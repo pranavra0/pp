@@ -72,9 +72,46 @@ impl Lexer {
     }
 
     fn skip_comment(&mut self) {
+        // self.peek() is '#' — consume it first
+        self.advance();
+        // Check if this is a block comment (#| ... |#)
+        if self.peek() == Some('|') {
+            self.advance(); // consume '|'
+            self.skip_block_comment(1);
+        } else {
+            // Line comment: skip until newline or EOF
+            while let Some(ch) = self.peek() {
+                if ch == '\n' { break; }
+                self.advance();
+            }
+        }
+    }
+
+    fn skip_block_comment(&mut self, depth: usize) {
         while let Some(ch) = self.peek() {
-            if ch == '\n' { break; }
-            self.advance();
+            match ch {
+                '#' => {
+                    self.advance();
+                    if self.peek() == Some('|') {
+                        self.advance();
+                        self.skip_block_comment(depth + 1);
+                    }
+                }
+                '|' => {
+                    self.advance();
+                    if self.peek() == Some('#') {
+                        self.advance();
+                        if depth == 1 {
+                            return;
+                        } else {
+                            return self.skip_block_comment(depth - 1);
+                        }
+                    }
+                }
+                _ => {
+                    self.advance();
+                }
+            }
         }
     }
 

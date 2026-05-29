@@ -108,6 +108,38 @@ fn test_lexer_comments() {
 }
 
 #[test]
+fn test_lexer_block_comment() {
+    // Basic block comment
+    let tokens = Lexer::new("+ 1 #| block comment |# 2").tokenize().unwrap();
+    let names: Vec<_> = tokens.iter().filter(|t| t.ty == TokenType::Name).collect();
+    assert_eq!(names.len(), 1);
+}
+
+#[test]
+fn test_lexer_block_comment_nested() {
+    // Nested block comments
+    let tokens = Lexer::new("+ 1 #| outer #| inner |# still outer |# 2").tokenize().unwrap();
+    let names: Vec<_> = tokens.iter().filter(|t| t.ty == TokenType::Name).collect();
+    assert_eq!(names.len(), 1);
+}
+
+#[test]
+fn test_lexer_block_comment_multiline() {
+    // Multi-line block comment
+    let tokens = Lexer::new("+ 1 #|\n   line one\n   line two\n |# 2").tokenize().unwrap();
+    let names: Vec<_> = tokens.iter().filter(|t| t.ty == TokenType::Name).collect();
+    assert_eq!(names.len(), 1);
+}
+
+#[test]
+fn test_lexer_line_comment_after_block() {
+    // Line comment after a block comment
+    let tokens = Lexer::new("+ 1 #| block |# # line\n 2").tokenize().unwrap();
+    let names: Vec<_> = tokens.iter().filter(|t| t.ty == TokenType::Name).collect();
+    assert_eq!(names.len(), 1);
+}
+
+#[test]
 fn test_lexer_empty() {
     let tokens = Lexer::new("").tokenize().unwrap();
     assert_eq!(tokens.len(), 1);
