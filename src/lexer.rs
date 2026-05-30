@@ -115,40 +115,44 @@ impl Lexer {
         }
     }
 
+    fn read_escape(&mut self) -> Result<char, String> {
+        self.advance(); // consume '\\'
+        match self.advance() {
+            'n' => Ok('\n'),
+            'r' => Ok('\r'),
+            't' => Ok('\t'),
+            '\\' => Ok('\\'),
+            '"' => Ok('"'),
+            '0' => Ok('\0'),
+            'x' => {
+                let hex = self.read_hex_digits(2)?;
+                let byte = u8::from_str_radix(&hex, 16)
+                    .map_err(|_| self.error(&format!("Invalid hex escape: \\x{}", hex)))?;
+                Ok(byte as char)
+            }
+            'u' => {
+                self.expect_char('{', "Expected '{' after \\u")?;
+                let hex = self.read_hex_digits_until('}')?;
+                if hex.is_empty() || hex.len() > 6 {
+                    return Err(self.error("Invalid unicode escape: \\u{...} must have 1-6 hex digits"));
+                }
+                let code = u32::from_str_radix(&hex, 16)
+                    .map_err(|_| self.error(&format!("Invalid unicode escape: \\u{{{}}}", hex)))?;
+                char::from_u32(code)
+                    .ok_or_else(|| self.error(&format!("Invalid unicode code point: U+{:X}", code)))
+            }
+            c => Err(self.error(&format!("Invalid escape sequence: \\{}", c))),
+        }
+    }
+
     fn read_string(&mut self, quote: char) -> Result<String, String> {
         let mut chars = Vec::new();
         loop {
             match self.peek() {
                 None => return Err(self.error("Unterminated string")),
                 Some('\\') => {
-                    self.advance();
-                    match self.advance() {
-                        'n' => chars.push('\n'),
-                        'r' => chars.push('\r'),
-                        't' => chars.push('\t'),
-                        '\\' => chars.push('\\'),
-                        '"' => chars.push('"'),
-                        '0' => chars.push('\0'),
-                        'x' => {
-                            let hex = self.read_hex_digits(2)?;
-                            let byte = u8::from_str_radix(&hex, 16)
-                                .map_err(|_| self.error(&format!("Invalid hex escape: \\x{}", hex)))?;
-                            chars.push(byte as char);
-                        }
-                        'u' => {
-                            self.expect_char('{', "Expected '{' after \\u")?;
-                            let hex = self.read_hex_digits_until('}')?;
-                            if hex.is_empty() || hex.len() > 6 {
-                                return Err(self.error("Invalid unicode escape: \\u{...} must have 1-6 hex digits"));
-                            }
-                            let code = u32::from_str_radix(&hex, 16)
-                                .map_err(|_| self.error(&format!("Invalid unicode escape: \\u{{{}}}", hex)))?;
-                            let c = char::from_u32(code)
-                                .ok_or_else(|| self.error(&format!("Invalid unicode code point: U+{:X}", code)))?;
-                            chars.push(c);
-                        }
-                        c => return Err(self.error(&format!("Invalid escape sequence: \\{}", c))),
-                    }
+                    let c = self.read_escape()?;
+                    chars.push(c);
                 }
                 Some(ch) if ch == quote => {
                     self.advance();
@@ -158,6 +162,64 @@ impl Lexer {
             }
         }
         Ok(chars.into_iter().collect())
+    }
+
+    fn read_multiline_string(&mut self) -> Result<String, String> {
+        // Already past the first '"' — we've consumed two '"' already
+        // so we're now positioned after the opening """
+        // Read the raw string content
+        let mut raw = Vec::new();
+        let closing_col;
+        loop {
+            match self.peek() {
+                None => return Err(self.error("Unterminated multi-line string")),
+                Some('\\') => {
+                    let c = self.read_escape()?;
+                    raw.push(c);
+                }
+                Some('"') => {
+                    // Check for closing """
+                    if self.pos + 2 < self.source.len()
+                        && self.source[self.pos] == '"'
+                        && self.source[self.pos + 1] == '"'
+                        && self.source[self.pos + 2] == '"'
+                    {
+                        closing_col = self.col;
+                        self.advance(); // '"'
+                        self.advance(); // '"'
+                        self.advance(); // '"'
+                        break;
+                    }
+                    raw.push(self.advance());
+                }
+                Some(_) => raw.push(self.advance()),
+            }
+        }
+        // Process whitespace stripping
+        let content: String = raw.into_iter().collect();
+        // Determine indentation from closing """ position
+        let indent = if closing_col > 0 { closing_col - 1 } else { 0 };
+        // Remove empty first line if content starts with newline
+        let content = if content.starts_with('\n') {
+            content[1..].to_string()
+        } else {
+            content
+        };
+        // Split, strip indent, remove trailing empty lines
+        let mut lines: Vec<String> = content.split('\n').map(|line| {
+            if indent > 0 {
+                let trimmed = line.trim_start_matches(' ');
+                let to_strip = indent.min(line.len() - trimmed.len());
+                line[to_strip..].to_string()
+            } else {
+                line.to_string()
+            }
+        }).collect();
+        // Remove trailing empty lines
+        while lines.last().map_or(false, |l| l.is_empty()) {
+            lines.pop();
+        }
+        Ok(lines.join("\n"))
     }
 
     fn expect_char(&mut self, expected: char, msg: &str) -> Result<(), String> {
@@ -292,8 +354,16 @@ impl Lexer {
                 ';' => { self.advance(); tokens.push(Token { ty: TokenType::Semicolon, lexeme: ";".into(), line: self.line, col: self.col - 1 }); }
                 '"' => {
                     self.advance();
-                    let value = self.read_string('"')?;
-                    tokens.push(Token { ty: TokenType::String, lexeme: value, line: self.line, col: self.col });
+                    // Check for """ (multi-line string)
+                    if self.peek() == Some('"') && self.pos + 1 < self.source.len() && self.source[self.pos + 1] == '"' {
+                        self.advance(); // second '"'
+                        self.advance(); // third '"'
+                        let value = self.read_multiline_string()?;
+                        tokens.push(Token { ty: TokenType::String, lexeme: value, line: self.line, col: self.col });
+                    } else {
+                        let value = self.read_string('"')?;
+                        tokens.push(Token { ty: TokenType::String, lexeme: value, line: self.line, col: self.col });
+                    }
                 }
                 c if c.is_ascii_digit() || (c == '-' && self.pos + 1 < self.source.len() && self.source[self.pos + 1].is_ascii_digit()) => {
                     let start_col = self.col;

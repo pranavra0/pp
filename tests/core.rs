@@ -122,6 +122,47 @@ fn test_lexer_string_invalid_unicode() {
 }
 
 #[test]
+fn test_lexer_multiline_string_basic() {
+    // Basic multi-line string with whitespace stripping
+    let src = "\"\"\"\n    hello world\n    \"\"\"";
+    let tokens = Lexer::new(src).tokenize().unwrap();
+    assert_eq!(tokens[0].ty, TokenType::String);
+    assert_eq!(tokens[0].lexeme, "hello world");
+}
+
+#[test]
+fn test_lexer_multiline_string_multiple_lines() {
+    // Multi-line string with multiple lines
+    let src = "\"\"\"\n    line one\n    line two\n    line three\n    \"\"\"";
+    let tokens = Lexer::new(src).tokenize().unwrap();
+    assert_eq!(tokens[0].lexeme, "line one\nline two\nline three");
+}
+
+#[test]
+fn test_lexer_multiline_string_no_indent() {
+    // Multi-line string with no extra indentation
+    let src = "\"\"\"\nfirst\nsecond\n\"\"\"";
+    let tokens = Lexer::new(src).tokenize().unwrap();
+    assert_eq!(tokens[0].lexeme, "first\nsecond");
+}
+
+#[test]
+fn test_lexer_multiline_string_escapes() {
+    // Escape sequences work in multi-line strings
+    let src = "\"\"\"\n    hello\\nworld\n    \"\"\"";
+    let tokens = Lexer::new(src).tokenize().unwrap();
+    assert_eq!(tokens[0].lexeme, "hello\nworld");
+}
+
+#[test]
+fn test_lexer_multiline_string_unterminated() {
+    // Unterminated multi-line string should error
+    let src = "\"\"\"\n    hello";
+    let result = Lexer::new(src).tokenize();
+    assert!(result.is_err());
+}
+
+#[test]
 fn test_lexer_symbols() {
     let tokens = Lexer::new(":int").tokenize().unwrap();
     assert_eq!(tokens[0].ty, TokenType::Symbol);
