@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::cell::RefCell;
 
-use crate::ast::Expr;
+use crate::ast::{Expr, InterpPart};
 use crate::lexer::{Lexer};
 use crate::parser::Parser;
 use crate::value::*;
@@ -366,6 +366,22 @@ impl Evaluator {
             }
             Expr::IntLit(n) => Value::Int(*n),
             Expr::StrLit(s) => Value::Str(Arc::from(s.as_str())),
+            Expr::InterpolatedStr(parts) => {
+                let mut result = String::new();
+                for part in parts {
+                    match part {
+                        InterpPart::Literal(s) => result.push_str(s),
+                        InterpPart::Expr(e) => {
+                            let val = self.eval(e, frame_id);
+                            if is_error(&val) { return val; }
+                            // Force thunks to get the actual value
+                            let val = self.force_pure(val);
+                            result.push_str(&format!("{}", val));
+                        }
+                    }
+                }
+                Value::Str(Arc::from(result))
+            }
             Expr::SymLit(s) => Value::Symbol(Arc::from(s.as_str())),
             Expr::Lambda { param, body } => Value::Closure {
                 param: Arc::from(param.as_str()),
@@ -839,6 +855,15 @@ fn hash_expr(e: &Expr) -> String {
                 h.update(hash_expr(item).as_bytes());
             }
         }
+        Expr::InterpolatedStr(parts) => {
+            h.update(b"interp\x00");
+            for part in parts {
+                match part {
+                    InterpPart::Literal(s) => { h.update(b"lit\x00"); h.update(s.as_bytes()); }
+                    InterpPart::Expr(e) => { h.update(b"expr\x00"); h.update(hash_expr(e).as_bytes()); }
+                }
+            }
+        }
     }
     format!("{:x}", h.finalize())
 }
@@ -931,6 +956,15 @@ fn free_vars(e: &Expr) -> HashSet<Arc<str>> {
             for item in items { fv.extend(free_vars(item)); }
             fv
         }
+        Expr::InterpolatedStr(parts) => {
+            let mut fv = HashSet::new();
+            for part in parts {
+                if let InterpPart::Expr(e) = part {
+                    fv.extend(free_vars(e));
+                }
+            }
+            fv
+        }
     }
 }
 
@@ -968,6 +1002,12 @@ fn substitute(body: &Expr, param: &str, arg: &Expr) -> Expr {
         },
         Expr::ListLit(items) => Expr::ListLit(
             items.iter().map(|i| substitute(i, param, arg)).collect()
+        ),
+        Expr::InterpolatedStr(parts) => Expr::InterpolatedStr(
+            parts.iter().map(|part| match part {
+                InterpPart::Literal(s) => InterpPart::Literal(s.clone()),
+                InterpPart::Expr(e) => InterpPart::Expr(Box::new(substitute(e, param, arg))),
+            }).collect()
         ),
     }
 }

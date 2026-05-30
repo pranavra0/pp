@@ -665,6 +665,60 @@ fn test_stdlib_take() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// String interpolation
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_interpolation_basic() {
+    // Simple variable interpolation
+    run_expect("x := 42; \"The answer is {x}.\"", true, "\"The answer is 42.\"");
+}
+
+#[test]
+fn test_interpolation_expression() {
+    // Expression interpolation
+    run_expect("\"{int-add 2 3}\"", false, "\"5\"");
+}
+
+#[test]
+fn test_interpolation_multi() {
+    // Multiple interpolations
+    run_expect("x := 1; y := 2; \"{x} + {y} = {int-add x y}\"", true, "\"1 + 2 = 3\"");
+}
+
+#[test]
+fn test_interpolation_escaped_brace() {
+    // Escaped brace {{ should produce literal {
+    run_expect("\"{{hello}}\"", false, "\"{hello}\"");
+}
+
+#[test]
+fn test_interpolation_no_interp() {
+    // String without braces is not interpolated (StrLit, not InterpolatedStr)
+    let tokens = pp::lexer::Lexer::new("\"hello\"").tokenize().unwrap();
+    assert!(!tokens[0].interpolated);
+}
+
+#[test]
+fn test_interpolation_with_interp() {
+    // String with braces IS interpolated
+    let tokens = pp::lexer::Lexer::new("\"hello {name}\"").tokenize().unwrap();
+    assert!(tokens[0].interpolated);
+}
+
+#[test]
+fn test_interpolation_record_field() {
+    // Record field access in interpolation
+    run_expect("r := {x = 10;}; \"{r.x}\"", true, "\"10\"");
+}
+
+#[test]
+fn test_interpolation_function_call() {
+    // Function call in interpolation
+    run_expect("\"{int-add 1 2}\"", false, "\"3\"");
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // Derivation
 // ═══════════════════════════════════════════════════════════════════
 

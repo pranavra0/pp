@@ -1,4 +1,10 @@
 #[derive(Debug, Clone, PartialEq)]
+pub enum InterpPart {
+    Literal(String),
+    Expr(Box<Expr>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Name(String),
     IntLit(i64),
@@ -11,4 +17,5 @@ pub enum Expr {
     Field { record: Box<Expr>, name: String },
     Pipe { left: Box<Expr>, right: Box<Expr> },
     ListLit(Vec<Expr>),
+    InterpolatedStr(Vec<InterpPart>),
 }

@@ -1,5 +1,5 @@
-use crate::ast::Expr;
-use crate::lexer::{Token, TokenType};
+use crate::ast::{Expr, InterpPart};
+use crate::lexer::{Lexer, Token, TokenType};
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -39,6 +39,102 @@ impl Parser {
         } else {
             false
         }
+    }
+
+    fn parse_interpolated_parts(&self, lexeme: &str, line: usize, col: usize) -> Result<Vec<InterpPart>, String> {
+        let mut parts = Vec::new();
+        let chars: Vec<char> = lexeme.chars().collect();
+        let mut i = 0;
+        let mut literal_start = 0;
+
+        while i < chars.len() {
+            if chars[i] == '{' {
+                // Check for {{ (escaped brace -> literal {)
+                if i + 1 < chars.len() && chars[i + 1] == '{' {
+                    // Push literal text before this pair
+                    if i > literal_start {
+                        let lit: String = chars[literal_start..i].iter().collect();
+                        parts.push(InterpPart::Literal(lit));
+                    }
+                    // {{ becomes a single { — push as literal
+                    parts.push(InterpPart::Literal("{".to_string()));
+                    i += 2;
+                    literal_start = i;
+                    continue;
+                }
+
+                // Push literal text before this expression
+                if i > literal_start {
+                    let lit: String = chars[literal_start..i].iter().collect();
+                    parts.push(InterpPart::Literal(lit));
+                }
+
+                // Find matching }
+                let expr_start = i + 1;
+                let mut depth = 1;
+                let mut expr_end = expr_start;
+                while expr_end < chars.len() && depth > 0 {
+                    if chars[expr_end] == '{' {
+                        depth += 1;
+                    } else if chars[expr_end] == '}' {
+                        // Check for }} (escaped brace -> literal })
+                        if depth == 1 && expr_end + 1 < chars.len() && chars[expr_end + 1] == '}' {
+                            // }} inside expression is not valid — treat as closing brace
+                            // Actually, }} inside the expression doesn't make sense as escape
+                            depth -= 1;
+                        } else {
+                            depth -= 1;
+                        }
+                    }
+                    if depth > 0 {
+                        expr_end += 1;
+                    }
+                }
+
+                if depth != 0 {
+                    return Err(format!("Unterminated interpolation expression in string at line {}, col {}", line, col));
+                }
+
+                // Parse the expression
+                let expr_text: String = chars[expr_start..expr_end].iter().collect();
+                let sub_tokens = Lexer::new(&expr_text).tokenize()
+                    .map_err(|e| format!("In interpolation expression: {}", e))?;
+                let mut sub_parser = Parser::new(sub_tokens);
+                let (_, expr) = sub_parser.parse()
+                    .map_err(|e| format!("In interpolation expression: {}", e))?;
+                match expr {
+                    Some(e) => parts.push(InterpPart::Expr(Box::new(e))),
+                    None => return Err("Empty interpolation expression".into()),
+                }
+
+                i = expr_end + 1; // skip past }
+                literal_start = i;
+            } else if chars[i] == '}' {
+                // Check for }} (escaped brace -> literal })
+                if i + 1 < chars.len() && chars[i + 1] == '}' {
+                    if i > literal_start {
+                        let lit: String = chars[literal_start..i].iter().collect();
+                        parts.push(InterpPart::Literal(lit));
+                    }
+                    parts.push(InterpPart::Literal("}".to_string()));
+                    i += 2;
+                    literal_start = i;
+                    continue;
+                }
+                // Lone } outside expression — treat as literal
+                i += 1;
+            } else {
+                i += 1;
+            }
+        }
+
+        // Trailing literal
+        if literal_start < chars.len() {
+            let lit: String = chars[literal_start..].iter().collect();
+            parts.push(InterpPart::Literal(lit));
+        }
+
+        Ok(parts)
     }
 
     pub fn parse(&mut self) -> Result<(Vec<(String, Expr)>, Option<Expr>), String> {
@@ -150,7 +246,12 @@ impl Parser {
             }
             TokenType::String => {
                 self.pos += 1;
-                Expr::StrLit(tok.lexeme.clone())
+                if tok.interpolated {
+                    let parts = self.parse_interpolated_parts(&tok.lexeme, tok.line, tok.col)?;
+                    Expr::InterpolatedStr(parts)
+                } else {
+                    Expr::StrLit(tok.lexeme.clone())
+                }
             }
             TokenType::Symbol => {
                 self.pos += 1;

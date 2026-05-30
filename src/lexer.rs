@@ -16,6 +16,7 @@ pub struct Token {
     pub lexeme: String,
     pub line: usize,
     pub col: usize,
+    pub interpolated: bool,
 }
 
 impl fmt::Display for Token {
@@ -55,6 +56,10 @@ impl Lexer {
             self.col += 1;
         }
         ch
+    }
+
+    fn tok(&self, ty: TokenType, lexeme: String, line: usize, col: usize) -> Token {
+        Token { ty, lexeme, line, col, interpolated: false }
     }
 
     fn error(&self, msg: &str) -> String {
@@ -344,12 +349,12 @@ impl Lexer {
                 self.advance();
                 if self.peek() == Some('=') {
                     self.advance();
-                    tokens.push(Token { ty: TokenType::Bind, lexeme: ":=".into(), line: self.line, col: self.col - 2 });
+                    tokens.push(self.tok(TokenType::Bind, ":=".into(), self.line, self.col - 2));
                 } else if matches!(self.peek(), Some(c) if c.is_alphanumeric()) {
                     let name = self.read_name();
-                    tokens.push(Token { ty: TokenType::Symbol, lexeme: name, line: self.line, col: self.col - 1 });
+                    tokens.push(self.tok(TokenType::Symbol, name, self.line, self.col - 1));
                 } else {
-                    tokens.push(Token { ty: TokenType::Colon, lexeme: ":".into(), line: self.line, col: self.col - 1 });
+                    tokens.push(self.tok(TokenType::Colon, ":".into(), self.line, self.col - 1));
                 }
                 continue;
             }
@@ -370,7 +375,7 @@ impl Lexer {
                     }
                     self.advance(); // consume "
                     let value = self.read_raw_string(hash_count)?;
-                    tokens.push(Token { ty: TokenType::String, lexeme: value, line: self.line, col: start_col });
+                    tokens.push(self.tok(TokenType::String, value, self.line, start_col));
                     continue;
                 }
             }
@@ -380,7 +385,7 @@ impl Lexer {
                 self.advance();
                 if self.peek() == Some('>') {
                     self.advance();
-                    tokens.push(Token { ty: TokenType::Pipe, lexeme: "|>".into(), line: self.line, col: self.col - 2 });
+                    tokens.push(self.tok(TokenType::Pipe, "|>".into(), self.line, self.col - 2));
                 } else {
                     return Err(self.error("Unexpected character after '|'"));
                 }
@@ -389,17 +394,17 @@ impl Lexer {
 
             // Single-char tokens
             match ch {
-                '\\' => { self.advance(); tokens.push(Token { ty: TokenType::Lambda, lexeme: "\\".into(), line: self.line, col: self.col - 1 }); }
-                '.' => { self.advance(); tokens.push(Token { ty: TokenType::Dot, lexeme: ".".into(), line: self.line, col: self.col - 1 }); }
-                '(' => { self.advance(); tokens.push(Token { ty: TokenType::LParen, lexeme: "(".into(), line: self.line, col: self.col - 1 }); }
-                ')' => { self.advance(); tokens.push(Token { ty: TokenType::RParen, lexeme: ")".into(), line: self.line, col: self.col - 1 }); }
-                '{' => { self.advance(); tokens.push(Token { ty: TokenType::LBrace, lexeme: "{".into(), line: self.line, col: self.col - 1 }); }
-                '}' => { self.advance(); tokens.push(Token { ty: TokenType::RBrace, lexeme: "}".into(), line: self.line, col: self.col - 1 }); }
-                '[' => { self.advance(); tokens.push(Token { ty: TokenType::LBracket, lexeme: "[".into(), line: self.line, col: self.col - 1 }); }
-                ']' => { self.advance(); tokens.push(Token { ty: TokenType::RBracket, lexeme: "]".into(), line: self.line, col: self.col - 1 }); }
-                '=' => { self.advance(); tokens.push(Token { ty: TokenType::Equals, lexeme: "=".into(), line: self.line, col: self.col - 1 }); }
-                ',' => { self.advance(); tokens.push(Token { ty: TokenType::Comma, lexeme: ",".into(), line: self.line, col: self.col - 1 }); }
-                ';' => { self.advance(); tokens.push(Token { ty: TokenType::Semicolon, lexeme: ";".into(), line: self.line, col: self.col - 1 }); }
+                '\\' => { self.advance(); tokens.push(self.tok(TokenType::Lambda, "\\".into(), self.line, self.col - 1)); }
+                '.' => { self.advance(); tokens.push(self.tok(TokenType::Dot, ".".into(), self.line, self.col - 1)); }
+                '(' => { self.advance(); tokens.push(self.tok(TokenType::LParen, "(".into(), self.line, self.col - 1)); }
+                ')' => { self.advance(); tokens.push(self.tok(TokenType::RParen, ")".into(), self.line, self.col - 1)); }
+                '{' => { self.advance(); tokens.push(self.tok(TokenType::LBrace, "{".into(), self.line, self.col - 1)); }
+                '}' => { self.advance(); tokens.push(self.tok(TokenType::RBrace, "}".into(), self.line, self.col - 1)); }
+                '[' => { self.advance(); tokens.push(self.tok(TokenType::LBracket, "[".into(), self.line, self.col - 1)); }
+                ']' => { self.advance(); tokens.push(self.tok(TokenType::RBracket, "]".into(), self.line, self.col - 1)); }
+                '=' => { self.advance(); tokens.push(self.tok(TokenType::Equals, "=".into(), self.line, self.col - 1)); }
+                ',' => { self.advance(); tokens.push(self.tok(TokenType::Comma, ",".into(), self.line, self.col - 1)); }
+                ';' => { self.advance(); tokens.push(self.tok(TokenType::Semicolon, ";".into(), self.line, self.col - 1)); }
                 '"' => {
                     self.advance();
                     // Check for """ (multi-line string)
@@ -407,10 +412,16 @@ impl Lexer {
                         self.advance(); // second '"'
                         self.advance(); // third '"'
                         let value = self.read_multiline_string()?;
-                        tokens.push(Token { ty: TokenType::String, lexeme: value, line: self.line, col: self.col });
+                        let interpolated = value.contains('{');
+                        let mut tok = self.tok(TokenType::String, value, self.line, self.col);
+                        tok.interpolated = interpolated;
+                        tokens.push(tok);
                     } else {
                         let value = self.read_string('"')?;
-                        tokens.push(Token { ty: TokenType::String, lexeme: value, line: self.line, col: self.col });
+                        let interpolated = value.contains('{');
+                        let mut tok = self.tok(TokenType::String, value, self.line, self.col);
+                        tok.interpolated = interpolated;
+                        tokens.push(tok);
                     }
                 }
                 c if c.is_ascii_digit() || (c == '-' && self.pos + 1 < self.source.len() && self.source[self.pos + 1].is_ascii_digit()) => {
@@ -422,18 +433,18 @@ impl Lexer {
                     }
                     let value = self.read_number();
                     let lexeme = if negative { format!("-{}", value) } else { value };
-                    tokens.push(Token { ty: TokenType::Number, lexeme, line: self.line, col: start_col });
+                    tokens.push(self.tok(TokenType::Number, lexeme, self.line, start_col));
                 }
                 c if c.is_alphabetic() || c == '_' || "+-*/%?@$&~^#!".contains(c) => {
                     let start_col = self.col;
                     let name = self.read_name();
                     let ty = if name == "if" { TokenType::If } else { TokenType::Name };
-                    tokens.push(Token { ty, lexeme: name, line: self.line, col: start_col });
+                    tokens.push(self.tok(ty, name, self.line, start_col));
                 }
                 _ => return Err(self.error(&format!("Unexpected character: {:?}", ch))),
             }
         }
-        tokens.push(Token { ty: TokenType::Eof, lexeme: String::new(), line: self.line, col: self.col });
+        tokens.push(self.tok(TokenType::Eof, String::new(), self.line, self.col));
         Ok(tokens)
     }
 }
