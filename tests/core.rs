@@ -344,6 +344,36 @@ fn test_int_literal() {
 }
 
 #[test]
+fn test_int_hex() {
+    run_expect("0xFF", false, "255");
+    run_expect("0xdead_beef", false, "3735928559");
+}
+
+#[test]
+fn test_int_octal() {
+    run_expect("0o777", false, "511");
+    run_expect("0o100", false, "64");
+}
+
+#[test]
+fn test_int_binary() {
+    run_expect("0b1010", false, "10");
+    run_expect("0b1111_1111", false, "255");
+}
+
+#[test]
+fn test_int_underscores() {
+    run_expect("1_000_000", false, "1000000");
+    run_expect("1_2_3_4", false, "1234");
+}
+
+#[test]
+fn test_int_negative() {
+    run_expect("-42", false, "-42");
+    run_expect("-0xFF", false, "-255");
+}
+
+#[test]
 fn test_string_literal() {
     run_expect("\"hello\"", false, "\"hello\"");
 }

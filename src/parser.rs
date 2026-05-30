@@ -241,8 +241,30 @@ impl Parser {
             }
             TokenType::Number => {
                 self.pos += 1;
-                let value: i64 = tok.lexeme.parse().map_err(|e| format!("Bad number: {}", e))?;
-                Expr::IntLit(value)
+                let lexeme = &tok.lexeme;
+                let (negative, body) = if lexeme.starts_with('-') {
+                    (true, &lexeme[1..])
+                } else {
+                    (false, lexeme.as_str())
+                };
+                let abs = if body.starts_with("0x") || body.starts_with("0X") {
+                    let digits: String = body.chars().skip(2).filter(|c| *c != '_').collect();
+                    i64::from_str_radix(&digits, 16)
+                        .map_err(|e| format!("Bad hex number '{}': {}", lexeme, e))?
+                } else if body.starts_with("0o") || body.starts_with("0O") {
+                    let digits: String = body.chars().skip(2).filter(|c| *c != '_').collect();
+                    i64::from_str_radix(&digits, 8)
+                        .map_err(|e| format!("Bad octal number '{}': {}", lexeme, e))?
+                } else if body.starts_with("0b") || body.starts_with("0B") {
+                    let digits: String = body.chars().skip(2).filter(|c| *c != '_').collect();
+                    i64::from_str_radix(&digits, 2)
+                        .map_err(|e| format!("Bad binary number '{}': {}", lexeme, e))?
+                } else {
+                    let digits: String = body.chars().filter(|c| *c != '_').collect();
+                    digits.parse::<i64>()
+                        .map_err(|e| format!("Bad number '{}': {}", lexeme, e))?
+                };
+                Expr::IntLit(if negative { -abs } else { abs })
             }
             TokenType::String => {
                 self.pos += 1;

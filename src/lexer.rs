@@ -299,17 +299,55 @@ impl Lexer {
 
     fn read_number(&mut self) -> String {
         let mut chars = Vec::new();
-        let mut has_dot = false;
-        while let Some(ch) = self.peek() {
-            if ch.is_ascii_digit() {
-                chars.push(self.advance());
-            } else if ch == '.' && !has_dot {
-                has_dot = true;
-                chars.push(self.advance());
-            } else {
-                break;
+
+        // Check for 0x, 0o, 0b prefixes
+        if self.peek() == Some('0') && self.pos + 1 < self.source.len() {
+            match self.source[self.pos + 1] {
+                'x' | 'X' => {
+                    chars.push(self.advance()); // '0'
+                    chars.push(self.advance()); // 'x'
+                    while let Some(ch) = self.peek() {
+                        if ch.is_ascii_hexdigit() || ch == '_' {
+                            chars.push(self.advance());
+                        } else { break; }
+                    }
+                }
+                'o' | 'O' => {
+                    chars.push(self.advance()); // '0'
+                    chars.push(self.advance()); // 'o'
+                    while let Some(ch) = self.peek() {
+                        if ch.is_ascii_digit() && ch != '8' && ch != '9' || ch == '_' {
+                            chars.push(self.advance());
+                        } else { break; }
+                    }
+                }
+                'b' | 'B' => {
+                    chars.push(self.advance()); // '0'
+                    chars.push(self.advance()); // 'b'
+                    while let Some(ch) = self.peek() {
+                        if ch == '0' || ch == '1' || ch == '_' {
+                            chars.push(self.advance());
+                        } else { break; }
+                    }
+                }
+                _ => {
+                    // Plain decimal (possibly leading 0)
+                    while let Some(ch) = self.peek() {
+                        if ch.is_ascii_digit() || ch == '_' {
+                            chars.push(self.advance());
+                        } else { break; }
+                    }
+                }
+            }
+        } else {
+            // Plain decimal (no leading 0)
+            while let Some(ch) = self.peek() {
+                if ch.is_ascii_digit() || ch == '_' {
+                    chars.push(self.advance());
+                } else { break; }
             }
         }
+
         chars.into_iter().collect()
     }
 
