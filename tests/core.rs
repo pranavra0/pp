@@ -163,6 +163,44 @@ fn test_lexer_multiline_string_unterminated() {
 }
 
 #[test]
+fn test_lexer_raw_string_basic() {
+    // Basic raw string: r"..." — backslash is literal, not escape
+    let tokens = Lexer::new("r\"hello\\nworld\"").tokenize().unwrap();
+    assert_eq!(tokens[0].ty, TokenType::String);
+    assert_eq!(tokens[0].lexeme, "hello\\nworld");
+}
+
+#[test]
+fn test_lexer_raw_string_windows_path() {
+    // Windows paths with raw strings
+    let tokens = Lexer::new("r\"C:\\\\Users\\\\name\\\\path\\\\to\\\\file\"").tokenize().unwrap();
+    assert_eq!(tokens[0].lexeme, "C:\\\\Users\\\\name\\\\path\\\\to\\\\file");
+}
+
+#[test]
+fn test_lexer_raw_string_with_hash() {
+    // Raw string with hash delimiter: r#"..."#
+    let tokens = Lexer::new("r#\"hello \"quote\" world\"#").tokenize().unwrap();
+    assert_eq!(tokens[0].ty, TokenType::String);
+    assert_eq!(tokens[0].lexeme, "hello \"quote\" world");
+}
+
+#[test]
+fn test_lexer_raw_string_double_hash() {
+    // Raw string with double hash delimiter: r##"..."##
+    let tokens = Lexer::new("r##\"hello #\" world\"##").tokenize().unwrap();
+    assert_eq!(tokens[0].ty, TokenType::String);
+    assert_eq!(tokens[0].lexeme, "hello #\" world");
+}
+
+#[test]
+fn test_lexer_raw_string_unterminated() {
+    // Unterminated raw string should error
+    let result = Lexer::new("r\"hello").tokenize();
+    assert!(result.is_err());
+}
+
+#[test]
 fn test_lexer_symbols() {
     let tokens = Lexer::new(":int").tokenize().unwrap();
     assert_eq!(tokens[0].ty, TokenType::Symbol);

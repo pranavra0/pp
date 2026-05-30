@@ -222,6 +222,33 @@ impl Lexer {
         Ok(lines.join("\n"))
     }
 
+    fn read_raw_string(&mut self, hash_count: usize) -> Result<String, String> {
+        let mut chars = Vec::new();
+        loop {
+            match self.peek() {
+                None => return Err(self.error("Unterminated raw string")),
+                Some('"') => {
+                    // Check if " is followed by hash_count #'s (closing delimiter)
+                    let is_close =
+                        self.source.len() > self.pos + hash_count
+                        && (0..=hash_count).all(|i| {
+                            self.source[self.pos + i] == if i == 0 { '"' } else { '#' }
+                        });
+                    if is_close {
+                        self.advance(); // consume '"'
+                        for _ in 0..hash_count {
+                            self.advance(); // consume #'s
+                        }
+                        break;
+                    }
+                    chars.push(self.advance());
+                }
+                Some(_) => chars.push(self.advance()),
+            }
+        }
+        Ok(chars.into_iter().collect())
+    }
+
     fn expect_char(&mut self, expected: char, msg: &str) -> Result<(), String> {
         match self.peek() {
             Some(ch) if ch == expected => {
@@ -325,6 +352,27 @@ impl Lexer {
                     tokens.push(Token { ty: TokenType::Colon, lexeme: ":".into(), line: self.line, col: self.col - 1 });
                 }
                 continue;
+            }
+
+            // Raw strings: r"..." or r#"..."# or r##"..."## etc.
+            if (ch == 'r' || ch == 'R') && self.pos + 1 < self.source.len() {
+                let mut la = self.pos + 1;
+                // Skip hashes to look for " after them
+                while la < self.source.len() && self.source[la] == '#' {
+                    la += 1;
+                }
+                if la < self.source.len() && self.source[la] == '"' {
+                    let hash_count = la - self.pos - 1;
+                    let start_col = self.col;
+                    self.advance(); // consume r/R
+                    for _ in 0..hash_count {
+                        self.advance(); // consume #'s
+                    }
+                    self.advance(); // consume "
+                    let value = self.read_raw_string(hash_count)?;
+                    tokens.push(Token { ty: TokenType::String, lexeme: value, line: self.line, col: start_col });
+                    continue;
+                }
             }
 
             // |>
