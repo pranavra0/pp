@@ -77,6 +77,51 @@ fn test_lexer_strings() {
 }
 
 #[test]
+fn test_lexer_string_escapes() {
+    // Basic escapes
+    let tokens = Lexer::new("\"\\n\\t\\r\\\\\\\"\\0\"").tokenize().unwrap();
+    assert_eq!(tokens[0].lexeme, "\n\t\r\\\"\0");
+}
+
+#[test]
+fn test_lexer_string_hex_escape() {
+    // Hex escape \x48 = 'H'
+    let tokens = Lexer::new("\"\\x48\\x65\\x6c\\x6c\\x6f\"").tokenize().unwrap();
+    assert_eq!(tokens[0].lexeme, "Hello");
+}
+
+#[test]
+fn test_lexer_string_unicode_escape() {
+    // Unicode escape \u{1f600} = grinning face
+    let tokens = Lexer::new("\"\\u{1f600}\"").tokenize().unwrap();
+    assert_eq!(tokens[0].lexeme, "\u{1f600}");
+    // Also test simpler unicode
+    let tokens = Lexer::new("\"\\u{41}\"").tokenize().unwrap();
+    assert_eq!(tokens[0].lexeme, "A");
+}
+
+#[test]
+fn test_lexer_string_invalid_escape() {
+    // Invalid escape should error
+    let result = Lexer::new("\"\\z\"").tokenize();
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_lexer_string_invalid_hex() {
+    // Invalid hex escape
+    let result = Lexer::new("\"\\xGH\"").tokenize();
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_lexer_string_invalid_unicode() {
+    // Invalid unicode code point (too large)
+    let result = Lexer::new("\"\\u{110000}\"").tokenize();
+    assert!(result.is_err());
+}
+
+#[test]
 fn test_lexer_symbols() {
     let tokens = Lexer::new(":int").tokenize().unwrap();
     assert_eq!(tokens[0].ty, TokenType::Symbol);

@@ -124,10 +124,30 @@ impl Lexer {
                     self.advance();
                     match self.advance() {
                         'n' => chars.push('\n'),
+                        'r' => chars.push('\r'),
                         't' => chars.push('\t'),
                         '\\' => chars.push('\\'),
                         '"' => chars.push('"'),
-                        c => chars.push(c),
+                        '0' => chars.push('\0'),
+                        'x' => {
+                            let hex = self.read_hex_digits(2)?;
+                            let byte = u8::from_str_radix(&hex, 16)
+                                .map_err(|_| self.error(&format!("Invalid hex escape: \\x{}", hex)))?;
+                            chars.push(byte as char);
+                        }
+                        'u' => {
+                            self.expect_char('{', "Expected '{' after \\u")?;
+                            let hex = self.read_hex_digits_until('}')?;
+                            if hex.is_empty() || hex.len() > 6 {
+                                return Err(self.error("Invalid unicode escape: \\u{...} must have 1-6 hex digits"));
+                            }
+                            let code = u32::from_str_radix(&hex, 16)
+                                .map_err(|_| self.error(&format!("Invalid unicode escape: \\u{{{}}}", hex)))?;
+                            let c = char::from_u32(code)
+                                .ok_or_else(|| self.error(&format!("Invalid unicode code point: U+{:X}", code)))?;
+                            chars.push(c);
+                        }
+                        c => return Err(self.error(&format!("Invalid escape sequence: \\{}", c))),
                     }
                 }
                 Some(ch) if ch == quote => {
@@ -138,6 +158,49 @@ impl Lexer {
             }
         }
         Ok(chars.into_iter().collect())
+    }
+
+    fn expect_char(&mut self, expected: char, msg: &str) -> Result<(), String> {
+        match self.peek() {
+            Some(ch) if ch == expected => {
+                self.advance();
+                Ok(())
+            }
+            Some(ch) => Err(self.error(&format!("{}: expected '{:?}', got '{:?}'", msg, expected, ch))),
+            None => Err(self.error(&format!("{}: expected '{}', got EOF", msg, expected))),
+        }
+    }
+
+    fn read_hex_digits(&mut self, count: usize) -> Result<String, String> {
+        let mut hex = String::with_capacity(count);
+        for _ in 0..count {
+            match self.peek() {
+                Some(c) if c.is_ascii_hexdigit() => hex.push(self.advance()),
+                Some(c) => return Err(self.error(&format!("Expected hex digit, got '{}'", c))),
+                None => return Err(self.error("Expected hex digit, got EOF")),
+            }
+        }
+        Ok(hex)
+    }
+
+    fn read_hex_digits_until(&mut self, delimiter: char) -> Result<String, String> {
+        let mut hex = String::new();
+        loop {
+            match self.peek() {
+                Some(c) if c == delimiter => {
+                    self.advance();
+                    return Ok(hex);
+                }
+                Some(c) if c.is_ascii_hexdigit() => {
+                    hex.push(self.advance());
+                    if hex.len() > 6 {
+                        return Err(self.error("Unicode escape has too many hex digits (max 6)"));
+                    }
+                }
+                Some(c) => return Err(self.error(&format!("Expected hex digit or '}}', got '{}'", c))),
+                None => return Err(self.error("Unterminated unicode escape")),
+            }
+        }
     }
 
     fn read_number(&mut self) -> String {
