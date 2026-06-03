@@ -93,11 +93,69 @@ and eval (e : expr) (env : env) : value =
       make_thunk_ca e env
 
   | EDo exprs ->
-      (* Evaluate each in sequence, forcing each, return the last *)
+      (* Evaluate each in sequence, threading a mutable env so that
+         imports, loads, and module loads affect subsequent expressions. *)
+      let env_ref = ref env in
       let rec go = function
         | [] -> VNil
-        | [last] -> force (eval last env)
-        | e :: rest -> ignore (force (eval e env)); go rest
+        | [last] ->
+            let result = force (eval last !env_ref) in
+            (match result with
+             | VEnvMap bindings ->
+                 env_ref := List.fold_left (fun e (n, v) ->
+                   extend_env e n v) !env_ref bindings;
+                 result
+             | _ -> result)
+        | (EImport mod_expr) :: rest ->
+            let mod_val = force (eval mod_expr !env_ref) in
+            (match mod_val with
+             | VEnvMap bindings ->
+                 env_ref := List.fold_left (fun e (n, v) ->
+                   extend_env e n v) !env_ref bindings;
+                 go rest
+             | _ -> failwith "import expects a module value")
+        | (ELoad path) :: rest ->
+            let ch = open_in path in
+            let source = really_input_string ch (in_channel_length ch) in
+            close_in ch;
+            let exprs = Reader.read_string source in
+            ignore (eval_expressions exprs env_ref);
+            go rest
+        | (ELoadModule path) :: rest ->
+            let ch = open_in path in
+            let source = really_input_string ch (in_channel_length ch) in
+            close_in ch;
+            let exprs = Reader.read_string source in
+            (* Evaluate in a fresh env with only builtins *)
+            let mod_ref = ref (Primitives.initial_env ()) in
+            ignore (eval_expressions exprs mod_ref);
+            (* Export all bindings that aren't builtins *)
+            let base_bindings = (Primitives.initial_env ()).bindings in
+            let rec collect_new all parent acc =
+              match all with
+              | [] -> List.rev acc
+              | (n, v) :: rest ->
+                  if List.exists (fun (pn, _) -> pn = n) parent then
+                    collect_new rest parent acc
+                  else
+                    collect_new rest parent ((n, v) :: acc)
+            in
+            let mod_val = VEnvMap (collect_new (!mod_ref).bindings base_bindings []) in
+            (* Merge into the do-env so subsequent expressions see the exports *)
+            (match mod_val with
+             | VEnvMap bindings ->
+                 env_ref := List.fold_left (fun e (n, v) ->
+                   extend_env e n v) !env_ref bindings;
+                 go rest
+             | _ -> go rest)
+        | e :: rest ->
+            let result = force (eval e !env_ref) in
+            (match result with
+             | VEnvMap bindings ->
+                 env_ref := List.fold_left (fun e (n, v) ->
+                   extend_env e n v) !env_ref bindings;
+                 go rest
+             | _ -> go rest)
       in
       go exprs
 
@@ -150,6 +208,80 @@ and eval (e : expr) (env : env) : value =
             nest env'' rest
       in
       nest env bindings
+
+  | EModule body_exprs ->
+      (* A module evaluates in a fresh env with only builtins, so its identity
+         is stable regardless of where it's defined. Only exports its own bindings. *)
+      let base_env = Primitives.initial_env () in
+      let mod_env = ref base_env in
+      let final_env = List.fold_left (fun (env_acc : env) e ->
+        match e with
+        | EDef (def_name, params, body) ->
+            let closure = make_closure ~name:(Some def_name) params body (ref env_acc) in
+            extend_env env_acc def_name closure
+        | EDefFexpr (def_name, params, body) ->
+            let fexpr = make_fexpr ~name:(Some def_name) params body (ref env_acc) in
+            extend_env env_acc def_name fexpr
+        | EImport mod_expr ->
+            let mod_val = force (eval mod_expr env_acc) in
+            (match mod_val with
+             | VEnvMap bindings ->
+                 List.fold_left (fun e (n, v) -> extend_env e n v) env_acc bindings
+             | _ -> failwith "import within module expects a module value")
+        | _ ->
+            ignore (force (eval e env_acc));
+            env_acc
+      ) !mod_env body_exprs in
+      (* Export only bindings added by the module (not builtins) *)
+      let rec collect_new all parent acc =
+        match all with
+        | [] -> List.rev acc
+        | (n, v) :: rest ->
+            if List.exists (fun (pn, _) -> pn = n) parent then
+              collect_new rest parent acc
+            else
+              collect_new rest parent ((n, v) :: acc)
+      in
+      let new_bindings = collect_new final_env.bindings base_env.bindings [] in
+      VEnvMap new_bindings
+
+  | EImport mod_expr ->
+      (* Import at evaluation site: returns a VEnvMap to be merged by the
+         caller (do-body, REPL, or file runner). *)
+      let mod_val = force (eval mod_expr env) in
+      (match mod_val with
+       | VEnvMap _ -> mod_val  (* caller handles merging *)
+       | _ -> failwith "import expects a module value")
+
+  | ELoad path ->
+      (* Load a file and evaluate it in the current env. *)
+      let ch = open_in path in
+      let source = really_input_string ch (in_channel_length ch) in
+      close_in ch;
+      let exprs = Reader.read_string source in
+      let env_ref = ref env in
+      eval_expressions exprs env_ref
+
+  | ELoadModule path ->
+      (* Load a file as a module: evaluate in a clean env (builtins only),
+         export all non-builtin bindings as VEnvMap. *)
+      let ch = open_in path in
+      let source = really_input_string ch (in_channel_length ch) in
+      close_in ch;
+      let exprs = Reader.read_string source in
+      let mod_ref = ref (Primitives.initial_env ()) in
+      ignore (eval_expressions exprs mod_ref);
+      let base_bindings = (Primitives.initial_env ()).bindings in
+      let rec collect_new all parent acc =
+        match all with
+        | [] -> List.rev acc
+        | (n, v) :: rest ->
+            if List.exists (fun (pn, _) -> pn = n) parent then
+              collect_new rest parent acc
+            else
+              collect_new rest parent ((n, v) :: acc)
+      in
+      VEnvMap (collect_new (!mod_ref).bindings base_bindings [])
 
 (* ---- Function Application ---- *)
 
@@ -331,8 +463,88 @@ and quote_to_value (e : expr) : value =
         VPair (list_to_list (List.fold_right (fun (n, h) acc ->
           VPair (VPair (VSymbol n, VPair (quote_to_value h, VNil)), acc)) handlers VNil),
           VPair (quote_to_value body, VNil)))
+  | EModule exprs ->
+      let qexprs = List.map quote_to_value exprs in
+      VPair (VSymbol "module",
+        List.fold_right (fun a acc -> VPair (a, acc)) qexprs VNil)
+  | EImport mod_expr ->
+      VPair (VSymbol "import", VPair (quote_to_value mod_expr, VNil))
+  | ELoad path ->
+      VPair (VSymbol "load", VPair (VString path, VNil))
+  | ELoadModule path ->
+      VPair (VSymbol "load-module", VPair (VString path, VNil))
 
 and list_to_list (v : value) : value = v  (* identity — already a list from fold_right *)
+
+(* Evaluate expressions sequentially with mutable env — used by ELoad, ELoadModule, and REPL *)
+and eval_expressions (exprs : expr list) (env : env ref) : value =
+  let rec go = function
+    | [] -> VNil
+    | [last] ->
+        (match last with
+         | EDef (name, params, body) ->
+             let closure = make_closure ~name:(Some name) params body env in
+             env := extend_env !env name closure;
+             closure
+         | EDefFexpr (name, params, body) ->
+             let fexpr = make_fexpr ~name:(Some name) params body env in
+             env := extend_env !env name fexpr;
+             fexpr
+         | EImport mod_expr ->
+             let mod_val = force (eval mod_expr !env) in
+             (match mod_val with
+              | VEnvMap bindings ->
+                  env := List.fold_left (fun e (n, v) ->
+                    extend_env e n v) !env bindings;
+                  mod_val
+              | _ -> failwith "import expects a module value")
+         | ELoad path ->
+             let ch = open_in path in
+             let source = really_input_string ch (in_channel_length ch) in
+             close_in ch;
+             let exprs = Reader.read_string source in
+             eval_expressions exprs env
+         | _ ->
+             let result = force (eval last !env) in
+             (match result with
+              | VEnvMap bindings ->
+                  env := List.fold_left (fun e (n, v) ->
+                    extend_env e n v) !env bindings;
+                  result
+              | _ -> result))
+    | (EDef (name, params, body)) :: rest ->
+        let closure = make_closure ~name:(Some name) params body env in
+        env := extend_env !env name closure;
+        go rest
+    | (EDefFexpr (name, params, body)) :: rest ->
+        let fexpr = make_fexpr ~name:(Some name) params body env in
+        env := extend_env !env name fexpr;
+        go rest
+    | (EImport mod_expr) :: rest ->
+        let mod_val = force (eval mod_expr !env) in
+        (match mod_val with
+         | VEnvMap bindings ->
+             env := List.fold_left (fun e (n, v) ->
+               extend_env e n v) !env bindings;
+             go rest
+         | _ -> failwith "import expects a module value")
+    | (ELoad path) :: rest ->
+        let ch = open_in path in
+        let source = really_input_string ch (in_channel_length ch) in
+        close_in ch;
+        let exprs = Reader.read_string source in
+        ignore (eval_expressions exprs env);
+        go rest
+    | e :: rest ->
+        let result = force (eval e !env) in
+        (match result with
+         | VEnvMap bindings ->
+             env := List.fold_left (fun e (n, v) ->
+               extend_env e n v) !env bindings;
+             go rest
+         | _ -> go rest)
+  in
+  go exprs
 
 (* ---- Public API ---- *)
 

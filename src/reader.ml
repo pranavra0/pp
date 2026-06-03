@@ -237,6 +237,10 @@ and parse_special_form ps car_sym =
   | "effect" -> parse_effect ps
   | "perform" -> parse_perform ps
   | "with-handler" -> parse_with_handler ps
+  | "module" -> parse_module ps
+  | "import" -> parse_import ps
+  | "load" -> parse_load ps
+  | "load-module" -> parse_load_module ps
   | _ ->
       (* Regular function call: (fn-name arg ...) *)
       let args = parse_rest ps in
@@ -489,6 +493,35 @@ and parse_with_handler ps =
   let body = match parse_rest ps with
     | [b] -> b | bs -> EDo bs in
   EWithHandler (handlers, body)
+
+(* (module body-exprs...) — creates a thunk that evaluates to an environment *)
+and parse_module ps =
+  let body = parse_rest ps in
+  EModule body
+
+(* (import mod-expr) — force a module thunk and merge its bindings *)
+and parse_import ps =
+  let mod_expr = parse_expr ps in
+  ignore (parse_rest ps);  (* consume ) and any trailing *)
+  EImport mod_expr
+
+(* (load "file.pp") — evaluate a file in the current environment *)
+and parse_load ps =
+  match peek ps with
+  | TokString path ->
+      ignore (advance ps);
+      ignore (parse_rest ps);
+      ELoad path
+  | _ -> failwith "load expects a string path"
+
+(* (load-module "file.pp") — evaluate a file as a module, returning an env map *)
+and parse_load_module ps =
+  match peek ps with
+  | TokString path ->
+      ignore (advance ps);
+      ignore (parse_rest ps);
+      ELoadModule path
+  | _ -> failwith "load-module expects a string path"
 
 (* (vector e1 e2 ...) — already inside a [ ... ] parsed as EApply *)
 and parse_vector ps =

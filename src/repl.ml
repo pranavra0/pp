@@ -12,29 +12,18 @@ let init () =
   Evaluator.init ();
   global_env := Primitives.initial_env ()
 
-(* Process a single expression and return the result *)
+(* Process a single expression and return the result.
+   Uses eval_expressions which handles def/import/env-merging. *)
 let process_expr (e : expr) : value =
-  match e with
-  | EDef (name, params, body) ->
-      let closure = make_closure ~name:(Some name) params body global_env in
-      global_env := extend_env !global_env name closure;
-      closure
-  | EDefFexpr (name, params, body) ->
-      let fexpr = make_fexpr ~name:(Some name) params body global_env in
-      global_env := extend_env !global_env name fexpr;
-      fexpr
-  | _ ->
-      let v = eval e !global_env in
-      force v
+  match eval_expressions [e] global_env with
+  | VEnvMap _ as v -> v
+  | v -> v
 
 (* Execute a source string (multiple expressions) *)
 let execute_string (source : string) : value list =
-  init ();  (* always init *)
+  init ();
   let exprs = read_string source in
-  List.map (fun e ->
-    let result = process_expr e in
-    result
-  ) exprs
+  List.map (fun e -> process_expr e) exprs
 
 (* Execute a source file *)
 let execute_file (path : string) : value list =

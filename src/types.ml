@@ -30,6 +30,10 @@ and expr =
   | EDef of string * string list * expr  (* (def name (params...) body) *)
   | EDefFexpr of string * string list * expr  (* (def-fexpr name (params...) body) *)
   | ELetStar of (string * expr) list * expr  (* sequential let — desugared by reader *)
+  | EModule of expr list        (* (module body...) — thunk producing an env *)
+  | EImport of expr             (* (import mod-expr) — force module, merge env *)
+  | ELoad of string             (* (load "file.pp") — eval file in current env *)
+  | ELoadModule of string       (* (load-module "file.pp") — eval file as module *)
 
 (* ---- Values — the runtime representation ---- *)
 
@@ -51,6 +55,7 @@ and value =
   | VThunk of thunk
   | VMacro of closure
   | VFexpr of fexpr
+  | VEnvMap of (string * value) list  (* module export: list of (name, thunk) pairs *)
 
 (* ---- Function closure ---- *)
 and closure = {
@@ -163,6 +168,14 @@ let rec hash_expr (e : expr) : string =
         hash_concat ["let_star_bind"; n; hash_expr e]
       ) bindings in
       hash_concat ("let_star" :: bparts @ [hash_expr body])
+  | EModule exprs ->
+      hash_concat ("module" :: List.map hash_expr exprs)
+  | EImport mod_expr ->
+      hash_concat ["import"; hash_expr mod_expr]
+  | ELoad path ->
+      hash_concat ["load"; path]
+  | ELoadModule path ->
+      hash_concat ["load_module"; path]
 
 and hash_value (v : value) : string =
   let rec hash_val v =
@@ -217,6 +230,12 @@ and hash_value (v : value) : string =
                      hash_concat ("params" :: fexpr_params);
                      hash_expr fexpr_body]
         (* Env deliberately not hashed *)
+    | VEnvMap bindings ->
+        let sorted = List.sort (fun (a,_) (b,_) -> String.compare a b) bindings in
+        let parts = List.map (fun (name, v) ->
+          hash_concat [name; hash_val v]
+        ) sorted in
+        hash_concat ("envmap" :: parts)
   in
   hash_val v
 
@@ -341,6 +360,8 @@ let rec string_of_value (v : value) : string =
   | VMacro _ -> "#<macro>"
   | VFexpr { fexpr_name = Some n; _ } -> "#<fexpr " ^ n ^ ">"
   | VFexpr { fexpr_name = None; _ } -> "#<fexpr>"
+  | VEnvMap bindings ->
+      "#<envmap " ^ string_of_int (List.length bindings) ^ " exports>"
 
 and string_of_capability (c : capability) : string =
   match c with
