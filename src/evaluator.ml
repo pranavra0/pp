@@ -267,13 +267,15 @@ and extract_capabilities (v : value) : capability list =
   match v with
   | VCapability c -> [c]
   | VVector vs -> Array.to_list (Array.map (fun v ->
-      match v with VCapability c -> c | _ -> failwith "capability vector must contain capabilities"
+      match force v with VCapability c -> c | _ -> failwith "capability vector must contain capabilities"
     ) vs)
   | VPair _ ->
       let rec collect acc = function
         | VNil -> List.rev acc
-        | VPair (VCapability c, rest) -> collect (c :: acc) rest
-        | VPair (v, _) -> failwith ("not a capability: " ^ string_of_value v)
+        | VPair (v, rest) ->
+            (match force v with
+             | VCapability c -> collect (c :: acc) rest
+             | other -> failwith ("not a capability: " ^ string_of_value other))
         | _ -> failwith "capability list must be a proper list"
       in
       collect [] v

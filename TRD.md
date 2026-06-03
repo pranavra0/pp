@@ -542,9 +542,10 @@ etc.) are deferred to v2.
 | `(with-handler ((effect handler)...) body)` | Install effect handlers |
 | `(delay expr)` | Explicitly create a suspended thunk (rarely needed) |
 | `(do exprs...)` | Sequence expressions; forces each, returns last |
+| `(and exprs...)` | Short-circuiting logical AND |
+| `(or exprs...)` | Short-circuiting logical OR |
 | `(let* (binding...) body)` | Sequential let (each binding sees previous ones) |
 | `(def-fexpr name (params...) body)` | Define an operative (fexpr) — receives unevaluated args |
-| `(macro (params...) body)` | Compile-time macro (planned) |
 
 ### 4.2 Key Built-ins (v1)
 
@@ -741,52 +742,44 @@ These three rules are the foundation. They will not change.
 
 ### 7.1 Implementation Language
 
-**Recommendation: Rust.** Rationale:
+**Chosen: OCaml.** Rationale:
 
-- High performance needed for content-addressing (hashing every node).
-- Memory safety matters for a runtime that will manage thunks and capabilities.
-- Strong type system helps enforce invariants (purity, capability scoping).
-- Good serialization (serde) for the persistent cache.
-- Path to native compilation (v2+).
-- Growing ecosystem for language implementation (Cranelift for JIT).
+- Algebraic data types + pattern matching are native — an evaluator is a giant `match`.
+- GC handles thunk lifetimes automatically — no manual memory management.
+- Type inference means less ceremony than Rust, but still catches structural mistakes.
+- Development velocity matters more than runtime speed for v1 semantics validation.
+- Zero external dependencies — everything comes from the OCaml stdlib.
 
-**Alternative: Racket.** Faster to prototype, but harder to make production-grade
-and harder to later self-host.
+**Bootstrap path**: v1 interpreter in OCaml (12-line Makefile). Meta-circular
+evaluator in pp (`examples/meta.pp`) proves the language is self-describing.
+v2: write a pp compiler in pp, eliminating the OCaml bootstrap.
 
-**Bootstrap path**: implement v1 in Rust. v2 self-hosting: write a pp
-interpreter in pp (meta-circular). The Rust runtime becomes the "hardware
-abstraction layer."
-
-### 7.2 Project Structure (proposed)
+### 7.2 Project Structure
 
 ```
 pp/
 ├── TRD.md                  ← this document
-├── Cargo.toml
-├── src/
-│   ├── main.rs             ← entry point (pp CLI)
-│   ├── reader.rs           ← s-expression parser + rich literals
-│   ├── types.rs            ← Value, Thunk, Capability, etc.
-│   ├── hasher.rs           ← SHA-256 content addressing
-│   ├── evaluator.rs        ← lazy evaluator
-│   ├── scheduler.rs        ← thunk forcing, work queue
-│   ├── cache.rs            ← persistent content-addressed cache
-│   ├── effects.rs          ← algebraic effect system
-│   ├── capabilities.rs     ← capability tokens
-│   ├── code_store.rs       ← content-addressed code store
-│   ├── primitives.rs       ← built-in functions
-│   ├── repl.rs             ← REPL
-│   └── stdlib/
-│       ├── base.pp         ← core library (list ops, etc.)
-│       ├── fs.pp           ← filesystem effects
-│       ├── net.pp          ← network effects
-│       └── process.pp      ← process effects
+├── Makefile                ← 12-line bootstrap build
+├── .gitignore
+├── pp                      ← the interpreter binary
+├── build.pp                ← aspirational self-hosting build
 ├── examples/
-│   ├── factorial.pp
-│   ├── build.pp
-│   └── service.pp
-└── tests/
-    └── ...
+│   ├── factorial.pp        ← recursion + laziness
+│   ├── lazy.pp             ← thunks that never fire
+│   ├── build.pp            ← DAG emerges from evaluation
+│   ├── demo.pp             ← let*, fexprs, capabilities
+│   └── meta.pp             ← meta-circular evaluator (pp in pp)
+├── stdlib/
+└── src/
+    ├── types.ml            ← value, expr, thunk, closure, fexpr types
+    ├── hasher.ml           ← content-addressing (Digest)
+    ├── reader.ml           ← s-expression parser + rich literals
+    ├── capabilities.ml     ← authority tokens
+    ├── primitives.ml       ← built-in functions
+    ├── evaluator.ml        ← lazy eval, force, apply, effects
+    ├── cache.ml            ← persistent cache (stub)
+    ├── repl.ml             ← REPL loop + file runner
+    └── main.ml             ← CLI entry point
 ```
 
 ---
@@ -801,8 +794,7 @@ pp/
 2. **Garbage collection of cached thunks**: when do we evict from the
    persistent cache? LRU? Size-based? Explicit `pp cache clean`?
 
-3. **Exact syntax for effect declarations**: `defeffect` vs `effect` vs
-   something else. The TRD uses `defeffect` as a placeholder.
+3. **Effect syntax**: settled on `(perform name args...)` with `(with-handler ((name handler) ...) body)`. No `defeffect` declaration needed — effects are identified by name at perform time.
 
 4. **Module system**: how do `.pp` files reference each other? `import`? Names
    as metadata mapped to hashes? Namespaced keywords?
@@ -822,8 +814,7 @@ pp/
 9. **Exception/error handling**: how do errors interact with laziness and
    effects? An error during thunk evaluation memoizes the error?
 
-10. **Self-hosting strategy**: at what point do we write a pp interpreter in
-    pp? What's the bootstrap chain?
+10. **Self-hosting strategy**: v1 has a working meta-circular evaluator (`examples/meta.pp`). The bootstrap chain is: 12-line Makefile → OCaml bytecode interpreter → meta.pp → (v2) pp compiler in pp. The Makefile is an axiom, not a feature — it will be replaced by pp itself.
 
 ---
 
@@ -831,19 +822,10 @@ pp/
 
 **v1 is successful if**:
 
-- A user can write a `.pp` file with pure and effectful expressions.
-- Pure expressions are automatically cached and reused across runs.
-- Effectful expressions are capability-scoped and cannot access unauthorized
-  resources.
-- A multi-file build (e.g., compiling a C project, building a static site)
-  demonstrates automatic incrementality — change one file, only affected thunks
-  re-evaluate.
-- The REPL is usable for exploration.
-
-**The language is compelling if**:
-
-- A build system, a package install, and a service deployment are
-  indistinguishable — they're all just forcing thunks.
-- "Run this on three nodes" becomes a few lines of code.
-- The concept of "dependency hell" doesn't arise because code is
-  content-addressed.
+- A user can write a `.pp` file with pure and effectful expressions. ✅
+- Pure expressions are automatically memoized within a session (content-addressed thunk store). ✅
+- Cross-run persistent caching is deferred to v2. ⚠️
+- Effectful expressions are capability-scoped (capabilities are first-class values; `effect` blocks scope them). ✅
+- A multi-file build demonstrates the DAG emerges from evaluation (see `examples/build.pp`). ✅
+- The REPL is usable for exploration. ✅
+- The language can implement itself — a meta-circular evaluator runs correctly (see `examples/meta.pp`). ✅
