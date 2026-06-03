@@ -5,7 +5,7 @@ open Reader
 open Evaluator
 
 (* Global environment for REPL *)
-let global_env : env ref = ref []
+let global_env : env ref = ref empty_env
 
 (* Initialize REPL *)
 let init () =

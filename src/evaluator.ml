@@ -15,10 +15,11 @@ let current_capabilities : capability list ref = ref []
 let thunk_store : (string, thunk) Hashtbl.t = Hashtbl.create 1024
 
 (* Create or retrieve a content-addressed thunk.
-   Two thunks with the same (expr, env, capabilities) are the SAME thunk. *)
+   Two thunks with the same (expr, env, capabilities) are the SAME thunk.
+   Uses env.env_hash for O(1) environment identity — no recursive traversal. *)
 let make_thunk_ca (expr : expr) (env : env) : value =
   let caps_hash = hash_concat ("caps" :: List.map Hasher.hash_capability !current_capabilities) in
-  let h = hash_concat ["thunk"; Hasher.hash_expr expr; Hasher.hash_env env; caps_hash] in
+  let h = hash_concat ["thunk"; Hasher.hash_expr expr; env.env_hash; caps_hash] in
   match Hashtbl.find_opt thunk_store h with
   | Some existing -> VThunk existing
   | None ->
@@ -177,7 +178,7 @@ and apply (fn : value) (args : value list) (env : env) : value =
       ) !fexpr_env fexpr_params args in
       (* Expose the calling environment so the fexpr can introspect it *)
       let calling_env_val = VVector (Array.of_list (
-        List.map (fun (n, v) -> VPair (VString n, v)) env)) in
+        List.map (fun (n, v) -> VPair (VString n, v)) env.bindings)) in
       let env' = extend_env env' "calling-env" calling_env_val in
       eval fexpr_body env'
 

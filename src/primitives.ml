@@ -21,7 +21,8 @@ let lookup (name : string) : value option =
   Hashtbl.find_opt builtins name
 
 let initial_env () : env =
-  Hashtbl.fold (fun name v env -> (name, v) :: env) builtins []
+  let bindings = Hashtbl.fold (fun name v acc -> (name, v) :: acc) builtins [] in
+  env_of_bindings bindings
 
 (* ---- Register all primitives ---- *)
 
@@ -67,7 +68,7 @@ let () =
   register "=" (fun args ->
     let args = force_args args in
     match args with
-    | [a; b] -> VBool (a = b)
+    | [a; b] -> VBool (try a = b with Invalid_argument _ -> a == b)
     | _ -> failwith "= expects two arguments");
 
   register "<" (fun args ->
