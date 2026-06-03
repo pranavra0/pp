@@ -1,2 +1,15 @@
-/target
-docs/
+# pp build artifacts
+*.cmo
+*.cmi
+*.cmx
+*.o
+
+# pp binary
+pp
+pp-native
+
+# Cache
+.pp/
+
+# OCaml
+_build/
