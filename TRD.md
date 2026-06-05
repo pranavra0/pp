@@ -792,7 +792,7 @@ These three rules are the foundation. They will not change.
 - Meta-circular evaluator (`meta.pp`) runs all test cases correctly.
 - Tail-call optimization via `eval_tail`/`apply_tail` CPS transformation — OCaml stack does not grow across tail calls. Simple, multi-arg, and mutual recursion all pass at depth 10k+ (bytecode) / 100k+ (native).
 
-### 6.4 v1.5 — "Parallelism and Macros"
+### 6.4 v1.5 — "Parallelism"
 
 - Parallel evaluation of independent thunks.
 - Improved error reporting (source locations, stack traces).

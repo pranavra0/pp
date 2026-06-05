@@ -6,8 +6,7 @@
 
 pp can read and evaluate code from the OCaml side, but pp code itself cannot
 eval pp strings or apply functions dynamically. Adding these two builtins makes
-the language self-aware — the meta-circular evaluator becomes trivial, and
-macros (if ever desired) can be implemented in pp itself.
+the language self-aware — the meta-circular evaluator becomes trivial.
 
 Fexprs already give us operatives (functions that receive unevaluated args).
 `eval-pp` + `apply-pp` complete the picture: the ability to evaluate arbitrary

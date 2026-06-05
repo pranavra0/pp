@@ -53,7 +53,6 @@ and value =
   | VBuiltin of string * (value list -> value)  (* name + ocaml function *)
   | VCapability of capability
   | VThunk of thunk
-  | VMacro of closure
   | VFexpr of fexpr
   | VEnvMap of (string * value) list  (* module export: list of (name, thunk) pairs *)
 
@@ -221,9 +220,6 @@ and hash_value (v : value) : string =
         hash_concat ["builtin"; name]
     | VCapability cap ->
         hash_capability cap
-    | VMacro { params; body; env = _ } ->
-        hash_concat ["macro"; hash_concat ("params" :: params);
-                     hash_expr body]
     | VFexpr { fexpr_name; fexpr_params; fexpr_body; fexpr_env = _ } ->
         hash_concat ["fexpr";
                      (match fexpr_name with Some n -> n | None -> "anon");
@@ -357,7 +353,6 @@ let rec string_of_value (v : value) : string =
        | Unevaluated -> "#<thunk>"
        | Evaluating -> "#<thunk: evaluating>"
        | Evaluated v -> "#<thunk: " ^ string_of_value v ^ ">")
-  | VMacro _ -> "#<macro>"
   | VFexpr { fexpr_name = Some n; _ } -> "#<fexpr " ^ n ^ ">"
   | VFexpr { fexpr_name = None; _ } -> "#<fexpr>"
   | VEnvMap bindings ->

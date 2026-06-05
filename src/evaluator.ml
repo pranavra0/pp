@@ -315,9 +315,6 @@ and apply_tail (fn : value) (args : value list) (env : env) (k : value -> value)
          with Failure msg ->
            failwith (Printf.sprintf "builtin '%s' failed: %s" name msg))
 
-  | VMacro { params; body; env = macro_env } ->
-      failwith "macros not yet supported"
-
   | _ ->
       failwith (Printf.sprintf "not a function: %s" (string_of_value fn))
 
