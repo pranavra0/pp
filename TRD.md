@@ -76,6 +76,20 @@ onto the lazy computation DAG.
 
 ;; Force a thunk explicitly
 (force some-thunk)
+
+;; Modules — thunks that evaluate to environments
+(module
+  (def (square x) (* x x))
+  (def (cube x) (* x (* x x))))
+
+;; Import a module's bindings into the current scope
+(import some-module)
+
+;; Load a file into the current scope (like the REPL)
+(load "lib/math.pp")
+
+;; Load a file as a module (clean env, returns an env-map)
+(def math (load-module "lib/math.pp"))
 ```
 
 #### 2.1.1 Rich Data Literals
@@ -107,6 +121,33 @@ constructs, but map directly onto the underlying list structure.
 Higher abstractions (spreadsheet cells, React components, service definitions)
 are **libraries** built on the expression model, not syntax extensions. The
 core remains one uniform Lisp.
+
+#### 2.1.2 Modules as Environment Thunks
+
+Modules are not a separate namespace or compilation-unit system. A module is
+a **thunk that evaluates to an environment**. Importing is forcing that thunk
+and merging its bindings into the current scope. Module identity is
+`hash(module-body)` — independent of where the module is defined.
+
+```lisp
+;; A module is just a thunk that produces an environment-map (VEnvMap)
+(module
+  (def (double x) (* x 2))
+  (def (triple x) (* x 3)))
+
+;; Import merges bindings into the current scope
+(let [m (load-module "math.pp")]
+  (import m)
+  (double 5))  ;; => 10
+
+;; load brings a file's defs into scope directly
+(load "stdlib/list.pp")
+```
+
+Modules evaluate in a **clean environment** (builtins only, no ambient scope),
+so their identity and behavior are stable regardless of import site. Imports
+compose through `do`, making them ordinary DAG edges rather than a separate
+resolution phase.
 
 ### 2.2 Data Model
 
@@ -546,6 +587,10 @@ etc.) are deferred to v2.
 | `(or exprs...)` | Short-circuiting logical OR |
 | `(let* (binding...) body)` | Sequential let (each binding sees previous ones) |
 | `(def-fexpr name (params...) body)` | Define an operative (fexpr) — receives unevaluated args |
+| `(module defs...)` | Create a module — a thunk producing an environment-map (VEnvMap) |
+| `(import mod-expr)` | Force a module thunk and merge its bindings into the current scope |
+| `(load "file.pp")` | Evaluate a file in the current scope; defs persist |
+| `(load-module "file.pp")` | Evaluate a file in a clean env and return its exports as VEnvMap |
 
 ### 4.2 Key Built-ins (v1)
 
@@ -618,7 +663,28 @@ etc.) are deferred to v2.
 (compile-c-project "./src" "./build")
 ```
 
-### 5.3 Service Definition
+### 5.3 Modules
+
+```lisp
+;; A math module — just a Lisp expression, not a separate file format
+(def math-mod
+  (module
+    (def (square x) (* x x))
+    (def (cube x) (* x (* x x)))))
+
+;; Import merges bindings into scope
+(import math-mod)
+(square 5)  ;; => 25
+
+;; Load a file directly (defs become visible in current scope)
+(load "stdlib/list.pp")
+
+;; Load as an isolated module (clean env, reusable VEnvMap)
+(def list-lib (load-module "stdlib/list.pp"))
+(import list-lib)
+```
+
+### 5.4 Service Definition
 
 ```lisp
 ;; A service is a function that takes capabilities and runs
@@ -640,7 +706,7 @@ etc.) are deferred to v2.
     (supervise [db cache web])))
 ```
 
-### 5.4 Distributed Computation (v2 Syntax Preview)
+### 5.5 Distributed Computation (v2 Syntax Preview)
 
 ```lisp
 ;; Remote evaluation returns a task thunk
@@ -675,8 +741,10 @@ capabilities, algebraic effects — on a single machine.
 | S-expression reader with rich literals | ✅ |
 | Haskell-style lazy evaluation | ✅ |
 | Content-addressed thunk store (`make_thunk_ca` + global dedup) | ✅ |
+| O(1) thunk identity via persistent env IDs and cached hashes | ✅ |
 | Recursive `force` (evaluates through thunk chains) | ✅ |
 | Lazy data constructors (`cons`/`list` store thunks without forcing) | ✅ |
+| Module system (`module`, `import`, `load`, `load-module`) | ✅ |
 | Persistent disk cache | ⚠️ v2 |
 | Capability tokens (`filesystem`, `network`, `process`, compose, restrict) | ✅ |
 | Algebraic effects (`perform`/`with-handler`, single-shot) | ✅ |
@@ -684,6 +752,7 @@ capabilities, algebraic effects — on a single machine.
 | Fexprs (`def-fexpr` — operatives with unevaluated args) | ✅ |
 | `and`/`or` short-circuiting special forms | ✅ |
 | Closures capture `env ref` (see later `def`s — mutual recursion) | ✅ |
+| Tail-call optimization (function calls in tail position don't grow stack) | ✅ |
 | REPL + file runner | ✅ |
 | Incremental builds (automatic, via content-addressing) | ✅ |
 
@@ -693,18 +762,18 @@ These three rules are the foundation. They will not change.
 
 | Rule | Description |
 |------|-------------|
-| **Thunk identity** | `hash(expr, free-var-env, capability-scope)`. Same hash = same thunk in the global store. Two `(delay 42)` in the same context are physically the same object. |
-| **Dependencies** | Everything accessed during evaluation. Currently: full environment included in hash (pessimistic but correct). |
+| **Thunk identity** | `hash(expr, env_id, capability-scope)`. Env identity is an incrementally-computed hash stored on each env node — O(1), not structural traversal. Same hash = same thunk in the global store. |
+| **Dependencies** | Everything accessed during evaluation. Currently: full environment identity included in hash (pessimistic but correct; future: free-variable-only for broader sharing). |
 | **Effects inside DAG** | Effects are not outside the DAG — they are capability-gated inputs whose observed results become part of the thunk's identity. A thunk that reads a file is cached by that file's content hash. |
 
 | Deferred to v2 | Why |
 |----------------|-----|
-| Free-variable analysis for env hashing | Currently includes full env. Free-var-only makes sharing broader without breaking correctness. |
 | Resource-access tracking during eval | File reads, network calls — record content hashes of accessed resources and include in thunk hash. Enables effectful caching. |
 | Capability propagation for remote eval | Remote thunks receive only delegated capabilities — essential for distributed safety. |
 | Persistent disk cache | In-memory only. Disk persistence needs serialization format + invalidation strategy. |
 | Multi-shot continuations | Currently single-shot. Multi-shot enables non-determinism, generators, etc. |
 | Parallel evaluation | Independent thunks evaluated concurrently. |
+| Thunk-chain forcing (lazy space leaks) | Deeply-nested arithmetic thunks (e.g. `(- (- n 1) 1)`) overflow when forced all at once. Fix requires strictness annotations or a CPS/trampoline evaluator. |
 
 ### 6.2 v1.1 — "Fexprs and Capabilities" ✅ DONE
 
@@ -712,13 +781,24 @@ These three rules are the foundation. They will not change.
 - `def-fexpr` — operatives that receive unevaluated arguments + calling environment.
 - Capability constructors: `filesystem`, `network`, `process`, `cap-compose`, `cap-restrict`.
 
-### 6.3 v1.5 — "Parallelism and Macros"
+### 6.3 v1.2 — "Modules and O(1) Identity" ✅ DONE
+
+- Environment nodes carry stable integer IDs and cached incremental hashes — thunk identity is O(1) regardless of env chain depth.
+- Modules as environment-producing thunks: `(module defs...)` returns a `VEnvMap`.
+- `(import mod-expr)` merges a module's bindings into scope via `do`-scoped env threading.
+- `(load "file.pp")` evaluates a file in the current scope (like the REPL).
+- `(load-module "file.pp")` evaluates a file in a clean env and returns its exports.
+- Modules evaluate in a clean environment (builtins only), so identity is stable.
+- Meta-circular evaluator (`meta.pp`) runs all test cases correctly.
+- Tail-call optimization via `eval_tail`/`apply_tail` CPS transformation — OCaml stack does not grow across tail calls. Simple, multi-arg, and mutual recursion all pass at depth 10k+ (bytecode) / 100k+ (native).
+
+### 6.4 v1.5 — "Parallelism and Macros"
 
 - Parallel evaluation of independent thunks.
 - Improved error reporting (source locations, stack traces).
 - Basic IDE support (LSP).
 
-### 6.3 v2 — "Remote Thunks"
+### 6.5 v2 — "Remote Thunks"
 
 - `remote-eval`: send thunks to other nodes for evaluation.
 - Capability propagation: remote thunks only get delegated capabilities.
@@ -728,7 +808,7 @@ These three rules are the foundation. They will not change.
 - Failure handling: timeouts, retries, partial results.
 - Multi-shot continuations in the effect system.
 
-### 6.4 v3 — "Redundant and Cluster-Wide"
+### 6.6 v3 — "Redundant and Cluster-Wide"
 
 - Redundant execution: "run on N nodes, return first result."
 - Cluster scheduler with resource awareness.
@@ -768,15 +848,17 @@ pp/
 │   ├── lazy.pp             ← thunks that never fire
 │   ├── build.pp            ← DAG emerges from evaluation
 │   ├── demo.pp             ← let*, fexprs, capabilities
-│   └── meta.pp             ← meta-circular evaluator (pp in pp)
+│   ├── meta.pp             ← meta-circular evaluator (pp in pp)
+│   ├── math.pp             ← example module (loaded by module_test.pp)
+│   └── module_test.pp      ← module + import + load demo
 ├── stdlib/
 └── src/
-    ├── types.ml            ← value, expr, thunk, closure, fexpr types
-    ├── hasher.ml           ← content-addressing (Digest)
+    ├── types.ml            ← types, env, hashing, pretty-printing
+    ├── hasher.ml           ← thin re-export (all hashing lives in types.ml)
     ├── reader.ml           ← s-expression parser + rich literals
     ├── capabilities.ml     ← authority tokens
     ├── primitives.ml       ← built-in functions
-    ├── evaluator.ml        ← lazy eval, force, apply, effects
+    ├── evaluator.ml        ← lazy eval, force, apply, effects, modules
     ├── cache.ml            ← persistent cache (stub)
     ├── repl.ml             ← REPL loop + file runner
     └── main.ml             ← CLI entry point
@@ -796,8 +878,7 @@ pp/
 
 3. **Effect syntax**: settled on `(perform name args...)` with `(with-handler ((name handler) ...) body)`. No `defeffect` declaration needed — effects are identified by name at perform time.
 
-4. **Module system**: how do `.pp` files reference each other? `import`? Names
-   as metadata mapped to hashes? Namespaced keywords?
+4. **Module system**: ✅ Resolved. Modules are thunks that evaluate to environments (VEnvMap). `(import m)` forces the thunk and merges bindings via `do`-scoped env threading. No separate namespace, no compilation phase — modules are just DAG nodes at a higher granularity. See Section 2.1.2.
 
 5. **Serialization format for cached values**: something fast and
    content-addressable. Candidates: CBOR, MessagePack, or a custom binary
@@ -806,10 +887,9 @@ pp/
 6. **Capability serialization for remote eval (v2)**: how do you serialize a
    capability token and ensure the remote node enforces it correctly?
 
-7. **Exact semantics of `force` on already-forced thunks**: transparent (no-op)
-   or an error to force twice?
+7. **Exact semantics of `force` on already-forced thunks**: ✅ Settled. Transparent no-op — `force` returns the memoized value without error. This is the natural consequence of memoization: forcing twice is harmless.
 
-8. **Tail call optimization**: needed for practical functional programming.
+8. **Tail call optimization**: ✅ Implemented. `eval_tail`/`apply_tail` thread a continuation `k` through tail-position expressions. Function-call recursion does not grow the OCaml stack. Verified at 100k+ depth in native builds. See Section 6.3.
 
 9. **Exception/error handling**: how do errors interact with laziness and
    effects? An error during thunk evaluation memoizes the error?
@@ -829,3 +909,4 @@ pp/
 - A multi-file build demonstrates the DAG emerges from evaluation (see `examples/build.pp`). ✅
 - The REPL is usable for exploration. ✅
 - The language can implement itself — a meta-circular evaluator runs correctly (see `examples/meta.pp`). ✅
+- Modules compose via the same thunk + DAG mechanism as expressions — no separate module system. ✅
