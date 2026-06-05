@@ -29,6 +29,13 @@ let make_thunk_ca (expr : expr) (env : env) : value =
 
 (* ---- Force: evaluate a thunk on demand ---- *)
 
+(* The force function is tail-recursive through already-evaluated thunk chains.
+   For unevaluated thunks, it calls eval which may recursively call force via
+   builtins. This works for all common patterns; extremely deep thunk chains
+   (e.g. 100k nested arithmetic thunks) may overflow the OCaml stack.
+   This is the classic lazy-evaluation space leak — future work includes
+   strictness annotations or a trampoline-based force. *)
+
 let rec force (v : value) : value =
   match v with
   | VThunk t ->
@@ -42,70 +49,70 @@ let rec force (v : value) : value =
            force result)
   | _ -> v
 
-(* ---- Main Evaluator ---- *)
+(* ---- Main Evaluator (non-tail) ---- *)
 
 and eval (e : expr) (env : env) : value =
+  eval_tail e env (fun v -> v)
+
+(* ---- Tail-position evaluator ---- *)
+(* eval_tail e env k: evaluates e in tail position with continuation k.
+   The continuation k is threaded through tail calls without growing the
+   OCaml stack — this is how TCO works. *)
+
+and eval_tail (e : expr) (env : env) (k : value -> value) : value =
   match e with
-  | ELiteral v -> v  (* self-evaluating *)
+  | ELiteral v -> k v
 
   | ESymbol name ->
       (match lookup_env env name with
-       | Some v -> force v  (* force bindings on access *)
+       | Some v -> k (force v)
        | None ->
            (match Primitives.lookup name with
-            | Some v -> v
+            | Some v -> k v
             | None -> failwith ("unbound symbol: " ^ name)))
 
   | EIf (cond, then_e, else_e) ->
-      (* Force the condition to decide which branch *)
+      (* Condition is non-tail; branches are tail *)
       (match force (eval cond env) with
-       | VBool true -> eval then_e env
-       | VBool false -> eval else_e env
-       | VNil -> eval else_e env  (* nil is falsy *)
-       | _ -> eval then_e env)     (* non-nil, non-false is truthy *)
+       | VBool true -> eval_tail then_e env k
+       | VBool false -> eval_tail else_e env k
+       | VNil -> eval_tail else_e env k
+       | _ -> eval_tail then_e env k)
 
   | ELet (bindings, body) ->
-      (* Create thunks for each binding — DON'T force them *)
+      (* Bindings are non-tail (they become thunks); body is tail *)
       let env' = List.fold_left (fun env' (name, binding_expr) ->
-        let thunk = make_thunk_ca binding_expr env  (* thunks capture current env, not extended env *)
-        in
+        let thunk = make_thunk_ca binding_expr env in
         extend_env env' name thunk
       ) env bindings in
-      eval body env'
+      eval_tail body env' k
 
   | EFn (params, body) ->
-      make_closure ~name:None params body (ref env)
+      k (make_closure ~name:None params body (ref env))
 
   | EApply (fn_expr, arg_exprs) ->
+      (* Tail application: evaluate fn and args (non-tail), then tail-apply *)
       let fn_val = force (eval fn_expr env) in
-      (* Create thunks for each argument *)
       let arg_thunks = List.map (fun arg_expr -> make_thunk_ca arg_expr env) arg_exprs in
-      apply fn_val arg_thunks env
+      apply_tail fn_val arg_thunks env k
 
   | EQuote e ->
-      quote_to_value e
+      k (quote_to_value e)
 
   | EForce e ->
-      force (eval e env)
+      (* EForce in tail position: eval the inner expression in tail position,
+         then force the result and pass to k *)
+      eval_tail e env (fun v -> k (force v))
 
   | EDelay e ->
-      (* delay just returns a thunk; don't evaluate *)
-      make_thunk_ca e env
+      k (make_thunk_ca e env)
 
   | EDo exprs ->
-      (* Evaluate each in sequence, threading a mutable env so that
-         imports, loads, and module loads affect subsequent expressions. *)
+      (* All but last are non-tail; last is tail *)
       let env_ref = ref env in
       let rec go = function
-        | [] -> VNil
-        | [last] ->
-            let result = force (eval last !env_ref) in
-            (match result with
-             | VEnvMap bindings ->
-                 env_ref := List.fold_left (fun e (n, v) ->
-                   extend_env e n v) !env_ref bindings;
-                 result
-             | _ -> result)
+        | [] -> k VNil
+        | [last] -> eval_tail last !env_ref k
         | (EImport mod_expr) :: rest ->
             let mod_val = force (eval mod_expr !env_ref) in
             (match mod_val with
@@ -126,10 +133,8 @@ and eval (e : expr) (env : env) : value =
             let source = really_input_string ch (in_channel_length ch) in
             close_in ch;
             let exprs = Reader.read_string source in
-            (* Evaluate in a fresh env with only builtins *)
             let mod_ref = ref (Primitives.initial_env ()) in
             ignore (eval_expressions exprs mod_ref);
-            (* Export all bindings that aren't builtins *)
             let base_bindings = (Primitives.initial_env ()).bindings in
             let rec collect_new all parent acc =
               match all with
@@ -141,7 +146,6 @@ and eval (e : expr) (env : env) : value =
                     collect_new rest parent ((n, v) :: acc)
             in
             let mod_val = VEnvMap (collect_new (!mod_ref).bindings base_bindings []) in
-            (* Merge into the do-env so subsequent expressions see the exports *)
             (match mod_val with
              | VEnvMap bindings ->
                  env_ref := List.fold_left (fun e (n, v) ->
@@ -163,45 +167,41 @@ and eval (e : expr) (env : env) : value =
       let caps_val = force (eval caps_expr env) in
       let caps =
         match caps_val with
-        | VNil -> []  (* no capabilities *)
+        | VNil -> []
         | _ -> extract_capabilities caps_val
       in
       let saved_caps = !current_capabilities in
       current_capabilities := caps @ saved_caps;
-      let result = eval body env in
+      let result = eval_tail body env k in
       current_capabilities := saved_caps;
       result
 
   | EPerform (name, arg_exprs) ->
       let args = List.map (fun e -> make_thunk_ca e env) arg_exprs in
       let forced_args = List.map force args in
-      perform_effect name forced_args
+      k (perform_effect name forced_args)
 
   | EWithHandler (handlers, body) ->
       let saved_handlers = !handler_stack in
-      (* Install handlers — each handler is a closure *)
       let new_handlers = List.map (fun (name, handler_expr) ->
         let handler_val = force (eval handler_expr env) in
         (name, fun args ->
           apply handler_val args env)
       ) handlers in
       handler_stack := new_handlers @ saved_handlers;
-      let result = eval body env in
+      let result = eval_tail body env k in
       handler_stack := saved_handlers;
       result
 
   | EDef (name, params, body) ->
-      let closure = make_closure ~name:(Some name) params body (ref env) in
-      closure
+      k (make_closure ~name:(Some name) params body (ref env))
 
   | EDefFexpr (name, params, body) ->
-      let fexpr = make_fexpr ~name:(Some name) params body (ref env) in
-      fexpr
+      k (make_fexpr ~name:(Some name) params body (ref env))
 
   | ELetStar (bindings, body) ->
-      (* let* is desugared by the reader, but we handle it directly too *)
       let rec nest env' = function
-        | [] -> eval body env'
+        | [] -> eval_tail body env' k
         | (name, expr) :: rest ->
             let thunk = make_thunk_ca expr env' in
             let env'' = extend_env env' name thunk in
@@ -210,8 +210,6 @@ and eval (e : expr) (env : env) : value =
       nest env bindings
 
   | EModule body_exprs ->
-      (* A module evaluates in a fresh env with only builtins, so its identity
-         is stable regardless of where it's defined. Only exports its own bindings. *)
       let base_env = Primitives.initial_env () in
       let mod_env = ref base_env in
       let final_env = List.fold_left (fun (env_acc : env) e ->
@@ -232,7 +230,6 @@ and eval (e : expr) (env : env) : value =
             ignore (force (eval e env_acc));
             env_acc
       ) !mod_env body_exprs in
-      (* Export only bindings added by the module (not builtins) *)
       let rec collect_new all parent acc =
         match all with
         | [] -> List.rev acc
@@ -243,28 +240,21 @@ and eval (e : expr) (env : env) : value =
               collect_new rest parent ((n, v) :: acc)
       in
       let new_bindings = collect_new final_env.bindings base_env.bindings [] in
-      VEnvMap new_bindings
+      k (VEnvMap new_bindings)
 
   | EImport mod_expr ->
-      (* Import at evaluation site: returns a VEnvMap to be merged by the
-         caller (do-body, REPL, or file runner). *)
       let mod_val = force (eval mod_expr env) in
-      (match mod_val with
-       | VEnvMap _ -> mod_val  (* caller handles merging *)
-       | _ -> failwith "import expects a module value")
+      k mod_val
 
   | ELoad path ->
-      (* Load a file and evaluate it in the current env. *)
       let ch = open_in path in
       let source = really_input_string ch (in_channel_length ch) in
       close_in ch;
       let exprs = Reader.read_string source in
       let env_ref = ref env in
-      eval_expressions exprs env_ref
+      k (eval_expressions exprs env_ref)
 
   | ELoadModule path ->
-      (* Load a file as a module: evaluate in a clean env (builtins only),
-         export all non-builtin bindings as VEnvMap. *)
       let ch = open_in path in
       let source = really_input_string ch (in_channel_length ch) in
       close_in ch;
@@ -281,11 +271,20 @@ and eval (e : expr) (env : env) : value =
             else
               collect_new rest parent ((n, v) :: acc)
       in
-      VEnvMap (collect_new (!mod_ref).bindings base_bindings [])
+      k (VEnvMap (collect_new (!mod_ref).bindings base_bindings []))
 
-(* ---- Function Application ---- *)
+(* ---- Function Application (non-tail) ---- *)
 
 and apply (fn : value) (args : value list) (env : env) : value =
+  apply_tail fn args env (fun v -> v)
+
+(* ---- Tail-position application ---- *)
+(* apply_tail fn args env k: applies fn to args, evaluates the body in
+   tail position with continuation k. This is the engine of TCO: the
+   continuation k is passed through to eval_tail on the function body,
+   so a tail-call chain never grows the OCaml stack. *)
+
+and apply_tail (fn : value) (args : value list) (env : env) (k : value -> value) : value =
   match fn with
   | VClosure { fn_name = _; params; body; env = closure_env } ->
       if List.length params <> List.length args then
@@ -294,37 +293,29 @@ and apply (fn : value) (args : value list) (env : env) : value =
       let env' = List.fold_left2 (fun e param arg ->
         extend_env e param arg  (* arg is already a thunk *)
       ) !closure_env params args in
-      eval body env'
+      eval_tail body env' k
 
   | VFexpr { fexpr_name = _; fexpr_params; fexpr_body; fexpr_env } ->
-      (* Fexpr receives unevaluated arg thunks captured from the CALLING environment.
-         The fexpr decides which to force and when. *)
       if List.length fexpr_params <> List.length args then
         failwith (Printf.sprintf "fexpr arity mismatch: expected %d args, got %d"
                     (List.length fexpr_params) (List.length args));
-      (* Bind parameters to the argument thunks (unevaluated).
-         The thunks were created in the calling env by EApply, so forcing them
-         evaluates in the caller's context. *)
       let env' = List.fold_left2 (fun e param arg ->
         extend_env e param arg
       ) !fexpr_env fexpr_params args in
-      (* Expose the calling environment so the fexpr can introspect it *)
       let calling_env_val = VVector (Array.of_list (
         List.map (fun (n, v) -> VPair (VString n, v)) env.bindings)) in
       let env' = extend_env env' "calling-env" calling_env_val in
-      eval fexpr_body env'
+      eval_tail fexpr_body env' k
 
   | VBuiltin (name, f) ->
-      (* Pass args as-is — each builtin decides which to force *)
       let forced_args = List.map (fun v ->
-        match v with VThunk _ -> v | _ -> v  (* keep thunks! *)
+        match v with VThunk _ -> v | _ -> v
       ) args in
-      (try f forced_args
-       with Failure msg ->
-         failwith (Printf.sprintf "builtin '%s' failed: %s" name msg))
+      k (try f forced_args
+         with Failure msg ->
+           failwith (Printf.sprintf "builtin '%s' failed: %s" name msg))
 
   | VMacro { params; body; env = macro_env } ->
-      (* Macros receive un-evaluated expressions *)
       failwith "macros not yet supported"
 
   | _ ->

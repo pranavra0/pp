@@ -27,15 +27,19 @@ let initial_env () : env =
 (* ---- Register all primitives ---- *)
 
 let () =
-  (* Arithmetic — strict: force all args *)
+  (* Arithmetic — strict: force all args, variadic + and * with identity *)
   register "+" (fun args ->
     let args = force_args args in
     match args with
-    | [VInt a; VInt b] -> VInt (a + b)
-    | [VFloat a; VFloat b] -> VFloat (a +. b)
-    | [VInt a; VFloat b] -> VFloat (float_of_int a +. b)
-    | [VFloat a; VInt b] -> VFloat (a +. float_of_int b)
-    | _ -> failwith "+ expects two numbers");
+    | [] -> VInt 0
+    | _ ->
+        let rec add acc = function
+          | [] -> acc
+          | VInt n :: rest -> add (match acc with VInt a -> VInt (a + n) | VFloat a -> VFloat (a +. float_of_int n)) rest
+          | VFloat f :: rest -> add (match acc with VInt a -> VFloat (float_of_int a +. f) | VFloat a -> VFloat (a +. f)) rest
+          | v :: _ -> failwith (Printf.sprintf "+ expects numbers, got %s" (string_of_value v))
+        in
+        add (List.hd args) (List.tl args));
 
   register "-" (fun args ->
     let args = force_args args in
@@ -47,9 +51,15 @@ let () =
   register "*" (fun args ->
     let args = force_args args in
     match args with
-    | [VInt a; VInt b] -> VInt (a * b)
-    | [VFloat a; VFloat b] -> VFloat (a *. b)
-    | _ -> failwith "* expects two numbers");
+    | [] -> VInt 1
+    | _ ->
+        let rec mul acc = function
+          | [] -> acc
+          | VInt n :: rest -> mul (match acc with VInt a -> VInt (a * n) | VFloat a -> VFloat (a *. float_of_int n)) rest
+          | VFloat f :: rest -> mul (match acc with VInt a -> VFloat (float_of_int a *. f) | VFloat a -> VFloat (a *. f)) rest
+          | v :: _ -> failwith (Printf.sprintf "* expects numbers, got %s" (string_of_value v))
+        in
+        mul (List.hd args) (List.tl args));
 
   register "/" (fun args ->
     let args = force_args args in
@@ -64,40 +74,73 @@ let () =
     | [VInt a; VInt b] when b <> 0 -> VInt (a mod b)
     | _ -> failwith "mod expects two integers");
 
-  (* Comparison — strict *)
+  (* Comparison — strict, variadic chaining *)
   register "=" (fun args ->
     let args = force_args args in
     match args with
-    | [a; b] -> VBool (try a = b with Invalid_argument _ -> a == b)
-    | _ -> failwith "= expects two arguments");
+    | [] | [_] -> VBool true
+    | a :: rest ->
+        VBool (List.for_all (fun b -> try a = b with Invalid_argument _ -> a == b) rest));
 
   register "<" (fun args ->
     let args = force_args args in
     match args with
-    | [VInt a; VInt b] -> VBool (a < b)
-    | [VFloat a; VFloat b] -> VBool (a < b)
-    | _ -> failwith "< expects two numbers");
+    | [] | [_] -> VBool true
+    | _ ->
+        let rec chained = function
+          | [] | [_] -> true
+          | VInt a :: VInt b :: rest -> a < b && chained (VInt b :: rest)
+          | VFloat a :: VFloat b :: rest -> a < b && chained (VFloat b :: rest)
+          | VInt a :: VFloat b :: rest -> float_of_int a < b && chained (VFloat b :: rest)
+          | VFloat a :: VInt b :: rest -> a < float_of_int b && chained (VInt b :: rest)
+          | _ -> failwith "< expects numbers"
+        in
+        VBool (chained args));
 
   register ">" (fun args ->
     let args = force_args args in
     match args with
-    | [VInt a; VInt b] -> VBool (a > b)
-    | [VFloat a; VFloat b] -> VBool (a > b)
-    | _ -> failwith "> expects two numbers");
+    | [] | [_] -> VBool true
+    | _ ->
+        let rec chained = function
+          | [] | [_] -> true
+          | VInt a :: VInt b :: rest -> a > b && chained (VInt b :: rest)
+          | VFloat a :: VFloat b :: rest -> a > b && chained (VFloat b :: rest)
+          | VInt a :: VFloat b :: rest -> float_of_int a > b && chained (VFloat b :: rest)
+          | VFloat a :: VInt b :: rest -> a > float_of_int b && chained (VInt b :: rest)
+          | _ -> failwith "> expects numbers"
+        in
+        VBool (chained args));
 
   register "<=" (fun args ->
     let args = force_args args in
     match args with
-    | [VInt a; VInt b] -> VBool (a <= b)
-    | [VFloat a; VFloat b] -> VBool (a <= b)
-    | _ -> failwith "<= expects two numbers");
+    | [] | [_] -> VBool true
+    | _ ->
+        let rec chained = function
+          | [] | [_] -> true
+          | VInt a :: VInt b :: rest -> a <= b && chained (VInt b :: rest)
+          | VFloat a :: VFloat b :: rest -> a <= b && chained (VFloat b :: rest)
+          | VInt a :: VFloat b :: rest -> float_of_int a <= b && chained (VFloat b :: rest)
+          | VFloat a :: VInt b :: rest -> a <= float_of_int b && chained (VInt b :: rest)
+          | _ -> failwith "<= expects numbers"
+        in
+        VBool (chained args));
 
   register ">=" (fun args ->
     let args = force_args args in
     match args with
-    | [VInt a; VInt b] -> VBool (a >= b)
-    | [VFloat a; VFloat b] -> VBool (a >= b)
-    | _ -> failwith ">= expects two numbers");
+    | [] | [_] -> VBool true
+    | _ ->
+        let rec chained = function
+          | [] | [_] -> true
+          | VInt a :: VInt b :: rest -> a >= b && chained (VInt b :: rest)
+          | VFloat a :: VFloat b :: rest -> a >= b && chained (VFloat b :: rest)
+          | VInt a :: VFloat b :: rest -> float_of_int a >= b && chained (VFloat b :: rest)
+          | VFloat a :: VInt b :: rest -> a >= float_of_int b && chained (VInt b :: rest)
+          | _ -> failwith ">= expects numbers"
+        in
+        VBool (chained args));
 
   (* List operations — car/cdr force the pair, cons/list are lazy *)
   register "cons" (fun args ->
@@ -147,16 +190,16 @@ let () =
   register "hash-map" (fun args ->
     let rec make_pairs = function
       | [] -> []
-      | k :: v :: rest -> (k, v) :: make_pairs rest
+      | k :: v :: rest -> (force_one k, v) :: make_pairs rest
       | _ -> failwith "hash-map expects even number of arguments"
     in
-    VMap (make_pairs args));  (* lazy *)
+    VMap (make_pairs args));  (* keys forced, values lazy *)
 
   register "hash-map-get" (fun args ->
     let args = force_args args in
     match args with
     | [VMap kvs; key] ->
-        (match List.find_opt (fun (k, _) -> k = key) kvs with
+        (match List.find_opt (fun (k, _) -> force_one k = key) kvs with
          | Some (_, v) -> v
          | None -> VNil)
     | _ -> failwith "hash-map-get expects a map and a key");
