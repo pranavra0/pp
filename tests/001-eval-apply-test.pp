@@ -3,8 +3,7 @@
 ;; Must run without errors and produce expected output.
 
 (print "=== 1. eval-pp: basic expression ===")
-(let [result (eval-pp "(+ 1 2 3)")]
-  (print "eval-pp (+ 1 2 3) =>" result))
+(print "eval-pp (+ 1 2 3) =>" (eval-pp "(+ 1 2 3)"))
 
 (print "")
 (print "=== 2. eval-pp: uses calling environment ===")
@@ -13,9 +12,9 @@
   (print "eval-pp (+ x y) =>" (eval-pp "(+ x y)")))
 
 (print "")
-(print "=== 3. eval-pp: can define things ===")
-(let [result (eval-pp "(def (square x) (* x x))")]
-  (print "defined square =>" result)
+(print "=== 3. eval-pp: define in do scope ===")
+(do
+  (eval-pp "(def (square x) (* x x))")
   (print "square 5 =>" (square 5)))
 
 (print "")

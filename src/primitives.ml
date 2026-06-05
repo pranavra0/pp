@@ -6,6 +6,15 @@ open Types
 let force_ref : (value -> value) ref = ref (fun v -> v)
 let set_force (f : value -> value) = force_ref := f
 
+(* Reference to the current environment — updated by evaluator at eval entry *)
+let current_env_ref : env ref = ref Types.empty_env
+
+(* References to evaluator's eval and apply — set by evaluator at init *)
+let eval_ref : (expr -> env -> value) ref = ref (fun _ _ -> failwith "eval not initialized")
+let apply_ref : (value -> value list -> env -> value) ref = ref (fun _ _ _ -> failwith "apply not initialized")
+let set_eval (f : expr -> env -> value) = eval_ref := f
+let set_apply (f : value -> value list -> env -> value) = apply_ref := f
+
 (* Force helpers for builtins *)
 let force_val (v : value) : value = !force_ref v
 let force_args (args : value list) : value list = List.map force_val args
@@ -313,5 +322,65 @@ let () =
 
   register "capability?" (fun args ->
     match args with [arg] -> VBool (match force_one arg with VCapability _ -> true | _ -> false) | _ -> failwith "capability? expects one arg");
+
+  (* ---- eval-pp and apply-pp ---- *)
+
+  register "eval-pp" (fun args ->
+    let args = force_args args in
+    match args with
+    | [VString code] ->
+        let exprs = Reader.read_string code in
+        (* Capture the calling env into a local ref — avoid clobbering
+           current_env_ref during inner evaluations. *)
+        let local_env = ref !current_env_ref in
+        let new_defs = ref [] in
+        let rec go = function
+          | [] ->
+              if !new_defs = [] then VNil
+              else VEnvMap (List.rev !new_defs)
+          | [EDef (name, params, body)] ->
+              let closure = Types.make_closure ~name:(Some name) params body local_env in
+              local_env := Types.extend_env !local_env name closure;
+              new_defs := (name, closure) :: !new_defs;
+              if !new_defs = [] then VNil else VEnvMap (List.rev !new_defs)
+          | [EDefFexpr (name, params, body)] ->
+              let fexpr = Types.make_fexpr ~name:(Some name) params body local_env in
+              local_env := Types.extend_env !local_env name fexpr;
+              new_defs := (name, fexpr) :: !new_defs;
+              if !new_defs = [] then VNil else VEnvMap (List.rev !new_defs)
+          | [last] ->
+              (* Pure expression: evaluate and force *)
+              force_one (!eval_ref last !local_env)
+          | (EDef (name, params, body)) :: rest ->
+              let closure = Types.make_closure ~name:(Some name) params body local_env in
+              local_env := Types.extend_env !local_env name closure;
+              new_defs := (name, closure) :: !new_defs;
+              go rest
+          | (EDefFexpr (name, params, body)) :: rest ->
+              let fexpr = Types.make_fexpr ~name:(Some name) params body local_env in
+              local_env := Types.extend_env !local_env name fexpr;
+              new_defs := (name, fexpr) :: !new_defs;
+              go rest
+          | e :: rest ->
+              ignore (force_one (!eval_ref e !local_env));
+              go rest
+        in
+        go exprs
+    | _ -> failwith "eval-pp expects a string"
+  );
+
+  register "apply-pp" (fun args ->
+    let args = force_args args in
+    match args with
+    | [fn; args_list] ->
+        let rec list_to_ocaml = function
+          | VNil -> []
+          | VPair (car, cdr) -> car :: list_to_ocaml cdr
+          | _ -> failwith "apply-pp expects a proper list for args"
+        in
+        let arg_values = list_to_ocaml args_list in
+        !apply_ref fn arg_values !current_env_ref
+    | _ -> failwith "apply-pp expects fn and list of args"
+  );
 
   ()

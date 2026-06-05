@@ -52,6 +52,7 @@ let rec force (v : value) : value =
 (* ---- Main Evaluator (non-tail) ---- *)
 
 and eval (e : expr) (env : env) : value =
+  Primitives.current_env_ref := env;
   eval_tail e env (fun v -> v)
 
 (* ---- Tail-position evaluator ---- *)
@@ -60,6 +61,7 @@ and eval (e : expr) (env : env) : value =
    OCaml stack — this is how TCO works. *)
 
 and eval_tail (e : expr) (env : env) (k : value -> value) : value =
+  Primitives.current_env_ref := env;
   match e with
   | ELiteral v -> k v
 
@@ -108,11 +110,21 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       k (make_thunk_ca e env)
 
   | EDo exprs ->
-      (* All but last are non-tail; last is tail *)
+      (* All but last are non-tail; last is tail.
+         Uses a local env ref for threading — NOT current_env_ref,
+         because inner evaluations would clobber it. *)
       let env_ref = ref env in
       let rec go = function
         | [] -> k VNil
         | [last] -> eval_tail last !env_ref k
+        | (EDef (name, params, body)) :: rest ->
+            let closure = make_closure ~name:(Some name) params body env_ref in
+            env_ref := extend_env !env_ref name closure;
+            go rest
+        | (EDefFexpr (name, params, body)) :: rest ->
+            let fexpr = make_fexpr ~name:(Some name) params body env_ref in
+            env_ref := extend_env !env_ref name fexpr;
+            go rest
         | (EImport mod_expr) :: rest ->
             let mod_val = force (eval mod_expr !env_ref) in
             (match mod_val with
@@ -308,6 +320,7 @@ and apply_tail (fn : value) (args : value list) (env : env) (k : value -> value)
       eval_tail fexpr_body env' k
 
   | VBuiltin (name, f) ->
+      Primitives.current_env_ref := env;
       let forced_args = List.map (fun v ->
         match v with VThunk _ -> v | _ -> v
       ) args in
@@ -550,4 +563,6 @@ let init () =
   handler_stack := [];
   current_capabilities := [];
   Hashtbl.clear thunk_store;
-  Primitives.set_force force
+  Primitives.set_force force;
+  Primitives.set_eval eval;
+  Primitives.set_apply apply
