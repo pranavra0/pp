@@ -20,6 +20,15 @@ let force_val (v : value) : value = !force_ref v
 let force_args (args : value list) : value list = List.map force_val args
 let force_one (v : value) : value = force_val v
 
+(* Deep force: recursively force all thunks in a data structure *)
+let rec force_deep (v : value) : value =
+  match force_val v with
+  | VPair (car, cdr) -> VPair (force_deep car, force_deep cdr)
+  | VVector vs -> VVector (Array.map force_deep vs)
+  | VMap kvs -> VMap (List.map (fun (k, v) -> (force_deep k, force_deep v)) kvs)
+  | VSet vs -> VSet (List.map force_deep vs)
+  | other -> other
+
 (* A table of built-in functions: name -> value *)
 let builtins : (string, value) Hashtbl.t = Hashtbl.create 64
 
@@ -243,9 +252,9 @@ let () =
   register "thunk?" (fun args ->
     match args with [arg] -> VBool (match arg with VThunk _ -> true | _ -> false) | _ -> failwith "thunk? expects one arg");
 
-  (* I/O — strict *)
+  (* I/O — strict, deep-forces for display *)
   register "print" (fun args ->
-    let args = force_args args in
+    let args = List.map force_deep args in
     List.iter (fun v -> print_string (string_of_value v)) args;
     print_newline ();
     VNil);
@@ -381,6 +390,15 @@ let () =
         let arg_values = list_to_ocaml args_list in
         !apply_ref fn arg_values !current_env_ref
     | _ -> failwith "apply-pp expects fn and list of args"
+  );
+
+  (* ---- force-deep ---- *)
+
+  register "force-deep" (fun args ->
+    let args = force_args args in
+    match args with
+    | [v] -> force_deep v
+    | _ -> failwith "force-deep expects one argument"
   );
 
   ()

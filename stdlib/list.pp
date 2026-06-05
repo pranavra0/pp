@@ -1,0 +1,50 @@
+;; stdlib/list.pp — basic list operation library
+;;
+;; All functions are lazy: they produce thunks via `cons`.  Since `cons`
+;; stores its arguments as-is, elements are only computed on demand.
+
+;; (map f lst) — apply f to each element of lst, return a lazy list of results
+(def (map f lst)
+  (if (nil? lst)
+      nil
+      (cons (f (car lst)) (map f (cdr lst)))))
+
+;; (filter pred lst) — return a lazy list of elements satisfying pred
+(def (filter pred lst)
+  (if (nil? lst)
+      nil
+      (if (pred (car lst))
+          (cons (car lst) (filter pred (cdr lst)))
+          (filter pred (cdr lst)))))
+
+;; (foldl f acc lst) — left fold (strict in the accumulator)
+;;   (foldl + 0 (list 1 2 3))  =>  ((0 + 1) + 2) + 3 = 6
+(def (foldl f acc lst)
+  (if (nil? lst)
+      acc
+      (foldl f (f acc (car lst)) (cdr lst))))
+
+;; (foldr f acc lst) — right fold (lazy)
+;;   (foldr cons nil (list 1 2 3))  =>  (1 . (2 . (3 . nil)))  =  (1 2 3)
+(def (foldr f acc lst)
+  (if (nil? lst)
+      acc
+      (f (car lst) (foldr f acc (cdr lst)))))
+
+;; (range start end) — generate numbers from start (inclusive) to end (exclusive)
+(def (range start end)
+  (if (>= start end)
+      nil
+      (cons start (range (+ start 1) end))))
+
+;; (take n lst) — take first n elements of lst
+(def (take n lst)
+  (if (or (nil? lst) (= n 0))
+      nil
+      (cons (car lst) (take (- n 1) (cdr lst)))))
+
+;; (length lst) — count elements in lst (strict: forces the whole list)
+(def (length lst)
+  (if (nil? lst)
+      0
+      (+ 1 (length (cdr lst)))))
