@@ -11,6 +11,9 @@ let handler_stack : (string * (value list -> value)) list ref = ref []
 (* Current capability set (for effectful blocks) *)
 let current_capabilities : capability list ref = ref []
 
+(* ReaderT-style ambient config stack *)
+let config_stack : value list ref = ref []
+
 (* Content-addressed thunk store: hash -> thunk record *)
 let thunk_store : (string, thunk) Hashtbl.t = Hashtbl.create 1024
 
@@ -19,11 +22,12 @@ let thunk_store : (string, thunk) Hashtbl.t = Hashtbl.create 1024
    Uses env.env_hash for O(1) environment identity — no recursive traversal. *)
 let make_thunk_ca (expr : expr) (env : env) : value =
   let caps_hash = hash_concat ("caps" :: List.map Hasher.hash_capability !current_capabilities) in
-  let h = hash_concat ["thunk"; Hasher.hash_expr expr; env.env_hash; caps_hash] in
+  let cfg_hash = hash_concat ("cfg" :: List.map hash_value !config_stack) in
+  let h = hash_concat ["thunk"; Hasher.hash_expr expr; env.env_hash; caps_hash; cfg_hash] in
   match Hashtbl.find_opt thunk_store h with
   | Some existing -> VThunk existing
   | None ->
-      let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env } in
+      let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env; vm_code = None; type_ann = None; thunk_loc = None; config_hash = cfg_hash } in
       Hashtbl.add thunk_store h t;
       VThunk t
 
@@ -44,7 +48,15 @@ let rec force (v : value) : value =
        | Evaluating -> failwith "infinite recursion detected (forcing a thunk already being evaluated)"
        | Unevaluated ->
            t.thunk_status <- Evaluating;
-           let result = eval t.thunk_expr t.thunk_env in
+           let result =
+             match t.vm_code with
+             | Some (bc, code_offset, frames) ->
+                 (* VM thunk: delegate to the VM runner *)
+                 !Primitives.vm_run_thunk_ref bc code_offset frames
+             | None ->
+                 (* Tree-walker thunk *)
+                 eval t.thunk_expr t.thunk_env
+           in
            t.thunk_status <- Evaluated result;
            force result)
   | _ -> v
@@ -99,7 +111,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       apply_tail fn_val arg_thunks env k
 
   | EQuote e ->
-      k (quote_to_value e)
+      k (Types.quote_to_value e)
 
   | EForce e ->
       (* EForce in tail position: eval the inner expression in tail position,
@@ -285,6 +297,48 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       in
       k (VEnvMap (collect_new (!mod_ref).bindings base_bindings []))
 
+  | ELocated (_, e) -> eval_tail e env k
+  | ETyped (e, _) -> eval_tail e env k
+  | EIsland (uri, _) ->
+      let ch = open_in uri in
+      let source = really_input_string ch (in_channel_length ch) in
+      close_in ch;
+      let exprs = Reader.read_string source in
+      let env_ref = ref env in
+      k (eval_expressions exprs env_ref)
+  | EWithConfig (map_expr, body) ->
+      let cfg = force (eval map_expr env) in
+      (match cfg with
+       | VMap _ ->
+           let saved = !config_stack in
+           config_stack := cfg :: !config_stack;
+           let result = eval_tail body env k in
+           config_stack := saved;
+           result
+       | _ -> failwith "with-config expects a map")
+  | EConfig (key_expr, default_opt) ->
+      let key_val = force (eval key_expr env) in
+      let key_name = match key_val with
+        | VString s | VKeyword s | VSymbol s -> s
+        | _ -> failwith "config key must be a string, keyword, or symbol" in
+      let rec find = function
+        | [] -> None
+        | VMap kvs :: rest ->
+            (match List.assoc_opt (VString key_name) kvs with
+             | Some v -> Some v
+             | None ->
+                 (match List.assoc_opt (VKeyword key_name) kvs with
+                  | Some v -> Some v
+                  | None -> find rest))
+        | _ :: rest -> find rest
+      in
+      (match find !config_stack with
+       | Some v -> k v
+       | None ->
+           (match default_opt with
+            | Some d -> eval_tail d env k
+            | None -> k VNil))
+
 (* ---- Function Application (non-tail) ---- *)
 
 and apply (fn : value) (args : value list) (env : env) : value =
@@ -298,7 +352,7 @@ and apply (fn : value) (args : value list) (env : env) : value =
 
 and apply_tail (fn : value) (args : value list) (env : env) (k : value -> value) : value =
   match fn with
-  | VClosure { fn_name = _; params; body; env = closure_env } ->
+  | VClosure { fn_name = _; params; body; env = closure_env; _ } ->
       if List.length params <> List.length args then
         failwith (Printf.sprintf "arity mismatch: expected %d args, got %d"
                     (List.length params) (List.length args));
@@ -307,7 +361,7 @@ and apply_tail (fn : value) (args : value list) (env : env) (k : value -> value)
       ) !closure_env params args in
       eval_tail body env' k
 
-  | VFexpr { fexpr_name = _; fexpr_params; fexpr_body; fexpr_env } ->
+  | VFexpr { fexpr_name = _; fexpr_params; fexpr_body; fexpr_env; _ } ->
       if List.length fexpr_params <> List.length args then
         failwith (Printf.sprintf "fexpr arity mismatch: expected %d args, got %d"
                     (List.length fexpr_params) (List.length args));
@@ -415,67 +469,6 @@ and extract_capabilities (v : value) : capability list =
       collect [] v
   | _ -> failwith ("expected capability, got: " ^ string_of_value v)
 
-(* Convert a quoted expression to a value (for quote) *)
-and quote_to_value (e : expr) : value =
-  match e with
-  | ELiteral v -> v
-  | ESymbol s -> VSymbol s
-  | EIf _ -> failwith "cannot quote if"  (* shouldn't happen *)
-  | ELet _ -> failwith "cannot quote let"
-  | EFn (params, body) ->
-      (* Quoted fn becomes a list: (fn (params...) body) *)
-      VPair (VSymbol "fn",
-        VPair (VVector (Array.of_list (List.map (fun p -> VSymbol p) params)),
-          VPair (quote_to_value body, VNil)))
-  | EApply (fn, args) ->
-      let qfn = quote_to_value fn in
-      let qargs = List.map quote_to_value args in
-      let args_list = List.fold_right (fun a acc -> VPair (a, acc)) qargs VNil in
-      VPair (qfn, args_list)
-  | EQuote e -> VPair (VSymbol "quote", VPair (quote_to_value e, VNil))
-  | EForce e -> VPair (VSymbol "force", VPair (quote_to_value e, VNil))
-  | EDelay e -> VPair (VSymbol "delay", VPair (quote_to_value e, VNil))
-  | EDo exprs ->
-      let qexprs = List.map quote_to_value exprs in
-      VPair (VSymbol "do", List.fold_right (fun a acc -> VPair (a, acc)) qexprs VNil)
-  | EDef (name, params, body) ->
-      VPair (VSymbol "def",
-        VPair (VSymbol name,
-          VPair (list_to_list (List.fold_right (fun p acc -> VPair (VSymbol p, acc)) params VNil),
-            VPair (quote_to_value body, VNil))))
-  | EDefFexpr (name, params, body) ->
-      VPair (VSymbol "def-fexpr",
-        VPair (VSymbol name,
-          VPair (list_to_list (List.fold_right (fun p acc -> VPair (VSymbol p, acc)) params VNil),
-            VPair (quote_to_value body, VNil))))
-  | ELetStar (bindings, body) ->
-      VPair (VSymbol "let*",
-        VPair (list_to_list (List.fold_right (fun (n, e) acc ->
-          VPair (VPair (VSymbol n, VPair (quote_to_value e, VNil)), acc)) bindings VNil),
-          VPair (quote_to_value body, VNil)))
-  | EEffect (caps, body) ->
-      VPair (VSymbol "effect", VPair (quote_to_value caps, VPair (quote_to_value body, VNil)))
-  | EPerform (name, args) ->
-      let qargs = List.map quote_to_value args in
-      VPair (VSymbol "perform",
-        VPair (VSymbol name, list_to_list (List.fold_right (fun a acc -> VPair (a, acc)) qargs VNil)))
-  | EWithHandler (handlers, body) ->
-      VPair (VSymbol "with-handler",
-        VPair (list_to_list (List.fold_right (fun (n, h) acc ->
-          VPair (VPair (VSymbol n, VPair (quote_to_value h, VNil)), acc)) handlers VNil),
-          VPair (quote_to_value body, VNil)))
-  | EModule exprs ->
-      let qexprs = List.map quote_to_value exprs in
-      VPair (VSymbol "module",
-        List.fold_right (fun a acc -> VPair (a, acc)) qexprs VNil)
-  | EImport mod_expr ->
-      VPair (VSymbol "import", VPair (quote_to_value mod_expr, VNil))
-  | ELoad path ->
-      VPair (VSymbol "load", VPair (VString path, VNil))
-  | ELoadModule path ->
-      VPair (VSymbol "load-module", VPair (VString path, VNil))
-
-and list_to_list (v : value) : value = v  (* identity — already a list from fold_right *)
 
 (* Evaluate expressions sequentially with mutable env — used by ELoad, ELoadModule, and REPL *)
 and eval_expressions (exprs : expr list) (env : env ref) : value =

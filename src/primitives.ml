@@ -15,6 +15,10 @@ let apply_ref : (value -> value list -> env -> value) ref = ref (fun _ _ _ -> fa
 let set_eval (f : expr -> env -> value) = eval_ref := f
 let set_apply (f : value -> value list -> env -> value) = apply_ref := f
 
+(* Reference to the VM's thunk runner — set by VM at init *)
+let vm_run_thunk_ref : (Types.bytecode -> int -> Types.frame list -> Types.value) ref =
+  ref (fun _ _ _ -> failwith "VM not initialized")
+
 (* Force helpers for builtins *)
 let force_val (v : value) : value = !force_ref v
 let force_args (args : value list) : value list = List.map force_val args
@@ -44,6 +48,20 @@ let initial_env () : env =
 
 (* ---- Register all primitives ---- *)
 
+
+(* Refs for compiler primitives — set by Compiler.init_primitives after compiler.ml loads *)
+let compiler_state_ref : Types.comp_state option ref = ref None
+let compiler_finish_ref : (Types.comp_state -> Types.bytecode) ref =
+  ref (fun _ -> failwith "compiler not initialized")
+
+(* Ref for VM bytecode runner — set by Vm.init after vm.ml loads *)
+let vm_run_bytecode_ref : (Types.bytecode -> Types.value) ref =
+  ref (fun _ -> failwith "VM not initialized")
+
+(* Ref for VM global definition hook — set by Vm.init after vm.ml loads.
+   Used by eval-pp so that definitions it returns are visible to the VM. *)
+let vm_define_ref : (string -> Types.value -> unit) ref =
+  ref (fun _ _ -> ())
 let () =
   (* Arithmetic — strict: force all args, variadic + and * with identity *)
   register "+" (fun args ->
@@ -350,11 +368,13 @@ let () =
           | [EDef (name, params, body)] ->
               let closure = Types.make_closure ~name:(Some name) params body local_env in
               local_env := Types.extend_env !local_env name closure;
+              !vm_define_ref name closure;
               new_defs := (name, closure) :: !new_defs;
               if !new_defs = [] then VNil else VEnvMap (List.rev !new_defs)
           | [EDefFexpr (name, params, body)] ->
               let fexpr = Types.make_fexpr ~name:(Some name) params body local_env in
               local_env := Types.extend_env !local_env name fexpr;
+              !vm_define_ref name fexpr;
               new_defs := (name, fexpr) :: !new_defs;
               if !new_defs = [] then VNil else VEnvMap (List.rev !new_defs)
           | [last] ->
@@ -363,11 +383,13 @@ let () =
           | (EDef (name, params, body)) :: rest ->
               let closure = Types.make_closure ~name:(Some name) params body local_env in
               local_env := Types.extend_env !local_env name closure;
+              !vm_define_ref name closure;
               new_defs := (name, closure) :: !new_defs;
               go rest
           | (EDefFexpr (name, params, body)) :: rest ->
               let fexpr = Types.make_fexpr ~name:(Some name) params body local_env in
               local_env := Types.extend_env !local_env name fexpr;
+              !vm_define_ref name fexpr;
               new_defs := (name, fexpr) :: !new_defs;
               go rest
           | e :: rest ->
@@ -388,7 +410,17 @@ let () =
           | _ -> failwith "apply-pp expects a proper list for args"
         in
         let arg_values = list_to_ocaml args_list in
-        !apply_ref fn arg_values !current_env_ref
+        (match fn with
+         | VClosure c when c.vm_bc != Types.dummy_bytecode ->
+             let new_frame = Types.make_frame (List.length c.params) in
+             List.iteri (fun i arg -> Types.frame_set new_frame i arg) arg_values;
+             !vm_run_thunk_ref c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
+         | VFexpr fe when fe.vm_bc != Types.dummy_bytecode ->
+             let new_frame = Types.make_frame (List.length fe.fexpr_params) in
+             List.iteri (fun i arg -> Types.frame_set new_frame i arg) arg_values;
+             !vm_run_thunk_ref fe.vm_bc fe.vm_offset (new_frame :: fe.vm_frames)
+         | _ ->
+             !apply_ref fn arg_values !current_env_ref)
     | _ -> failwith "apply-pp expects fn and list of args"
   );
 
@@ -399,6 +431,84 @@ let () =
     match args with
     | [v] -> force_deep v
     | _ -> failwith "force-deep expects one argument"
+  );
+
+  (* ---- slurp: read file to string ---- *)
+
+  register "slurp" (fun args ->
+    let args = force_args args in
+    match args with
+    | [VString path] ->
+        (try
+           let ch = open_in path in
+           let content = really_input_string ch (in_channel_length ch) in
+           close_in ch;
+           VString content
+         with Sys_error msg -> failwith ("slurp: " ^ msg))
+    | _ -> failwith "slurp expects a file path string"
+  );
+
+  (* ---- read-string: parse string to value (for pp compiler) ---- *)
+
+  register "read-string" (fun args ->
+    let args = force_args args in
+    match args with
+    | [VString source] ->
+        let exprs = Reader.read_string source in
+        (* Return as a list of quoted exprs *)
+        (match exprs with
+         | [e] -> Types.quote_to_value e
+         | _ -> VVector (Array.of_list (List.map Types.quote_to_value exprs)))
+    | _ -> failwith "read-string expects a source string"
+  );
+
+  (* ---- island-fetch: resolve a remote island URI to a local path ---- *)
+  register "island-fetch" (fun args ->
+    let args = force_args args in
+    match args with
+    | [VString uri] -> VString uri
+    | _ -> failwith "island-fetch expects a URI string"
+  );
+
+
+  register "ppc-emit-opcode" (fun args ->
+    let args = force_args args in
+    failwith "ppc-emit-opcode: not yet implemented for self-hosting"
+  );
+
+  register "ppc-emit-constant" (fun args ->
+    let args = force_args args in
+    failwith "ppc-emit-constant: not yet implemented for self-hosting"
+  );
+
+  register "ppc-finish" (fun args ->
+    match !compiler_state_ref with
+    | Some st ->
+        compiler_state_ref := None;
+        let bc = !compiler_finish_ref st in
+        Types.VBytecode bc
+    | None ->
+        failwith "ppc-finish: no active compiler state"
+  );
+
+  register "ppc-run" (fun args ->
+    let args = force_args args in
+    match args with
+    | [Types.VBytecode bc] ->
+        !vm_run_bytecode_ref bc
+    | _ -> failwith "ppc-run expects a bytecode value"
+  );
+
+  register "ppc-resolve-local" (fun args ->
+    failwith "ppc-resolve-local: not yet implemented for self-hosting"
+  );
+
+  register "ppc-push-cenv-frame" (fun args ->
+    failwith "ppc-push-cenv-frame: not yet implemented for self-hosting"
+  );
+
+  register "ppc-pop-cenv-frame" (fun args ->
+    failwith "ppc-pop-cenv-frame: not yet implemented for self-hosting"
   );
 
   ()

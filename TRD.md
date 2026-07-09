@@ -898,6 +898,34 @@ pp/
 
 ---
 
+
+## 8.5 Bytecode VM (v2)
+
+A stack-based bytecode VM and AST→bytecode compiler have been implemented
+(Phase 1-5 of `pp-bytecode-vm-plan`). The VM provides:
+
+- **O(1) lexical environment access** via indexed slots (replacing the tree-walker's O(n) `lookup_env`).
+- **Bytecode serialization** (`.ppc` format) — compiled bytecode can be cached and loaded across runs.
+- **Self-hosting path** — the compiler itself ports to pp (`src/pc.pp`), enabling `pp` to compile itself.
+
+Architecture:
+
+| File | Role |
+|------|------|
+| `src/bytecode.ml` | Serialization, disassembly |  
+| `src/vm.ml` | Stack VM execution loop |
+| `src/compiler.ml` | AST→bytecode compiler |
+| `src/pc.pp` | Self-hosting pp compiler port |
+
+Key opcodes (29 total): PUSH, LOAD_LOCAL, STORE_LOCAL, LOAD_GLOBAL, STORE_GLOBAL,
+POP, DUP, JUMP, JUMP_IF_FALSE, FORCE, MAKE_THUNK, MAKE_CLOSURE, MAKE_FEXPR,
+CALL, TAIL_CALL, RETURN, HALT, BUILTIN, CONS, ENTER_EFFECT, EXIT_EFFECT,
+PERFORM, PUSH_HANDLER, POP_HANDLER, MAKE_MODULE, IMPORT, LOAD_FILE,
+LOAD_MODULE_FILE, NOP.
+
+The tree-walker remains as a correctness oracle; `--bytecode` and `--diff` flags
+enable side-by-side validation.
+
 ## 9. Success Criteria
 
 **v1 is successful if**:

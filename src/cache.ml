@@ -1,28 +1,54 @@
-(* pp cache — content-addressed cache (in-memory for v1, persistent for v1.5) *)
+(* pp cache — content-addressed cache, now wired to bytecode serialization *)
 
-(* For v1, the cache is the evaluator's in-memory thunk_cache.
-   This module provides the interface for future persistent caching. *)
-
-(* Cache directory *)
 let cache_dir () =
   let home = match Sys.getenv_opt "HOME" with Some h -> h | None -> "/tmp" in
   Filename.concat home ".pp"
 
-(* Initialize the cache directory *)
+let cache_path hash =
+  Filename.concat (Filename.concat (cache_dir ()) "cache") (hash ^ ".ppc")
+
 let init () =
   let dir = cache_dir () in
-  (try ignore (Sys.is_directory dir)  (* check if exists *)
+  (try ignore (Sys.is_directory dir)
    with Sys_error _ ->
      let _ = Sys.command ("mkdir -p " ^ Filename.quote dir) in ());
+  let cachedir = Filename.concat dir "cache" in
+  (try ignore (Sys.is_directory cachedir)
+   with Sys_error _ ->
+     let _ = Sys.command ("mkdir -p " ^ Filename.quote cachedir) in ());
   dir
 
-(* Save a value to the persistent cache *)
-let save (hash : string) (v : Types.value) : unit =
-  (* v1: no-op. v1.5: serialize to disk *)
-  ignore (hash, v)
+(* Save bytecode to persistent cache *)
+let save (hash : string) (bc : Types.bytecode) : unit =
+  let _ = init () in
+  let path = cache_path hash in
+  let data = Bytecode.save bc in
+  try
+    let ch = open_out_bin path in
+    output_string ch data;
+    close_out ch
+  with Sys_error msg ->
+    Printf.eprintf "cache: failed to save %s: %s\n%!" hash msg
 
-(* Load a value from the persistent cache *)
-let load (hash : string) : Types.value option =
-  (* v1: no persistent cache *)
-  ignore hash;
-  None
+(* Load bytecode from persistent cache *)
+let load (hash : string) : Types.bytecode option =
+  let _ = init () in
+  let path = cache_path hash in
+  try
+    if not (Sys.file_exists path) then None
+    else begin
+      let ch = open_in_bin path in
+      let len = in_channel_length ch in
+      let data = really_input_string ch len in
+      close_in ch;
+      let bc = Bytecode.load data in
+      Some bc
+    end
+  with Sys_error _ -> None
+
+(* Save a value's bytecode representation.
+   Used by the VM compilation path to cache compiled bytecode. *)
+let save_value (hash : string) (v : Types.value) : unit =
+  match v with
+  | Types.VBytecode bc -> save hash bc
+  | _ -> ()  (* non-bytecode values not cached to disk *)

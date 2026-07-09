@@ -34,6 +34,11 @@ and expr =
   | EImport of expr             (* (import mod-expr) — force module, merge env *)
   | ELoad of string             (* (load "file.pp") — eval file in current env *)
   | ELoadModule of string       (* (load-module "file.pp") — eval file as module *)
+  | EIsland of string * string option  (* (island <uri> [version]) — remote import *)
+  | EWithConfig of expr * expr     (* (with-config {map} body) — ambient config *)
+  | EConfig of expr * expr option  (* (config key [default]) — read config *)
+  | ETyped of expr * expr          (* (the-expr : type) — type annotation *)
+  | ELocated of (string * int) * expr  (* source-located expression *)
 
 (* ---- Values — the runtime representation ---- *)
 
@@ -55,13 +60,17 @@ and value =
   | VThunk of thunk
   | VFexpr of fexpr
   | VEnvMap of (string * value) list  (* module export: list of (name, thunk) pairs *)
+  | VBytecode of bytecode
 
 (* ---- Function closure ---- *)
 and closure = {
   fn_name : string option;  (* optional name for debugging *)
   params : string list;
-  body : expr;
-  env : env ref;  (* reference to environment — sees later defs *)
+  body : expr;              (* tree-walker: actual body; VM: ignored *)
+  env : env ref;            (* tree-walker: captured env; VM: ignored *)
+  vm_bc : bytecode;         (* VM: bytecode this closure belongs to *)
+  vm_offset : int;          (* VM: code offset of function body *)
+  vm_frames : frame list;   (* VM: captured frames at closure creation time *)
 }
 
 (* ---- Fexpr — operative: receives unevaluated args + calling environment ---- *)
@@ -69,15 +78,21 @@ and fexpr = {
   fexpr_name : string option;
   fexpr_params : string list;
   fexpr_body : expr;
-  fexpr_env : env ref;  (* reference to environment *)
+  fexpr_env : env ref;
+  vm_bc : bytecode;         (* VM: bytecode this fexpr belongs to *)
+  vm_offset : int;          (* VM: code offset of fexpr body *)
+  vm_frames : frame list;   (* VM: captured frames at fexpr creation time *)
 }
 
-(* ---- Thunk — a suspended computation ---- *)
 and thunk = {
   mutable thunk_status : thunk_status;
   mutable thunk_hash : string option;  (* precomputed content-addressable hash *)
   thunk_expr : expr;
   thunk_env : env;
+  vm_code : (bytecode * int * frame list) option;  (* VM thunk: (bytecode, code_offset, captured_frames) *)
+  type_ann : expr option;              (* lazy gradual type annotation *)
+  thunk_loc : (string * int) option;   (* source location for error reporting *)
+  config_hash : string;                (* ReaderT config snapshot identity *)
 }
 
 and thunk_status =
@@ -97,6 +112,81 @@ and capability =
   | CapNone
 
 and fs_mode = Read | Write | ReadWrite
+
+(* ---- Bytecode VM types ---- *)
+and opcode =
+  | PUSH of int              (* constant-pool index *)
+  | LOAD_LOCAL of int * int  (* depth, slot *)
+  | STORE_LOCAL of int       (* slot in current frame *)
+  | LOAD_GLOBAL of int       (* constant-pool index of name *)
+  | STORE_GLOBAL of int
+  | POP | DUP
+  | JUMP of int              (* relative forward/backward offset in opcodes *)
+  | JUMP_IF_FALSE of int     (* pop; jump if VNil or VBool false *)
+  | FORCE                    (* pop thunk, force via recursive VM, push result *)
+  | MAKE_THUNK of int * expr option * ((string * int) option)
+                               (* code offset, optional type annotation, optional source location *)
+  | MAKE_CLOSURE of int * int(* code offset, nparams *)
+  | MAKE_FEXPR of int * int  (* code offset, nparams; binds quoted arg-exprs *)
+  | CALL of int | TAIL_CALL of int | RETURN | HALT
+  | BUILTIN of int           (* cp idx of name; pushes the VBuiltin value *)
+  | CONS                     (* pop b, pop a, push VPair(a,b) *)
+  | ENTER_EFFECT | EXIT_EFFECT
+  | PERFORM of int * int     (* cp idx of effect name, nargs *)
+  | PUSH_HANDLER of int      (* n (name,closure) pairs already on stack *)
+  | POP_HANDLER
+  | MAKE_MODULE of int       (* nexports; pops name+thunk pairs, pushes VEnvMap *)
+  | IMPORT                   (* pop VEnvMap, merge bindings into current frame *)
+  | LOAD_FILE of int | LOAD_MODULE_FILE of int  (* cp idx of path *)
+  | NOP
+  | PUSH_CONFIG              (* pop config-map, push onto config stack *)
+  | POP_CONFIG               (* pop config stack *)
+  | READ_CONFIG of int       (* cp idx of key name; push config value or VNil *)
+
+and bytecode = {
+  consts : value array;
+  code : opcode array;
+  nparams_of : (int, int) Hashtbl.t;          (* code offset -> param count *)
+  param_names_of : (int, string list) Hashtbl.t;  (* code offset -> param names *)
+  closure_names_of : (int, string) Hashtbl.t;  (* code offset -> optional def name *)
+}
+
+and frame = {
+  mutable slots : value array;
+  mutable len : int;
+}
+
+(* ---- Compiler types (referenced by primitives.ml) ---- *)
+
+type cenv = string list list
+
+type def_info = {
+  name : string;
+  is_fexpr : bool;
+  slot : int;
+}
+
+type comp_state = {
+  mutable ops : opcode list;
+  mutable const_ht : (string, int) Hashtbl.t;
+  mutable consts : value list;
+  mutable nparams_of : (int, int) Hashtbl.t;
+  mutable param_names_of : (int, string list) Hashtbl.t;
+  mutable closure_names_of : (int, string) Hashtbl.t;
+  mutable cenv : cenv;
+  mutable fexpr_names : (string, bool) Hashtbl.t;
+}
+
+let fresh_comp_state () = {
+  ops = [];
+  const_ht = Hashtbl.create 128;
+  consts = [];
+  nparams_of = Hashtbl.create 16;
+  param_names_of = Hashtbl.create 16;
+  closure_names_of = Hashtbl.create 16;
+  cenv = [];
+  fexpr_names = Hashtbl.create 32;
+}
 
 
 (* =================================================================== *)
@@ -175,6 +265,16 @@ let rec hash_expr (e : expr) : string =
       hash_concat ["load"; path]
   | ELoadModule path ->
       hash_concat ["load_module"; path]
+  | EIsland (uri, pin) ->
+      hash_concat ["island"; uri; (match pin with Some p -> p | None -> "")]
+  | EWithConfig (map_expr, body) ->
+      hash_concat ["with_config"; hash_expr map_expr; hash_expr body]
+  | EConfig (key_expr, default) ->
+      hash_concat ["config"; hash_expr key_expr; (match default with Some d -> hash_expr d | None -> "")]
+  | ETyped (e, ty) ->
+      hash_concat ["typed"; hash_expr e; hash_expr ty]
+  | ELocated ((file, line), e) ->
+      hash_concat ["located"; file; string_of_int line; hash_expr e]
 
 and hash_value (v : value) : string =
   let rec hash_val v =
@@ -185,7 +285,7 @@ and hash_value (v : value) : string =
          | None ->
              (* Should not happen in practice — all thunks go through make_thunk_ca.
                 Fall back to structural hash using the env's cached hash. *)
-             hash_concat ["thunk"; hash_expr t.thunk_expr; t.thunk_env.env_hash])
+             hash_concat ["thunk"; hash_expr t.thunk_expr; t.thunk_env.env_hash; t.config_hash])
     | VNil -> hash_string "nil"
     | VBool true -> hash_string "bool:true"
     | VBool false -> hash_string "bool:false"
@@ -210,7 +310,7 @@ and hash_value (v : value) : string =
     | VSet vs ->
         let sorted = List.sort String.compare (List.map hash_val vs) in
         hash_concat ("set" :: sorted)
-    | VClosure { fn_name; params; body; env = _ } ->
+    | VClosure { fn_name; params; body; env = _; _ } ->
         let name_part = match fn_name with Some n -> n | None -> "anon" in
         hash_concat ["closure"; name_part;
                      hash_concat ("params" :: params);
@@ -220,7 +320,7 @@ and hash_value (v : value) : string =
         hash_concat ["builtin"; name]
     | VCapability cap ->
         hash_capability cap
-    | VFexpr { fexpr_name; fexpr_params; fexpr_body; fexpr_env = _ } ->
+    | VFexpr { fexpr_name; fexpr_params; fexpr_body; fexpr_env = _; _ } ->
         hash_concat ["fexpr";
                      (match fexpr_name with Some n -> n | None -> "anon");
                      hash_concat ("params" :: fexpr_params);
@@ -232,6 +332,8 @@ and hash_value (v : value) : string =
           hash_concat [name; hash_val v]
         ) sorted in
         hash_concat ("envmap" :: parts)
+    | VBytecode bc ->
+        hash_concat ["bytecode"; string_of_int (Array.length bc.code)]
   in
   hash_val v
 
@@ -305,14 +407,113 @@ let extend_env_many (env : env) (bindings : (string * value) list) : env =
 (*  Constructor helpers                                                 *)
 (* =================================================================== *)
 
+
+(* Dummy bytecode for tree-walker closures *)
+let dummy_bytecode = { consts = [||]; code = [||]; nparams_of = Hashtbl.create 0; param_names_of = Hashtbl.create 0; closure_names_of = Hashtbl.create 0 }
+
 let make_closure ?(name=None) params body env_ref =
-  VClosure { fn_name = name; params; body; env = env_ref }
+  VClosure { fn_name = name; params; body; env = env_ref; vm_bc = dummy_bytecode; vm_offset = 0; vm_frames = [] }
 
 let make_fexpr ?(name=None) params body env_ref =
-  VFexpr { fexpr_name = name; fexpr_params = params; fexpr_body = body; fexpr_env = env_ref }
+  VFexpr { fexpr_name = name; fexpr_params = params; fexpr_body = body; fexpr_env = env_ref; vm_bc = dummy_bytecode; vm_offset = 0; vm_frames = [] }
 
-let make_thunk expr env =
-  VThunk { thunk_status = Unevaluated; thunk_hash = None; thunk_expr = expr; thunk_env = env }
+let make_thunk ?vm_code:(vc=None) ?type_ann:(ta=None) ?thunk_loc:(tl=None) ?config_hash:(ch="") expr env =
+  VThunk { thunk_status = Unevaluated; thunk_hash = None; thunk_expr = expr; thunk_env = env; vm_code = vc; type_ann = ta; thunk_loc = tl; config_hash = ch }
+
+(* ---- Frame helpers ---- *)
+
+let make_frame n = { slots = Array.make n VNil; len = n }
+
+let frame_get f i =
+  if i < f.len then f.slots.(i) else VNil
+
+let frame_set f i v =
+  if i >= Array.length f.slots then begin
+    let ncap = max (Array.length f.slots * 2) (i + 1) in
+    let a = Array.make ncap VNil in
+    Array.blit f.slots 0 a 0 f.len;
+    f.slots <- a
+  end;
+  if i >= f.len then f.len <- i + 1;
+  f.slots.(i) <- v
+
+(* ---- Quotation: expr -> value ---- *)
+
+let rec quote_to_value (e : expr) : value =
+  match e with
+  | ELiteral v -> v
+  | ESymbol s -> VSymbol s
+  | EIf _ -> failwith "cannot quote if"
+  | ELet _ -> failwith "cannot quote let"
+  | EFn (params, body) ->
+      VPair (VSymbol "fn",
+        VPair (VVector (Array.of_list (List.map (fun p -> VSymbol p) params)),
+          VPair (quote_to_value body, VNil)))
+  | EApply (fn, args) ->
+      let qfn = quote_to_value fn in
+      let qargs = List.map quote_to_value args in
+      let args_list = List.fold_right (fun a acc -> VPair (a, acc)) qargs VNil in
+      VPair (qfn, args_list)
+  | EQuote e -> VPair (VSymbol "quote", VPair (quote_to_value e, VNil))
+  | EForce e -> VPair (VSymbol "force", VPair (quote_to_value e, VNil))
+  | EDelay e -> VPair (VSymbol "delay", VPair (quote_to_value e, VNil))
+  | EDo exprs ->
+      let qexprs = List.map quote_to_value exprs in
+      VPair (VSymbol "do", List.fold_right (fun a acc -> VPair (a, acc)) qexprs VNil)
+  | EDef (name, params, body) ->
+      VPair (VSymbol "def",
+        VPair (VSymbol name,
+          VPair (list_to_list_v (List.fold_right (fun p acc -> VPair (VSymbol p, acc)) params VNil),
+            VPair (quote_to_value body, VNil))))
+  | EDefFexpr (name, params, body) ->
+      VPair (VSymbol "def-fexpr",
+        VPair (VSymbol name,
+          VPair (list_to_list_v (List.fold_right (fun p acc -> VPair (VSymbol p, acc)) params VNil),
+            VPair (quote_to_value body, VNil))))
+  | ELetStar (bindings, body) ->
+      VPair (VSymbol "let*",
+        VPair (list_to_list_v (List.fold_right (fun (n, e) acc ->
+          VPair (VPair (VSymbol n, VPair (quote_to_value e, VNil)), acc)) bindings VNil),
+          VPair (quote_to_value body, VNil)))
+  | EEffect (caps, body) ->
+      VPair (VSymbol "effect", VPair (quote_to_value caps, VPair (quote_to_value body, VNil)))
+  | EPerform (name, args) ->
+      let qargs = List.map quote_to_value args in
+      VPair (VSymbol "perform",
+        VPair (VSymbol name, list_to_list_v (List.fold_right (fun a acc -> VPair (a, acc)) qargs VNil)))
+  | EWithHandler (handlers, body) ->
+      VPair (VSymbol "with-handler",
+        VPair (list_to_list_v (List.fold_right (fun (n, h) acc ->
+          VPair (VPair (VSymbol n, VPair (quote_to_value h, VNil)), acc)) handlers VNil),
+          VPair (quote_to_value body, VNil)))
+  | EModule exprs ->
+      let qexprs = List.map quote_to_value exprs in
+      VPair (VSymbol "module",
+        List.fold_right (fun a acc -> VPair (a, acc)) qexprs VNil)
+  | EImport mod_expr ->
+      VPair (VSymbol "import", VPair (quote_to_value mod_expr, VNil))
+  | ELoad path ->
+      VPair (VSymbol "load", VPair (VString path, VNil))
+  | ELoadModule path ->
+      VPair (VSymbol "load-module", VPair (VString path, VNil))
+  | EIsland (uri, pin) ->
+      let pin_v = match pin with Some p -> VString p | None -> VNil in
+      VPair (VSymbol "island",
+        VPair (VString uri, VPair (pin_v, VNil)))
+  | EWithConfig (map_expr, body) ->
+      VPair (VSymbol "with-config",
+        VPair (quote_to_value map_expr, VPair (quote_to_value body, VNil)))
+  | EConfig (key_expr, default) ->
+      let default_v = match default with Some d -> quote_to_value d | None -> VNil in
+      VPair (VSymbol "config",
+        VPair (quote_to_value key_expr, VPair (default_v, VNil)))
+  | ETyped (e, ty) ->
+      VPair (VSymbol ":",
+        VPair (quote_to_value e, VPair (quote_to_value ty, VNil)))
+  | ELocated ((file, line), e) ->
+      quote_to_value e
+
+and list_to_list_v (v : value) : value = v  (* identity *)
 
 
 (* =================================================================== *)
@@ -357,6 +558,8 @@ let rec string_of_value (v : value) : string =
   | VFexpr { fexpr_name = None; _ } -> "#<fexpr>"
   | VEnvMap bindings ->
       "#<envmap " ^ string_of_int (List.length bindings) ^ " exports>"
+  | VBytecode bc ->
+      "#<bytecode " ^ string_of_int (Array.length bc.code) ^ " ops>"
 
 and string_of_capability (c : capability) : string =
   match c with
