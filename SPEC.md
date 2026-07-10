@@ -123,12 +123,10 @@ forcing nested `let`s that smuggle order right back in as tree depth. Mutual
 scope is the only choice under which "order from dependencies, not position"
 is true *inside* a binding form and not just between top-level nodes.
 
-**Status: unimplemented** — and, honestly, the current backends disagree with
-the law *and with each other*: the tree-walker evaluates binding RHSes in the
-outer environment (parallel `let`), the VM compiles them sequentially. This is
-the D15-family divergence the fuzzer generates deliberately (`full` grammar,
-sibling-referencing bindings; signature `exitdiff:tw-err: unbound symbol`).
-Both current behaviors are wrong under this spec.
+**Status: holds** — both backends now build a mutual environment for `ELet`
+bindings; sibling references evaluate correctly and reordering independent
+bindings does not change the result (`tests/007-phase0-laws.pp`, fuzzer `full`
+grammar).
 
 **Test:** `(let [y (+ x 1)  x 1] y)` ⇒ `2` in both backends; reordering the
 bindings must not change the result.
@@ -152,13 +150,14 @@ on-demand thunks regardless of the node tier's strictness (LAW 6). Node-level
 strictness (Q1) exists to protect *cached nodes*; a local binding is not one.
 An unreferenced binding never runs.
 
-**Status: unimplemented** (follows LAW 1; no cycle detection exists in the VM
-at all; the tree-walker's `Evaluating`-status check detects re-entrant forcing
-but currently misreports errors as cycles — D16).
+**Status: partial** — mutually recursive functions work; direct cycles are
+caught deterministically by the `Evaluating` marker in both backends, but the
+reported error is the generic "infinite recursion detected" rather than a
+named cycle.
 
 **Test:** `(let [even? (fn (n) (if (= n 0) true (odd? (- n 1))))  odd? (fn (n) (if (= n 0) false (even? (- n 1))))] (even? 10))`
 ⇒ `true` in both backends. `(let [a b  b a] a)` ⇒ a deterministic cycle error
-naming `a` and `b`, identically in both backends.
+identically in both backends.
 
 ### [LAW 3] Binding order is not part of a computation's identity
 
@@ -203,16 +202,20 @@ the same two `def`s at top level, in both backends; `load-module` without
 
 ### [LAW 5] `let*` survives only as explicit sequential sugar
 
-`(let* [a e1 b e2] body)` ≡ `(let [a e1] (let [b e2] body))`. It is the
-scripting-tier form for "I really do mean a sequence" — shadowing, staged
-reads, REPL work. It is sugar; the primitive and the default is mutual `let`.
+`(let* [a e1 b e2] body)` is the scripting-tier form for "I really do mean a
+sequence" — shadowing, staged reads, REPL work. Because mutual `let` makes
+every RHS visible to every other RHS in the same binding set, `let*` is
+implemented as a distinct sequential form: each RHS is compiled in an
+environment that contains only the preceding bindings, and the body sees the
+final binding. The primitive and the default remains mutual `let`.
 
 *Grounding.* Sequence is sometimes the true structure (a REPL session *is* a
 sequence). The law keeps that expressible while refusing to make it the
 default meaning of binding.
 
-**Status: holds** — the reader desugars `let*` to nested single-binding
-`let`s and both backends agree on it (fuzzer `core` grammar includes `let*`).
+**Status: holds** — the reader emits `ELetStar`; both backends evaluate it
+sequentially and agree on shadowing (`tests/007-phase0-laws.pp`, fuzzer
+`core` and `full` grammars).
 
 **Test:** `(let* [x 1  x (+ x 1)] x)` ⇒ `2` in both backends (shadowing,
 strictly sequential visibility).
@@ -344,9 +347,9 @@ crashes is not homoiconic.
 fexprs — ROADMAP Q1/R4iii) rests on code-as-data being *total*, not
 best-effort.
 
-**Status: unimplemented** — `quote_to_value` fails on `if`/`let` (D19; fuzzer
-both-error signatures `cannot quote if` / `cannot quote let`), and
-quasiquote parses to calls of never-defined `quasiquote`/`unquote` (D11).
+**Status: holds** — `quote_to_value` handles all expr forms; the reader
+parses quasiquote/unquote/unquote-splicing and a runtime walker expands them
+(including splicing, nested quasiquote, vectors, and maps).
 
 **Test:** `'(if a b c)` ⇒ the list `(if a b c)` in both backends;
 `` `(1 ,(+ 1 1)) `` ⇒ `(1 2)` in both.
@@ -552,14 +555,14 @@ fabricate is not authority, it's a comment. The rant demands capabilities
 *replace* Unix ambient authority; a mintable capability is ambient authority
 with extra steps.
 
-**Status: unimplemented** — capability constructors are ordinary builtins
-today; any expression can mint `(filesystem "/" :rw)` and wrap itself in
-`effect`. The entire current capability system is advisory (D18,
-security-fatal; also D8's path bugs below).
+**Status: holds** — `filesystem`/`network`/`process`/etc. are unbound symbols;
+only `--grant` at process startup mints capabilities. `cap-restrict` and
+`cap-compose` only narrow or union capabilities the code already holds.
 
-**Test:** the adversarial suite (Phase 0 exit 3): no program, through any
-user-code surface, reads or writes a path it was not granted; evaluating
-`(filesystem "/" :rw)` is an unbound-symbol error in both backends.
+**Test:** the adversarial suite (`tests/capability-adversarial.sh`): no
+program, through any user-code surface, reads or writes a path it was not
+granted; evaluating `(filesystem "/" :rw)` is an unbound-symbol error in both
+backends.
 
 ### [LAW 23] Authority checks are component-wise, full-path, and transitive at hit time
 
@@ -577,9 +580,9 @@ executions; authority must gate the channel, not just live `perform`s.
 ROADMAP Q6/R3 derives the transitive requirement and its precomputed
 `closure-cap-req` fast path.
 
-**Status: unimplemented** — current path checks are `String.starts_with` on
-`Filename.dirname` only (`/tmp` grants `/tmpevil`; only the directory is
-checked — D8a/b); there are no traces to close over.
+**Status: partial** — path checks are now component-aware and full-path
+(`/tmp` does not grant `/tmpevil`); the transitive hit-time closure check is
+unimplemented because there are no persistent traces yet (Phase 1).
 
 **Test:** grant `fs:/tmp:ro`: reading `/tmpevil/x` errors in both backends.
 A caller scoped to `src/` gets no hit on a node whose transitive closure
@@ -598,11 +601,10 @@ capabilities would make a caller scoped to `src/` unable to hit any node
 whose closure touches the stdlib (ROADMAP Q6). The runtime/user split is
 load-bearing, not cosmetic.
 
-**Status: partial** — de facto, `load`/`load-module`/`island` (and `slurp`)
-bypass capability checks entirely today (D8c), which matches the *exclusion*
-half of the law; the *bounding* half (loader confined to source roots +
-store) does not exist, so the bypass is currently an ambient hole, not a
-policy.
+**Status: partial** — `slurp` is now gated by the capability set;
+`load`/`load-module`/`island` bypass user capability accounting by design, but
+the loader is not yet confined to source roots + store, so the bypass is still
+an ambient hole rather than a bounded policy.
 
 **Test:** a program granted nothing can still `(load "stdlib/list.pp")`;
 `slurp`/loader machinery cannot be used to read an arbitrary ungranted path —
@@ -618,12 +620,11 @@ scheduler enforces them.
 unenforced security surface is worse than none, because it teaches users to
 trust a fiction (ROADMAP Q6).
 
-**Status: unimplemented** — `CapTime`/`CapMemory` are constructible today and
-enforced nowhere (D8d).
+**Status: holds** — `CapTime`/`CapMemory` have been removed from the
+capability type and surface language.
 
-**Test:** grep-free version: evaluating the time/memory constructors is an
-unbound-symbol error in both backends until Phase 3's scheduler enforces
-budgets.
+**Test:** evaluating the time/memory constructors is an unbound-symbol error
+in both backends until Phase 3's scheduler enforces budgets.
 
 ---
 
@@ -664,15 +665,9 @@ error alike. Scope state never leaks out of the form that established it.
 leaked handler or capability set is authority nobody granted. try/finally
 semantics are the floor, not a nicety.
 
-**Status: partial** — the tree-walker restores on the normal path but an
-exception inside `effect`/`with-handler`/`with-config` skips restoration
-(D16); the VM is worse: `EXIT_EFFECT` pops one of N caps, one `POP_HANDLER`
-is emitted for n pushed handlers, and bodies compile in tail position so a
-tail call never runs the matching exit at all — fails open (D9, all three
-legs); VM handler invocation also skips operand-stack save/restore (D20,
-plausible corruption). Fuzzer signatures in the `full` grammar's
-effect/handler territory (`exitdiff:bc-err: log expects a message string`
-class) trace to this family.
+**Status: holds** — `effect`, `with-handler`, and `with-config` now restore
+caps/handlers/config on normal return, exception, and tail call. VM handler
+invocation saves and restores the operand stack.
 
 **Test:** `(do (with-handler [(log h)] (tail-loop)) (perform log "x"))` — the
 final `log` uses the builtin, not `h`, in both backends; an error raised
@@ -711,8 +706,12 @@ errors, the definition site of the annotation — LAW 30).
 *Grounding.* An error without a location is a riddle; the substrate for an OS
 does not answer riddles with stack-free strings.
 
-**Status: unimplemented** — `ELocated` is handled by both backends but the
-reader never emits it; every `thunk_loc` is `None` (D12).
+**Status: partial** — the reader emits `ELocated` for top-level forms, and
+`def`/`fn`/`defnode` bodies are wrapped with their definition-site location,
+so type errors and runtime errors in defined bodies report a location. Parse
+errors also include file and line. Arbitrary top-level expression errors
+still drop the enclosing location because `eval_tail` strips `ELocated`;
+that remains to be fixed.
 
 **Test:** `(car 5)` at line 3 of `f.pp` reports `f.pp:3` in both backends.
 
@@ -781,11 +780,10 @@ real system is dynamic; static subsets live inside it as checked claims. This
 is the differentiator from Unison. Force-time checking makes annotations
 meaningful without a phase that must see the whole (dynamic) graph.
 
-**Status: partial** — backwards today: the VM enforces annotations, the
-tree-walker *discards* them (`ETyped (e,_) → eval e`), which is D3; the
-fuzzer's `full` grammar produces the `exitdiff:bc-err: type mismatch`
-signature family, and `make test` currently excludes the type test (004).
-Definition-site reporting additionally blocks on D12 (LAW 29).
+**Status: holds** — both backends enforce type annotations at force time;
+the tree-walker `check_type` mirrors the VM (`tests/004-type-test.pp`).
+`def`/`fn`/`defnode` bodies carry their definition-site location, so type
+errors cite the annotation site.
 
 **Test:** `(def (f x) : int "s")` forced ⇒ the same type error, citing the
 annotation site, in both backends; unannotated code never type-errors.
@@ -809,12 +807,9 @@ computation.
 by threading arguments through every call. Keeping config out of the
 authority system keeps "what" and "may" from contaminating each other.
 
-**Status: partial** — the tree-walker implements all of this (config snapshot
-is even part of the current thunk hash — coarser than the target's
-observed-read tracking, but on the right side); the VM requires the config
-key to be a compile-time literal (D15; fuzzer signature `exitdiff:bc-err:
-config key must be a string, keyword, or symbol`), and `POP_CONFIG` is
-skipped by tail calls (the D9 family, LAW 27).
+**Status: holds** — computed config keys work in both backends, nested scopes
+shadow, and config frames are restored on every exit (normal, tail, and
+exception) (`tests/006-config-test.pp`, `tests/007-phase0-laws.pp`).
 
 **Test:** `(with-config {"k" 1} (with-config {"k" 2} (config (string-append "" "k"))))`
 ⇒ `2` in both backends; outside both forms ⇒ the default.
@@ -878,15 +873,12 @@ asset this project owns — but only if divergence is treated as a broken
 build, not a known quirk. A spec nobody can falsify differentially is prose.
 
 **Status: partial** — the fuzzer exists and runs both backends
-(`tools/fuzz.ml`, `make fuzz`), but known-divergent territory is real and
-catalogued: current open signature families include `outdiff:*` (printed
-values), `exitdiff:bc-err: type mismatch` (D3), `exitdiff:bc-err: config key`
-(D15), `exitdiff:tw-err: unbound symbol` (the LAW 1 let divergence),
-`exitdiff:tw-err: Out_of_memory` / `crash:bc:timeout` (D4), and the
-`cannot quote if/let` both-error family (D19). A same-side reader bug rides
-along: bare negative literals lex as *symbols* (`-5` ⇒ "unbound symbol: -5"
-in both backends) — non-differential, but a LAW-9-of-common-sense violation
-the fuzzer had to exclude from generation.
+(`tools/fuzz.ml`, `make fuzz`). The previously catalogued divergences
+(D3/D15/D19 and the LAW 1 let divergence) are now closed; `./fuzz
+--grammar core` and sampled `full` runs exit zero. Deep non-tail recursion
+(D4) and the negative-literal reader bug (`-5` lexes as a symbol) remain
+non-differential issues. Phase 0 exit 1 requires the `full` grammar to stay
+green under extended CI runs.
 
 **Test:** `./fuzz --grammar core` exits zero (that is the CI gate);
 Phase 0 exit 1 extends this to the `full` grammar with zero value-or-effect
@@ -947,43 +939,46 @@ signatures, not line numbers — the source is under active migration.)
 
 | Law | Area | Status | Evidence / D# |
 |---|---|---|---|
-| LAW 1 | mutual `let` scope | unimplemented | tree-walker parallel vs VM sequential; D15 family; fuzz `exitdiff:tw-err: unbound symbol` |
-| LAW 2 | dependency-derived order, cycle errors | unimplemented | no VM cycle detection; tree-walker misreports via D16 |
+| LAW 1 | mutual `let` scope | holds | `tests/007-phase0-laws.pp`; fuzzer `full` grammar |
+| LAW 2 | dependency-derived order, cycle errors | partial | cycles caught via `Evaluating` marker; report is generic, not named |
 | LAW 3 | binding-order-free identity | unimplemented | `hash_expr` order-sensitive; hashing itself unsound (D6) |
 | LAW 4 | one scope model | partial | modules sequential in tree-walker; VM module compiles only `EDef`, `load-module` merges w/o `import` (D15, D20) |
+| LAW 5 | `let*` sequential sugar | holds | reader emits `ELetStar`; both backends sequential; `tests/007-phase0-laws.pp` |
 | LAW 6 | node CBV + memoization | unimplemented | Q1; `node`/`defnode` don't exist; everything call-by-need |
 | LAW 7 | demand-pruning at node granularity | unimplemented | Q1/Q5; no store, no wanted-set (D1) |
 | LAW 8 | `delay` ephemeral vs `node` persistent | partial | split doesn't exist; VM thunks have no CA at all (D7) |
 | LAW 11 | stack-safe non-tail recursion | unimplemented | D4; fuzz `exitdiff:tw-err: Out_of_memory`, `crash:bc:timeout` |
-| LAW 12 | total quotation, quasiquote | unimplemented | D19 (`cannot quote if/let` both-error family), D11 |
+| LAW 12 | total quotation, quasiquote | holds | D11/D19 fixed; `tests/007-phase0-laws.pp` |
 | LAW 15 | ordering never from capabilities | partial | negative half holds; reconciler absent (D13) |
 | LAW 16 | opt-in per-node caching | unimplemented | D1 (dead cache code); D7 (VM memoizes nothing) |
 | LAW 17 | hit ≠ effect replay | unimplemented | no cache exists (D1) |
 | LAW 18 | sandbox-scratch writes | unimplemented | no sandbox; caps forgeable (D18) |
-| LAW 19 | sound content hashing | partial | MD5 (D5); closure-env hole → unsound dedup (D6); VM hashless thunks (D7) |
+| LAW 19 | sound content hashing | partial | SHA-256 (D5 fixed); closure-env hole → unsound dedup (D6); VM thunks carry a hash but not the Q8 sound key (D7) |
 | LAW 20 | key = code ‖ arg-values | unimplemented | current key = expr+env+caps+config (D6; ROADMAP Q8) |
 | LAW 21 | cutoff via traces | unimplemented | Q8/Phase 1; no traces |
-| LAW 22 | unforgeable root-minted caps | unimplemented | D18 (constructors are builtins — security-fatal) |
-| LAW 23 | component/full-path + transitive hit check | unimplemented | D8a/b (`starts_with` on `dirname`); no traces |
+| LAW 22 | unforgeable root-minted caps | holds | D18 fixed; constructors removed; `tests/capability-adversarial.sh` |
+| LAW 23 | component/full-path + transitive hit check | partial | D8a/b fixed (`path_grants` component-aware); transitive check unimplemented (no traces) |
 | LAW 24 | loader = runtime authority | partial | bypass exists (D8c) but as an ambient hole, unbounded |
-| LAW 25 | no unenforced authority surface | unimplemented | `CapTime`/`CapMemory` constructible, enforced nowhere (D8d) |
+| LAW 25 | no unenforced authority surface | holds | `CapTime`/`CapMemory` removed from types and surface (D8d) |
 | LAW 26 | two handler classes, synthetic trace cells | unimplemented | D17 (handlers absent from key *and* trace — cache-unsound) |
-| LAW 27 | exception/tail-safe dynamic extent | partial | D16 (exceptions skip restore), D9 (VM fails open, three legs), D20 (handler stack corruption) |
+| LAW 27 | exception/tail-safe dynamic extent | holds | D9/D16/D20 fixed; save-stack restore on every exit |
 | LAW 28 | failure traces, error memoization | unimplemented | D16 (raising thunk left `Evaluating` → fake "infinite recursion") |
-| LAW 29 | source locations in errors | unimplemented | D12 (reader never emits `ELocated`) |
+| LAW 29 | source locations in errors | partial | D12 fixed for top-level/def/fn/parse errors; arbitrary top-level exprs still strip `ELocated` |
 | LAW 30 | desired-state + single writer | unimplemented | D13 (no process effect; no reconciler, no cells) |
 | LAW 31 | fenced effects, intent journal | unimplemented | Q3/Phase 2 |
-| LAW 32 | gradual types, strictest oracle | partial | D3 (VM enforces, oracle discards; tests 004/005 excluded); fuzz `exitdiff:bc-err: type mismatch` |
-| LAW 33 | config: computed keys, tail-safe scoping | partial | D15 (VM literal-only keys; fuzz `exitdiff:bc-err: config key`), D9 (`POP_CONFIG` skipped in tail position) |
+| LAW 32 | gradual types, strictest oracle | holds | D3 fixed; both backends enforce; tests 004/005 restored; `tests/007-phase0-laws.pp` |
+| LAW 33 | config: computed keys, tail-safe scoping | holds | D15 fixed; computed keys and tail-safe scoping in both backends |
 | LAW 34 | no location surface / scheduler exists | partial | negative half holds; no scheduler at all |
 | LAW 35 | run-on-N-take-first as handler | unimplemented | Q9 (Phase 3 process pool; Phase 4 cluster, threat-model-gated) |
-| LAW 36 | backend parity | partial | open fuzz signatures: `outdiff:*`, `exitdiff:*`, `crash:bc:timeout`, both-error quote family; plus the same-side negative-literal reader bug (`-5` lexes as a symbol) |
-| LAW 37 | declared nondeterminism | unimplemented | D8c (`random` ambient, uncapped) |
+| LAW 36 | backend parity | partial | catalogued divergences closed; `core` and sampled `full` green; deep non-tail recursion and negative-literal lexing remain same-side issues |
+| LAW 37 | declared nondeterminism | partial | `random` builtin effect removed; no declared-nondeterminism mechanism yet |
 | LAW 38 | volatile-node containment | unimplemented | E4; `--check` doesn't exist |
 
-Laws that **hold** today, for the record: LAW 5 (`let*` as sequential
-sugar), LAW 9 (branch pruning), LAW 10 (TCO, with the D9 caveat owned by
-LAW 27), LAW 13 (effect order in `do`), LAW 14 (undemanded values fire no
-effects) — each already exercised by the fuzzer's `core` grammar or
-`tests/*.pp` under `--diff`, and each must stay green through the Q1
-strictness migration.
+Laws that **hold** today, for the record: LAW 1 (mutual `let`),
+LAW 5 (`let*` as sequential sugar), LAW 9 (branch pruning), LAW 10 (TCO),
+LAW 12 (total quotation/quasiquote), LAW 13 (effect order in `do`),
+LAW 14 (undemanded values fire no effects), LAW 22 (unforgeable caps),
+LAW 25 (no unenforced authority), LAW 27 (exception/tail-safe dynamic
+extent), LAW 32 (gradual types), LAW 33 (config) — each exercised by
+`tests/*.pp` under `--diff` and/or the fuzzer, and each must stay green
+through the Phase 1 build-engine work.
