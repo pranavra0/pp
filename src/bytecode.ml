@@ -43,7 +43,7 @@ let opcode_id = function
   | NOP -> 28
   | PUSH_CONFIG -> 29
   | POP_CONFIG -> 30
-  | READ_CONFIG _ -> 31
+  | READ_CONFIG -> 31
 
 (**
   Serialize a bytecode unit to a binary string.
@@ -166,7 +166,7 @@ let save (bc : bytecode) : string =
     | NOP -> put_u8 28
     | PUSH_CONFIG -> put_u8 29
     | POP_CONFIG -> put_u8 30
-    | READ_CONFIG i -> put_u8 31; put_u32 i
+    | READ_CONFIG -> put_u8 31
   in
   put_u32 (Array.length bc.code);
   Array.iter put_opcode bc.code;
@@ -327,7 +327,7 @@ let load (data : string) : bytecode =
     | 28 -> NOP
     | 29 -> PUSH_CONFIG
     | 30 -> POP_CONFIG
-    | 31 -> let i = get_u32 () in READ_CONFIG i
+    | 31 -> READ_CONFIG
     | _ -> failwith (Printf.sprintf "bytecode: unknown opcode id %d" id)
   in
 
@@ -393,7 +393,7 @@ let string_of_opcode = function
   | NOP -> "NOP"
   | PUSH_CONFIG -> "PUSH_CONFIG"
   | POP_CONFIG -> "POP_CONFIG"
-  | READ_CONFIG i -> Printf.sprintf "READ_CONFIG %d" i
+  | READ_CONFIG -> "READ_CONFIG"
 
 let disassemble (bc : bytecode) : string =
   let lines = Array.mapi (fun i op ->

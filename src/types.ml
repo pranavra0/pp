@@ -88,7 +88,7 @@ and thunk = {
   mutable thunk_status : thunk_status;
   mutable thunk_hash : string option;  (* precomputed content-addressable hash *)
   thunk_expr : expr;
-  thunk_env : env;
+  mutable thunk_env : env;
   vm_code : (bytecode * int * frame list) option;  (* VM thunk: (bytecode, code_offset, captured_frames) *)
   type_ann : expr option;              (* lazy gradual type annotation *)
   thunk_loc : (string * int) option;   (* source location for error reporting *)
@@ -141,7 +141,7 @@ and opcode =
   | NOP
   | PUSH_CONFIG              (* pop config-map, push onto config stack *)
   | POP_CONFIG               (* pop config stack *)
-  | READ_CONFIG of int       (* cp idx of key name; push config value or VNil *)
+  | READ_CONFIG              (* pop key from stack; push config value or VNil *)
 
 and bytecode = {
   consts : value array;

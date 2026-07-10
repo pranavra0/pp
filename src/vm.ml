@@ -694,11 +694,11 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
         incr pc;
         loop ()
 
-    | READ_CONFIG i ->
-        let key_name =
-          match (!bc_ref).consts.(i) with
-          | VString s -> s
-          | _ -> failwith "VM: READ_CONFIG constant is not a string"
+    | READ_CONFIG ->
+        let key_val = pop () in
+        let key_name = match key_val with
+          | VString s | VKeyword s | VSymbol s -> s
+          | _ -> failwith "VM: READ_CONFIG key must be a string, keyword, or symbol"
         in
         let rec find = function
           | [] -> VNil

@@ -355,12 +355,9 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       compile_expr st body false;
       emit st POP_CONFIG
   | EConfig (key_expr, default_opt) ->
-      let key_name =
-        match key_expr with
-        | ELiteral (VString s) | ELiteral (VKeyword s) | ESymbol s -> s
-        | _ -> failwith "config key must be a string, keyword, or symbol"
-      in
-      emit st (READ_CONFIG (intern_name st key_name));
+      compile_expr st key_expr false;
+      emit st FORCE;
+      emit st READ_CONFIG;
       (match default_opt with
        | Some d ->
            emit st DUP;

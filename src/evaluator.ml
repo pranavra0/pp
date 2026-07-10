@@ -140,12 +140,21 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
        | _ -> eval_tail then_e env k)
 
   | ELet (bindings, body) ->
-      (* Bindings are non-tail (they become thunks); body is tail *)
-      let env' = List.fold_left (fun env' (name, binding_expr) ->
-        let thunk = make_thunk_ca binding_expr env in
-        extend_env env' name thunk
-      ) env bindings in
-      eval_tail body env' k
+      (* Mutual let: all bindings visible in every RHS (LAW 1).
+         Create thunks with outer env, build mutual env, then backpatch
+         each thunk's env so they see each other when forced. *)
+      let thunks = List.map (fun (name, binding_expr) ->
+        (name, make_thunk_ca binding_expr env)
+      ) bindings in
+      let env_mutual = List.fold_left (fun e (name, thunk) ->
+        extend_env e name thunk
+      ) env thunks in
+      List.iter (fun (_, thunk) ->
+        match thunk with
+        | VThunk t -> t.thunk_env <- env_mutual
+        | _ -> ()
+      ) thunks;
+      eval_tail body env_mutual k
 
   | EFn (params, body) ->
       k (make_closure ~name:None params body (ref env))
