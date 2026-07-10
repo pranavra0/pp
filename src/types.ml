@@ -26,9 +26,10 @@ and expr =
   | EPerform of string * expr list  (* (perform effect-name args...) *)
   | EWithHandler of (string * expr) list * expr  (* effect handler installation *)
   | EDelay of expr          (* explicit delay *)
+  | ENode of expr           (* (node body) — persistent cacheable node *)
+  | EDefNode of string * string list * expr  (* (defnode (name params...) body...) *)
   | EDo of expr list        (* sequencing — forces each, returns last *)
   | EDef of string * string list * expr  (* (def name (params...) body) *)
-  | EDefFexpr of string * string list * expr  (* (def-fexpr name (params...) body) *)
   | ELetStar of (string * expr) list * expr  (* sequential let — desugared by reader *)
   | EModule of expr list        (* (module body...) — thunk producing an env *)
   | EImport of expr             (* (import mod-expr) — force module, merge env *)
@@ -58,7 +59,6 @@ and value =
   | VBuiltin of string * (value list -> value)  (* name + ocaml function *)
   | VCapability of capability
   | VThunk of thunk
-  | VFexpr of fexpr
   | VEnvMap of (string * value) list  (* module export: list of (name, thunk) pairs *)
   | VBytecode of bytecode
 
@@ -71,17 +71,6 @@ and closure = {
   vm_bc : bytecode;         (* VM: bytecode this closure belongs to *)
   vm_offset : int;          (* VM: code offset of function body *)
   vm_frames : frame list;   (* VM: captured frames at closure creation time *)
-}
-
-(* ---- Fexpr — operative: receives unevaluated args + calling environment ---- *)
-and fexpr = {
-  fexpr_name : string option;
-  fexpr_params : string list;
-  fexpr_body : expr;
-  fexpr_env : env ref;
-  vm_bc : bytecode;         (* VM: bytecode this fexpr belongs to *)
-  vm_offset : int;          (* VM: code offset of fexpr body *)
-  vm_frames : frame list;   (* VM: captured frames at fexpr creation time *)
 }
 
 and thunk = {
@@ -127,7 +116,6 @@ and opcode =
   | MAKE_THUNK of int * expr option * ((string * int) option)
                                (* code offset, optional type annotation, optional source location *)
   | MAKE_CLOSURE of int * int(* code offset, nparams *)
-  | MAKE_FEXPR of int * int  (* code offset, nparams; binds quoted arg-exprs *)
   | CALL of int | TAIL_CALL of int | RETURN | HALT
   | BUILTIN of int           (* cp idx of name; pushes the VBuiltin value *)
   | CONS                     (* pop b, pop a, push VPair(a,b) *)
@@ -162,7 +150,6 @@ type cenv = string list list
 
 type def_info = {
   name : string;
-  is_fexpr : bool;
   slot : int;
 }
 
@@ -174,7 +161,6 @@ type comp_state = {
   mutable param_names_of : (int, string list) Hashtbl.t;
   mutable closure_names_of : (int, string) Hashtbl.t;
   mutable cenv : cenv;
-  mutable fexpr_names : (string, bool) Hashtbl.t;
 }
 
 let fresh_comp_state () = {
@@ -185,7 +171,6 @@ let fresh_comp_state () = {
   param_names_of = Hashtbl.create 16;
   closure_names_of = Hashtbl.create 16;
   cenv = [];
-  fexpr_names = Hashtbl.create 32;
 }
 
 
@@ -213,7 +198,7 @@ let empty_env =
 (*  hash_value).                                                        *)
 (* =================================================================== *)
 
-let hash_string (s : string) : string = Digest.string s
+let hash_string (s : string) : string = Cryptokit.hash_string (Cryptokit.Hash.sha256 ()) s
 
 let hash_concat (parts : string list) : string =
   hash_string (String.concat ":" parts)
@@ -246,12 +231,13 @@ let rec hash_expr (e : expr) : string =
       ) handlers in
       hash_concat ("with_handler" :: hparts @ [hash_expr body])
   | EDelay e -> hash_concat ["delay"; hash_expr e]
+  | ENode e -> hash_concat ["node"; hash_expr e]
+  | EDefNode (name, params, body) ->
+      hash_concat ["defnode"; name; hash_concat ("params" :: params); hash_expr body]
   | EDo exprs ->
       hash_concat ("do" :: List.map hash_expr exprs)
   | EDef (name, params, body) ->
       hash_concat ["def"; name; hash_concat ("params" :: params); hash_expr body]
-  | EDefFexpr (name, params, body) ->
-      hash_concat ["def_fexpr"; name; hash_concat ("params" :: params); hash_expr body]
   | ELetStar (bindings, body) ->
       let bparts = List.map (fun (n, e) ->
         hash_concat ["let_star_bind"; n; hash_expr e]
@@ -320,12 +306,6 @@ and hash_value (v : value) : string =
         hash_concat ["builtin"; name]
     | VCapability cap ->
         hash_capability cap
-    | VFexpr { fexpr_name; fexpr_params; fexpr_body; fexpr_env = _; _ } ->
-        hash_concat ["fexpr";
-                     (match fexpr_name with Some n -> n | None -> "anon");
-                     hash_concat ("params" :: fexpr_params);
-                     hash_expr fexpr_body]
-        (* Env deliberately not hashed *)
     | VEnvMap bindings ->
         let sorted = List.sort (fun (a,_) (b,_) -> String.compare a b) bindings in
         let parts = List.map (fun (name, v) ->
@@ -361,7 +341,7 @@ and hash_capability (c : capability) : string =
 (* Incremental hash: hash("env", parent_hash, binding_name, hash_of_value).
    O(1) in the size of the env chain. *)
 let env_extend_hash (parent_hash : string) (name : string) (v_hash : string) : string =
-  Digest.string (String.concat ":" ["env"; parent_hash; name; v_hash])
+  hash_string (String.concat ":" ["env"; parent_hash; name; v_hash])
 
 (* Extend an environment with one binding.
    Creates a new env node with a fresh ID and an incrementally-computed hash. *)
@@ -378,7 +358,7 @@ let hash_bindings_flat (bindings : (string * value) list) : string =
   let parts = List.map (fun (name, v) ->
     String.concat ":" ["env_binding"; name; hash_value v]
   ) sorted in
-  Digest.string (String.concat ":" ("env_flat" :: parts))
+  hash_string (String.concat ":" ("env_flat" :: parts))
 
 (* Build an environment from a flat list of bindings (for initial env).
    Assigns a fresh ID and computes a deterministic hash. *)
@@ -414,9 +394,6 @@ let dummy_bytecode = { consts = [||]; code = [||]; nparams_of = Hashtbl.create 0
 let make_closure ?(name=None) params body env_ref =
   VClosure { fn_name = name; params; body; env = env_ref; vm_bc = dummy_bytecode; vm_offset = 0; vm_frames = [] }
 
-let make_fexpr ?(name=None) params body env_ref =
-  VFexpr { fexpr_name = name; fexpr_params = params; fexpr_body = body; fexpr_env = env_ref; vm_bc = dummy_bytecode; vm_offset = 0; vm_frames = [] }
-
 let make_thunk ?vm_code:(vc=None) ?type_ann:(ta=None) ?thunk_loc:(tl=None) ?config_hash:(ch="") expr env =
   VThunk { thunk_status = Unevaluated; thunk_hash = None; thunk_expr = expr; thunk_env = env; vm_code = vc; type_ann = ta; thunk_loc = tl; config_hash = ch }
 
@@ -443,8 +420,18 @@ let rec quote_to_value (e : expr) : value =
   match e with
   | ELiteral v -> v
   | ESymbol s -> VSymbol s
-  | EIf _ -> failwith "cannot quote if"
-  | ELet _ -> failwith "cannot quote let"
+  | EIf (cond, then_e, else_e) ->
+      VPair (VSymbol "if",
+        VPair (quote_to_value cond,
+          VPair (quote_to_value then_e,
+            VPair (quote_to_value else_e, VNil))))
+  | ELet (bindings, body) ->
+      let qbindings = List.fold_right (fun (n, e) acc ->
+        VPair (VPair (VSymbol n, VPair (quote_to_value e, VNil)), acc)
+      ) bindings VNil in
+      VPair (VSymbol "let",
+        VPair (list_to_list_v qbindings,
+          VPair (quote_to_value body, VNil)))
   | EFn (params, body) ->
       VPair (VSymbol "fn",
         VPair (VVector (Array.of_list (List.map (fun p -> VSymbol p) params)),
@@ -457,16 +444,17 @@ let rec quote_to_value (e : expr) : value =
   | EQuote e -> VPair (VSymbol "quote", VPair (quote_to_value e, VNil))
   | EForce e -> VPair (VSymbol "force", VPair (quote_to_value e, VNil))
   | EDelay e -> VPair (VSymbol "delay", VPair (quote_to_value e, VNil))
+  | ENode e -> VPair (VSymbol "node", VPair (quote_to_value e, VNil))
+  | EDefNode (name, params, body) ->
+      VPair (VSymbol "defnode",
+        VPair (VSymbol name,
+          VPair (list_to_list_v (List.fold_right (fun p acc -> VPair (VSymbol p, acc)) params VNil),
+            VPair (quote_to_value body, VNil))))
   | EDo exprs ->
       let qexprs = List.map quote_to_value exprs in
       VPair (VSymbol "do", List.fold_right (fun a acc -> VPair (a, acc)) qexprs VNil)
   | EDef (name, params, body) ->
       VPair (VSymbol "def",
-        VPair (VSymbol name,
-          VPair (list_to_list_v (List.fold_right (fun p acc -> VPair (VSymbol p, acc)) params VNil),
-            VPair (quote_to_value body, VNil))))
-  | EDefFexpr (name, params, body) ->
-      VPair (VSymbol "def-fexpr",
         VPair (VSymbol name,
           VPair (list_to_list_v (List.fold_right (fun p acc -> VPair (VSymbol p, acc)) params VNil),
             VPair (quote_to_value body, VNil))))
@@ -554,8 +542,6 @@ let rec string_of_value (v : value) : string =
        | Unevaluated -> "#<thunk>"
        | Evaluating -> "#<thunk: evaluating>"
        | Evaluated v -> "#<thunk: " ^ string_of_value v ^ ">")
-  | VFexpr { fexpr_name = Some n; _ } -> "#<fexpr " ^ n ^ ">"
-  | VFexpr { fexpr_name = None; _ } -> "#<fexpr>"
   | VEnvMap bindings ->
       "#<envmap " ^ string_of_int (List.length bindings) ^ " exports>"
   | VBytecode bc ->

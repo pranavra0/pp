@@ -20,37 +20,35 @@ let process_expr (e : expr) : value =
   | v -> v
 
 (* Tree-walker: execute a source string *)
-let execute_string (source : string) : value list =
+let execute_string ?(source : string = "<?>") (input : string) : value list =
   init ();
-  let exprs = read_string source in
-  List.map (fun e -> process_expr e) exprs
+  let exprs = read_string ~source input in
+  List.map (fun e -> process_expr (ELocated ((source, 1), e))) exprs
 
 (* Tree-walker: execute a source file *)
 let execute_file (path : string) : value list =
   let ch = open_in path in
   let source = really_input_string ch (in_channel_length ch) in
   close_in ch;
-  execute_string source
+  execute_string ~source:path source
 
 (* Bytecode VM: compile and run *)
-let execute_string_bytecode (use_vm : bool) (source : string) : value list =
+let execute_string_bytecode ?(source : string = "<?>") (use_vm : bool) (input : string) : value list =
   if use_vm then begin
-    (* Compile via the OCaml compiler, run via VM one expression at a time
-       so that the result list matches the tree-walker backend. *)
-    let exprs = read_string source in
+    let exprs = read_string ~source input in
     Vm.init ();
     List.map (fun e ->
-      let bc = Compiler.compile_program [e] in
+      let bc = Compiler.compile_program [ELocated ((source, 1), e)] in
       Vm.run_program_expr bc
     ) exprs
   end else
-    execute_string source
+    execute_string ~source input
 
 let execute_file_bytecode (use_vm : bool) (path : string) : value list =
   let ch = open_in path in
   let source = really_input_string ch (in_channel_length ch) in
   close_in ch;
-  execute_string_bytecode use_vm source
+  execute_string_bytecode ~source:path use_vm source
 
 (* Tree-walker REPL *)
 let repl () =

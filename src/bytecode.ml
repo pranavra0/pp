@@ -29,8 +29,7 @@ let opcode_id = function
   | FORCE -> 9
   | MAKE_THUNK _ -> 10
   | MAKE_CLOSURE _ -> 11
-  | MAKE_FEXPR _ -> 12
-  | CALL _ -> 13 | TAIL_CALL _ -> 14
+  | CALL _ -> 12 | TAIL_CALL _ -> 13
   | RETURN -> 15 | HALT -> 16
   | BUILTIN _ -> 17
   | CONS -> 18
@@ -114,7 +113,7 @@ let save (bc : bytecode) : string =
     | VCapability _ ->
         put_u8 const_tag_cap;
         put_u8 0
-    | VClosure _ | VFexpr _ | VBuiltin _ | VThunk _ | VEnvMap _ | VBytecode _ ->
+    | VClosure _ | VBuiltin _ | VThunk _ | VEnvMap _ | VBytecode _ ->
         (* Non-serializable constants; write as nil *)
         put_u8 const_tag_nil
   in
@@ -149,8 +148,7 @@ let save (bc : bytecode) : string =
                                 String.iter (fun c -> put_u8 (Char.code c)) file;
                                 put_u32 line)
     | MAKE_CLOSURE (off, np) -> put_u8 11; put_u32 off; put_u32 np
-    | MAKE_FEXPR (off, np) -> put_u8 12; put_u32 off; put_u32 np
-    | CALL n -> put_u8 13; put_u32 n
+    | CALL n -> put_u8 12; put_u32 n
     | TAIL_CALL n -> put_u8 14; put_u32 n
     | RETURN -> put_u8 15 | HALT -> put_u8 16
     | BUILTIN i -> put_u8 17; put_u32 i
@@ -310,7 +308,6 @@ let load (data : string) : bytecode =
         in
         MAKE_THUNK (off, None, tl)
     | 11 -> let off = get_u32 () in let np = get_u32 () in MAKE_CLOSURE (off, np)
-    | 12 -> let off = get_u32 () in let np = get_u32 () in MAKE_FEXPR (off, np)
     | 13 -> let n = get_u32 () in CALL n
     | 14 -> let n = get_u32 () in TAIL_CALL n
     | 15 -> RETURN | 16 -> HALT
@@ -376,7 +373,6 @@ let string_of_opcode = function
   | FORCE -> "FORCE"
   | MAKE_THUNK (off, _, _) -> Printf.sprintf "MAKE_THUNK %d" off
   | MAKE_CLOSURE (off, np) -> Printf.sprintf "MAKE_CLOSURE %d %d" off np
-  | MAKE_FEXPR (off, np) -> Printf.sprintf "MAKE_FEXPR %d %d" off np
   | CALL n -> Printf.sprintf "CALL %d" n
   | TAIL_CALL n -> Printf.sprintf "TAIL_CALL %d" n
   | RETURN -> "RETURN" | HALT -> "HALT"

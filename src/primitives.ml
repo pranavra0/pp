@@ -300,39 +300,6 @@ let () =
     | [VString msg] -> failwith msg
     | _ -> failwith "error");
 
-  (* Capability constructors *)
-  register "filesystem" (fun args ->
-    let args = force_args args in
-    match args with
-    | [VString path; VKeyword mode] ->
-        let m = match mode with
-          | "ro" -> Read | "rw" -> ReadWrite | "wo" -> Write
-          | _ -> failwith "filesystem mode must be :ro, :rw, or :wo"
-        in
-        VCapability (CapFilesystem { path; mode = m })
-    | _ -> failwith "filesystem expects path string and mode keyword");
-
-  register "network" (fun args ->
-    let args = force_args args in
-    match args with
-    | [VKeyword protocol] ->
-        let p = match protocol with
-          | "tcp" -> "tcp" | "udp" -> "udp" | "any" -> "any"
-          | _ -> failwith "network protocol must be :tcp, :udp, or :any"
-        in
-        VCapability (CapNetwork { protocol = p })
-    | _ -> failwith "network expects a protocol keyword");
-
-  register "process" (fun args ->
-    match args with [] -> VCapability CapProcess | _ -> failwith "process takes no arguments");
-
-  register "time-budget" (fun args ->
-    let args = force_args args in
-    match args with [VInt ms] -> VCapability (CapTime ms) | _ -> failwith "time-budget expects ms integer");
-
-  register "memory-budget" (fun args ->
-    let args = force_args args in
-    match args with [VInt bytes] -> VCapability (CapMemory bytes) | _ -> failwith "memory-budget expects bytes integer");
 
   register "cap-compose" (fun args ->
     let caps = List.map (fun v -> match force_one v with VCapability c -> c | _ -> failwith "cap-compose expects capabilities") args in
@@ -371,12 +338,6 @@ let () =
               !vm_define_ref name closure;
               new_defs := (name, closure) :: !new_defs;
               if !new_defs = [] then VNil else VEnvMap (List.rev !new_defs)
-          | [EDefFexpr (name, params, body)] ->
-              let fexpr = Types.make_fexpr ~name:(Some name) params body local_env in
-              local_env := Types.extend_env !local_env name fexpr;
-              !vm_define_ref name fexpr;
-              new_defs := (name, fexpr) :: !new_defs;
-              if !new_defs = [] then VNil else VEnvMap (List.rev !new_defs)
           | [last] ->
               (* Pure expression: evaluate and force *)
               force_one (!eval_ref last !local_env)
@@ -385,12 +346,6 @@ let () =
               local_env := Types.extend_env !local_env name closure;
               !vm_define_ref name closure;
               new_defs := (name, closure) :: !new_defs;
-              go rest
-          | (EDefFexpr (name, params, body)) :: rest ->
-              let fexpr = Types.make_fexpr ~name:(Some name) params body local_env in
-              local_env := Types.extend_env !local_env name fexpr;
-              !vm_define_ref name fexpr;
-              new_defs := (name, fexpr) :: !new_defs;
               go rest
           | e :: rest ->
               ignore (force_one (!eval_ref e !local_env));
@@ -415,10 +370,6 @@ let () =
              let new_frame = Types.make_frame (List.length c.params) in
              List.iteri (fun i arg -> Types.frame_set new_frame i arg) arg_values;
              !vm_run_thunk_ref c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
-         | VFexpr fe when fe.vm_bc != Types.dummy_bytecode ->
-             let new_frame = Types.make_frame (List.length fe.fexpr_params) in
-             List.iteri (fun i arg -> Types.frame_set new_frame i arg) arg_values;
-             !vm_run_thunk_ref fe.vm_bc fe.vm_offset (new_frame :: fe.vm_frames)
          | _ ->
              !apply_ref fn arg_values !current_env_ref)
     | _ -> failwith "apply-pp expects fn and list of args"

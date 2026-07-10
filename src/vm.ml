@@ -1,15 +1,14 @@
 (* pp bytecode VM — stack-based virtual machine executing bytecode *)
 
 open Types
+open Runtime
 
 (* ---- VM State ---- *)
 
 let operand_stack : value array ref = ref (Array.make 1024 VNil)
 let sp = ref 0
 
-let handler_stack : (string * (value list -> value)) list ref = ref []
-let current_capabilities : capability list ref = ref []
-let config_stack : value list ref = ref []
+(* handler_stack, current_capabilities, config_stack, thunk_store are in Runtime. *)
 (* Save-stacks so ENTER_EFFECT/PUSH_HANDLER can restore the EXACT prior scope
    on EXIT_EFFECT/POP_HANDLER regardless of how many caps/handlers were pushed
    (D9: ENTER pushed N but EXIT popped 1; PUSH_HANDLER pushed n but one
@@ -17,7 +16,6 @@ let config_stack : value list ref = ref []
 let caps_save_stack : capability list list ref = ref []
 let handler_save_stack : (string * (value list -> value)) list list ref = ref []
 let globals : (string, value) Hashtbl.t = Hashtbl.create 128
-let thunk_store : (string, thunk) Hashtbl.t = Hashtbl.create 1024
 
 (* ---- Stack helpers ---- *)
 
@@ -305,24 +303,6 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
         loop ()
 
 
-    | MAKE_FEXPR (offset, nparams) ->
-        let captured = !local_frames in
-        let params =
-          match Hashtbl.find_opt (!bc_ref).param_names_of offset with
-          | Some names -> names
-          | None -> []
-        in
-        push (VFexpr {
-          fexpr_name = None;
-          fexpr_params = params;
-          fexpr_body = ELiteral VNil;
-          fexpr_env = ref empty_env;
-          vm_bc = !bc_ref;
-          vm_offset = offset;
-          vm_frames = captured;
-        });
-        incr pc;
-        loop ()
     | CALL n ->
         let args = pop_n n in
         let fn_val = pop () in
@@ -353,31 +333,6 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
              push r;
              incr pc;
              loop ()
-         | VFexpr fe when fe.vm_bc == Types.dummy_bytecode ->
-             (* Tree-walker fexpr invoked from bytecode. *)
-             let r = !Primitives.apply_ref fn_val args !Primitives.current_env_ref in
-             push r;
-             incr pc;
-             loop ()
-         | VFexpr fe ->
-             let nparams = List.length fe.fexpr_params in
-             if n <> nparams then
-               failwith (Printf.sprintf "VM: arity mismatch for fexpr: expected %d, got %d" nparams n);
-             let new_frame = make_frame nparams in
-             List.iteri (fun i arg ->
-               frame_set new_frame i arg
-             ) args;
-             let callee_frames = new_frame :: fe.vm_frames in
-             let saved_sp = !sp in
-             let saved_stack = !operand_stack in
-             sp := 0;
-             operand_stack := Array.make 1024 VNil;
-             let r = run fe.vm_bc fe.vm_offset callee_frames in
-             sp := saved_sp;
-             operand_stack := saved_stack;
-             push r;
-             incr pc;
-             loop ()
          | VBuiltin (name, f) ->
              let r = f args in
              push r;
@@ -403,20 +358,6 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
              local_frames := new_frame :: c.vm_frames;
              bc_ref := c.vm_bc;
              pc := c.vm_offset;
-             loop ()
-         | VFexpr fe when fe.vm_bc == Types.dummy_bytecode ->
-             result := !Primitives.apply_ref fn_val args !Primitives.current_env_ref
-         | VFexpr fe ->
-             let nparams = List.length fe.fexpr_params in
-             if n <> nparams then
-               failwith (Printf.sprintf "VM: fexpr arity mismatch for tail call: expected %d, got %d" nparams n);
-             let new_frame = make_frame nparams in
-             List.iteri (fun i arg ->
-               frame_set new_frame i arg
-             ) args;
-             local_frames := new_frame :: fe.vm_frames;
-             bc_ref := fe.vm_bc;
-             pc := fe.vm_offset;
              loop ()
          | VBuiltin (name, f) ->
              (* Tail-calling a builtin: evaluate and return result to caller *)
@@ -529,25 +470,6 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
                 sp := 0;
                 operand_stack := Array.make 1024 VNil;
                 let r = run c.vm_bc c.vm_offset frames' in
-                sp := saved_sp;
-                operand_stack := saved_stack;
-                r
-            | VFexpr fe when fe.vm_bc == Types.dummy_bytecode ->
-                !Primitives.apply_ref hv args !Primitives.current_env_ref
-            | VFexpr fe ->
-                let nparams = List.length fe.fexpr_params in
-                if List.length args <> nparams then
-                  failwith (Printf.sprintf
-                    "fexpr arity mismatch: expected %d args, got %d"
-                    nparams (List.length args));
-                let new_frame = make_frame nparams in
-                List.iteri (fun i arg -> frame_set new_frame i arg) args;
-                let frames' = new_frame :: fe.vm_frames in
-                let saved_sp = !sp in
-                let saved_stack = !operand_stack in
-                sp := 0;
-                operand_stack := Array.make 1024 VNil;
-                let r = run fe.vm_bc fe.vm_offset frames' in
                 sp := saved_sp;
                 operand_stack := saved_stack;
                 r
@@ -785,7 +707,6 @@ let rec init () =
   let global_bindings = Hashtbl.fold (fun name v acc -> (name, v) :: acc) globals [] in
   Primitives.current_env_ref := Types.env_of_bindings global_bindings;
   handler_stack := [];
-  current_capabilities := [];
   config_stack := [];
   caps_save_stack := [];
   handler_save_stack := [];

@@ -2,20 +2,11 @@
 
 open Types
 open Hasher
+open Runtime
 
 (* ---- Evaluation State ---- *)
 
-(* Handler stack for algebraic effects *)
-let handler_stack : (string * (value list -> value)) list ref = ref []
-
-(* Current capability set (for effectful blocks) *)
-let current_capabilities : capability list ref = ref []
-
-(* ReaderT-style ambient config stack *)
-let config_stack : value list ref = ref []
-
-(* Content-addressed thunk store: hash -> thunk record *)
-let thunk_store : (string, thunk) Hashtbl.t = Hashtbl.create 1024
+(* Content-addressed thunk store is now in Runtime. *)
 
 (* Create or retrieve a content-addressed thunk.
    Two thunks with the same (expr, env, capabilities) are the SAME thunk.
@@ -175,10 +166,11 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       k (make_closure ~name:None params body (ref env))
 
   | EApply (fn_expr, arg_exprs) ->
-      (* Tail application: evaluate fn and args (non-tail), then tail-apply *)
+      (* Strict application (Q1): force fn and all args before calling.
+         This is call-by-value: arguments are evaluated before the body runs. *)
       let fn_val = force (eval fn_expr env) in
-      let arg_thunks = List.map (fun arg_expr -> make_thunk_ca arg_expr env) arg_exprs in
-      apply_tail fn_val arg_thunks env k
+      let arg_vals = List.map (fun arg_expr -> force (eval arg_expr env)) arg_exprs in
+      apply_tail fn_val arg_vals env k
 
   | EQuote e ->
       k (Types.quote_to_value e)
@@ -190,6 +182,12 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
 
   | EDelay e ->
       k (make_thunk_ca e env)
+
+  | ENode e ->
+      k (make_thunk_ca e env)
+
+  | EDefNode (name, params, body) ->
+      k (make_closure ~name:(Some name) params body (ref env))
 
   | EDo exprs ->
       (* All but last are non-tail; last is tail.
@@ -203,9 +201,9 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
             let closure = make_closure ~name:(Some name) params body env_ref in
             env_ref := extend_env !env_ref name closure;
             go rest
-        | (EDefFexpr (name, params, body)) :: rest ->
-            let fexpr = make_fexpr ~name:(Some name) params body env_ref in
-            env_ref := extend_env !env_ref name fexpr;
+        | (EDefNode (name, params, body)) :: rest ->
+            let closure = make_closure ~name:(Some name) params body env_ref in
+            env_ref := extend_env !env_ref name closure;
             go rest
         | (EImport mod_expr) :: rest ->
             let mod_val = force (eval mod_expr !env_ref) in
@@ -290,9 +288,6 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
   | EDef (name, params, body) ->
       k (make_closure ~name:(Some name) params body (ref env))
 
-  | EDefFexpr (name, params, body) ->
-      k (make_fexpr ~name:(Some name) params body (ref env))
-
   | ELetStar (bindings, body) ->
       let rec nest env' = function
         | [] -> eval_tail body env' k
@@ -311,9 +306,9 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
         | EDef (def_name, params, body) ->
             let closure = make_closure ~name:(Some def_name) params body (ref env_acc) in
             extend_env env_acc def_name closure
-        | EDefFexpr (def_name, params, body) ->
-            let fexpr = make_fexpr ~name:(Some def_name) params body (ref env_acc) in
-            extend_env env_acc def_name fexpr
+        | EDefNode (def_name, params, body) ->
+            let closure = make_closure ~name:(Some def_name) params body (ref env_acc) in
+            extend_env env_acc def_name closure
         | EImport mod_expr ->
             let mod_val = force (eval mod_expr env_acc) in
             (match mod_val with
@@ -438,18 +433,6 @@ and apply_tail (fn : value) (args : value list) (env : env) (k : value -> value)
         extend_env e param arg  (* arg is already a thunk *)
       ) !closure_env params args in
       eval_tail body env' k
-
-  | VFexpr { fexpr_name = _; fexpr_params; fexpr_body; fexpr_env; _ } ->
-      if List.length fexpr_params <> List.length args then
-        failwith (Printf.sprintf "fexpr arity mismatch: expected %d args, got %d"
-                    (List.length fexpr_params) (List.length args));
-      let env' = List.fold_left2 (fun e param arg ->
-        extend_env e param arg
-      ) !fexpr_env fexpr_params args in
-      let calling_env_val = VVector (Array.of_list (
-        List.map (fun (n, v) -> VPair (VString n, v)) env.bindings)) in
-      let env' = extend_env env' "calling-env" calling_env_val in
-      eval_tail fexpr_body env' k
 
   | VBuiltin (name, f) ->
       Primitives.current_env_ref := env;
@@ -589,24 +572,25 @@ and extract_capabilities (v : value) : capability list =
 
 (* Evaluate expressions sequentially with mutable env — used by ELoad, ELoadModule, and REPL *)
 and eval_expressions (exprs : expr list) (env : env ref) : value =
+  let unwrap e = match e with ELocated (_, e') -> e' | _ -> e in
   let rec go = function
     | [] -> VNil
-    | [last] ->
-        (match last with
+    | [e] ->
+        (match unwrap e with
          | EDef (name, params, body) ->
              let closure = make_closure ~name:(Some name) params body env in
              env := extend_env !env name closure;
              closure
-         | EDefFexpr (name, params, body) ->
-             let fexpr = make_fexpr ~name:(Some name) params body env in
-             env := extend_env !env name fexpr;
-             fexpr
+         | EDefNode (name, params, body) ->
+             let closure = make_closure ~name:(Some name) params body env in
+             env := extend_env !env name closure;
+             closure
          | EImport mod_expr ->
-             let mod_val = force (eval mod_expr !env) in
+             let mod_val = force (eval e !env) in
              (match mod_val with
               | VEnvMap bindings ->
-                  env := List.fold_left (fun e (n, v) ->
-                    extend_env e n v) !env bindings;
+                  env := List.fold_left (fun env' (n, v) ->
+                    extend_env env' n v) !env bindings;
                   mod_val
               | _ -> failwith "import expects a module value")
          | ELoad path ->
@@ -616,44 +600,46 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
              let exprs = Reader.read_string source in
              eval_expressions exprs env
          | _ ->
-             let result = force (eval last !env) in
+             let result = force (eval e !env) in
              (match result with
               | VEnvMap bindings ->
-                  env := List.fold_left (fun e (n, v) ->
-                    extend_env e n v) !env bindings;
+                  env := List.fold_left (fun env' (n, v) ->
+                    extend_env env' n v) !env bindings;
                   result
               | _ -> result))
-    | (EDef (name, params, body)) :: rest ->
-        let closure = make_closure ~name:(Some name) params body env in
-        env := extend_env !env name closure;
-        go rest
-    | (EDefFexpr (name, params, body)) :: rest ->
-        let fexpr = make_fexpr ~name:(Some name) params body env in
-        env := extend_env !env name fexpr;
-        go rest
-    | (EImport mod_expr) :: rest ->
-        let mod_val = force (eval mod_expr !env) in
-        (match mod_val with
-         | VEnvMap bindings ->
-             env := List.fold_left (fun e (n, v) ->
-               extend_env e n v) !env bindings;
-             go rest
-         | _ -> failwith "import expects a module value")
-    | (ELoad path) :: rest ->
-        let ch = open_in path in
-        let source = really_input_string ch (in_channel_length ch) in
-        close_in ch;
-        let exprs = Reader.read_string source in
-        ignore (eval_expressions exprs env);
-        go rest
     | e :: rest ->
-        let result = force (eval e !env) in
-        (match result with
-         | VEnvMap bindings ->
-             env := List.fold_left (fun e (n, v) ->
-               extend_env e n v) !env bindings;
+        (match unwrap e with
+         | EDef (name, params, body) ->
+             let closure = make_closure ~name:(Some name) params body env in
+             env := extend_env !env name closure;
              go rest
-         | _ -> go rest)
+         | EDefNode (name, params, body) ->
+             let closure = make_closure ~name:(Some name) params body env in
+             env := extend_env !env name closure;
+             go rest
+         | EImport mod_expr ->
+             let mod_val = force (eval e !env) in
+             (match mod_val with
+              | VEnvMap bindings ->
+                  env := List.fold_left (fun env' (n, v) ->
+                    extend_env env' n v) !env bindings;
+                  go rest
+              | _ -> failwith "import expects a module value")
+         | ELoad path ->
+             let ch = open_in path in
+             let source = really_input_string ch (in_channel_length ch) in
+             close_in ch;
+             let exprs = Reader.read_string source in
+             ignore (eval_expressions exprs env);
+             go rest
+         | _ ->
+             let result = force (eval e !env) in
+             (match result with
+              | VEnvMap bindings ->
+                  env := List.fold_left (fun env' (n, v) ->
+                    extend_env env' n v) !env bindings;
+                  go rest
+              | _ -> go rest))
   in
   go exprs
 
@@ -671,7 +657,7 @@ let eval_and_force (e : expr) : value =
 (* Initialize the evaluator state *)
 let init () =
   handler_stack := [];
-  current_capabilities := [];
+  current_capabilities := !initial_capabilities;
   Hashtbl.clear thunk_store;
   Primitives.set_force force;
   Primitives.set_eval eval;

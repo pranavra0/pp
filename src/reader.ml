@@ -250,7 +250,6 @@ and parse_special_form ps car_sym =
   ignore (advance ps);  (* consume the car symbol *)
   match car_sym with
   | "def" -> parse_def ps
-  | "def-fexpr" -> parse_def_fexpr ps
   | "fn" -> parse_fn ps
   | "if" -> parse_if ps
   | "let" -> parse_let ps
@@ -260,6 +259,8 @@ and parse_special_form ps car_sym =
   | "quote" -> parse_quote ps
   | "force" -> parse_force ps
   | "delay" -> parse_delay ps
+  | "node" -> parse_node ps
+  | "defnode" -> parse_defnode ps
   | "do" -> parse_do ps
   | "effect" -> parse_effect ps
   | "perform" -> parse_perform ps
@@ -519,27 +520,41 @@ and parse_delay ps =
   ignore (parse_rest ps);
   EDelay e
 
+(* (node expr) *)
+and parse_node ps =
+  let e = parse_expr ps in
+  ignore (parse_rest ps);
+  ENode e
+
+(* (defnode name value) or (defnode (name params...) [: type] body...) *)
+and parse_defnode ps =
+  match peek ps with
+  | TokLParen ->
+      (* (defnode (name params...) [: type] body...) *)
+      ignore (advance ps);  (* consume ( *)
+      let name = expect_symbol ps in
+      let params = parse_param_list ps in  (* consumes ) after params *)
+      let ret_ty =
+        match peek ps with
+        | TokColon -> ignore (advance ps); Some (parse_expr ps)
+        | _ -> None in
+      let body = match parse_rest ps with
+        | [b] -> b | bs -> EDo bs in
+      let body' = match ret_ty with
+        | Some ty -> ETyped (body, ty)
+        | None -> body in
+      EDefNode (name, params, body')
+  | TokSymbol name ->
+      ignore (advance ps);
+      let value = parse_expr ps in
+      ignore (parse_rest ps);  (* consume ) and any trailing *)
+      EDefNode (name, [], value)  (* variable definition *)
+  | _ -> failwith "malformed defnode"
+
 (* (do exprs...) *)
 and parse_do ps =
   let exprs = parse_rest ps in
   EDo exprs
-
-(* (def-fexpr name (params...) body...) *)
-and parse_def_fexpr ps =
-  match peek ps with
-  | TokLParen ->
-      ignore (advance ps);
-      let name = expect_symbol ps in
-      let params = parse_param_list ps in
-      let body = match parse_rest ps with
-        | [b] -> b | bs -> EDo bs in
-      EDefFexpr (name, params, body)
-  | TokSymbol name ->
-      ignore (advance ps);
-      let value = parse_expr ps in
-      ignore (parse_rest ps);
-      EDefFexpr (name, [], value)
-  | _ -> failwith "malformed def-fexpr"
 
 (* (let* [name expr name2 expr2 ...] body...) — sequential let *)
 and parse_let_star ps =
@@ -721,7 +736,7 @@ and parse_set ps =
 
 (* ---- Public API ---- *)
 
-let read_string (input : string) : expr list =
+let read_string ?(source : string = "<?>") (input : string) : expr list =
   let tokens = lex input in
   let ps = make_ps tokens in
   let result = ref [] in
@@ -736,8 +751,8 @@ let read_string (input : string) : expr list =
   loop ();
   List.rev !result
 
-let read_one (input : string) : expr =
-  match read_string input with
+let read_one ?(source : string = "<?>") (input : string) : expr =
+  match read_string ~source input with
   | [e] -> e
   | [] -> failwith "empty input"
   | _ -> failwith "multiple expressions"

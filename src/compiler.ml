@@ -64,9 +64,9 @@ let rec emit_thunk_region ?type_ann:(ta=None) ?thunk_loc:(tl=None) (st : comp_st
   emit st (MAKE_THUNK (body_start, ta, tl));
   body_start
 
-(* ---- Emit a closure/fexpr region (body + JUMP-around + MAKE_CLOSURE/MAKE_FEXPR) ---- *)
+(* ---- Emit a closure region (body + JUMP-around + MAKE_CLOSURE) ---- *)
 
-and emit_closure_region ?(name=None) (st : comp_state) (params : string list) (body : expr) (is_fexpr : bool) : int =
+and emit_closure_region ?(name=None) (st : comp_state) (params : string list) (body : expr) : int =
   let jmp_idx = current_offset st in
   emit st (JUMP 0);
   let body_start = current_offset st in
@@ -79,10 +79,7 @@ and emit_closure_region ?(name=None) (st : comp_state) (params : string list) (b
   Hashtbl.add st.nparams_of body_start (List.length params);
   Hashtbl.add st.param_names_of body_start params;
   (match name with Some n -> Hashtbl.add st.closure_names_of body_start n | None -> ());
-  if is_fexpr then
-    emit st (MAKE_FEXPR (body_start, List.length params))
-  else
-    emit st (MAKE_CLOSURE (body_start, List.length params));
+  emit st (MAKE_CLOSURE (body_start, List.length params));
   body_start
 
 (* ---- Lexical resolution ---- *)
@@ -156,11 +153,16 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       end
 
   | EFn (params, body) ->
-      ignore (emit_closure_region st params body false)
+      ignore (emit_closure_region st params body)
 
   | EApply (fn_expr, arg_exprs) ->
+      (* Strict application (Q1): force fn and all args before calling *)
       compile_expr st fn_expr false;
-      List.iter (fun arg -> ignore (emit_thunk_region st arg)) arg_exprs;
+      emit st FORCE;
+      List.iter (fun arg ->
+        compile_expr st arg false;
+        emit st FORCE
+      ) arg_exprs;
       if tail then
         emit st (TAIL_CALL (List.length arg_exprs))
       else
@@ -175,6 +177,13 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
 
   | EDelay e ->
       ignore (emit_thunk_region st e)
+  | ENode e ->
+      ignore (emit_thunk_region st e)
+  | EDefNode (name, params, body) ->
+      ignore (emit_closure_region ~name:(Some name) st params body);
+      emit st (STORE_GLOBAL (intern_name st name));
+      if tail && st.cenv = [] then
+        emit st (LOAD_GLOBAL (intern_name st name))
   | EDo exprs ->
       let is_top_level = (st.cenv = []) in
       (* Pass 1: collect defs *)
@@ -183,14 +192,9 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       let names_to_add = ref [] in
       List.iter (fun sub ->
         match sub with
-        | EDef (name, _, _) ->
-            def_infos := {name; is_fexpr=false; slot= !slot_counter} :: !def_infos;
+        | EDef (name, _, _) | EDefNode (name, _, _) ->
+            def_infos := {name; slot= !slot_counter} :: !def_infos;
             names_to_add := name :: !names_to_add;
-            if not is_top_level then incr slot_counter
-        | EDefFexpr (name, _, _) ->
-            def_infos := {name; is_fexpr=true; slot= !slot_counter} :: !def_infos;
-            names_to_add := name :: !names_to_add;
-            Hashtbl.add st.fexpr_names name true;
             if not is_top_level then incr slot_counter
         | _ -> ()
       ) exprs;
@@ -204,23 +208,15 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       let rec compile_subs = function
         | [] -> ()
         | [last] -> compile_expr st last tail
-        | (EDef (name, params, body)) :: rest ->
-            ignore (emit_closure_region ~name:(Some name) st params body false);
+        | (EDef (name, params, body)) :: rest
+        | (EDefNode (name, params, body)) :: rest ->
+            ignore (emit_closure_region ~name:(Some name) st params body);
             if is_top_level then
               emit st (STORE_GLOBAL (intern_name st name))
             else
               (match Hashtbl.find_opt def_map name with
                | Some di -> emit st (STORE_LOCAL di.slot)
                | None -> failwith ("compiler: def " ^ name ^ " not found"));
-            compile_subs rest
-        | (EDefFexpr (name, params, body)) :: rest ->
-            ignore (emit_closure_region ~name:(Some name) st params body true);
-            if is_top_level then
-              emit st (STORE_GLOBAL (intern_name st name))
-            else
-              (match Hashtbl.find_opt def_map name with
-               | Some di -> emit st (STORE_LOCAL di.slot)
-               | None -> failwith ("compiler: def-fexpr " ^ name ^ " not found"));
             compile_subs rest
         | (EImport mod_expr) :: rest ->
             compile_expr st mod_expr false;
@@ -261,14 +257,8 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       emit st EXIT_EFFECT
 
   | EDef (name, params, body) ->
-      ignore (emit_closure_region ~name:(Some name) st params body false);
+      ignore (emit_closure_region ~name:(Some name) st params body);
       emit st (STORE_GLOBAL (intern_name st name));
-      if tail && st.cenv = [] then
-        emit st (LOAD_GLOBAL (intern_name st name))
-  | EDefFexpr (name, params, body) ->
-      ignore (emit_closure_region ~name:(Some name) st params body true);
-      emit st (STORE_GLOBAL (intern_name st name));
-      Hashtbl.add st.fexpr_names name true;
       if tail && st.cenv = [] then
         emit st (LOAD_GLOBAL (intern_name st name))
 
@@ -305,14 +295,10 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       let count = ref 0 in
       List.iter (fun sub ->
         match sub with
-        | EDef (name, params, body) ->
+        | EDef (name, params, body)
+        | EDefNode (name, params, body) ->
             emit st (PUSH (intern st (VString name)));
-            ignore (emit_closure_region ~name:(Some name) st params body false);
-            incr count
-        | EDefFexpr (name, params, body) ->
-            emit st (PUSH (intern st (VString name)));
-            Hashtbl.add st.fexpr_names name true;
-            ignore (emit_closure_region ~name:(Some name) st params body true);
+            ignore (emit_closure_region ~name:(Some name) st params body);
             incr count
         | EImport _ ->
             (* Evaluated for its side effects like the tree-walker
@@ -409,7 +395,7 @@ let compile_program (exprs : expr list) : bytecode =
                 module value; discard it in statement position. *)
              compile_expr st e true;
              emit st POP
-         | EDef _ | EDefFexpr _ | ELoad _ ->
+         | EDef _ | EDefNode _ | ELoad _ ->
              (* Defs consume their own result (STORE_GLOBAL), no POP needed *)
              compile_expr st e true
          | _ ->

@@ -6,11 +6,13 @@ let () =
   let diff = ref false in
   let eval_str = ref None in
   let files = ref [] in
+  let grants = ref [] in
 
   let rec parse = function
     | "--bytecode" :: rest -> bytecode := true; parse rest
     | "--diff" :: rest -> diff := true; bytecode := true; parse rest
     | "--update" :: rest -> Island.update_mode := true; parse rest
+    | "--grant" :: grant :: rest -> grants := grant :: !grants; parse rest
     | "-e" :: e :: rest -> eval_str := Some e; parse rest
     | "--version" :: _ | "-v" :: _ ->
         Printf.printf "pp v0.1.0\n"; exit 0
@@ -22,6 +24,7 @@ let () =
         Printf.printf "  pp --bytecode <file.pp>  Run via bytecode VM\n";
         Printf.printf "  pp --diff <file.pp>      Run both backends and diff\n";
         Printf.printf "  pp -e '<expr>'           Evaluate an expression\n";
+        Printf.printf "  pp --grant <spec>        Grant capability (fs:/path:rw, net:tcp, etc.)\n";
         Printf.printf "  pp run <file>            Run a pp source file\n";
         Printf.printf "  pp --version             Print version\n";
         Printf.printf "  pp --help                Print this help\n";
@@ -32,9 +35,25 @@ let () =
   in
   parse args;
 
+  (* Parse --grant specs into capabilities *)
+  let parse_grant spec =
+    match String.split_on_char ':' spec with
+    | ["fs"; path; mode] ->
+        let m = match mode with
+          | "ro" -> Types.Read | "rw" -> Types.ReadWrite | "wo" -> Types.Write
+          | _ -> failwith ("invalid fs mode in --grant: " ^ mode)
+        in Types.CapFilesystem { path; mode = m }
+    | ["net"; protocol] ->
+        Types.CapNetwork { protocol }
+    | ["process"] ->
+        Types.CapProcess
+    | _ -> failwith ("invalid --grant spec: " ^ spec)
+  in
+  let initial_caps = List.map parse_grant (List.rev !grants) in
+  Runtime.initial_capabilities := initial_caps;
+
   match !eval_str, !files with
   | Some e, [] ->
-      (* -e eval-string *)
       if !diff then begin
         Printf.eprintf "--diff not supported with -e\n"; exit 1
       end;
@@ -43,11 +62,9 @@ let () =
         Printf.printf "%s\n" (Types.string_of_value v)
       ) results
   | None, [] ->
-      (* REPL *)
       if !bytecode then Repl.repl_bytecode ()
       else Repl.repl ()
   | _, files ->
-      (* Execute files *)
       let files = List.rev files in
       if !diff then begin
         List.iter (fun f ->
