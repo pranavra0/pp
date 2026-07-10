@@ -1,199 +1,182 @@
 # pp
 
-pp is a lazy, cached, dynamic, capability-scoped Lisp.
+pp is a content-addressed, capability-scoped Lisp — and an experiment in
+collapsing build systems, package managers, and orchestrators into one
+substrate.
 
-Build systems, package managers, container builders and cluster orchestrators all manage the same thing: dependency graphs, execution order, caching, and side effects. We built separate tools for each. pp makes the language itself do all of it. Every expression is a thunk — the dependency graph is not something you author by hand. It emerges from evaluation. Thunks are content-addressed, so caching and deduplication are automatic across runs and across machines. The same mechanism handles compiling C, pulling a package, or running a migration — there is no separate cache layer.
+Build systems, package managers, container builders, and cluster orchestrators
+all manage the same thing: dependency graphs, execution order, caching, and
+side effects. We build separate tools for each. pp's thesis is that the
+*language* can be that substrate. Every value has a content hash, so two
+computations with the same code and inputs *are* the same computation —
+caching, deduplication, and early cutoff are corollaries of identity, not a
+bolted-on cache layer. Side effects require **capabilities**: unforgeable
+authority tokens, minted only at the root, that a computation must hold to touch
+the world.
 
-Side effects need capabilities. A function cannot touch the network unless you give it permission. Capabilities are ordinary values: you compose them, restrict them to a subdirectory, pass them around, and audit exactly what authority each line of code holds.
+> **Status:** pp is early. The interpreter, two back ends, effects,
+> capabilities, and in-memory content-addressed dedup work today. **Phase 1
+> is closed: pp is an incremental hermetic build engine**, and the claim is
+> executable — a 101-TU C project builds through a real `build.pp` with
+> every exit criterion journal-proven (null rebuild = 0 processes in ~130ms;
+> touch = 0 recompiles; one edit = exactly compile+link; `rm -rf build/` =
+> byte-identical restore with 0 tool re-runs; comment-only header edit cuts
+> off the link; authority gates cache hits transitively), pp builds itself,
+> and **Lua 5.4.7** builds/caches/restores the same way
+> (`tests/024`, `scripts/build-self.sh`, `scripts/build-lua.sh`). Under the
+> hood: verifying traces over file/config/handler/tool/tree/loader cells,
+> LAW-20 keying, per-run world snapshots (CAS ingest), per-node sandboxes,
+> depfile-refined process tracing, a journaled single-writer reconciler, and
+> `pp why` / `--no-cache` / `--check` auditability. Next: the Phase-2 push
+> scheduler — see [docs/STATUS.md](docs/STATUS.md) for exactly what is real
+> and [docs/ROADMAP.md](docs/ROADMAP.md) for where it's going.
+
+## Documentation
+
+| Doc | What it is |
+|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | The moving parts: how a program flows through the reader, the two back ends, and the shared runtime. **Start here to understand the code.** |
+| [docs/GLOSSARY.md](docs/GLOSSARY.md) | One-line definitions of the vocabulary. |
+| [docs/SPEC.md](docs/SPEC.md) | The normative semantic laws, each with a status marker. |
+| [docs/STATUS.md](docs/STATUS.md) | What works today + the D1–D21 discrepancy ledger. |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | The phased plan with falsifiable exit criteria, plus the maturity track (ergonomics, stdlib, portability, releases). |
+| [docs/DESIGN.md](docs/DESIGN.md) | Why it's shaped this way: principles, the Q1–Q12 decisions, prior art. |
+| [docs/TESTING.md](docs/TESTING.md) | The differential test suite and fuzzer. |
+| [AGENTS.md](AGENTS.md) | Orientation for AI coding agents. |
 
 ## Quick start
 
-You need OCaml (4.14 or later) and `ocamlc`.
+Requires [opam](https://opam.ocaml.org/) with OCaml, `dune`, and `cryptokit`.
+[direnv](https://direnv.net/) is optional but recommended.
 
 ```sh
-make              # build
-./pp              # REPL
-./pp file.pp      # run a file
-./pp --bytecode f # compile to bytecode first
-./pp --diff f     # run both backends, compare output
-./pp -e '(+ 1 2)' # evaluate one expression
+opam install dune cryptokit
+dune build            # builds the interpreter and the fuzzer; targets bin/pp
 ```
+
+With direnv, run `direnv allow` once and then `dune`/`pp` are on your PATH
+directly. Without it, use `dune exec pp --` or the `bin/pp` symlink:
+
+```sh
+pp                    # REPL
+pp file.pp            # run a file
+pp --bytecode file.pp # run via the bytecode VM instead of the tree-walker
+pp --diff file.pp     # run both back ends, fail if their results differ
+pp -e '(+ 1 2)'       # evaluate one expression
+```
+
+Run the tests with `dune runtest` (see [docs/TESTING.md](docs/TESTING.md)).
 
 ## A tour
 
-pp is a Lisp-1. Functions and variables live in the same namespace.
+pp is a Lisp-1: functions and variables share one namespace.
 
 ```clojure
 ;; values
 42 3.14 "hello" true false nil :keyword 'symbol
 
-;; arithmetic (variadic)
-(+ 1 2 3)           ; 6
-(* 2 3 4)           ; 24
+;; arithmetic and comparison (variadic)
+(+ 1 2 3)                 ; 6
+(if (> 5 0) "pos" "neg")  ; "pos"
 
-;; conditionals
-(if (> x 0) (print "positive") (print "not"))
+;; bindings are MUTUAL: every binding sees every other, position-free.
+(let [y (+ x 1)
+      x 1]
+  y)                      ; 2  — y sees x though x is written second
 
-;; bindings — parallel and lazy. y's value is a thunk that sees x.
-(let [x 10
-      y (+ x 20)]
-  (print x y))
-
-;; sequential bindings
-(let* [x 10
-       y (+ x 20)]
-  (print x y))
+;; let* is explicit sequential sugar
+(let* [x 1
+       x (+ x 1)]
+  x)                      ; 2
 
 ;; functions
 (def (square x) (* x x))
-(fn (x) (* x x))    ; anonymous
+(square 7)                ; 49
+((fn (x) (* x x)) 7)      ; 49
 
-;; do forces each expression, returns the last
+;; value bindings: (def x v) evaluates v at definition time, binds the value
+(def answer (* 6 7))
+answer                    ; 42
+
+;; parameter and return type annotations are checked when the body runs
+(def (inc n : int) : int (+ n 1))
+(inc "oops")              ; type mismatch: expected int, got "oops" at …
+
+;; do sequences effects and returns the last value
 (do (print "a") (print "b") 42)
 ```
 
 ### Laziness
 
-Nothing runs until you ask for it.
+`delay` builds an unforced thunk; `force` runs it, and the result is memoized.
 
 ```clojure
-;; This thunk is never forced — the error never fires
-(let [unused (delay (error "boom") 42)]
-  (print "safe"))
-
-;; Results are cached after the first force
-(let [big (delay (do (print "working...") (* 100 200)))]
-  (print (force big))   ; prints "working..." then 20000
-  (print (force big)))  ; prints 20000, no recompute
+(let [t (delay (do (print "working...") (* 100 200)))]
+  (print (force t))     ; prints "working..." then 20000
+  (print (force t)))    ; prints 20000 — no recompute
 ```
 
-Identical thunks with the same inputs, environment and capabilities are the
-same thunk. Computed once, shared everywhere. This is how pp replaces build
-caches, package registries and memoisation libraries.
+Identical thunks with the same inputs, environment, and capabilities are the
+*same* thunk: computed once, shared everywhere. Wrapping a computation in
+`(node e)` extends this *across runs*: its result is cached in `~/.pp/store` and
+reused by a later process, while a **verifying trace** records the files it read
+so a cache hit is re-checked against the world and never serves stale data.
 
 ### Effects and capabilities
 
-Side effects need permission. Capabilities are first-class values.
+Side effects go through `perform`; capabilities are the authority to run them,
+and they enter only via `--grant` on the command line.
 
 ```clojure
-;; Read-only access to /etc
-(effect :capabilities [(filesystem "/etc" :ro)]
-  (print (perform read-file "/etc/hostname")))
+;; perform dispatches to the ambient handler
+(with-handler [ask (fn (q) 42)]
+  (perform ask "the answer?"))     ; 42
 
-;; Compose and restrict
-(let [scope (cap-restrict (filesystem "/tmp" :rw) "myapp")]
-  (effect :capabilities [scope]
-    (perform write-file "/tmp/out.txt" "done")))
+;; reading a file requires a granted filesystem capability:
+;;   pp --grant fs:/etc:ro read-hostname.pp
+(print (perform read-file "/etc/hostname"))
 ```
 
-### Modules and islands
+User code cannot *construct* a capability — only narrow one it already holds
+with `cap-restrict` / `cap-compose`. Authority is a ceiling, checked at every
+`perform`.
 
-A module is a block of code whose exports are a value you can import.
+### Modules
+
+A module is a block of code whose exports are a value you `import`.
 
 ```clojure
-(let [m (module (def (double x) (* x 2))
-                (def (triple x) (* x 3)))]
+(let [m (module (def (double x) (* x 2)))]
   (import m)
-  (print (double 5)))  ; 10
+  (double 21))          ; 42
 ```
 
-An island is a module that lives somewhere else — a Git repository, a URL,
-another machine. You write the URI and a version tag. On first use, pp fetches
-it, pins the commit hash, and caches the result. On every later use, you get
-the same pinned code with no network call and no lockfile to maintain.
+`(load "stdlib/list.pp")` merges a file into the current scope;
+`(load-module "f.pp")` loads it isolated and returns its exports. **Islands** —
+modules pinned by hash from a git repo or URL — are specified but currently do a
+local read only (see D2 in [docs/STATUS.md](docs/STATUS.md)).
 
-```clojure
-(island <github:cull-os/packages> "v2.1.0")
-```
+### Type annotations and config
 
-Where a module is for code you write, an island is for code someone else
-wrote. Both produce a value you import with `import`. Both are
-content-addressed, so two islands with different pins are different thunks.
-
-Loading a file directly into your scope is a third option — useful during
-development, but without the isolation or pinning that modules and islands
-give you.
-
-```clojure
-(load "stdlib/list.pp")          ; merge into current scope
-(load-module "examples/math.pp") ; isolated, returns exports
-```
-
-### Fexprs
-
-Fexprs get their arguments unevaluated. They choose what to run.
-
-```clojure
-(def-fexpr (my-if condition then else)
-  (if (force condition) (force then) (force else)))
-
-(my-if true  (print "yes")  (print "no"))
-```
-
-### Type annotations
-
-Annotations are optional. Annotated code is checked at runtime, when the
-value is first forced. Errors report the definition site, not a stack trace
-50 frames deep.
+Annotations are optional and checked at force time; config is ambient,
+dynamically-scoped data (distinct from capabilities, which are authority).
 
 ```clojure
 (def (square x : int) : int (* x x))
-(let [x : int 42] (print x))
+(square 7)                            ; 49
+
+(with-config {:host "db1"}
+  (config :host))                     ; "db1"
 ```
 
-### Ambient configuration
+## Two back ends
 
-Configuration flows implicitly through the call tree. It is not threaded
-through every function signature.
+pp has two execution engines that must produce identical output:
 
-```clojure
-(with-config {:host "db1" :port 5432}
-  (print (config :host))              ; "db1"
-  (print (config :missing "fallback"))) ; "fallback"
-```
+| Back end | How | What it is |
+|---|---|---|
+| Tree-walker | `pp file.pp` | Interprets the AST directly. The correctness oracle. |
+| Bytecode VM | `pp --bytecode file.pp` | Compiles to a 31-opcode stack machine: O(1) locals, tail-call optimization. |
 
-Configuration is distinct from capabilities. Config is data (what host to
-connect to). Capabilities are authority (whether you may connect at all).
-
-## Two backends
-
-pp has two execution engines that produce identical output.
-
-| Backend | How to use | What it does |
-|---------|-----------|--------------|
-| Tree-walker | `./pp file.pp` | Interprets the AST directly. The correctness baseline. |
-| Bytecode VM | `./pp --bytecode file.pp` | Compiles to a stack VM with 31 opcodes. O(1) variable lookup, tail-call optimisation, serialisable bytecode. |
-
-Use `./pp --diff file.pp` to run both and check they agree.
-
-## Project map
-
-```
-src/
-  types.ml           types — expr, value, thunk, opcode, frame
-  reader.ml          lexer and parser
-  hasher.ml          content-addressed hashing
-  capabilities.ml    capability checks
-  island.ml          island resolution and pin storage
-  primitives.ml      built-in functions
-  evaluator.ml       tree-walking evaluator (oracle)
-  bytecode.ml        .ppc serialization and disassembly
-  compiler.ml        AST to bytecode compiler
-  vm.ml              stack virtual machine
-  cache.ml           persistent bytecode cache
-  repl.ml            read-eval-print loop
-  main.ml            entry point
-tests/               test files
-examples/            example programs
-stdlib/              standard library
-```
-
-## Requirements
-
-OCaml 4.14 or later with `ocamlc`. For a native binary: `ocamlopt`.
-
-```sh
-make          # bytecode interpreter
-make native   # native binary (./pp-native)
-make test     # run tests under both backends
-```
+`pp --diff file.pp` runs both and fails if they disagree. Divergences are the
+main thing pp's fuzzer hunts for — see [docs/TESTING.md](docs/TESTING.md).

@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+# Differential test suite. Runs every tests/NNN-*.pp under BOTH backends
+# (tree-walker and bytecode VM) and diffs their output — any divergence is a
+# failure — then runs the capability adversarial suite. Invoked by
+# `dune runtest`; can also be run by hand from the repo root:
+#
+#     dune build && scripts/run-tests.sh ./pp
+#
+# Arg 1 is the pp binary (default: the dune-built one). The tests are run with
+# the repo root as cwd so `(load "stdlib/list.pp")` resolves.
+set -uo pipefail
+PP="${1:-_build/default/src/main.exe}"
+fail=0
+
+for f in tests/[0-9]*.pp; do
+  "$PP" --bytecode "$f" > /tmp/pp-bc.out 2>&1
+  "$PP"             "$f" > /tmp/pp-tw.out 2>&1
+  if diff -u /tmp/pp-tw.out /tmp/pp-bc.out > /tmp/pp-diff.out; then
+    echo "ok   $f"
+  else
+    echo "FAIL $f  (backends disagree)"
+    cat /tmp/pp-diff.out
+    fail=1
+  fi
+done
+
+echo "--- capability adversarial suite ---"
+if PP="$PP" bash tests/capability-adversarial.sh; then
+  :
+else
+  fail=1
+fi
+
+echo "--- node-cache trace suite ---"
+if PP="$PP" bash tests/010-node-cache-trace.sh; then
+  :
+else
+  fail=1
+fi
+
+echo "--- node-key (LAW 20) suite ---"
+if PP="$PP" bash tests/011-node-key-law20.sh; then
+  :
+else
+  fail=1
+fi
+
+echo "--- node-failure trace (LAW 28) suite ---"
+if PP="$PP" bash tests/012-node-failure-trace.sh; then
+  :
+else
+  fail=1
+fi
+
+echo "--- node-hit capability (LAW 23b) suite ---"
+if PP="$PP" bash tests/013-node-hit-capability.sh; then
+  :
+else
+  fail=1
+fi
+
+echo "--- VM node parity (D7) suite ---"
+if PP="$PP" bash tests/014-vm-node-parity.sh; then
+  :
+else
+  fail=1
+fi
+
+echo "--- config/handler trace cells (LAW 33/26) suite ---"
+if PP="$PP" bash tests/015-config-handler-cells.sh; then
+  :
+else
+  fail=1
+fi
+
+echo "--- cutoff (LAW 21, exit criteria 2/5) suite ---"
+if PP="$PP" bash tests/016-cutoff.sh; then
+  :
+else
+  fail=1
+fi
+
+echo "--- run effect + sandbox (D13) suite ---"
+if PP="$PP" bash tests/017-run-effect.sh; then
+  :
+else
+  fail=1
+fi
+
+echo "--- reconciler (Q4) suite ---"
+if PP="$PP" bash tests/018-reconcile.sh; then
+  :
+else
+  fail=1
+fi
+
+echo "--- why / no-cache / check suite ---"
+if PP="$PP" bash tests/019-why-nocache-check.sh; then
+  :
+else
+  fail=1
+fi
+
+echo "--- loader authority (Q6/D8c) suite ---"
+if PP="$PP" bash tests/020-loader-authority.sh; then
+  :
+else
+  fail=1
+fi
+
+echo "--- CAS ingest (Q11) suite ---"
+if PP="$PP" bash tests/021-cas-ingest.sh; then
+  :
+else
+  fail=1
+fi
+
+echo "--- depfile adapter (Q2) suite ---"
+if PP="$PP" bash tests/022-depfile.sh; then
+  :
+else
+  fail=1
+fi
+
+echo "--- blob reconcile suite ---"
+if PP="$PP" bash tests/023-blob-reconcile.sh; then
+  :
+else
+  fail=1
+fi
+
+echo "--- def value-binding suite ---"
+if PP="$PP" bash tests/025-def-value.sh; then
+  :
+else
+  fail=1
+fi
+
+echo "--- param type annotation suite ---"
+if PP="$PP" bash tests/026-param-types.sh; then
+  :
+else
+  fail=1
+fi
+
+echo "--- error message suite ---"
+if PP="$PP" bash tests/027-error-messages.sh; then
+  :
+else
+  fail=1
+fi
+
+echo "--- stdlib suite ---"
+if PP="$PP" bash tests/028-stdlib.sh; then
+  :
+else
+  fail=1
+fi
+
+echo "--- REPL suite ---"
+if PP="$PP" bash tests/029-repl.sh; then
+  :
+else
+  fail=1
+fi
+
+echo "--- Phase-1 exit criteria (100-TU C build) suite ---"
+if PP="$PP" bash tests/024-phase1-exit.sh; then
+  :
+else
+  fail=1
+fi
+
+exit $fail

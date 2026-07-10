@@ -71,8 +71,14 @@ let () =
     | _ ->
         let rec add acc = function
           | [] -> acc
-          | VInt n :: rest -> add (match acc with VInt a -> VInt (a + n) | VFloat a -> VFloat (a +. float_of_int n)) rest
-          | VFloat f :: rest -> add (match acc with VInt a -> VFloat (float_of_int a +. f) | VFloat a -> VFloat (a +. f)) rest
+          | VInt n :: rest -> add (match acc with
+              | VInt a -> VInt (a + n)
+              | VFloat a -> VFloat (a +. float_of_int n)
+              | v -> failwith (Printf.sprintf "+ expects numbers, got %s" (string_of_value v))) rest
+          | VFloat f :: rest -> add (match acc with
+              | VInt a -> VFloat (float_of_int a +. f)
+              | VFloat a -> VFloat (a +. f)
+              | v -> failwith (Printf.sprintf "+ expects numbers, got %s" (string_of_value v))) rest
           | v :: _ -> failwith (Printf.sprintf "+ expects numbers, got %s" (string_of_value v))
         in
         add (List.hd args) (List.tl args));
@@ -91,8 +97,14 @@ let () =
     | _ ->
         let rec mul acc = function
           | [] -> acc
-          | VInt n :: rest -> mul (match acc with VInt a -> VInt (a * n) | VFloat a -> VFloat (a *. float_of_int n)) rest
-          | VFloat f :: rest -> mul (match acc with VInt a -> VFloat (float_of_int a *. f) | VFloat a -> VFloat (a *. f)) rest
+          | VInt n :: rest -> mul (match acc with
+              | VInt a -> VInt (a * n)
+              | VFloat a -> VFloat (a *. float_of_int n)
+              | v -> failwith (Printf.sprintf "* expects numbers, got %s" (string_of_value v))) rest
+          | VFloat f :: rest -> mul (match acc with
+              | VInt a -> VFloat (float_of_int a *. f)
+              | VFloat a -> VFloat (a *. f)
+              | v -> failwith (Printf.sprintf "* expects numbers, got %s" (string_of_value v))) rest
           | v :: _ -> failwith (Printf.sprintf "* expects numbers, got %s" (string_of_value v))
         in
         mul (List.hd args) (List.tl args));
@@ -339,6 +351,12 @@ let () =
               !vm_define_ref name closure;
               new_defs := (name, closure) :: !new_defs;
               if !new_defs = [] then VNil else VEnvMap (List.rev !new_defs)
+          | [EDefValue (name, rhs)] ->
+              let v = !eval_ref rhs !local_env in
+              local_env := Types.extend_env !local_env name v;
+              !vm_define_ref name v;
+              new_defs := (name, v) :: !new_defs;
+              VEnvMap (List.rev !new_defs)
           | [last] ->
               (* Pure expression: evaluate and force *)
               force_one (!eval_ref last !local_env)
@@ -348,6 +366,12 @@ let () =
               local_env := Types.extend_env !local_env name closure;
               !vm_define_ref name closure;
               new_defs := (name, closure) :: !new_defs;
+              go rest
+          | (EDefValue (name, rhs)) :: rest ->
+              let v = !eval_ref rhs !local_env in
+              local_env := Types.extend_env !local_env name v;
+              !vm_define_ref name v;
+              new_defs := (name, v) :: !new_defs;
               go rest
           | e :: rest ->
               ignore (force_one (!eval_ref e !local_env));
@@ -391,16 +415,185 @@ let () =
     let args = force_args args in
     match args with
     | [VString path] ->
-        if not (List.exists (fun cap -> Capabilities.check_fs_read cap path) !Runtime.current_capabilities) then
-          failwith ("slurp: permission denied for " ^ path);
-        (try
-           let ch = open_in path in
-           let content = really_input_string ch (in_channel_length ch) in
-           close_in ch;
-           VString content
-         with Sys_error msg -> failwith ("slurp: " ^ msg))
+        (* Node-local sandbox scratch reads are capability-free and unrecorded
+           (LAW 18) — scratch is the node's working memory. *)
+        (match Process.sandbox_read path with
+         | Some content -> VString content
+         | None ->
+           if not (List.exists (fun cap -> Capabilities.check_fs_read cap path) !Runtime.current_capabilities) then
+             raise (Types.Capability_error ("slurp: permission denied for " ^ path));
+           (* Cell observation: recorded into enclosing node traces; in node
+              context, CAS-ingested and pinned for the run (Q11). *)
+           (try VString (Store.read_file_cell path)
+            with Sys_error msg -> failwith ("slurp: " ^ msg)))
     | _ -> failwith "slurp expects a file path string"
   );
+
+  (* ---- blob: ingest bytes into the CAS, return a small reference ----
+     (blob S) stores S under ~/.pp/store/blobs/<sha256> and returns
+     "blob:<sha256>". Desired-state maps carry these refs instead of inline
+     bytes; the reconciler diffs them by hash and materializes from the
+     store — which is what lets `rm -rf build/` restore with zero tool
+     re-runs (exit criterion 4). *)
+  register "blob" (fun args ->
+    let args = force_args args in
+    match args with
+    | [VString s] -> VString ("blob:" ^ Store.store_blob s)
+    | _ -> failwith "blob expects a string");
+
+  (* (blob-get REF) — the inverse: "blob:<sha256>" → the stored bytes.
+     Content-addressed, so no cell is recorded: the ref in a node's key or
+     free vars already pins exactly these bytes. *)
+  register "blob-get" (fun args ->
+    let args = force_args args in
+    match args with
+    | [VString r] ->
+        let prefix = "blob:" in
+        let plen = String.length prefix in
+        if String.length r > plen && String.sub r 0 plen = prefix then
+          let h = String.sub r plen (String.length r - plen) in
+          (match Store.load_blob h with
+           | Some bytes -> VString bytes
+           | None -> failwith ("blob-get: blob missing from store: " ^ h))
+        else failwith ("blob-get expects a blob:<hash> reference, got " ^ r)
+    | _ -> failwith "blob-get expects a blob reference string");
+
+  (* ---- stdlib primitives (ROADMAP §2) ---- *)
+
+  register "number->string" (fun args ->
+    match force_args args with
+    | [VInt n] -> VString (string_of_int n)
+    | [VFloat f] -> VString (string_of_float f)
+    | _ -> failwith "number->string expects a number");
+
+  register "string->number" (fun args ->
+    match force_args args with
+    | [VString s] ->
+        (match int_of_string_opt s with
+         | Some n -> VInt n
+         | None ->
+             (match float_of_string_opt s with
+              | Some f -> VFloat f
+              | None -> VNil))
+    | _ -> failwith "string->number expects a string");
+
+  (* (string-index S SUB) — index of the first occurrence of SUB, or nil. *)
+  register "string-index" (fun args ->
+    match force_args args with
+    | [VString s; VString sub] ->
+        let n = String.length s and m = String.length sub in
+        let rec go i =
+          if i + m > n then VNil
+          else if String.sub s i m = sub then VInt i
+          else go (i + 1)
+        in go 0
+    | _ -> failwith "string-index expects two strings");
+
+  register "string-trim" (fun args ->
+    match force_args args with
+    | [VString s] -> VString (String.trim s)
+    | _ -> failwith "string-trim expects a string");
+
+  (* (string-sub S START LEN) *)
+  register "string-sub" (fun args ->
+    match force_args args with
+    | [VString s; VInt start; VInt len] ->
+        if start < 0 || len < 0 || start + len > String.length s then
+          failwith (Printf.sprintf "string-sub: out of bounds (start %d, len %d, string length %d)"
+                      start len (String.length s))
+        else VString (String.sub s start len)
+    | _ -> failwith "string-sub expects a string, a start index, and a length");
+
+  (* Map utilities — keys were forced at construction; values stay lazy. *)
+  register "map-keys" (fun args ->
+    match force_args args with
+    | [VMap kvs] -> List.fold_right (fun (k, _) acc -> VPair (k, acc)) kvs VNil
+    | _ -> failwith "map-keys expects a map");
+
+  register "map-vals" (fun args ->
+    match force_args args with
+    | [VMap kvs] -> List.fold_right (fun (_, v) acc -> VPair (v, acc)) kvs VNil
+    | _ -> failwith "map-vals expects a map");
+
+  register "map-remove" (fun args ->
+    match args with
+    | [m; k] ->
+        (match force_one m with
+         | VMap kvs ->
+             let key = force_one k in
+             VMap (List.filter (fun (k', _) -> k' <> key) kvs)
+         | _ -> failwith "map-remove expects a map and a key")
+    | _ -> failwith "map-remove expects a map and a key");
+
+  (* File predicates: capability-gated observations recorded as `stat:` trace
+     cells — presence/kind only, never contents, so a node that probed
+     existence recomputes exactly when the path appears/disappears/changes
+     kind (see Store.stat_cell_id). *)
+  let stat_primitive name want_dir =
+    register name (fun args ->
+      match force_args args with
+      | [VString path] ->
+          if not (List.exists (fun cap -> Capabilities.check_fs_read cap path)
+                    !Runtime.current_capabilities) then
+            raise (Types.Capability_error
+                     (name ^ ": capability error: no read access for " ^ path));
+          let kind = Store.stat_kind path in
+          Runtime.record_read (Store.stat_cell_id path) (Store.stat_kind_hash kind);
+          VBool (if want_dir then kind = "dir" else kind <> "absent")
+      | _ -> failwith (name ^ " expects a path string"))
+  in
+  stat_primitive "file-exists?" false;
+  stat_primitive "dir?" true;
+
+  (* (argv) — program arguments after `--`, an `argv:` observation. *)
+  register "argv" (fun args ->
+    match args with
+    | [] ->
+        let av = !Runtime.program_argv in
+        Runtime.record_read Store.argv_cell_id (Store.argv_observed_hash ());
+        List.fold_right (fun s acc -> VPair (VString s, acc)) av VNil
+    | _ -> failwith "argv takes no arguments");
+
+  (* (env-get NAME) — environment variable or nil, an `env:` observation. *)
+  register "env-get" (fun args ->
+    match force_args args with
+    | [VString name] ->
+        let v = Sys.getenv_opt name in
+        Runtime.record_read (Store.env_cell_id name) (Store.env_observed_hash v);
+        (match v with Some s -> VString s | None -> VNil)
+    | _ -> failwith "env-get expects a variable name string");
+
+  (* (exit [N]) — terminate the run with status N (default 0). *)
+  register "exit" (fun args ->
+    match force_args args with
+    | [] -> raise (Types.Pp_exit 0)
+    | [VInt n] -> raise (Types.Pp_exit n)
+    | _ -> failwith "exit expects an optional integer status");
+
+  (* (string-split S SEP) — split on the single-char separator, dropping
+     empty fields (manifest-file friendly: trailing newlines vanish). *)
+  register "string-split" (fun args ->
+    let args = force_args args in
+    match args with
+    | [VString s; VString sep] when String.length sep = 1 ->
+        let parts = String.split_on_char sep.[0] s in
+        List.fold_right (fun p acc ->
+          if p = "" then acc else VPair (VString p, acc))
+          parts VNil
+    | _ -> failwith "string-split expects a string and a single-char separator");
+
+  (* (map-insert M K V) — a new map with K bound to V (K forced; an existing
+     binding for K is replaced). The dynamic counterpart of the {..} literal,
+     for building desired-state maps by folding. *)
+  register "map-insert" (fun args ->
+    match args with
+    | [m; k; v] ->
+        (match force_one m with
+         | VMap kvs ->
+             let key = force_one k in
+             VMap ((key, v) :: List.filter (fun (k', _) -> k' <> key) kvs)
+         | _ -> failwith "map-insert expects a map, a key, and a value")
+    | _ -> failwith "map-insert expects a map, a key, and a value");
 
   (* ---- read-string: parse string to value (for pp compiler) ---- *)
 

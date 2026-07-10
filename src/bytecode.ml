@@ -28,6 +28,7 @@ let opcode_id = function
   | JUMP _ -> 7 | JUMP_IF_FALSE _ -> 8
   | FORCE -> 9
   | MAKE_THUNK _ -> 10
+  | MAKE_NODE _ -> 32
   | MAKE_CLOSURE _ -> 11
   | CALL _ -> 12 | TAIL_CALL _ -> 13
   | RETURN -> 15 | HALT -> 16
@@ -139,6 +140,20 @@ let save (bc : bytecode) : string =
     | FORCE -> put_u8 9
     | MAKE_THUNK (off, ta, tl) ->
         put_u8 10; put_u32 off;
+        (match ta with
+         | None -> put_u8 0
+         | Some e -> put_u8 1; put_const (quote_to_value e));
+        (match tl with
+         | None -> put_u8 0
+         | Some (file, line) -> put_u8 1; put_u32 (String.length file);
+                                String.iter (fun c -> put_u8 (Char.code c)) file;
+                                put_u32 line)
+    | MAKE_NODE (off, _e, _fv, ta, tl) ->
+        (* The .ppc serializer is dead (the persistent store supersedes it); this
+           keeps the match total and roundtrips the offset/annotation/location,
+           dropping the AST + free-var descriptors that only the live in-memory
+           path needs. *)
+        put_u8 32; put_u32 off;
         (match ta with
          | None -> put_u8 0
          | Some e -> put_u8 1; put_const (quote_to_value e));
@@ -307,6 +322,21 @@ let load (data : string) : bytecode =
           | _ -> failwith "bytecode: bad MAKE_THUNK location flag"
         in
         MAKE_THUNK (off, None, tl)
+    | 32 ->
+        let off = get_u32 () in
+        (match get_u8 () with 0 -> () | 1 -> ignore (get_const ()) | _ -> failwith "bytecode: bad MAKE_NODE type-annotation flag");
+        let tl =
+          match get_u8 () with
+          | 0 -> None
+          | 1 ->
+              let file_len = get_u32 () in
+              let file = Bytes.create file_len in
+              for j = 0 to file_len - 1 do Bytes.set file j (Char.chr (get_u8 ())) done;
+              let line = get_u32 () in
+              Some (Bytes.to_string file, line)
+          | _ -> failwith "bytecode: bad MAKE_NODE location flag"
+        in
+        MAKE_NODE (off, ELiteral VNil, [], None, tl)
     | 11 -> let off = get_u32 () in let np = get_u32 () in MAKE_CLOSURE (off, np)
     | 13 -> let n = get_u32 () in CALL n
     | 14 -> let n = get_u32 () in TAIL_CALL n
@@ -372,6 +402,7 @@ let string_of_opcode = function
   | JUMP_IF_FALSE i -> Printf.sprintf "JUMP_IF_FALSE %d" i
   | FORCE -> "FORCE"
   | MAKE_THUNK (off, _, _) -> Printf.sprintf "MAKE_THUNK %d" off
+  | MAKE_NODE (off, _, _, _, _) -> Printf.sprintf "MAKE_NODE %d" off
   | MAKE_CLOSURE (off, np) -> Printf.sprintf "MAKE_CLOSURE %d %d" off np
   | CALL n -> Printf.sprintf "CALL %d" n
   | TAIL_CALL n -> Printf.sprintf "TAIL_CALL %d" n

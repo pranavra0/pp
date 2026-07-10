@@ -1,5 +1,21 @@
 (* pp types — mutually recursive type definitions for the pp runtime *)
 
+(* A capability denial: authority is not part of a computation's identity or
+   validity (LAW 15/20), so a cap-denied run must NOT be memoized as a failing
+   trace — otherwise granting the missing capability later would still re-serve
+   the stale denial. Kept distinct from `Failure` precisely so node evaluation
+   can decline to cache it. The registered printer makes it surface to the user
+   with the same message text as before. *)
+exception Capability_error of string
+let () = Printexc.register_printer (function
+  | Capability_error msg -> Some msg
+  | _ -> None)
+
+(* (exit N): deliberate termination with a status code. A dedicated exception
+   (not Failure) so it is never memoized as a failing node trace and never
+   picks up error decoration — it unwinds to main, which exits. *)
+exception Pp_exit of int
+
 (* ---- Environment ---- *)
 
 (* An environment node with a stable ID, a cached hash, and a list of bindings.
@@ -29,7 +45,11 @@ and expr =
   | ENode of expr           (* (node body) — persistent cacheable node *)
   | EDefNode of string * string list * expr  (* (defnode (name params...) body...) *)
   | EDo of expr list        (* sequencing — forces each, returns last *)
-  | EDef of string * string list * expr  (* (def name (params...) body) *)
+  | EDef of string * string list * expr  (* (def (name params...) body) *)
+  | EDefValue of string * expr  (* (def name value) — non-list head: a value
+                                   binding, evaluated at definition time (the
+                                   ROADMAP §1 footgun fix). Blocks give it
+                                   letrec* scope; the top level is sequential. *)
   | ELetStar of (string * expr) list * expr  (* sequential let — desugared by reader *)
   | EModule of expr list        (* (module body...) — thunk producing an env *)
   | EImport of expr             (* (import mod-expr) — force module, merge env *)
@@ -83,6 +103,12 @@ and thunk = {
   thunk_loc : (string * int) option;   (* source location for error reporting *)
   config_hash : string;                (* ReaderT config snapshot identity *)
   mutable thunk_persist : bool;         (* persist across runs? true for node, false for delay/let *)
+  mutable node_fv : (string * int * int) list;
+    (* VM node thunks only: the node's free variables as (name, depth, slot),
+       Global encoded as (name, -1, -1). Lets the VM compute the LAW 20 node key
+       — code + free-var value hashes — from captured frames, since a VM thunk
+       carries bytecode+frames rather than an AST+env. Empty for every other
+       thunk. *)
 }
 
 and thunk_status =
@@ -114,6 +140,10 @@ and opcode =
   | FORCE                    (* pop thunk, force via recursive VM, push result *)
   | MAKE_THUNK of int * expr option * ((string * int) option)
                                (* code offset, optional type annotation, optional source location *)
+  | MAKE_NODE of int * expr * (string * int * int) list * expr option * ((string * int) option)
+                               (* persistent node: code offset, body AST (for the
+                                  code hash), free-var descriptors (name,depth,slot;
+                                  Global = -1,-1), type annotation, source location *)
   | MAKE_CLOSURE of int * int(* code offset, nparams *)
   | CALL of int | TAIL_CALL of int | RETURN | HALT
   | BUILTIN of int           (* cp idx of name; pushes the VBuiltin value *)
@@ -210,6 +240,17 @@ let hash_string (s : string) : string =
 let hash_concat (parts : string list) : string =
   hash_string (String.concat ":" parts)
 
+(* Dummy bytecode for tree-walker closures — also the sentinel hash_value uses
+   (by physical equality) to tell a tree-walker closure from a VM one. *)
+let dummy_bytecode = { consts = [||]; code = [||]; nparams_of = Hashtbl.create 0; param_names_of = Hashtbl.create 0; closure_names_of = Hashtbl.create 0 }
+
+(* Content identity of a compiled bytecode unit: the marshalled consts+code
+   arrays. Same-version, same-architecture determinism — the same caveat the
+   persistent store's Marshal serialization already carries. *)
+let hash_bytecode (bc : bytecode) : string =
+  try hash_string (Marshal.to_string (bc.consts, bc.code) [Marshal.Closures])
+  with _ -> hash_string "bytecode:unmarshalable"
+
 let rec hash_expr (e : expr) : string =
   match e with
   | ELiteral v -> hash_concat ["lit"; hash_value v]
@@ -245,6 +286,8 @@ let rec hash_expr (e : expr) : string =
       hash_concat ("do" :: List.map hash_expr exprs)
   | EDef (name, params, body) ->
       hash_concat ["def"; name; hash_concat ("params" :: params); hash_expr body]
+  | EDefValue (name, e) ->
+      hash_concat ["def-value"; name; hash_expr e]
   | ELetStar (bindings, body) ->
       let bparts = List.map (fun (n, e) ->
         hash_concat ["let_star_bind"; n; hash_expr e]
@@ -270,15 +313,36 @@ let rec hash_expr (e : expr) : string =
       hash_concat ["located"; file; string_of_int line; hash_expr e]
 
 and hash_value (v : value) : string =
-  let rec hash_val v =
+  (* Frames already being hashed (physical identity): a closure captured in a
+     frame that captures the closure would otherwise recurse forever. A
+     re-encountered frame contributes a fixed cycle marker — deterministic,
+     because the traversal order is structural. *)
+  let visited_frames : frame list ref = ref [] in
+  let rec hash_frame (fr : frame) : string =
+    if List.memq fr !visited_frames then hash_string "frame:cycle"
+    else begin
+      visited_frames := fr :: !visited_frames;
+      let live = Array.sub fr.slots 0 fr.len in
+      hash_concat ("frame" :: Array.to_list (Array.map hash_val live))
+    end
+  and hash_val v =
     match v with
     | VThunk t ->
         (match t.thunk_hash with
          | Some h -> h  (* O(1): use precomputed content-addressable hash *)
          | None ->
-             (* Should not happen in practice — all thunks go through make_thunk_ca.
-                Fall back to structural hash using the env's cached hash. *)
-             hash_concat ["thunk"; hash_expr t.thunk_expr; t.thunk_env.env_hash; t.config_hash])
+             (match t.vm_code with
+              | Some (bc, offset, frames) ->
+                  (* VM thunk: its AST/env fields are placeholders — identity is
+                     the bytecode region + entry offset + captured frames. *)
+                  hash_concat
+                    (["vm-thunk"; hash_bytecode bc; string_of_int offset]
+                     @ List.map hash_frame frames)
+              | None ->
+                  (* Should not happen in practice — all thunks go through
+                     make_thunk_ca. Fall back to structural hash using the
+                     env's cached hash. *)
+                  hash_concat ["thunk"; hash_expr t.thunk_expr; t.thunk_env.env_hash; t.config_hash]))
     | VNil -> hash_string "nil"
     | VBool true -> hash_string "bool:true"
     | VBool false -> hash_string "bool:false"
@@ -303,12 +367,36 @@ and hash_value (v : value) : string =
     | VSet vs ->
         let sorted = List.sort String.compare (List.map hash_val vs) in
         hash_concat ("set" :: sorted)
-    | VClosure { fn_name; params; body; env = _; _ } ->
+    | VClosure { fn_name; params; body; env; vm_bc; vm_offset; vm_frames } ->
         let name_part = match fn_name with Some n -> n | None -> "anon" in
-        hash_concat ["closure"; name_part;
-                     hash_concat ("params" :: params);
-                     hash_expr body]
-        (* Env deliberately NOT hashed — closures hold a ref to mutable global env *)
+        if vm_bc == dummy_bytecode then
+          hash_concat ["closure"; name_part;
+                       hash_concat ("params" :: params);
+                       hash_expr body;
+                       (!env).env_hash]
+          (* D6: the captured environment IS part of a closure's identity — two
+             closures with identical code but different captures must hash
+             differently, or an enclosing content-addressed thunk collides and
+             returns a stale result (tests/009). We fold in the captured env's
+             PRECOMPUTED env_hash: O(1), no traversal, and no recursion back into
+             hash_value (env_hash is a fixed string computed at extend_env time),
+             so recursive/mutual closures terminate. This over-approximates —
+             it captures the whole visible env, not just free variables — which
+             is sound (at worst fewer cache hits); free-var-precise keying is a
+             later optimization. *)
+        else
+          (* VM closure: body is a placeholder (ELiteral VNil) and env is empty —
+             the code lives in vm_bc at vm_offset and the captures in vm_frames.
+             Hashing the placeholders made ALL same-arity VM closures collide,
+             which let a node cached under handler A be served under handler B
+             (LAW 26 trace cells compare handler hashes). Identity here is the
+             bytecode unit + entry offset + cycle-guarded captured frames. *)
+          hash_concat
+            (["vm-closure"; name_part;
+              hash_concat ("params" :: params);
+              hash_bytecode vm_bc;
+              string_of_int vm_offset]
+             @ List.map hash_frame vm_frames)
     | VBuiltin (name, _) ->
         hash_concat ["builtin"; name]
     | VCapability cap ->
@@ -337,6 +425,62 @@ and hash_capability (c : capability) : string =
   | CapRestrict { cap; scope } ->
       hash_concat ["cap_restrict"; hash_capability cap; scope]
   | CapNone -> hash_string "cap_none"
+
+(* ---- Free-variable analysis (for the LAW 20 node key) ----
+   The set of symbols a node's code references but does not itself bind. The
+   persistent node key resolves exactly these to their *value* hashes, so a node
+   depends on the definitions it actually uses — not on the whole ambient
+   environment (rebinding an unrelated global must not re-key it). Over-approx is
+   sound (fewer hits); under-approx is not, so binding forms are handled
+   conservatively. *)
+module SS = Set.Make(String)
+
+let free_vars (e : expr) : SS.t =
+  let add_all names b = List.fold_left (fun acc n -> SS.add n acc) b names in
+  (* names a `do`/`module` block binds for its siblings (defs, incl. located) *)
+  let block_binders exprs =
+    List.filter_map (function
+      | EDef (n, _, _) | EDefNode (n, _, _) | EDefValue (n, _) -> Some n
+      | ELocated (_, (EDef (n, _, _) | EDefNode (n, _, _) | EDefValue (n, _))) -> Some n
+      | _ -> None) exprs
+  in
+  let rec fv bound e =
+    match e with
+    | ELiteral _ | EQuote _ | ELoad _ | ELoadModule _ | EIsland _ -> SS.empty
+    | ESymbol s -> if SS.mem s bound then SS.empty else SS.singleton s
+    | EIf (c, t, f) -> SS.union (fv bound c) (SS.union (fv bound t) (fv bound f))
+    | ELet (binds, body) | ELetStar (binds, body) ->
+        let bound' = add_all (List.map fst binds) bound in
+        let rhs = List.fold_left (fun a (_, e) -> SS.union a (fv bound' e)) SS.empty binds in
+        SS.union rhs (fv bound' body)
+    | EFn (params, body) -> fv (add_all params bound) body
+    | EApply (f, args) ->
+        List.fold_left (fun a e -> SS.union a (fv bound e)) (fv bound f) args
+    | EForce e | EDelay e | ENode e -> fv bound e
+    | EEffect (caps, body) -> SS.union (fv bound caps) (fv bound body)
+    | EPerform (_, args) ->
+        List.fold_left (fun a e -> SS.union a (fv bound e)) SS.empty args
+    | EWithHandler (handlers, body) ->
+        let hs = List.fold_left (fun a (_, e) -> SS.union a (fv bound e)) SS.empty handlers in
+        SS.union hs (fv bound body)
+    | EDef (name, params, body) | EDefNode (name, params, body) ->
+        fv (add_all params (SS.add name bound)) body
+    | EDefValue (_, e) ->
+        (* Whole-block letrec* scope is handled by block_binders; a
+           self-reference in the RHS is a referenced-before-definition error
+           at runtime, never a dependency on an outer binding. *)
+        fv bound e
+    | EDo exprs | EModule exprs ->
+        let bound' = add_all (block_binders exprs) bound in
+        List.fold_left (fun a e -> SS.union a (fv bound' e)) SS.empty exprs
+    | EImport mod_expr -> fv bound mod_expr
+    | EWithConfig (m, body) -> SS.union (fv bound m) (fv bound body)
+    | EConfig (k, d) ->
+        SS.union (fv bound k) (match d with Some e -> fv bound e | None -> SS.empty)
+    | ETyped (e, _) -> fv bound e
+    | ELocated (_, e) -> fv bound e
+  in
+  fv SS.empty e
 
 
 (* =================================================================== *)
@@ -393,14 +537,11 @@ let extend_env_many (env : env) (bindings : (string * value) list) : env =
 (* =================================================================== *)
 
 
-(* Dummy bytecode for tree-walker closures *)
-let dummy_bytecode = { consts = [||]; code = [||]; nparams_of = Hashtbl.create 0; param_names_of = Hashtbl.create 0; closure_names_of = Hashtbl.create 0 }
-
 let make_closure ?(name=None) params body env_ref =
   VClosure { fn_name = name; params; body; env = env_ref; vm_bc = dummy_bytecode; vm_offset = 0; vm_frames = [] }
 
 let make_thunk ?vm_code:(vc=None) ?type_ann:(ta=None) ?thunk_loc:(tl=None) ?config_hash:(ch="") expr env =
-  VThunk { thunk_status = Unevaluated; thunk_hash = None; thunk_expr = expr; thunk_env = env; vm_code = vc; type_ann = ta; thunk_loc = tl; config_hash = ch; thunk_persist = false }
+  VThunk { thunk_status = Unevaluated; thunk_hash = None; thunk_expr = expr; thunk_env = env; vm_code = vc; type_ann = ta; thunk_loc = tl; config_hash = ch; thunk_persist = false; node_fv = [] }
 
 (* ---- Frame helpers ---- *)
 
@@ -463,6 +604,9 @@ let rec quote_to_value (e : expr) : value =
         VPair (VSymbol name,
           VPair (list_to_list_v (List.fold_right (fun p acc -> VPair (VSymbol p, acc)) params VNil),
             VPair (quote_to_value body, VNil))))
+  | EDefValue (name, e) ->
+      VPair (VSymbol "def",
+        VPair (VSymbol name, VPair (quote_to_value e, VNil)))
   | ELetStar (bindings, body) ->
       VPair (VSymbol "let*",
         VPair (list_to_list_v (List.fold_right (fun (n, e) acc ->

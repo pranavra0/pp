@@ -48,3 +48,37 @@
   (if (nil? lst)
       0
       (+ 1 (length (cdr lst)))))
+
+;; (each f lst) — apply f to each element for its effects, return nil
+(def (each f lst)
+  (if (nil? lst)
+      nil
+      (do (f (car lst)) (each f (cdr lst)))))
+
+;; (append a b) — concatenate two lists (lazy in b)
+(def (append a b)
+  (if (nil? a)
+      b
+      (cons (car a) (append (cdr a) b))))
+
+;; (reverse lst) — strict reversal
+(def (reverse lst)
+  (foldl (fn (acc x) (cons x acc)) nil lst))
+
+;; (nth n lst) — zero-based element access; nil past the end
+(def (nth n lst)
+  (if (nil? lst)
+      nil
+      (if (= n 0) (car lst) (nth (- n 1) (cdr lst)))))
+
+;; (drop n lst) — lst without its first n elements
+(def (drop n lst)
+  (if (or (nil? lst) (= n 0))
+      lst
+      (drop (- n 1) (cdr lst))))
+
+;; (member? x lst) — structural membership
+(def (member? x lst)
+  (if (nil? lst)
+      false
+      (if (= x (car lst)) true (member? x (cdr lst)))))

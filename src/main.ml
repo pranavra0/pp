@@ -1,18 +1,26 @@
 (* pp main — entry point for the pp interpreter *)
 
-let () =
+let main () =
   let args = List.tl (Array.to_list Sys.argv) in
   let bytecode = ref false in
   let diff = ref false in
   let eval_str = ref None in
   let files = ref [] in
   let grants = ref [] in
+  let reconcile_root = ref None in
 
   let rec parse = function
+    | "--" :: rest ->
+        (* Everything after `--` is the program's argv (the `argv` builtin). *)
+        Runtime.program_argv := rest
     | "--bytecode" :: rest -> bytecode := true; parse rest
     | "--diff" :: rest -> diff := true; bytecode := true; parse rest
     | "--update" :: rest -> Island.update_mode := true; parse rest
     | "--grant" :: grant :: rest -> grants := grant :: !grants; parse rest
+    | "--reconcile" :: root :: rest -> reconcile_root := Some root; parse rest
+    | "why" :: rest | "--why" :: rest -> Store.why_mode := true; parse rest
+    | "--no-cache" :: rest -> Store.no_cache := true; parse rest
+    | "--check" :: rest -> Store.check_mode := true; parse rest
     | "-e" :: e :: rest -> eval_str := Some e; parse rest
     | "--version" :: _ | "-v" :: _ ->
         Printf.printf "pp v0.1.0\n"; exit 0
@@ -24,7 +32,11 @@ let () =
         Printf.printf "  pp --bytecode <file.pp>  Run via bytecode VM\n";
         Printf.printf "  pp --diff <file.pp>      Run both backends and diff\n";
         Printf.printf "  pp -e '<expr>'           Evaluate an expression\n";
-        Printf.printf "  pp --grant <spec>        Grant capability (fs:/path:rw, net:tcp, etc.)\n";
+        Printf.printf "  pp --grant <spec>        Grant capability (fs:/path:rw, net:tcp, process)\n";
+        Printf.printf "  pp --reconcile <root>    Materialize the program's map value under <root>\n";
+        Printf.printf "  pp why <file.pp>         Explain node cache hits/misses (capability-filtered)\n";
+        Printf.printf "  pp --no-cache <file.pp>  Skip cache reads (recompute); results still stored\n";
+        Printf.printf "  pp --check <file.pp>     Determinism audit: run each node twice, flag volatile\n";
         Printf.printf "  pp run <file>            Run a pp source file\n";
         Printf.printf "  pp --version             Print version\n";
         Printf.printf "  pp --help                Print this help\n";
@@ -51,9 +63,21 @@ let () =
   in
   let initial_caps = List.map parse_grant (List.rev !grants) in
   Runtime.initial_capabilities := initial_caps;
+  (* Loader authority bound (Q6/D8c): the interpreter may load source from
+     the CLI-named programs' directories, the cwd, and ~/.pp — nothing else. *)
+  Runtime.source_roots :=
+    Sys.getcwd ()
+    :: List.map (fun f ->
+         Filename.dirname
+           (if Filename.is_relative f then Filename.concat (Sys.getcwd ()) f
+            else f))
+         !files;
   Store.init ();
+  (* --reconcile: collect every cell observation the program makes so the
+     reconciler can enforce stratification (LAW 30). *)
+  if !reconcile_root <> None then Runtime.observe_all := true;
 
-  match !eval_str, !files with
+  (match !eval_str, !files with
   | Some e, [] ->
       if !diff then begin
         Printf.eprintf "--diff not supported with -e\n"; exit 1
@@ -83,7 +107,38 @@ let () =
           end
         ) files
       end else begin
-        List.iter (fun f ->
-          ignore (Repl.execute_file_bytecode !bytecode f)
-        ) files
-      end
+        match !reconcile_root with
+        | None ->
+            List.iter (fun f ->
+              ignore (Repl.execute_file_bytecode !bytecode f)
+            ) files
+        | Some root ->
+            (* The program's FINAL value is the desired state of the domain
+               rooted at [root] (Q4/LAW 30); the reconciler is the writer. *)
+            let last =
+              List.fold_left (fun _ f ->
+                match List.rev (Repl.execute_file_bytecode !bytecode f) with
+                | v :: _ -> Some v
+                | [] -> None)
+                None files
+            in
+            (match last with
+             | Some v -> Reconciler.reconcile ~root v
+             | None -> failwith "reconcile: the program produced no value")
+      end);
+
+  (* --check verdict: any volatile node fails the audit (LAW 38). *)
+  if !Store.check_mode && !Store.volatile_count > 0 then begin
+    Printf.eprintf "[check] FAIL: %d volatile node(s) flagged\n%!"
+      !Store.volatile_count;
+    exit 1
+  end
+
+(* Uncaught runtime errors print as one clean line, not an OCaml backtrace
+   header (ROADMAP §1 error-message ergonomics). Exit 1. *)
+let () =
+  try main () with
+  | Types.Pp_exit n -> exit n
+  | Failure msg | Types.Capability_error msg | Sys_error msg ->
+      Printf.eprintf "pp: error: %s\n%!" msg;
+      exit 1

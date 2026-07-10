@@ -2,7 +2,7 @@
 # Adversarial capability suite — Phase 0 exit (3).
 # Runs both backends and compares their verdicts.
 set -euo pipefail
-PP=${PP:-./pp}
+PP=${PP:-bin/pp}
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 

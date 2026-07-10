@@ -14,7 +14,7 @@ let sp = ref 0
    (D9: ENTER pushed N but EXIT popped 1; PUSH_HANDLER pushed n but one
    POP_HANDLER popped 1). Mirrors the tree-walker's saved/restore pattern. *)
 let caps_save_stack : capability list list ref = ref []
-let handler_save_stack : (string * (value list -> value)) list list ref = ref []
+let handler_save_stack : (string * (value list -> value) * string) list list ref = ref []
 let globals : (string, value) Hashtbl.t = Hashtbl.create 128
 
 (* ---- Stack helpers ---- *)
@@ -79,27 +79,29 @@ let perform_builtin_effect (name : string) (args : value list) : value =
   | "read-file" ->
       (match args with
        | [VString path] ->
-           if not (has_fs_read path) then
-             failwith ("capability error: no read access for " ^ path);
-           (try
-              let ch = open_in path in
-              let content = really_input_string ch (in_channel_length ch) in
-              close_in ch;
-              VString content
-            with Sys_error msg -> failwith ("read-file: " ^ msg))
+           (* Node-local sandbox scratch reads: capability-free, unrecorded
+              (LAW 18) — same rule as the tree-walker. *)
+           (match Process.sandbox_read path with
+            | Some content -> VString content
+            | None ->
+              if not (has_fs_read path) then
+                raise (Types.Capability_error ("read-file: capability error: no read access for " ^ path));
+              (* Cell observation: recorded + CAS-pinned in node context (Q11). *)
+              (try VString (Store.read_file_cell path)
+               with Sys_error msg -> failwith ("read-file: " ^ msg)))
        | _ -> failwith "read-file expects a string path")
   | "write-file" ->
       (match args with
        | [VString path; VString content] ->
-           if not (has_fs_write path) then
-             failwith ("capability error: no write access for " ^ path);
-           (try
-              let ch = open_out path in
-              output_string ch content;
-              close_out ch;
-              VNil
-            with Sys_error msg -> failwith ("write-file: " ^ msg))
+           (* LAW 18 node/scripting split — shared with the tree-walker. *)
+           Process.write_file_effect ~has_cap:has_fs_write path content
        | _ -> failwith "write-file expects path and content strings")
+  | "run" ->
+      (* D13: process execution — capability-gated, trace-recorded, sandboxed. *)
+      Process.run_effect args
+  | "run-dep" ->
+      (* Q2 refinement: run + depfile → precise cells, no coarse tree cells. *)
+      Process.run_dep_effect args
   | "log" ->
       (match args with
        | [VString level; VString msg] ->
@@ -111,10 +113,14 @@ let perform_builtin_effect (name : string) (args : value list) : value =
       failwith ("unhandled effect: " ^ name)
 
 let perform_effect (name : string) (args : value list) : value =
+  (* LAW 26: which handler intercepts (or that none does) is an observation;
+     inside a node it is recorded as a `handler:<effect>` trace cell — same as
+     the tree-walker's perform_effect. *)
+  Runtime.record_handler_observation name;
   (* Check handler stack *)
   let rec find_handler = function
     | [] -> perform_builtin_effect name args
-    | (hname, h) :: rest ->
+    | (hname, h, _) :: rest ->
         if hname = name then h args
         else find_handler rest
   in
@@ -143,6 +149,10 @@ let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
                 type_name (string_of_value v) loc_str)
 
 (* ---- Force via VM (for evaluator.force to dispatch into) ---- *)
+
+(* Saved evaluator force — vm_force falls back to this for tree-walker thunks.
+   Declared before `run` so the mutually-recursive `vm_force` (below) can use it. *)
+let saved_eval_force : (value -> value) ref = ref (fun v -> v)
 
 (** Run a bytecode program starting at a given pc with given frames.
     Returns the result value (top of operand stack at HALT/RETURN). *)
@@ -187,7 +197,9 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
          | None ->
              (match Primitives.lookup name with
               | Some v -> push v
-              | None -> failwith ("VM: unbound global: " ^ name)));
+              (* Same text as the tree-walker's ESymbol miss — unbound-name
+                 errors must not reveal which backend ran. *)
+              | None -> failwith ("unbound symbol: " ^ name)));
         incr pc;
         loop ()
 
@@ -238,6 +250,13 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
                 loop ()
             | Evaluating ->
                 failwith "VM: infinite recursion detected (forcing a thunk already being evaluated)"
+            | Unevaluated when t.thunk_persist ->
+                (* Persistent node: route through the store (LAW 16/17/20/21/23/28),
+                   shared with vm_force. *)
+                let result_val = force_node_thunk t in
+                push result_val;
+                incr pc;
+                loop ()
             | Unevaluated ->
                 t.thunk_status <- Evaluating;
                 let result_val =
@@ -284,6 +303,24 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
         push t;
         incr pc;
         loop ()
+    | MAKE_NODE (offset, body_ast, fv_descs, type_ann, thunk_loc) ->
+        (* Persistent node thunk: carries the captured frames (for execution) plus
+           the body AST and free-var descriptors (for the LAW 20 node key). *)
+        let captured = !local_frames in
+        let cfg_hash = hash_concat ("cfg" :: List.map hash_value !config_stack) in
+        let t = make_thunk ~vm_code:(Some (!bc_ref, offset, captured))
+                   ~type_ann ~thunk_loc ~config_hash:cfg_hash
+                   body_ast
+                   empty_env
+        in
+        (match t with
+         | VThunk th ->
+             th.thunk_persist <- true;
+             th.node_fv <- fv_descs
+         | _ -> ());
+        push t;
+        incr pc;
+        loop ()
     | MAKE_CLOSURE (offset, nparams) ->
         let captured = !local_frames in
         let params =
@@ -318,8 +355,10 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
              loop ()
          | VClosure c ->
              let nparams = List.length c.params in
-             if n <> nparams then
-               failwith (Printf.sprintf "VM: arity mismatch for closure: expected %d, got %d" nparams n);
+             if n <> nparams then begin
+               let fname = match c.fn_name with Some nm -> nm | None -> "#<fn>" in
+               failwith (Printf.sprintf "arity mismatch calling %s: expected %d args, got %d" fname nparams n)
+             end;
              let new_frame = make_frame nparams in
              List.iteri (fun i arg ->
                frame_set new_frame i arg
@@ -351,8 +390,10 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
              result := !Primitives.apply_ref fn_val args !Primitives.current_env_ref
          | VClosure c ->
              let nparams = List.length c.params in
-             if n <> nparams then
-               failwith (Printf.sprintf "VM: arity mismatch for tail call: expected %d, got %d" nparams n);
+             if n <> nparams then begin
+               let fname = match c.fn_name with Some nm -> nm | None -> "#<fn>" in
+               failwith (Printf.sprintf "arity mismatch calling %s: expected %d args, got %d" fname nparams n)
+             end;
              let new_frame = make_frame nparams in
              List.iteri (fun i arg ->
                frame_set new_frame i arg
@@ -447,7 +488,8 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
           pairs := (name, handler_val) :: !pairs
         done;
         let new_handlers = List.map (fun (n, hv) ->
-          (n, fun args ->
+          (n,
+           (fun args ->
             (* Invoke the handler FUNCTION with the (already-forced) effect
                args and return its result, mirroring the tree-walker's
                [fun args -> apply handler_val args env] (evaluator.ml
@@ -460,10 +502,12 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
                 !Primitives.apply_ref hv args !Primitives.current_env_ref
             | VClosure c ->
                 let nparams = List.length c.params in
-                if List.length args <> nparams then
+                if List.length args <> nparams then begin
+                  let fname = match c.fn_name with Some nm -> nm | None -> "#<fn>" in
                   failwith (Printf.sprintf
-                    "arity mismatch: expected %d args, got %d"
-                    nparams (List.length args));
+                    "arity mismatch calling %s: expected %d args, got %d"
+                    fname nparams (List.length args))
+                end;
                 let new_frame = make_frame nparams in
                 List.iteri (fun i arg -> frame_set new_frame i arg) args;
                 let frames' = new_frame :: c.vm_frames in
@@ -477,7 +521,8 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
                 r
             | VBuiltin (_, f) -> f args
             | _ -> failwith ("VM: handler is not a function: " ^ string_of_value hv)
-          )
+           ),
+           hash_value hv)   (* D17: handler identity in the key *)
         ) !pairs in
         handler_save_stack := !handler_stack :: !handler_save_stack;
         handler_stack := new_handlers @ !handler_stack;
@@ -537,14 +582,10 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
           | VString s -> s
           | _ -> failwith "VM: LOAD_FILE constant is not a string"
         in
-        let source =
-          (* Let Sys_error propagate unwrapped — the tree-walker (the
-             oracle) does a bare open_in for load/island (evaluator.ml
-             ELoad/EIsland), so both backends must fail identically. *)
-          let ch = open_in path in
-          let content = really_input_string ch (in_channel_length ch) in
-          close_in ch; content
-        in
+        (* Loader authority: bounded + runtime-cell recorded (Q6/D8c) —
+           same helper as the tree-walker's ELoad/EIsland, so both backends
+           fail identically outside the source roots. *)
+        let source = Runtime.loader_read path in
         let exprs = Reader.read_string source in
         let prog = Compiler.compile_program exprs in
         let saved_sp = !sp in
@@ -565,10 +606,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
           | _ -> failwith "VM: LOAD_MODULE_FILE constant is not a string"
         in
         let source =
-          try
-            let ch = open_in path in
-            let content = really_input_string ch (in_channel_length ch) in
-            close_in ch; content
+          try Runtime.loader_read path
           with Sys_error msg -> failwith ("VM: cannot load module file: " ^ msg)
         in
         let exprs = Reader.read_string source in
@@ -624,18 +662,12 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
           | VString s | VKeyword s | VSymbol s -> s
           | _ -> failwith "VM: READ_CONFIG key must be a string, keyword, or symbol"
         in
-        let rec find = function
-          | [] -> VNil
-          | VMap kvs :: rest ->
-              (match List.assoc_opt (VString key_name) kvs with
-               | Some v -> v
-               | None ->
-                   (match List.assoc_opt (VKeyword key_name) kvs with
-                    | Some v -> v
-                    | None -> find rest))
-          | _ :: rest -> find rest
-        in
-        push (find !config_stack);
+        (* LAW 33: a config read inside a node is a recorded observation —
+           same cell and lookup rule as the tree-walker's EConfig. *)
+        Runtime.record_config_read key_name;
+        push (match Runtime.config_lookup key_name with
+              | Some v -> v
+              | None -> VNil);
         incr pc;
         loop ()
   in
@@ -644,17 +676,18 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
 
 
 
-(* Saved evaluator force — vm_force falls back to this for tree-walker thunks *)
-let saved_eval_force : (value -> value) ref = ref (fun v -> v)
 (* ---- VM-side force for builtins ---- *)
 
-let rec vm_force (v : value) : value =
+and vm_force (v : value) : value =
   match v with
   | VThunk t ->
       begin match t.thunk_status with
       | Evaluated result -> vm_force result
       | Evaluating -> failwith "VM force: infinite recursion"
       | Unevaluated ->
+          if t.thunk_persist then
+            vm_force (force_node_thunk t)
+          else
           begin match t.vm_code with
           | Some (bc', offset, frames') ->
               t.thunk_status <- Evaluating;
@@ -675,6 +708,117 @@ let rec vm_force (v : value) : value =
           end
       end
   | _ -> v
+
+(* LAW 20 node key for a VM node thunk. A VM thunk carries bytecode+frames rather
+   than an AST+env, so the free variables are resolved from the descriptors the
+   compiler emitted (MAKE_NODE): a Local (depth,slot) reads the captured frame,
+   a Global (depth < 0) reads the globals table. Each is forced (call-by-value)
+   and hashed. The key format is byte-identical to the tree-walker's
+   `node_key_of`, so a node whose free vars are data (strings, ints, …) produces
+   the SAME key in both backends and shares the store entry; closures hash per
+   backend, so those key separately but each remains sound. *)
+and vm_node_key (t : thunk) : string =
+  let frames = match t.vm_code with Some (_, _, fr) -> fr | None -> [] in
+  let fv_parts =
+    List.map (fun (name, depth, slot) ->
+      let v =
+        if depth < 0 then
+          (match Hashtbl.find_opt globals name with Some v -> v | None -> VNil)
+        else
+          (try frame_get (List.nth frames depth) slot with _ -> VNil)
+      in
+      let hv = (try hash_value (vm_force v) with _ -> hash_value v) in
+      hash_concat ["fv"; name; hv])
+      t.node_fv
+  in
+  (* Ambient config/handlers are deliberately NOT in the key: what a node
+     observed of them is recorded as config:/handler: trace cells and governs
+     validity, not identity (LAW 33/26) — same as the tree-walker. *)
+  hash_concat (["node-key"; hash_expr t.thunk_expr] @ fv_parts)
+
+(* Force a persistent VM node through the store: verify a hit (authority-gated),
+   else run the body under a fresh trace frame and store the result (or a failing
+   trace). Shared by the FORCE opcode and vm_force so a node caches identically
+   however it is demanded. Assumes t is persistent and Unevaluated. *)
+and force_node_thunk (t : thunk) : value =
+  let nk = vm_node_key t in
+  match Store.hit ~key:nk ~authorized:Evaluator.cell_authorized with
+  | Store.HitOk cached -> t.thunk_status <- Evaluated cached; cached
+  | Store.HitFailed errval ->
+      (match errval with VString m -> failwith m | _ -> failwith "node failed (cached)")
+  | Store.Miss ->
+      t.thunk_status <- Evaluating;
+      let tframe = Runtime.push_trace_frame () in
+      let result =
+        try
+          let r =
+            match t.vm_code with
+            | Some (bc', offset, cf) ->
+                let saved_sp = !sp in
+                let saved_stack = !operand_stack in
+                sp := 0;
+                operand_stack := Array.make 1024 VNil;
+                let r = run bc' offset cf in
+                sp := saved_sp;
+                operand_stack := saved_stack;
+                r
+            | None -> failwith "VM: node thunk without vm_code"
+          in
+          Runtime.pop_trace_frame ();
+          r
+        with
+        | Failure msg as e ->
+            Runtime.pop_trace_frame ();
+            let errval = VString msg in
+            let err_hash = hash_value errval in
+            (try Store.store_object ~key:err_hash ~value:errval with _ -> ());
+            (try Store.store_trace ~key:nk ~outcome:Failed ~result_hash:err_hash
+                   ~reads:(List.rev !tframe) with _ -> ());
+            t.thunk_status <- Unevaluated;
+            raise e
+        | e ->
+            Runtime.pop_trace_frame ();
+            t.thunk_status <- Unevaluated;
+            raise e
+      in
+      (match t.type_ann with
+       | Some ty -> check_type result ty t.thunk_loc
+       | None -> ());
+      t.thunk_status <- Evaluated result;
+      let result_hash = hash_value result in
+      (try Store.store_object ~key:result_hash ~value:result with _ -> ());
+      (try Store.store_trace ~key:nk ~outcome:Ok ~result_hash
+             ~reads:(List.rev !tframe) with _ -> ());
+      (* --check (LAW 38): re-run the body and compare result hashes — same
+         audit as the tree-walker's evaluate_and_store. *)
+      if !Store.check_mode then begin
+        (match t.vm_code with
+         | Some (bc', offset, cf) ->
+             let frame2 = Runtime.push_trace_frame () in
+             ignore frame2;
+             let r2 =
+               try
+                 let saved_sp = !sp in
+                 let saved_stack = !operand_stack in
+                 sp := 0;
+                 operand_stack := Array.make 1024 VNil;
+                 let r = run bc' offset cf in
+                 sp := saved_sp;
+                 operand_stack := saved_stack;
+                 r
+               with e -> Runtime.pop_trace_frame (); raise e
+             in
+             Runtime.pop_trace_frame ();
+             if hash_value r2 <> result_hash then begin
+               incr Store.volatile_count;
+               Printf.eprintf
+                 "[check] volatile node %s: an identical run produced a different result hash\n%!"
+                 (Store.short_key nk)
+             end
+         | None -> ())
+      end;
+      result
+
 (* ---- Public: run a single expression bytecode without re-initialising VM state ---- *)
 let run_program_expr (prog : bytecode) : value =
   let root_frame = make_frame 0 in
@@ -714,6 +858,9 @@ let rec init () =
   handler_save_stack := [];
   Hashtbl.clear thunk_store;
   Primitives.set_force vm_force;
+  (* Config-cell observations (LAW 33) hash the forced value; under the VM the
+     forcing is vm_force (Evaluator.init is not run on this path). *)
+  Runtime.force_hook := vm_force;
   Primitives.vm_run_thunk_ref := (fun bc offset frames ->
     (* Run a VM region with an isolated operand stack. *)
     let saved_sp = !sp in

@@ -40,8 +40,21 @@ let backpatch_jump (st : comp_state) (jmp_idx : int) =
 
 (* ---- Extend cenv with flat frame (no nesting) ---- *)
 
+(* An unreferenceable placeholder name for a slot that has been freed for
+   *visibility* but must stay *reserved*.  No pp identifier can equal it (it
+   contains a NUL), so [resolve] never matches it. *)
+let dead_slot = "\000dead"
+
 (** Extend the current cenv frame with [names], returning the starting slot
-    index and a thunk to restore the cenv. *)
+    index and a thunk to restore the cenv.
+
+    Restore does NOT truncate the frame: it marks this scope's slots dead in
+    place while preserving the frame's length (its slot high-water mark).  The
+    VM frame is a single mutable array shared with every thunk/closure that
+    captures it, so a slot must never be reused for a different binding within
+    the frame's lifetime — a nested [let] inside a [let*] binding RHS is
+    compiled into a thunk that, when forced later, would otherwise write into a
+    slot the sibling binding had reused, clobbering it. *)
 let extend_cenv (st : comp_state) (names : string list) : int * (unit -> unit) =
   let current_frame, parent_frames =
     match st.cenv with
@@ -49,9 +62,18 @@ let extend_cenv (st : comp_state) (names : string list) : int * (unit -> unit) =
     | f :: rest -> f, rest
   in
   let start_slot = List.length current_frame in
+  let n = List.length names in
   st.cenv <- (current_frame @ names) :: parent_frames;
   let restore () =
-    st.cenv <- current_frame :: parent_frames
+    match st.cenv with
+    | head :: parents ->
+        let head' =
+          List.mapi
+            (fun i nm -> if i >= start_slot && i < start_slot + n then dead_slot else nm)
+            head
+        in
+        st.cenv <- head' :: parents
+    | [] -> ()
   in
   (start_slot, restore)
 let rec emit_thunk_region ?type_ann:(ta=None) ?thunk_loc:(tl=None) (st : comp_state) (e : expr) : int =
@@ -62,6 +84,30 @@ let rec emit_thunk_region ?type_ann:(ta=None) ?thunk_loc:(tl=None) (st : comp_st
   emit st RETURN;
   backpatch_jump st jmp_idx;
   emit st (MAKE_THUNK (body_start, ta, tl));
+  body_start
+
+(* Like emit_thunk_region, but for a persistent node: emits MAKE_NODE carrying
+   the body AST (for the LAW 20 code hash) and the node's free-variable
+   descriptors (name, depth, slot; Global = -1,-1) resolved in the current
+   compile-time environment, so the VM can compute the node key from the values
+   in the captured frames at force time. The thunk body shares the surrounding
+   cenv (no frame pushed), so these slot indices are valid against the frames the
+   node captures. *)
+and emit_node_region ?type_ann:(ta=None) ?thunk_loc:(tl=None) (st : comp_state) (e : expr) : int =
+  let fv_descs =
+    Types.SS.elements (Types.free_vars e)
+    |> List.map (fun name ->
+         match resolve st.cenv name with
+         | `Local (depth, slot) -> (name, depth, slot)
+         | `Global -> (name, -1, -1))
+  in
+  let jmp_idx = current_offset st in
+  emit st (JUMP 0);
+  let body_start = current_offset st in
+  compile_expr st e true;
+  emit st RETURN;
+  backpatch_jump st jmp_idx;
+  emit st (MAKE_NODE (body_start, e, fv_descs, ta, tl));
   body_start
 
 (* ---- Emit a closure region (body + JUMP-around + MAKE_CLOSURE) ---- *)
@@ -178,7 +224,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
   | EDelay e ->
       ignore (emit_thunk_region st e)
   | ENode e ->
-      ignore (emit_thunk_region st e)
+      ignore (emit_node_region st e)
   | EDefNode (name, params, body) ->
       ignore (emit_closure_region ~name:(Some name) st params body);
       emit st (STORE_GLOBAL (intern_name st name));
@@ -186,14 +232,20 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
         emit st (LOAD_GLOBAL (intern_name st name))
   | EDo exprs ->
       let is_top_level = (st.cenv = []) in
-      (* Pass 1: collect defs *)
+      (* Pass 1: collect defs — function defs AND value defs share the block's
+         letrec* scope, so both get slots up front. *)
       let def_infos = ref [] in
+      let val_infos = ref [] in
       let slot_counter = ref 0 in
       let names_to_add = ref [] in
       List.iter (fun sub ->
         match sub with
         | EDef (name, _, _) | EDefNode (name, _, _) ->
             def_infos := {name; slot= !slot_counter} :: !def_infos;
+            names_to_add := name :: !names_to_add;
+            if not is_top_level then incr slot_counter
+        | EDefValue (name, _) ->
+            val_infos := (name, !slot_counter) :: !val_infos;
             names_to_add := name :: !names_to_add;
             if not is_top_level then incr slot_counter
         | _ -> ()
@@ -204,6 +256,18 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       in
       let def_map = Hashtbl.create 16 in
       List.iter (fun di -> Hashtbl.add def_map di.name {di with slot = start_slot + di.slot}) !def_infos;
+      let val_map = Hashtbl.create 16 in
+      List.iter (fun (name, slot) -> Hashtbl.replace val_map name (start_slot + slot)) !val_infos;
+      (* Poison prologue: pre-store each value-def binding so a reference that
+         runs before its def raises "<name>: referenced before its definition"
+         — byte-identical to the tree-walker's poison thunks. *)
+      List.iter (fun (name, slot) ->
+        ignore (emit_thunk_region st
+          (EApply (ESymbol "error",
+                   [ELiteral (VString (name ^ ": referenced before its definition"))])));
+        if is_top_level then emit st (STORE_GLOBAL (intern_name st name))
+        else emit st (STORE_LOCAL (start_slot + slot))
+      ) (List.rev !val_infos);
       (* Pass 2: compile each sub-expression *)
       let rec compile_subs = function
         | [] -> ()
@@ -216,6 +280,15 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
             else
               (match Hashtbl.find_opt def_map name with
                | Some di -> emit st (STORE_LOCAL di.slot)
+               | None -> failwith ("compiler: def " ^ name ^ " not found"));
+            compile_subs rest
+        | (EDefValue (name, rhs)) :: rest ->
+            compile_expr st rhs false;
+            if is_top_level then
+              emit st (STORE_GLOBAL (intern_name st name))
+            else
+              (match Hashtbl.find_opt val_map name with
+               | Some slot -> emit st (STORE_LOCAL slot)
                | None -> failwith ("compiler: def " ^ name ^ " not found"));
             compile_subs rest
         | (EImport mod_expr) :: rest ->
@@ -262,6 +335,18 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       if tail && st.cenv = [] then
         emit st (LOAD_GLOBAL (intern_name st name))
 
+  | EDefValue (name, rhs) ->
+      if st.cenv = [] then begin
+        (* Top level: evaluate now, bind as a global (sequential — matches the
+           tree-walker's eval_expressions). *)
+        compile_expr st rhs false;
+        emit st (STORE_GLOBAL (intern_name st name));
+        if tail then emit st (LOAD_GLOBAL (intern_name st name))
+      end else
+        (* Bare expression position inside a frame: evaluate the RHS and leave
+           it; binding is the enclosing block's job (EDo below) — mirrors the
+           tree-walker's EDefValue arm. *)
+        compile_expr st rhs tail
 
   | EPerform (name, arg_exprs) ->
       List.iter (fun arg -> ignore (emit_thunk_region st arg)) arg_exprs;
@@ -299,6 +384,13 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
         | EDefNode (name, params, body) ->
             emit st (PUSH (intern st (VString name)));
             ignore (emit_closure_region ~name:(Some name) st params body);
+            incr count
+        | EDefValue (name, rhs) ->
+            (* Evaluated at module-construction time, exported by name. (The
+               VM's known module-scope limitation applies: a sibling reference
+               resolves globally — see STATUS D-list.) *)
+            emit st (PUSH (intern st (VString name)));
+            compile_expr st rhs false;
             incr count
         | EImport _ ->
             (* Evaluated for its side effects like the tree-walker
@@ -399,6 +491,9 @@ let compile_program (exprs : expr list) : bytecode =
          | EDef _ | EDefNode _ | ELoad _ ->
              (* Defs consume their own result (STORE_GLOBAL), no POP needed *)
              compile_expr st e true
+         | EDefValue _ ->
+             (* Non-tail: STORE_GLOBAL consumes the value, nothing to POP *)
+             compile_expr st e false
          | _ ->
              compile_expr st e false;
              emit st POP);

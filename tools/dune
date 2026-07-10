@@ -1,0 +1,7 @@
+; The differential fuzzer (docs/TESTING.md). Stdlib + unix only.
+; Run:  dune exec fuzz -- --grammar full --count 1500
+(executable
+ (name fuzz)
+ (modules fuzz)
+ (libraries unix)
+ (flags -no-strict-sequence -w -8-10-26-27-39))

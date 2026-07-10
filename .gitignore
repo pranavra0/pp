@@ -4,9 +4,9 @@
 *.cmx
 *.o
 
-# pp binary
-pp
-pp-native
+# pp binary — root convenience symlink (bin/pp is tracked instead)
+/pp
+/pp-native
 
 # Cache
 .pp/
@@ -18,3 +18,4 @@ _build/
 fuzz
 fuzz-failures/
 fuzz-failures-full/
+scripts/.cache/

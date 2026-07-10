@@ -14,11 +14,11 @@ open Runtime
 let make_thunk_ca (expr : expr) (env : env) : value =
   let caps_hash = hash_concat ("caps" :: List.map Hasher.hash_capability !current_capabilities) in
   let cfg_hash = hash_concat ("cfg" :: List.map hash_value !config_stack) in
-  let h = hash_concat ["thunk"; Hasher.hash_expr expr; env.env_hash; caps_hash; cfg_hash] in
+  let h = hash_concat ["thunk"; Hasher.hash_expr expr; env.env_hash; caps_hash; cfg_hash; handlers_hash ()] in
   match Hashtbl.find_opt thunk_store h with
   | Some existing -> VThunk existing
   | None ->
-      let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env; vm_code = None; type_ann = None; thunk_loc = None; config_hash = cfg_hash; thunk_persist = false } in
+      let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env; vm_code = None; type_ann = None; thunk_loc = None; config_hash = cfg_hash; thunk_persist = false; node_fv = [] } in
       Hashtbl.add thunk_store h t;
       VThunk t
 
@@ -29,11 +29,11 @@ let make_thunk_ca (expr : expr) (env : env) : value =
 let make_thunk_ca_typed (expr : expr) (ty : expr) (loc : (string * int) option) (env : env) : value =
   let caps_hash = hash_concat ("caps" :: List.map Hasher.hash_capability !current_capabilities) in
   let cfg_hash = hash_concat ("cfg" :: List.map hash_value !config_stack) in
-  let h = hash_concat ["thunk-typed"; Hasher.hash_expr expr; Hasher.hash_expr ty; env.env_hash; caps_hash; cfg_hash] in
+  let h = hash_concat ["thunk-typed"; Hasher.hash_expr expr; Hasher.hash_expr ty; env.env_hash; caps_hash; cfg_hash; handlers_hash ()] in
   match Hashtbl.find_opt thunk_store h with
   | Some existing -> VThunk existing
   | None ->
-      let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env; vm_code = None; type_ann = Some ty; thunk_loc = loc; config_hash = cfg_hash; thunk_persist = false } in
+      let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env; vm_code = None; type_ann = Some ty; thunk_loc = loc; config_hash = cfg_hash; thunk_persist = false; node_fv = [] } in
       Hashtbl.add thunk_store h t;
       VThunk t
 
@@ -62,6 +62,52 @@ let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
       | None -> "" in
     failwith (Printf.sprintf "type mismatch: expected %s, got %s%s"
                 type_name (string_of_value v) loc_str)
+
+(* LAW 23b: whether the caller's current capabilities permit reading a trace
+   cell. Used to gate cache hits on the transitive read closure. Cells that
+   carry no user authority — config:, handler:, and runtime:file: (loader
+   reads run under interpreter authority, Q6/D8c) — pass unconditionally via
+   the final default. *)
+let cell_authorized (cell_id : string) : bool =
+  let strip prefix =
+    let plen = String.length prefix in
+    if String.length cell_id >= plen && String.sub cell_id 0 plen = prefix then
+      Some (String.sub cell_id plen (String.length cell_id - plen))
+    else None
+  in
+  match strip "file:" with
+  | Some path ->
+      List.exists (fun cap -> Capabilities.check_fs_read cap path) !current_capabilities
+  | None ->
+  match strip "tree:" with
+  | Some root ->
+      (* A coarse tree observation (run effect, Q2) is covered by an fs-read
+         grant over the root. *)
+      List.exists (fun cap -> Capabilities.check_fs_read cap root) !current_capabilities
+  | None ->
+  match strip "tool:" with
+  | Some _ ->
+      (* A tool observation came from a `run`; serving a result that embeds
+         one requires process authority, not an fs grant over the binary. *)
+      List.exists (function CapProcess -> true | _ -> false) !current_capabilities
+  | None ->
+  match strip "stat:" with
+  | Some path ->
+      (* A file-predicate observation (file-exists?/dir?) discloses presence,
+         so serving it requires the same fs-read authority as recording it. *)
+      List.exists (fun cap -> Capabilities.check_fs_read cap path) !current_capabilities
+  | None -> true  (* config:/handler:/env:/argv: cells carry no authority *)
+
+(* letrec* poison for value defs in blocks: a fresh (non-content-addressed)
+   thunk pre-bound at block entry so the whole block sees the binding; forcing
+   it before the def executes raises, and the def backpatches it in place. The
+   error expression compiles/evaluates to the SAME text in both backends. *)
+let poison_expr (name : string) : expr =
+  EApply (ESymbol "error",
+          [ELiteral (VString (name ^ ": referenced before its definition"))])
+
+let poison_thunk (name : string) (env : env) : value =
+  make_thunk (poison_expr name) env
 
 (* ---- Force: evaluate a thunk on demand ---- *)
 
@@ -95,17 +141,23 @@ let rec force (v : value) : value =
            decr force_depth;
            failwith "infinite recursion detected (forcing a thunk already being evaluated)"
        | Unevaluated ->
-           (* Check persistent store if this is a node thunk *)
+           (* Check persistent store if this is a node thunk. Identity is the
+              LAW 20 node key (code + free-var value hashes); the trace decides
+              validity. A stale trace falls through to recompute. *)
            if t.thunk_persist then
-             (match t.thunk_hash with
-              | Some h ->
-                  (match Store.load_object ~key:h with
-                   | Some cached ->
-                       t.thunk_status <- Evaluated cached;
-                       decr force_depth;
-                       force cached
-                   | None -> evaluate_and_store t h)
-              | None -> evaluate_and_store_no_key t)
+             let nk = node_key_of t in
+             (match Store.hit ~key:nk ~authorized:cell_authorized with
+              | Store.HitOk cached ->
+                  t.thunk_status <- Evaluated cached;
+                  decr force_depth;
+                  force cached
+              | Store.HitFailed errval ->
+                  (* LAW 28: re-serve a memoized failure without re-running. *)
+                  decr force_depth;
+                  (match errval with
+                   | VString msg -> failwith msg
+                   | _ -> failwith "node failed (cached)")
+              | Store.Miss -> evaluate_and_store t nk)
            else
              evaluate_and_store_no_key t)
   | _ ->
@@ -114,12 +166,45 @@ let rec force (v : value) : value =
 
 and evaluate_and_store (t : thunk) (h : string) : value =
   t.thunk_status <- Evaluating;
+  (* Push a trace frame so the world-reads this node makes (slurp, read-file)
+     are captured as (cell-id, observed-hash) pairs and stored with the result.
+     Popped on every exit — normal or exceptional — so a raised error never
+     leaks a dangling frame onto the stack. *)
+  let frame = Runtime.push_trace_frame () in
   let result =
-    match t.vm_code with
-    | Some (bc, code_offset, frames) ->
-        !Primitives.vm_run_thunk_ref bc code_offset frames
-    | None ->
-        eval t.thunk_expr t.thunk_env
+    try
+      let r =
+        match t.vm_code with
+        | Some (bc, code_offset, frames) ->
+            !Primitives.vm_run_thunk_ref bc code_offset frames
+        | None ->
+            eval t.thunk_expr t.thunk_env
+      in
+      Runtime.pop_trace_frame ();
+      r
+    with
+    | Failure msg as e ->
+        Runtime.pop_trace_frame ();
+        (* LAW 28: store a FAILING trace — the error value plus the reads made
+           up to the failure — so a re-force with unchanged inputs re-serves the
+           failure, and re-runs only when a read changes. D16: reset the status
+           off `Evaluating` so the next force reports the real error, not a fake
+           "infinite recursion". *)
+        if t.thunk_persist then begin
+          let errval = VString msg in
+          let err_hash = Hasher.hash_value errval in
+          (try Store.store_object ~key:err_hash ~value:errval with _ -> ());
+          (try Store.store_trace ~key:h ~outcome:Failed ~result_hash:err_hash
+                 ~reads:(List.rev !frame) with _ -> ())
+        end;
+        t.thunk_status <- Unevaluated;
+        decr force_depth;
+        raise e
+    | e ->
+        Runtime.pop_trace_frame ();
+        t.thunk_status <- Unevaluated;
+        decr force_depth;
+        raise e
   in
   (match t.type_ann with
    | Some ty -> check_type result ty t.thunk_loc
@@ -127,8 +212,33 @@ and evaluate_and_store (t : thunk) (h : string) : value =
   t.thunk_status <- Evaluated result;
   if t.thunk_persist then begin
     let result_hash = Hasher.hash_value result in
-    (try Store.store_object ~key:h ~value:result with _ -> ());
-    (try Store.store_trace ~key:h ~outcome:Ok ~result_hash with _ -> ())
+    (* Objects are content-addressed by result hash; the trace maps the node
+       key to that result plus the reads that justify it. *)
+    (try Store.store_object ~key:result_hash ~value:result with _ -> ());
+    (try Store.store_trace ~key:h ~outcome:Ok ~result_hash
+           ~reads:(List.rev !frame) with _ -> ());
+    (* --check (LAW 38): run the body a second time under a throwaway trace
+       frame; a different result hash means the node observed something no
+       cell captured — volatile, and unsafe to cache. *)
+    if !Store.check_mode then begin
+      let frame2 = Runtime.push_trace_frame () in
+      ignore frame2;
+      let r2 =
+        try
+          (match t.vm_code with
+           | Some (bc, code_offset, frames) ->
+               !Primitives.vm_run_thunk_ref bc code_offset frames
+           | None -> eval t.thunk_expr t.thunk_env)
+        with e -> Runtime.pop_trace_frame (); decr force_depth; raise e
+      in
+      Runtime.pop_trace_frame ();
+      if Hasher.hash_value r2 <> result_hash then begin
+        incr Store.volatile_count;
+        Printf.eprintf
+          "[check] volatile node %s: an identical run produced a different result hash\n%!"
+          (Store.short_key h)
+      end
+    end
   end;
   decr force_depth;
   force result
@@ -136,11 +246,19 @@ and evaluate_and_store (t : thunk) (h : string) : value =
 and evaluate_and_store_no_key (t : thunk) : value =
   t.thunk_status <- Evaluating;
   let result =
-    match t.vm_code with
-    | Some (bc, code_offset, frames) ->
-        !Primitives.vm_run_thunk_ref bc code_offset frames
-    | None ->
-        eval t.thunk_expr t.thunk_env
+    try
+      match t.vm_code with
+      | Some (bc, code_offset, frames) ->
+          !Primitives.vm_run_thunk_ref bc code_offset frames
+      | None ->
+          eval t.thunk_expr t.thunk_env
+    with e ->
+      (* D16: an ephemeral thunk that raised must not be left `Evaluating`, or
+         the next force misreports "infinite recursion". Reset and re-raise the
+         real error (ephemeral thunks are not failure-cached). *)
+      t.thunk_status <- Unevaluated;
+      decr force_depth;
+      raise e
   in
   (match t.type_ann with
    | Some ty -> check_type result ty t.thunk_loc
@@ -148,6 +266,28 @@ and evaluate_and_store_no_key (t : thunk) : value =
   t.thunk_status <- Evaluated result;
   decr force_depth;
   force result
+
+(* LAW 20: a node's persistent key is its code structure plus the *value* hashes
+   of the free variables it references (forced, call-by-value — the key cannot
+   exist before its inputs' values do). This deliberately omits the whole-env
+   hash (so rebinding an unrelated global does not re-key the node), the
+   capability set (authority gates *access* to a hit — LAW 23 — never identity),
+   and the ambient config/handler stacks: a config value or handler the node
+   actually observed is recorded in its trace as a `config:`/`handler:` cell
+   and governs validity, not identity (LAW 33/26). *)
+and node_key_of (t : thunk) : string =
+  let e = t.thunk_expr in
+  let fv_parts =
+    Types.SS.elements (Types.free_vars e)
+    |> List.map (fun name ->
+         match lookup_env t.thunk_env name with
+         | Some v ->
+             let hv = (try Hasher.hash_value (force v)
+                       with _ -> Hasher.hash_value v) in
+             hash_concat ["fv"; name; hv]
+         | None -> hash_concat ["fv-unbound"; name])
+  in
+  hash_concat (["node-key"; Hasher.hash_expr e] @ fv_parts)
 
 (* ---- Main Evaluator (non-tail) ---- *)
 
@@ -232,6 +372,15 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
          Uses a local env ref for threading — NOT current_env_ref,
          because inner evaluations would clobber it. *)
       let env_ref = ref env in
+      (* letrec* prologue: pre-bind every value def to a poison thunk so the
+         whole block sees the binding (LAW 4); its def backpatches it. *)
+      let poisons : (string, value) Hashtbl.t = Hashtbl.create 4 in
+      List.iter (function
+        | EDefValue (name, _) ->
+            let p = poison_thunk name !env_ref in
+            Hashtbl.replace poisons name p;
+            env_ref := extend_env !env_ref name p
+        | _ -> ()) exprs;
       let rec go = function
         | [] -> k VNil
         | [last] -> eval_tail last !env_ref k
@@ -243,6 +392,13 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
             let closure = make_closure ~name:(Some name) params body env_ref in
             env_ref := extend_env !env_ref name closure;
             go rest
+        | (EDefValue (name, rhs)) :: rest ->
+            let v = eval rhs !env_ref in
+            (match Hashtbl.find_opt poisons name with
+             | Some (VThunk t) -> t.thunk_status <- Evaluated v
+             | _ -> ());
+            env_ref := extend_env !env_ref name v;
+            go rest
         | (EImport mod_expr) :: rest ->
             let mod_val = force (eval mod_expr !env_ref) in
             (match mod_val with
@@ -252,16 +408,12 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
                  go rest
              | _ -> failwith "import expects a module value")
         | (ELoad path) :: rest ->
-            let ch = open_in path in
-            let source = really_input_string ch (in_channel_length ch) in
-            close_in ch;
+            let source = Runtime.loader_read path in
             let exprs = Reader.read_string source in
             ignore (eval_expressions exprs env_ref);
             go rest
         | (ELoadModule path) :: rest ->
-            let ch = open_in path in
-            let source = really_input_string ch (in_channel_length ch) in
-            close_in ch;
+            let source = Runtime.loader_read path in
             let exprs = Reader.read_string source in
             let mod_ref = ref (Primitives.initial_env ()) in
             ignore (eval_expressions exprs mod_ref);
@@ -316,8 +468,9 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       let saved_handlers = !handler_stack in
       let new_handlers = List.map (fun (name, handler_expr) ->
         let handler_val = force (eval handler_expr env) in
-        (name, fun args ->
-          apply handler_val args env)
+        (name,
+         (fun args -> apply handler_val args env),
+         hash_value handler_val)   (* D17: handler identity in the key *)
       ) handlers in
       handler_stack := new_handlers @ saved_handlers;
       let result = try eval_tail body env k
@@ -327,6 +480,12 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
 
   | EDef (name, params, body) ->
       k (make_closure ~name:(Some name) params body (ref env))
+
+  | EDefValue (_, rhs) ->
+      (* Bare expression position: evaluate the RHS and return it; binding is
+         the job of the enclosing block / top level (mirrors EDef, which
+         returns its closure without binding here). *)
+      k (eval rhs env)
 
   | ELetStar (bindings, body) ->
       let rec nest env' = function
@@ -341,6 +500,16 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
   | EModule body_exprs ->
       let base_env = Primitives.initial_env () in
       let mod_env = ref base_env in
+      (* letrec* prologue for value defs, as in EDo. *)
+      let poisons : (string, value) Hashtbl.t = Hashtbl.create 4 in
+      let prebound_env = List.fold_left (fun acc e ->
+        match e with
+        | EDefValue (name, _) ->
+            let p = poison_thunk name acc in
+            Hashtbl.replace poisons name p;
+            extend_env acc name p
+        | _ -> acc) !mod_env body_exprs in
+      mod_env := prebound_env;
       let final_env = List.fold_left (fun (env_acc : env) e ->
         match e with
         | EDef (def_name, params, body) ->
@@ -349,6 +518,12 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
         | EDefNode (def_name, params, body) ->
             let closure = make_closure ~name:(Some def_name) params body (ref env_acc) in
             extend_env env_acc def_name closure
+        | EDefValue (def_name, rhs) ->
+            let v = eval rhs env_acc in
+            (match Hashtbl.find_opt poisons def_name with
+             | Some (VThunk t) -> t.thunk_status <- Evaluated v
+             | _ -> ());
+            extend_env env_acc def_name v
         | EImport mod_expr ->
             let mod_val = force (eval mod_expr env_acc) in
             (match mod_val with
@@ -359,11 +534,14 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
             ignore (force (eval e env_acc));
             env_acc
       ) !mod_env body_exprs in
+      (* Newest binding wins and each name is exported once (a value def's
+         backpatched poison pre-binding must not shadow the real binding). *)
       let rec collect_new all parent acc =
         match all with
         | [] -> List.rev acc
         | (n, v) :: rest ->
-            if List.exists (fun (pn, _) -> pn = n) parent then
+            if List.exists (fun (pn, _) -> pn = n) parent
+               || List.exists (fun (an, _) -> an = n) acc then
               collect_new rest parent acc
             else
               collect_new rest parent ((n, v) :: acc)
@@ -376,17 +554,13 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       k mod_val
 
   | ELoad path ->
-      let ch = open_in path in
-      let source = really_input_string ch (in_channel_length ch) in
-      close_in ch;
+      let source = Runtime.loader_read path in
       let exprs = Reader.read_string source in
       let env_ref = ref env in
       k (eval_expressions exprs env_ref)
 
   | ELoadModule path ->
-      let ch = open_in path in
-      let source = really_input_string ch (in_channel_length ch) in
-      close_in ch;
+      let source = Runtime.loader_read path in
       let exprs = Reader.read_string source in
       let mod_ref = ref (Primitives.initial_env ()) in
       ignore (eval_expressions exprs mod_ref);
@@ -413,9 +587,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
          emit_thunk_region + vm.ml FORCE/check_type). *)
       k (make_thunk_ca_typed e ty None env)
   | EIsland (uri, _) ->
-      let ch = open_in uri in
-      let source = really_input_string ch (in_channel_length ch) in
-      close_in ch;
+      let source = Runtime.loader_read uri in
       let exprs = Reader.read_string source in
       let env_ref = ref env in
       k (eval_expressions exprs env_ref)
@@ -435,18 +607,10 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       let key_name = match key_val with
         | VString s | VKeyword s | VSymbol s -> s
         | _ -> failwith "config key must be a string, keyword, or symbol" in
-      let rec find = function
-        | [] -> None
-        | VMap kvs :: rest ->
-            (match List.assoc_opt (VString key_name) kvs with
-             | Some v -> Some v
-             | None ->
-                 (match List.assoc_opt (VKeyword key_name) kvs with
-                  | Some v -> Some v
-                  | None -> find rest))
-        | _ :: rest -> find rest
-      in
-      (match find !config_stack with
+      (* LAW 33: reading config inside a node is an observation — recorded as a
+         `config:<key>` trace cell (absence included), never part of the key. *)
+      Runtime.record_config_read key_name;
+      (match Runtime.config_lookup key_name with
        | Some v -> k v
        | None ->
            (match default_opt with
@@ -466,23 +630,24 @@ and apply (fn : value) (args : value list) (env : env) : value =
 
 and apply_tail (fn : value) (args : value list) (env : env) (k : value -> value) : value =
   match fn with
-  | VClosure { fn_name = _; params; body; env = closure_env; _ } ->
-      if List.length params <> List.length args then
-        failwith (Printf.sprintf "arity mismatch: expected %d args, got %d"
-                    (List.length params) (List.length args));
+  | VClosure { fn_name; params; body; env = closure_env; _ } ->
+      if List.length params <> List.length args then begin
+        let fname = match fn_name with Some n -> n | None -> "#<fn>" in
+        failwith (Printf.sprintf "arity mismatch calling %s: expected %d args, got %d"
+                    fname (List.length params) (List.length args))
+      end;
       let env' = List.fold_left2 (fun e param arg ->
         extend_env e param arg  (* arg is already a thunk *)
       ) !closure_env params args in
       eval_tail body env' k
 
-  | VBuiltin (name, f) ->
+  | VBuiltin (_, f) ->
+      (* No re-wrapping of the error text: primitives name themselves in their
+         own messages, and the VM calls builtins unwrapped — wrapping here made
+         the two backends' error output differ (and mangled user `error`
+         messages into "builtin 'error' failed: …"). *)
       Primitives.current_env_ref := env;
-      let forced_args = List.map (fun v ->
-        match v with VThunk _ -> v | _ -> v
-      ) args in
-      k (try f forced_args
-         with Failure msg ->
-           failwith (Printf.sprintf "builtin '%s' failed: %s" name msg))
+      k (f args)
 
   | _ ->
       failwith (Printf.sprintf "not a function: %s" (string_of_value fn))
@@ -506,55 +671,62 @@ and trampoline_force (v : value) : value =
             | Evaluating -> failwith "infinite recursion detected (trampoline)"
             | Unevaluated ->
                 if t.thunk_persist then
-                  begin match t.thunk_hash with
-                  | Some h ->
-                      begin match Store.load_object ~key:h with
-                      | Some cached ->
+                  begin
+                  let h = node_key_of t in
+                  begin match Store.hit ~key:h ~authorized:cell_authorized with
+                      | Store.HitOk cached ->
                           t.thunk_status <- Evaluated cached;
                           Queue.add cached queue;
                           loop ()
-                      | None ->
+                      | Store.HitFailed errval ->
+                          (match errval with
+                           | VString msg -> failwith msg
+                           | _ -> failwith "node failed (cached)")
+                      | Store.Miss ->
                           t.thunk_status <- Evaluating;
+                          let frame = Runtime.push_trace_frame () in
                           let result =
-                            match t.vm_code with
-                            | Some (bc, code_offset, frames) ->
-                                !Primitives.vm_run_thunk_ref bc code_offset frames
-                            | None ->
-                                let saved = !force_depth in
-                                force_depth := 0;
-                                let r = eval t.thunk_expr t.thunk_env in
-                                force_depth := saved;
-                                r
+                            try
+                              let r =
+                                match t.vm_code with
+                                | Some (bc, code_offset, frames) ->
+                                    !Primitives.vm_run_thunk_ref bc code_offset frames
+                                | None ->
+                                    let saved = !force_depth in
+                                    force_depth := 0;
+                                    let r = eval t.thunk_expr t.thunk_env in
+                                    force_depth := saved;
+                                    r
+                              in
+                              Runtime.pop_trace_frame ();
+                              r
+                            with
+                            | Failure msg as e ->
+                                Runtime.pop_trace_frame ();
+                                let errval = VString msg in
+                                let err_hash = Hasher.hash_value errval in
+                                (try Store.store_object ~key:err_hash ~value:errval with _ -> ());
+                                (try Store.store_trace ~key:h ~outcome:Failed
+                                       ~result_hash:err_hash ~reads:(List.rev !frame)
+                                     with _ -> ());
+                                t.thunk_status <- Unevaluated;
+                                raise e
+                            | e ->
+                                Runtime.pop_trace_frame ();
+                                t.thunk_status <- Unevaluated;
+                                raise e
                           in
                           (match t.type_ann with
                            | Some ty -> check_type result ty t.thunk_loc
                            | None -> ());
                           t.thunk_status <- Evaluated result;
                           let result_hash = Hasher.hash_value result in
-                          (try Store.store_object ~key:h ~value:result with _ -> ());
-                          (try Store.store_trace ~key:h ~outcome:Ok ~result_hash with _ -> ());
+                          (try Store.store_object ~key:result_hash ~value:result with _ -> ());
+                          (try Store.store_trace ~key:h ~outcome:Ok ~result_hash
+                                 ~reads:(List.rev !frame) with _ -> ());
                           Queue.add result queue;
                           loop ()
                       end
-                  | None ->
-                      t.thunk_status <- Evaluating;
-                      let result =
-                        match t.vm_code with
-                        | Some (bc, code_offset, frames) ->
-                            !Primitives.vm_run_thunk_ref bc code_offset frames
-                        | None ->
-                            let saved = !force_depth in
-                            force_depth := 0;
-                            let r = eval t.thunk_expr t.thunk_env in
-                            force_depth := saved;
-                            r
-                      in
-                      (match t.type_ann with
-                       | Some ty -> check_type result ty t.thunk_loc
-                       | None -> ());
-                      t.thunk_status <- Evaluated result;
-                      Queue.add result queue;
-                      loop ()
                   end
                 else begin
                   (* ephemeral thunk — no store check *)
@@ -585,12 +757,17 @@ and trampoline_force (v : value) : value =
 (* ---- Effect System ---- *)
 
 and perform_effect (name : string) (args : value list) : value =
+  (* LAW 26: WHICH handler intercepts this effect (or that none does — the
+     builtin) is an observation of ambient state; inside a node it is recorded
+     as a `handler:<effect>` trace cell so a hit under a different handler
+     (mock vs real) re-computes instead of cross-contaminating. *)
+  Runtime.record_handler_observation name;
   (* Check for handler *)
   let rec find_handler = function
     | [] ->
         (* No handler — try builtin effect *)
         perform_builtin_effect name args
-    | (n, handler) :: rest ->
+    | (n, handler, _) :: rest ->
         if n = name then handler args
         else find_handler rest
   in
@@ -601,28 +778,34 @@ and perform_builtin_effect (name : string) (args : value list) : value =
   | "read-file" ->
       (match args with
        | [VString path] ->
-           if not (has_fs_read path) then
-             failwith ("capability error: no read access for " ^ path);
-           (try
-              let ch = open_in path in
-              let content = really_input_string ch (in_channel_length ch) in
-              close_in ch;
-              VString content
-            with Sys_error msg -> failwith ("read-file: " ^ msg))
+           (* Node-local sandbox scratch reads are capability-free and
+              unrecorded (LAW 18) — scratch is the node's working memory. *)
+           (match Process.sandbox_read path with
+            | Some content -> VString content
+            | None ->
+              if not (has_fs_read path) then
+                raise (Capability_error ("read-file: capability error: no read access for " ^ path));
+              (* Cell observation: recorded + CAS-pinned in node context (Q11). *)
+              (try VString (Store.read_file_cell path)
+               with Sys_error msg -> failwith ("read-file: " ^ msg)))
        | _ -> failwith "read-file expects a string path")
 
   | "write-file" ->
       (match args with
        | [VString path; VString content] ->
-           if not (has_fs_write path) then
-             failwith ("capability error: no write access for " ^ path);
-           (try
-              let ch = open_out path in
-              output_string ch content;
-              close_out ch;
-              VNil
-            with Sys_error msg -> failwith ("write-file: " ^ msg))
+           (* LAW 18: inside a node, relative ⇒ sandbox scratch, absolute ⇒
+              error; scripting tier unchanged (Process.write_file_effect). *)
+           Process.write_file_effect ~has_cap:has_fs_write path content
        | _ -> failwith "write-file expects path and content strings")
+
+  | "run" ->
+      (* D13: process execution — capability-gated, trace-recorded, sandboxed
+         (process.ml). *)
+      Process.run_effect args
+
+  | "run-dep" ->
+      (* Q2 refinement: run + depfile → precise cells, no coarse tree cells. *)
+      Process.run_dep_effect args
 
   | "log" ->
       (match args with
@@ -679,6 +862,12 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
              let closure = make_closure ~name:(Some name) params body env in
              env := extend_env !env name closure;
              closure
+         | EDefValue (name, rhs) ->
+             (* Top level is sequential: the RHS is evaluated now (a forward
+                reference is an unbound-symbol error), the value bound. *)
+             let v = eval rhs !env in
+             env := extend_env !env name v;
+             v
          | EImport mod_expr ->
              let mod_val = force (eval e !env) in
              (match mod_val with
@@ -688,9 +877,7 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
                   mod_val
               | _ -> failwith "import expects a module value")
          | ELoad path ->
-             let ch = open_in path in
-             let source = really_input_string ch (in_channel_length ch) in
-             close_in ch;
+             let source = Runtime.loader_read path in
              let exprs = Reader.read_string source in
              eval_expressions exprs env
          | _ ->
@@ -711,6 +898,10 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
              let closure = make_closure ~name:(Some name) params body env in
              env := extend_env !env name closure;
              go rest
+         | EDefValue (name, rhs) ->
+             let v = eval rhs !env in
+             env := extend_env !env name v;
+             go rest
          | EImport mod_expr ->
              let mod_val = force (eval e !env) in
              (match mod_val with
@@ -720,9 +911,7 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
                   go rest
               | _ -> failwith "import expects a module value")
          | ELoad path ->
-             let ch = open_in path in
-             let source = really_input_string ch (in_channel_length ch) in
-             close_in ch;
+             let source = Runtime.loader_read path in
              let exprs = Reader.read_string source in
              ignore (eval_expressions exprs env);
              go rest
@@ -755,4 +944,7 @@ let init () =
   Hashtbl.clear thunk_store;
   Primitives.set_force force;
   Primitives.set_eval eval;
-  Primitives.set_apply apply
+  Primitives.set_apply apply;
+  (* Config values may be unforced thunks; their trace-cell observation (LAW 33)
+     hashes the forced value, both at record time and at hit re-observation. *)
+  Runtime.force_hook := force

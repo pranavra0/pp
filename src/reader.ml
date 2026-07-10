@@ -221,6 +221,36 @@ let expect_symbol ps =
   | TokKeyword k -> k
   | t -> parse_error ps ("expected symbol, got " ^ string_of_token t)
 
+(* Blocks (do bodies, multi-expression fn/def/let bodies, modules) give every
+   def whole-block letrec* scope, so one name defined twice in a block is
+   incoherent. Function defs keep their pre-existing shadowing latitude; any
+   collision involving a VALUE def is rejected at read time. *)
+let check_block_defs ps (exprs : expr list) : expr list =
+  let name_of = function
+    | EDef (n, _, _) | EDefNode (n, _, _)
+    | ELocated (_, (EDef (n, _, _) | EDefNode (n, _, _))) -> Some (n, false)
+    | EDefValue (n, _) | ELocated (_, EDefValue (n, _)) -> Some (n, true)
+    | _ -> None
+  in
+  let seen : (string, bool) Hashtbl.t = Hashtbl.create 8 in
+  List.iter (fun e ->
+    match name_of e with
+    | None -> ()
+    | Some (n, is_val) ->
+        (match Hashtbl.find_opt seen n with
+         | Some was_val when is_val || was_val ->
+             parse_error ps ("duplicate definition in block: " ^ n)
+         | Some _ -> ()
+         | None -> Hashtbl.add seen n is_val))
+    exprs;
+  exprs
+
+(* Assemble a body from the expressions of a block, validating its defs. *)
+let block_body ps (exprs : expr list) : expr =
+  match check_block_defs ps exprs with
+  | [b] -> b
+  | bs -> EDo bs
+
 (* Parse an expression *)
 let rec parse_expr ps : expr =
   match peek ps with
@@ -292,6 +322,7 @@ and parse_special_form ps car_sym =
   | "island" -> parse_island ps
   | "with-config" -> parse_with_config ps
   | "config" -> parse_config ps
+  | "assert" -> parse_assert ps
   | _ ->
       (* Regular function call: (fn-name arg ...) *)
       let args = parse_rest ps in
@@ -332,7 +363,9 @@ and parse_vector_exprs ps =
   List.rev !result
 
 (* Parse a vector parameter list [name1 : type1 name2 : type2 ...]
-   Type annotations are parsed and ignored for v1. *)
+   Returns (name, type-annotation option) pairs; annotations are CHECKED —
+   the def/fn assembler desugars each into a located type check ahead of the
+   body (LAW 32; they were parsed-then-discarded before). *)
 and parse_vector_param_list ps =
   begin match advance ps with
     | TokLBracket -> ()
@@ -345,10 +378,15 @@ and parse_vector_param_list ps =
     | TokEOF -> parse_error ps "unterminated parameter vector"
     | TokSymbol s ->
         advance ps;
-        result := s :: !result;
         (match peek ps with
-         | TokColon -> ignore (advance ps); ignore (parse_expr ps); loop ()
-         | _ -> loop ())
+         | TokColon ->
+             ignore (advance ps);
+             let ty = parse_expr ps in
+             result := (s, Some ty) :: !result;
+             loop ()
+         | _ ->
+             result := (s, None) :: !result;
+             loop ())
     | TokColon ->
         ignore (advance ps);
         ignore (parse_expr ps);
@@ -357,6 +395,25 @@ and parse_vector_param_list ps =
   in
   loop ();
   List.rev !result
+
+(* Assemble a function's parameter names and body: each annotated parameter
+   desugars into a located type check run ahead of the body — both backends
+   compile/evaluate the shared desugared AST, so the checks are enforced
+   identically (LAW 32). An optional return annotation wraps the body. *)
+and assemble_fn_body locate (params : (string * expr option) list)
+    (ret_ty : expr option) (body : expr) : string list * expr =
+  let names = List.map fst params in
+  let checks =
+    List.filter_map (fun (p, tyo) ->
+      match tyo with
+      | Some ty -> Some (locate (ETyped (ESymbol p, ty)))
+      | None -> None) params in
+  let body' = match ret_ty with
+    | Some ty -> locate (ETyped (body, ty))
+    | None -> locate body in
+  match checks with
+  | [] -> (names, body')
+  | _ -> (names, EDo (checks @ [body']))
 
 (* (def name value)  or  (def (name params...) [: type] body...) *)
 and parse_def ps =
@@ -372,17 +429,16 @@ and parse_def ps =
         match peek ps with
         | TokColon -> ignore (advance ps); Some (parse_expr ps)
         | _ -> None in
-      let body = match parse_rest ps with
-        | [b] -> b | bs -> EDo bs in
-      let body' = match ret_ty with
-        | Some ty -> locate (ETyped (body, ty))
-        | None -> locate body in
-      EDef (name, params, body')
+      let body = block_body ps (parse_rest ps) in
+      let param_names, body' = assemble_fn_body locate params ret_ty body in
+      EDef (name, param_names, body')
   | TokSymbol name ->
+      (* (def name value) — a VALUE binding (evaluated at definition time),
+         not a nullary closure: the ROADMAP §1 footgun fix. *)
       ignore (advance ps);
       let value = parse_expr ps in
       ignore (parse_rest ps);  (* consume ) and any trailing *)
-      EDef (name, [], locate value)  (* variable definition *)
+      EDefValue (name, locate value)
   | _ -> parse_error ps "malformed def"
 
 (* (fn [params...] [: type] body...) or (fn (params...) [: type] body...) *)
@@ -401,15 +457,13 @@ and parse_fn ps =
     match peek ps with
     | TokColon -> ignore (advance ps); Some (parse_expr ps)
     | _ -> None in
-  let body = match parse_rest ps with
-    | [b] -> b | bs -> EDo bs in
-  let body' = match ret_ty with
-    | Some ty -> locate (ETyped (body, ty))
-    | None -> locate body in
-  EFn (params, body')
+  let body = block_body ps (parse_rest ps) in
+  let param_names, body' = assemble_fn_body locate params ret_ty body in
+  EFn (param_names, body')
 
-(* Parse a parameter list: name1 [: type1] name2 [: type2] ... ) — consumes the closing paren.
-   Type annotations are parsed and ignored for v1; only parameter names are returned. *)
+(* Parse a parameter list: name1 [: type1] name2 [: type2] ... ) — consumes
+   the closing paren. Returns (name, type-annotation option) pairs; the
+   annotations are CHECKED via desugared body checks (LAW 32). *)
 and parse_param_list ps =
   let rec loop () =
     match peek ps with
@@ -426,9 +480,9 @@ and parse_param_list ps =
         (match peek ps with
          | TokColon ->
              ignore (advance ps);
-             ignore (parse_expr ps);  (* consume per-parameter type annotation *)
-             s :: loop ()
-         | _ -> s :: loop ())
+             let ty = parse_expr ps in
+             (s, Some ty) :: loop ()
+         | _ -> (s, None) :: loop ())
     | _ -> parse_error ps "expected parameter symbol"
   and expect_rparen ps =
     match advance ps with
@@ -502,8 +556,7 @@ and parse_let ps =
         loop []
     | _ -> parse_error ps "let requires binding vector"
   in
-  let body = match parse_rest ps with
-    | [b] -> b | bs -> EDo bs in
+  let body = block_body ps (parse_rest ps) in
   ELet (bindings, body)
 
 (* (quote expr) *)
@@ -564,23 +617,43 @@ and parse_defnode ps =
         match peek ps with
         | TokColon -> ignore (advance ps); Some (parse_expr ps)
         | _ -> None in
-      let body = match parse_rest ps with
-        | [b] -> b | bs -> EDo bs in
-      let body' = match ret_ty with
-        | Some ty -> locate (ETyped (body, ty))
-        | None -> locate body in
-      EDefNode (name, params, body')
+      let body = block_body ps (parse_rest ps) in
+      let param_names, body' = assemble_fn_body locate params ret_ty body in
+      EDefNode (name, param_names, body')
   | TokSymbol name ->
+      (* (defnode name e) — a value binding of the node thunk of e, i.e.
+         (def name (node e)): forcing `name` runs/caches the node. *)
       ignore (advance ps);
       let value = parse_expr ps in
       ignore (parse_rest ps);  (* consume ) and any trailing *)
-      EDefNode (name, [], locate value)  (* variable definition *)
+      EDefValue (name, locate (ENode value))
   | _ -> parse_error ps "malformed defnode"
+
+(* (assert cond [msg]) — a located runtime check: a false/nil condition
+   raises `assertion failed: <form> at file:line` (or the custom message,
+   location appended). Desugars to if+error so both backends enforce the
+   shared AST identically. *)
+and parse_assert ps =
+  let line = peek_line ps in
+  let loc_suffix = Printf.sprintf " at %s:%d" !current_file line in
+  let cond = parse_expr ps in
+  let msg_opt = match peek ps with
+    | TokRParen -> None
+    | _ -> Some (parse_expr ps) in
+  ignore (parse_rest ps);
+  let msg_expr = match msg_opt with
+    | None ->
+        ELiteral (VString ("assertion failed: "
+                           ^ string_of_value (quote_to_value cond)
+                           ^ loc_suffix))
+    | Some m ->
+        EApply (ESymbol "string-append", [m; ELiteral (VString loc_suffix)]) in
+  EIf (cond, ELiteral VNil, EApply (ESymbol "error", [msg_expr]))
 
 (* (do exprs...) *)
 and parse_do ps =
   let exprs = parse_rest ps in
-  EDo exprs
+  EDo (check_block_defs ps exprs)
 
 (* (let* [name expr name2 expr2 ...] body...) — sequential let *)
 and parse_let_star ps =
@@ -596,8 +669,7 @@ and parse_let_star ps =
     | _ :: _ -> parse_error ps "let* binding name must be symbol"
   in
   let bindings = pair_up bindings in
-  let body = match parse_rest ps with
-    | [b] -> b | bs -> EDo bs in
+  let body = block_body ps (parse_rest ps) in
   ELetStar (bindings, body)
 
 (* (effect :capabilities [cap-exprs...] body...) or (effect body...) *)
@@ -613,8 +685,7 @@ and parse_effect ps =
          | _ -> parse_expr ps)
     | _ -> ELiteral VNil  (* no capabilities *)
   in
-  let body = match parse_rest ps with
-    | [b] -> b | bs -> EDo bs in
+  let body = block_body ps (parse_rest ps) in
   EEffect (caps_expr, body)
 
 (* (perform effect-name args...) *)
@@ -639,14 +710,13 @@ and parse_with_handler ps =
     | _ :: _ -> parse_error ps "handler name must be symbol or keyword"
   in
   let handlers = pair_up handlers in
-  let body = match parse_rest ps with
-    | [b] -> b | bs -> EDo bs in
+  let body = block_body ps (parse_rest ps) in
   EWithHandler (handlers, body)
 
 (* (module body-exprs...) — creates a thunk that evaluates to an environment *)
 and parse_module ps =
   let body = parse_rest ps in
-  EModule body
+  EModule (check_block_defs ps body)
 
 (* (import mod-expr) — force a module thunk and merge its bindings *)
 and parse_import ps =
@@ -690,8 +760,7 @@ and parse_island ps =
 (* (with-config {key val ...} body...) — ambient configuration block *)
 and parse_with_config ps =
   let map_expr = parse_expr ps in
-  let body = match parse_rest ps with
-    | [b] -> b | bs -> EDo bs in
+  let body = block_body ps (parse_rest ps) in
   EWithConfig (map_expr, body)
 
 (* (config key [default]) — read ambient config key *)
