@@ -13,3 +13,8 @@ pp-native
 
 # OCaml
 _build/
+
+# Fuzzer
+fuzz
+fuzz-failures/
+fuzz-failures-full/

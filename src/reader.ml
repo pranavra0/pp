@@ -87,8 +87,14 @@ let lex (input : string) : token list =
          | _ -> failwith ("unexpected character after #"))
     | Some '"' -> read_string ()
     | Some '-' ->
-        (match peek () with Some c when c >= '0' && c <= '9' -> read_number ()
-                            | _ -> read_symbol ())
+        let next = if !pos + 1 < len then Some input.[!pos + 1] else None in
+        let after = if !pos + 2 < len then Some input.[!pos + 2] else None in
+        (match next with
+         | Some c when c >= '0' && c <= '9' -> read_number ()
+         | Some '.' when (match after with
+                          | Some d -> d >= '0' && d <= '9'
+                          | None -> false) -> read_number ()
+         | _ -> read_symbol ())
     | Some c when c >= '0' && c <= '9' -> read_number ()
     | Some ':' -> read_keyword ()
     | Some _ -> read_symbol ()

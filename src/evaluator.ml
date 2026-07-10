@@ -31,6 +31,47 @@ let make_thunk_ca (expr : expr) (env : env) : value =
       Hashtbl.add thunk_store h t;
       VThunk t
 
+(* Like make_thunk_ca, but the thunk carries a type annotation that is
+   checked when the thunk is forced (mirrors the VM's MAKE_THUNK with
+   type_ann, vm.ml). The annotation participates in the content hash so a
+   typed thunk is never conflated with an untyped thunk over the same expr. *)
+let make_thunk_ca_typed (expr : expr) (ty : expr) (loc : (string * int) option) (env : env) : value =
+  let caps_hash = hash_concat ("caps" :: List.map Hasher.hash_capability !current_capabilities) in
+  let cfg_hash = hash_concat ("cfg" :: List.map hash_value !config_stack) in
+  let h = hash_concat ["thunk-typed"; Hasher.hash_expr expr; Hasher.hash_expr ty; env.env_hash; caps_hash; cfg_hash] in
+  match Hashtbl.find_opt thunk_store h with
+  | Some existing -> VThunk existing
+  | None ->
+      let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env; vm_code = None; type_ann = Some ty; thunk_loc = loc; config_hash = cfg_hash } in
+      Hashtbl.add thunk_store h t;
+      VThunk t
+
+(* Runtime check for gradual type annotations. This mirrors the VM's
+   check_type (vm.ml) EXACTLY — same recognized type names, same
+   "unknown types pass" policy, same error message — so both backends
+   fail identically. Keep the two in sync. *)
+let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
+  let type_name =
+    match ty with
+    | ESymbol s -> s
+    | ELiteral (VSymbol s) | ELiteral (VKeyword s) -> s
+    | _ -> "unknown"
+  in
+  let ok =
+    match type_name with
+    | "int" -> (match v with VInt _ -> true | _ -> false)
+    | "string" -> (match v with VString _ -> true | _ -> false)
+    | "bool" -> (match v with VBool _ -> true | _ -> false)
+    | "nil" -> (match v with VNil -> true | _ -> false)
+    | _ -> true  (* unknown types pass for v1 *)
+  in
+  if not ok then
+    let loc_str = match loc with
+      | Some (file, line) -> Printf.sprintf " at %s:%d" file line
+      | None -> "" in
+    failwith (Printf.sprintf "type mismatch: expected %s, got %s%s"
+                type_name (string_of_value v) loc_str)
+
 (* ---- Force: evaluate a thunk on demand ---- *)
 
 (* The force function is tail-recursive through already-evaluated thunk chains.
@@ -57,6 +98,11 @@ let rec force (v : value) : value =
                  (* Tree-walker thunk *)
                  eval t.thunk_expr t.thunk_env
            in
+           (* Gradual typing: an annotated thunk is checked when forced,
+              exactly like the VM's FORCE opcode (vm.ml). *)
+           (match t.type_ann with
+            | Some ty -> check_type result ty t.thunk_loc
+            | None -> ());
            t.thunk_status <- Evaluated result;
            force result)
   | _ -> v
@@ -297,8 +343,16 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       in
       k (VEnvMap (collect_new (!mod_ref).bindings base_bindings []))
 
+  | ELocated (loc, ETyped (e, ty)) ->
+      (* Mirror the compiler (compiler.ml ELocated+ETyped): a located
+         annotation becomes a typed thunk carrying the location. *)
+      k (make_thunk_ca_typed e ty (Some loc) env)
   | ELocated (_, e) -> eval_tail e env k
-  | ETyped (e, _) -> eval_tail e env k
+  | ETyped (e, ty) ->
+      (* Type annotations defer evaluation into a thunk whose result is
+         checked at force time — same semantics as the VM (compiler.ml
+         emit_thunk_region + vm.ml FORCE/check_type). *)
+      k (make_thunk_ca_typed e ty None env)
   | EIsland (uri, _) ->
       let ch = open_in uri in
       let source = really_input_string ch (in_channel_length ch) in
@@ -404,7 +458,7 @@ and perform_builtin_effect (name : string) (args : value list) : value =
   | "read-file" ->
       (match args with
        | [VString path] ->
-           if not (has_fs_read (Filename.dirname path)) then
+           if not (has_fs_read path) then
              failwith ("capability error: no read access for " ^ path);
            (try
               let ch = open_in path in
@@ -417,7 +471,7 @@ and perform_builtin_effect (name : string) (args : value list) : value =
   | "write-file" ->
       (match args with
        | [VString path; VString content] ->
-           if not (has_fs_write (Filename.dirname path)) then
+           if not (has_fs_write path) then
              failwith ("capability error: no write access for " ^ path);
            (try
               let ch = open_out path in

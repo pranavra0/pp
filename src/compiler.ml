@@ -224,13 +224,20 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
             compile_subs rest
         | (EImport mod_expr) :: rest ->
             compile_expr st mod_expr false;
+            emit st FORCE;
             emit st IMPORT;
+            emit st POP;
             compile_subs rest
         | (ELoad path) :: rest ->
             emit st (LOAD_FILE (intern_name st path));
             compile_subs rest
         | (ELoadModule path) :: rest ->
             emit st (LOAD_MODULE_FILE (intern_name st path));
+            (* Statement position: tree-walker merges the module's bindings
+               into the enclosing env (EDo/eval_expressions); IMPORT matches
+               (D20), then POP discards the statement's value. *)
+            emit st IMPORT;
+            emit st POP;
             compile_subs rest
         | e :: rest ->
             compile_expr st e false;
@@ -245,7 +252,12 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       compile_expr st caps_expr false;
       emit st FORCE;
       emit st ENTER_EFFECT;
-      compile_expr st body tail;
+      (* Body compiled NON-tail (was [tail]) so control returns to run
+         EXIT_EFFECT; a tail call in the body would frame-swap past EXIT and
+         leak the capability scope (D9). The tree-walker holds its frame open
+         across the body to restore [current_capabilities] (evaluator.ml
+         EEffect), so this is the matching dynamic extent, not a TCO loss. *)
+      compile_expr st body false;
       emit st EXIT_EFFECT
 
   | EDef (name, params, body) ->
@@ -268,10 +280,18 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
   | EWithHandler (handlers, body) ->
       List.iter (fun (name, handler_expr) ->
         emit st (PUSH (intern st (VString name)));
-        ignore (emit_closure_region st [] handler_expr false)
+        (* Tree-walker: the handler value is [force (eval handler_expr env)] —
+           the function itself, APPLIED to the effect args at perform time
+           (evaluator.ml EWithHandler/perform_effect). The old 0-param
+           emit_closure_region wrapper made [perform] return the fn instead of
+           running it. Compile the handler expr directly and force it. *)
+        compile_expr st handler_expr false;
+        emit st FORCE
       ) handlers;
       emit st (PUSH_HANDLER (List.length handlers));
-      compile_expr st body tail;
+      (* Body NON-tail (was [tail]) so control returns to run POP_HANDLER;
+         a tail call would frame-swap past POP and leak the handler (D9). *)
+      compile_expr st body false;
       emit st POP_HANDLER
 
   | EImport mod_expr ->
@@ -289,7 +309,23 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
             emit st (PUSH (intern st (VString name)));
             ignore (emit_closure_region ~name:(Some name) st params body false);
             incr count
-        | _ -> ()
+        | EDefFexpr (name, params, body) ->
+            emit st (PUSH (intern st (VString name)));
+            Hashtbl.add st.fexpr_names name true;
+            ignore (emit_closure_region ~name:(Some name) st params body true);
+            incr count
+        | EImport _ ->
+            (* Evaluated for its side effects like the tree-walker
+               (evaluator.ml EModule); IMPORT pushes the module value,
+               which is not part of the module under construction. *)
+            compile_expr st sub false;
+            emit st POP
+        | _ ->
+            (* Tree-walker evaluates every module child for side effects
+               (evaluator.ml EModule); do the same, discarding the value. *)
+            compile_expr st sub false;
+            emit st FORCE;
+            emit st POP
       ) exprs;
       st.cenv <- saved_cenv;
       emit st (MAKE_MODULE !count)
@@ -312,7 +348,11 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       compile_expr st map_expr false;
       emit st FORCE;
       emit st PUSH_CONFIG;
-      compile_expr st body tail;
+      (* Body NON-tail (was [tail]) so control returns to run POP_CONFIG;
+         a tail call would frame-swap past POP and leak the config scope
+         (D9). Matches the tree-walker's dynamic extent (evaluator.ml
+         EWithConfig restores [config_stack] after the body). *)
+      compile_expr st body false;
       emit st POP_CONFIG
   | EConfig (key_expr, default_opt) ->
       let key_name =
@@ -359,7 +399,20 @@ let compile_program (exprs : expr list) : bytecode =
     | e :: rest ->
         (* Non-last: compile non-tail (CALL not TAIL_CALL), then POP result *)
         (match e with
-         | EDef _ | EDefFexpr _ | EImport _ | ELoad _ | ELoadModule _ ->
+         | ELoadModule _ ->
+             (* Tree-walker merges a statement-position load-module's
+                bindings into the top-level env (eval_expressions); emit an
+                explicit IMPORT to match, now that LOAD_MODULE_FILE itself
+                no longer merges (D20). *)
+             compile_expr st e true;
+             emit st IMPORT;
+             emit st POP
+         | EImport _ ->
+             (* compile_expr's EImport ends in IMPORT, which pushes the
+                module value; discard it in statement position. *)
+             compile_expr st e true;
+             emit st POP
+         | EDef _ | EDefFexpr _ | ELoad _ ->
              (* Defs consume their own result (STORE_GLOBAL), no POP needed *)
              compile_expr st e true
          | _ ->

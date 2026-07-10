@@ -10,6 +10,12 @@ let sp = ref 0
 let handler_stack : (string * (value list -> value)) list ref = ref []
 let current_capabilities : capability list ref = ref []
 let config_stack : value list ref = ref []
+(* Save-stacks so ENTER_EFFECT/PUSH_HANDLER can restore the EXACT prior scope
+   on EXIT_EFFECT/POP_HANDLER regardless of how many caps/handlers were pushed
+   (D9: ENTER pushed N but EXIT popped 1; PUSH_HANDLER pushed n but one
+   POP_HANDLER popped 1). Mirrors the tree-walker's saved/restore pattern. *)
+let caps_save_stack : capability list list ref = ref []
+let handler_save_stack : (string * (value list -> value)) list list ref = ref []
 let globals : (string, value) Hashtbl.t = Hashtbl.create 128
 let thunk_store : (string, thunk) Hashtbl.t = Hashtbl.create 1024
 
@@ -75,7 +81,7 @@ let perform_builtin_effect (name : string) (args : value list) : value =
   | "read-file" ->
       (match args with
        | [VString path] ->
-           if not (has_fs_read (Filename.dirname path)) then
+           if not (has_fs_read path) then
              failwith ("capability error: no read access for " ^ path);
            (try
               let ch = open_in path in
@@ -87,7 +93,7 @@ let perform_builtin_effect (name : string) (args : value list) : value =
   | "write-file" ->
       (match args with
        | [VString path; VString content] ->
-           if not (has_fs_write (Filename.dirname path)) then
+           if not (has_fs_write path) then
              failwith ("capability error: no write access for " ^ path);
            (try
               let ch = open_out path in
@@ -454,19 +460,25 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
           | VNil -> []
           | _ -> extract_capabilities caps_val
         in
+        caps_save_stack := !current_capabilities :: !caps_save_stack;
         current_capabilities := caps @ !current_capabilities;
         incr pc;
         loop ()
 
     | EXIT_EFFECT ->
-        (match !current_capabilities with
+        (* Restore the pre-ENTER scope exactly, not pop-one (D9). *)
+        (match !caps_save_stack with
          | [] -> ()
-         | _ :: rest -> current_capabilities := rest);
+         | saved :: rest ->
+             current_capabilities := saved;
+             caps_save_stack := rest);
         incr pc;
         loop ()
 
     | PERFORM (namei, nargs) ->
-        let args = pop_n nargs in
+        (* Force args before dispatch, mirroring the tree-walker
+           (evaluator.ml EPerform forces each arg before perform_effect). *)
+        let args = List.map Primitives.force_val (pop_n nargs) in
         let name =
           match (!bc_ref).consts.(namei) with
           | VString s -> s
@@ -493,26 +505,68 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
         done;
         let new_handlers = List.map (fun (n, hv) ->
           (n, fun args ->
-            (* Call the handler closure with the effect args *)
-            (* We need to invoke the handler as a function with args *)
+            (* Invoke the handler FUNCTION with the (already-forced) effect
+               args and return its result, mirroring the tree-walker's
+               [fun args -> apply handler_val args env] (evaluator.ml
+               EWithHandler). [hv] is now the real handler function (the
+               compiler no longer wraps it in a 0-param region). Save/restore
+               the operand stack exactly like CALL (D20): [run] shares the
+               module-global operand_stack/sp. *)
             match hv with
+            | VClosure c when c.vm_bc == Types.dummy_bytecode ->
+                !Primitives.apply_ref hv args !Primitives.current_env_ref
             | VClosure c ->
-                let new_frame = make_frame (List.length c.params) in
+                let nparams = List.length c.params in
+                if List.length args <> nparams then
+                  failwith (Printf.sprintf
+                    "arity mismatch: expected %d args, got %d"
+                    nparams (List.length args));
+                let new_frame = make_frame nparams in
                 List.iteri (fun i arg -> frame_set new_frame i arg) args;
                 let frames' = new_frame :: c.vm_frames in
-                run bc c.vm_offset frames'
+                let saved_sp = !sp in
+                let saved_stack = !operand_stack in
+                sp := 0;
+                operand_stack := Array.make 1024 VNil;
+                let r = run c.vm_bc c.vm_offset frames' in
+                sp := saved_sp;
+                operand_stack := saved_stack;
+                r
+            | VFexpr fe when fe.vm_bc == Types.dummy_bytecode ->
+                !Primitives.apply_ref hv args !Primitives.current_env_ref
+            | VFexpr fe ->
+                let nparams = List.length fe.fexpr_params in
+                if List.length args <> nparams then
+                  failwith (Printf.sprintf
+                    "fexpr arity mismatch: expected %d args, got %d"
+                    nparams (List.length args));
+                let new_frame = make_frame nparams in
+                List.iteri (fun i arg -> frame_set new_frame i arg) args;
+                let frames' = new_frame :: fe.vm_frames in
+                let saved_sp = !sp in
+                let saved_stack = !operand_stack in
+                sp := 0;
+                operand_stack := Array.make 1024 VNil;
+                let r = run fe.vm_bc fe.vm_offset frames' in
+                sp := saved_sp;
+                operand_stack := saved_stack;
+                r
             | VBuiltin (_, f) -> f args
             | _ -> failwith ("VM: handler is not a function: " ^ string_of_value hv)
           )
         ) !pairs in
+        handler_save_stack := !handler_stack :: !handler_save_stack;
         handler_stack := new_handlers @ !handler_stack;
         incr pc;
         loop ()
 
     | POP_HANDLER ->
-        (match !handler_stack with
+        (* Restore the pre-PUSH handler stack exactly, not pop-one (D9). *)
+        (match !handler_save_stack with
          | [] -> ()
-         | _ :: rest -> handler_stack := rest);
+         | saved :: rest ->
+             handler_stack := saved;
+             handler_save_stack := rest);
         incr pc;
         loop ()
 
@@ -544,7 +598,11 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
                let slot = current_frame.len in
                frame_set current_frame slot v;
                Hashtbl.replace globals name v
-             ) bindings
+             ) bindings;
+             (* Tree-walker's EImport returns the module value; push it so
+                import works in expression position too. Statement-position
+                emitters follow IMPORT with POP. *)
+             push mod_val
          | _ -> failwith "VM: IMPORT expects a module value");
         incr pc;
         loop ()
@@ -556,11 +614,12 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
           | _ -> failwith "VM: LOAD_FILE constant is not a string"
         in
         let source =
-          try
-            let ch = open_in path in
-            let content = really_input_string ch (in_channel_length ch) in
-            close_in ch; content
-          with Sys_error msg -> failwith ("VM: cannot load file: " ^ msg)
+          (* Let Sys_error propagate unwrapped — the tree-walker (the
+             oracle) does a bare open_in for load/island (evaluator.ml
+             ELoad/EIsland), so both backends must fail identically. *)
+          let ch = open_in path in
+          let content = really_input_string ch (in_channel_length ch) in
+          close_in ch; content
         in
         let exprs = Reader.read_string source in
         let prog = Compiler.compile_program exprs in
@@ -609,7 +668,9 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
         ) globals;
         Hashtbl.clear globals;
         Hashtbl.iter (fun n v -> Hashtbl.add globals n v) saved_globals;
-        List.iter (fun (n, v) -> Hashtbl.replace globals n v) !new_bindings;
+        (* D20: do NOT merge into caller globals here; the tree-walker's
+           ELoadModule only returns the module value. Statement-position
+           merging is done by an explicit IMPORT emitted by the compiler. *)
         push (VEnvMap (List.rev !new_bindings));
         incr pc;
         loop ()
@@ -700,6 +761,13 @@ let run_program_expr (prog : bytecode) : value =
   let r = run prog 0 [root_frame] in
   sp := saved_sp;
   operand_stack := saved_stack;
+  (* Match the tree-walker's eval_expressions: a top-level statement whose
+     value is a module (VEnvMap) has its bindings merged into the top-level
+     environment (covers bare `(module ...)` and `(load-module ...)`). *)
+  (match r with
+   | VEnvMap bindings ->
+       List.iter (fun (name, v) -> Hashtbl.replace globals name v) bindings
+   | _ -> ());
   r
 
 (* ---- VM init and registration ---- *)
@@ -719,6 +787,8 @@ let rec init () =
   handler_stack := [];
   current_capabilities := [];
   config_stack := [];
+  caps_save_stack := [];
+  handler_save_stack := [];
   Hashtbl.clear thunk_store;
   Primitives.set_force vm_force;
   Primitives.vm_run_thunk_ref := (fun bc offset frames ->
