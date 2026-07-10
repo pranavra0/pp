@@ -74,38 +74,53 @@ let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
 
 (* ---- Force: evaluate a thunk on demand ---- *)
 
-(* The force function is tail-recursive through already-evaluated thunk chains.
-   For unevaluated thunks, it calls eval which may recursively call force via
-   builtins. This works for all common patterns; extremely deep thunk chains
-   (e.g. 100k nested arithmetic thunks) may overflow the OCaml stack.
-   This is the classic lazy-evaluation space leak — future work includes
-   strictness annotations or a trampoline-based force. *)
+(* Depth limit before switching to heap-allocated trampoline.
+   OCaml's default stack handles ~10k small frames; 2000 gives
+   ample headroom while keeping the trampoline nesting shallow
+   even for 10^6-deep recursion (~500 trampoline entries). *)
+let max_force_depth = 2000
+let force_depth = ref 0
 
+
+
+(* Main force entry-point: uses native stack for shallow chains,
+   switches to trampoline when depth exceeds threshold. *)
 let rec force (v : value) : value =
+  incr force_depth;
   match v with
+  | _ when !force_depth > max_force_depth ->
+      let saved = !force_depth in
+      force_depth := 0;
+      let r = trampoline_force v in
+      force_depth := saved;
+      decr force_depth;
+      r
   | VThunk t ->
       (match t.thunk_status with
-       | Evaluated result -> force result
-       | Evaluating -> failwith "infinite recursion detected (forcing a thunk already being evaluated)"
+       | Evaluated result ->
+           decr force_depth;
+           force result
+       | Evaluating ->
+           decr force_depth;
+           failwith "infinite recursion detected (forcing a thunk already being evaluated)"
        | Unevaluated ->
            t.thunk_status <- Evaluating;
            let result =
              match t.vm_code with
              | Some (bc, code_offset, frames) ->
-                 (* VM thunk: delegate to the VM runner *)
                  !Primitives.vm_run_thunk_ref bc code_offset frames
              | None ->
-                 (* Tree-walker thunk *)
                  eval t.thunk_expr t.thunk_env
            in
-           (* Gradual typing: an annotated thunk is checked when forced,
-              exactly like the VM's FORCE opcode (vm.ml). *)
            (match t.type_ann with
             | Some ty -> check_type result ty t.thunk_loc
             | None -> ());
            t.thunk_status <- Evaluated result;
+           decr force_depth;
            force result)
-  | _ -> v
+  | _ ->
+      decr force_depth;
+      v
 
 (* ---- Main Evaluator (non-tail) ---- *)
 
@@ -448,6 +463,45 @@ and apply_tail (fn : value) (args : value list) (env : env) (k : value -> value)
   | _ ->
       failwith (Printf.sprintf "not a function: %s" (string_of_value fn))
 
+
+(* Trampoline force: uses a local work queue to process thunk chains
+   without growing the OCaml stack.  Only entered when [force_depth]
+   exceeds [max_force_depth].  Part of the mutual-recursion block
+   so it can reference [eval] and [force]. *)
+and trampoline_force (v : value) : value =
+  let queue = Queue.create () in
+  Queue.add v queue;
+  let rec loop () =
+    match Queue.take_opt queue with
+    | None -> failwith "trampoline: empty queue"
+    | Some v ->
+        match v with
+        | VThunk t ->
+            (match t.thunk_status with
+             | Evaluated result -> Queue.add result queue; loop ()
+             | Evaluating -> failwith "infinite recursion detected (trampoline)"
+             | Unevaluated ->
+                 t.thunk_status <- Evaluating;
+                 let result =
+                   match t.vm_code with
+                   | Some (bc, code_offset, frames) ->
+                       !Primitives.vm_run_thunk_ref bc code_offset frames
+                   | None ->
+                       let saved = !force_depth in
+                       force_depth := 0;
+                       let r = eval t.thunk_expr t.thunk_env in
+                       force_depth := saved;
+                       r
+                 in
+                 (match t.type_ann with
+                  | Some ty -> check_type result ty t.thunk_loc
+                  | None -> ());
+                 t.thunk_status <- Evaluated result;
+                 Queue.add result queue;
+                 loop ())
+        | _ -> v  (* non-thunk: done *)
+  in
+  loop ()
 (* ---- Effect System ---- *)
 
 and perform_effect (name : string) (args : value list) : value =
