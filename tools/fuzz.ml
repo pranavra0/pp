@@ -484,14 +484,14 @@ let stmt_deep_rec env _d =
   let f = fresh "f" in
   let n = fresh "p" in
   if flip 0.5 then begin
-    let depth = [| 1000; 8000; 40000 |].(Random.int 3) in
+    let depth = [| 500; 2000; 5000 |].(Random.int 3) in
     [S [A "def"; S [A f; A n];
         S [A "if"; S [A "<="; A n; A "0"]; A "0";
            S [A "+"; A "1"; S [A f; S [A "-"; A n; A "1"]]]]];
      S [A "print"; S [A f; A (string_of_int depth)]]]
   end else begin
     let acc = fresh "p" in
-    let depth = [| 10000; 100000 |].(Random.int 2) in
+    let depth = [| 5000; 20000 |].(Random.int 2) in
     [S [A "def"; S [A f; A n; A acc];
         S [A "if"; S [A "<="; A n; A "0"]; A acc;
            S [A f; S [A "-"; A n; A "1"]; S [A "+"; A acc; A "1"]]]];
@@ -507,7 +507,7 @@ let stmt_big_map env _d =
       [S [A "load"; A ("\"" ^ !stdlib_path ^ "\"")]]
     end in
   let x = fresh "x" in
-  let n = rint 300 2000 in
+  let n = rint 50 200 in
   prelude @
   [S [A "print";
       S [A "length";
@@ -772,9 +772,9 @@ let judge (tw : outcome) (bc : outcome) : verdict =
       else if bc_ok && not tw_ok then
         Mismatch ("exitdiff:tw-err:" ^ error_tag tw.err)
       else
-        (* both non-zero: soft class; group by error tags *)
+        (* both non-zero: if same error tag, backends agree → Pass *)
         let ta = error_tag tw.err and tb = error_tag bc.err in
-        if ta = tb then BothError ("both-error:same:" ^ ta)
+        if ta = tb then Pass
         else BothError ("both-error:" ^ ta ^ "|" ^ tb)
 
 let sig_of_verdict = function

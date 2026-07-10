@@ -82,6 +82,7 @@ and thunk = {
   type_ann : expr option;              (* lazy gradual type annotation *)
   thunk_loc : (string * int) option;   (* source location for error reporting *)
   config_hash : string;                (* ReaderT config snapshot identity *)
+  mutable thunk_persist : bool;         (* persist across runs? true for node, false for delay/let *)
 }
 
 and thunk_status =
@@ -399,7 +400,7 @@ let make_closure ?(name=None) params body env_ref =
   VClosure { fn_name = name; params; body; env = env_ref; vm_bc = dummy_bytecode; vm_offset = 0; vm_frames = [] }
 
 let make_thunk ?vm_code:(vc=None) ?type_ann:(ta=None) ?thunk_loc:(tl=None) ?config_hash:(ch="") expr env =
-  VThunk { thunk_status = Unevaluated; thunk_hash = None; thunk_expr = expr; thunk_env = env; vm_code = vc; type_ann = ta; thunk_loc = tl; config_hash = ch }
+  VThunk { thunk_status = Unevaluated; thunk_hash = None; thunk_expr = expr; thunk_env = env; vm_code = vc; type_ann = ta; thunk_loc = tl; config_hash = ch; thunk_persist = false }
 
 (* ---- Frame helpers ---- *)
 

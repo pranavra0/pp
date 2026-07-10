@@ -18,7 +18,7 @@ let make_thunk_ca (expr : expr) (env : env) : value =
   match Hashtbl.find_opt thunk_store h with
   | Some existing -> VThunk existing
   | None ->
-      let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env; vm_code = None; type_ann = None; thunk_loc = None; config_hash = cfg_hash } in
+      let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env; vm_code = None; type_ann = None; thunk_loc = None; config_hash = cfg_hash; thunk_persist = false } in
       Hashtbl.add thunk_store h t;
       VThunk t
 
@@ -33,7 +33,7 @@ let make_thunk_ca_typed (expr : expr) (ty : expr) (loc : (string * int) option) 
   match Hashtbl.find_opt thunk_store h with
   | Some existing -> VThunk existing
   | None ->
-      let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env; vm_code = None; type_ann = Some ty; thunk_loc = loc; config_hash = cfg_hash } in
+      let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env; vm_code = None; type_ann = Some ty; thunk_loc = loc; config_hash = cfg_hash; thunk_persist = false } in
       Hashtbl.add thunk_store h t;
       VThunk t
 
@@ -95,16 +95,19 @@ let rec force (v : value) : value =
            decr force_depth;
            failwith "infinite recursion detected (forcing a thunk already being evaluated)"
        | Unevaluated ->
-           (* Check persistent store before evaluating *)
-           (match t.thunk_hash with
-            | Some h ->
-                (match Store.load_object ~key:h with
-                 | Some cached ->
-                     t.thunk_status <- Evaluated cached;
-                     decr force_depth;
-                     force cached
-                 | None -> evaluate_and_store t h)
-            | None -> evaluate_and_store_no_key t))
+           (* Check persistent store if this is a node thunk *)
+           if t.thunk_persist then
+             (match t.thunk_hash with
+              | Some h ->
+                  (match Store.load_object ~key:h with
+                   | Some cached ->
+                       t.thunk_status <- Evaluated cached;
+                       decr force_depth;
+                       force cached
+                   | None -> evaluate_and_store t h)
+              | None -> evaluate_and_store_no_key t)
+           else
+             evaluate_and_store_no_key t)
   | _ ->
       decr force_depth;
       v
@@ -122,11 +125,11 @@ and evaluate_and_store (t : thunk) (h : string) : value =
    | Some ty -> check_type result ty t.thunk_loc
    | None -> ());
   t.thunk_status <- Evaluated result;
-  let result_hash = Hasher.hash_value result in
-  (try Store.store_object ~key:h ~value:result
-   with _ -> ());
-  (try Store.store_trace ~key:h ~outcome:Ok ~result_hash
-   with _ -> ());
+  if t.thunk_persist then begin
+    let result_hash = Hasher.hash_value result in
+    (try Store.store_object ~key:h ~value:result with _ -> ());
+    (try Store.store_trace ~key:h ~outcome:Ok ~result_hash with _ -> ())
+  end;
   decr force_depth;
   force result
 
@@ -217,7 +220,9 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       k (make_thunk_ca e env)
 
   | ENode e ->
-      k (make_thunk_ca e env)
+      let thunk_val = make_thunk_ca e env in
+      (match thunk_val with VThunk t -> t.thunk_persist <- true | _ -> ());
+      k thunk_val
 
   | EDefNode (name, params, body) ->
       k (make_closure ~name:(Some name) params body (ref env))
@@ -500,55 +505,77 @@ and trampoline_force (v : value) : value =
             | Evaluated result -> Queue.add result queue; loop ()
             | Evaluating -> failwith "infinite recursion detected (trampoline)"
             | Unevaluated ->
-                begin match t.thunk_hash with
-                | Some h ->
-                    begin match Store.load_object ~key:h with
-                    | Some cached ->
-                        t.thunk_status <- Evaluated cached;
-                        Queue.add cached queue;
-                        loop ()
-                    | None ->
-                        t.thunk_status <- Evaluating;
-                        let result =
-                          match t.vm_code with
-                          | Some (bc, code_offset, frames) ->
-                              !Primitives.vm_run_thunk_ref bc code_offset frames
-                          | None ->
-                              let saved = !force_depth in
-                              force_depth := 0;
-                              let r = eval t.thunk_expr t.thunk_env in
-                              force_depth := saved;
-                              r
-                        in
-                        (match t.type_ann with
-                         | Some ty -> check_type result ty t.thunk_loc
-                         | None -> ());
-                        t.thunk_status <- Evaluated result;
-                        let result_hash = Hasher.hash_value result in
-                        (try Store.store_object ~key:h ~value:result with _ -> ());
-                        (try Store.store_trace ~key:h ~outcome:Ok ~result_hash with _ -> ());
-                        Queue.add result queue;
-                        loop ()
-                    end
-                | None ->
-                    t.thunk_status <- Evaluating;
-                    let result =
-                      match t.vm_code with
-                      | Some (bc, code_offset, frames) ->
-                          !Primitives.vm_run_thunk_ref bc code_offset frames
+                if t.thunk_persist then
+                  begin match t.thunk_hash with
+                  | Some h ->
+                      begin match Store.load_object ~key:h with
+                      | Some cached ->
+                          t.thunk_status <- Evaluated cached;
+                          Queue.add cached queue;
+                          loop ()
                       | None ->
-                          let saved = !force_depth in
-                          force_depth := 0;
-                          let r = eval t.thunk_expr t.thunk_env in
-                          force_depth := saved;
-                          r
-                    in
-                    (match t.type_ann with
-                     | Some ty -> check_type result ty t.thunk_loc
-                     | None -> ());
-                    t.thunk_status <- Evaluated result;
-                    Queue.add result queue;
-                    loop ()
+                          t.thunk_status <- Evaluating;
+                          let result =
+                            match t.vm_code with
+                            | Some (bc, code_offset, frames) ->
+                                !Primitives.vm_run_thunk_ref bc code_offset frames
+                            | None ->
+                                let saved = !force_depth in
+                                force_depth := 0;
+                                let r = eval t.thunk_expr t.thunk_env in
+                                force_depth := saved;
+                                r
+                          in
+                          (match t.type_ann with
+                           | Some ty -> check_type result ty t.thunk_loc
+                           | None -> ());
+                          t.thunk_status <- Evaluated result;
+                          let result_hash = Hasher.hash_value result in
+                          (try Store.store_object ~key:h ~value:result with _ -> ());
+                          (try Store.store_trace ~key:h ~outcome:Ok ~result_hash with _ -> ());
+                          Queue.add result queue;
+                          loop ()
+                      end
+                  | None ->
+                      t.thunk_status <- Evaluating;
+                      let result =
+                        match t.vm_code with
+                        | Some (bc, code_offset, frames) ->
+                            !Primitives.vm_run_thunk_ref bc code_offset frames
+                        | None ->
+                            let saved = !force_depth in
+                            force_depth := 0;
+                            let r = eval t.thunk_expr t.thunk_env in
+                            force_depth := saved;
+                            r
+                      in
+                      (match t.type_ann with
+                       | Some ty -> check_type result ty t.thunk_loc
+                       | None -> ());
+                      t.thunk_status <- Evaluated result;
+                      Queue.add result queue;
+                      loop ()
+                  end
+                else begin
+                  (* ephemeral thunk — no store check *)
+                  t.thunk_status <- Evaluating;
+                  let result =
+                    match t.vm_code with
+                    | Some (bc, code_offset, frames) ->
+                        !Primitives.vm_run_thunk_ref bc code_offset frames
+                    | None ->
+                        let saved = !force_depth in
+                        force_depth := 0;
+                        let r = eval t.thunk_expr t.thunk_env in
+                        force_depth := saved;
+                        r
+                  in
+                  (match t.type_ann with
+                   | Some ty -> check_type result ty t.thunk_loc
+                   | None -> ());
+                  t.thunk_status <- Evaluated result;
+                  Queue.add result queue;
+                  loop ()
                 end
             end
         | _ -> v  (* non-thunk: done *)
