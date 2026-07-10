@@ -634,9 +634,6 @@ and perform_builtin_effect (name : string) (args : value list) : value =
            VNil
        | _ -> failwith "log expects a message string")
 
-  | "random" ->
-      VInt (Random.int max_int)
-
   | _ ->
       failwith ("unhandled effect: " ^ name)
 

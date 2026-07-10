@@ -88,11 +88,14 @@ and resolve (cenv : cenv) (name : string) : [`Local of int * int | `Global] =
   let rec walk depth = function
     | [] -> `Global
     | frame :: rest ->
+        (* Scan from the end of the frame so later bindings shadow earlier
+           bindings in the same scope (needed for sequential let-star). *)
+        let len = List.length frame in
         let rec scan idx = function
           | [] -> walk (depth + 1) rest
-          | n :: ns -> if n = name then `Local (depth, idx) else scan (idx + 1) ns
+          | n :: ns -> if n = name then `Local (depth, idx) else scan (idx - 1) ns
         in
-        scan 0 frame
+        scan (len - 1) (List.rev frame)
   in
   walk 0 cenv
 
@@ -156,13 +159,10 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       ignore (emit_closure_region st params body)
 
   | EApply (fn_expr, arg_exprs) ->
-      (* Strict application (Q1): force fn and all args before calling *)
+      (* Strict application (Q1): compile_expr already emits FORCE for symbols;
+         literals are self-values. *)
       compile_expr st fn_expr false;
-      emit st FORCE;
-      List.iter (fun arg ->
-        compile_expr st arg false;
-        emit st FORCE
-      ) arg_exprs;
+      List.iter (fun arg -> compile_expr st arg false) arg_exprs;
       if tail then
         emit st (TAIL_CALL (List.length arg_exprs))
       else
@@ -365,8 +365,8 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
             st.cenv <- saved_frame :: (match st.cenv with [] -> [] | _ :: rest -> rest)
         | ((name, e) :: rest) ->
             ignore (emit_thunk_region st e);
-            let _, restore = extend_cenv st [name] in
-            emit st (STORE_LOCAL 0);
+            let slot, _restore = extend_cenv st [name] in
+            emit st (STORE_LOCAL slot);
             compile_sequential saved_frame rest
       in
       let saved_frame = match st.cenv with [] -> [] | f :: _ -> f in

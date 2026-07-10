@@ -1,53 +1,15 @@
-# gross make file that will eventually be replaced
+# Convenience Makefile. The real build is dune.
+# Use `opam exec -- dune build` directly if `dune` is not on PATH.
+DUNE ?= opam exec -- dune
+PP = _build/default/src/main.exe
 
-OCAMLC = ocamlfind ocamlc -package cryptokit
-OCAMLOPT = ocamlfind ocamlopt -package cryptokit
-
-SRC = src
-SOURCES = $(SRC)/types.ml $(SRC)/hasher.ml $(SRC)/store.ml $(SRC)/runtime.ml $(SRC)/reader.ml \
-          $(SRC)/capabilities.ml $(SRC)/island.ml $(SRC)/primitives.ml \
-          $(SRC)/evaluator.ml $(SRC)/bytecode.ml $(SRC)/compiler.ml \
-          $(SRC)/vm.ml $(SRC)/repl.ml $(SRC)/main.ml
-
-.PHONY: all clean run repl native fuzz
+.PHONY: all pp clean run repl native fuzz test cap-test
 
 all: pp
 
-pp: $(SOURCES)
-	cd $(SRC) && rm -f *.cm* && \
-	$(OCAMLC) -c types.ml && \
-	$(OCAMLC) -c hasher.ml && \
-	$(OCAMLC) -c store.ml && \
-	$(OCAMLC) -c runtime.ml && \
-	$(OCAMLC) -c reader.ml && \
-	$(OCAMLC) -c capabilities.ml && \
-	$(OCAMLC) -c island.ml && \
-	$(OCAMLC) -c primitives.ml && \
-	$(OCAMLC) -c evaluator.ml && \
-	$(OCAMLC) -c bytecode.ml && \
-	$(OCAMLC) -c compiler.ml && \
-	$(OCAMLC) -c vm.ml && \
-	$(OCAMLC) -c repl.ml && \
-	$(OCAMLC) -c main.ml && \
-	$(OCAMLC) -linkpkg -o ../pp types.cmo hasher.cmo store.cmo runtime.cmo reader.cmo capabilities.cmo island.cmo primitives.cmo evaluator.cmo bytecode.cmo compiler.cmo vm.cmo repl.cmo main.cmo
-
-native:
-	cd $(SRC) && rm -f *.cm* *.cmx *.o && \
-	$(OCAMLOPT) -c types.ml && \
-	$(OCAMLOPT) -c hasher.ml && \
-	$(OCAMLOPT) -c store.ml && \
-	$(OCAMLOPT) -c runtime.ml && \
-	$(OCAMLOPT) -c reader.ml && \
-	$(OCAMLOPT) -c capabilities.ml && \
-	$(OCAMLOPT) -c island.ml && \
-	$(OCAMLOPT) -c primitives.ml && \
-	$(OCAMLOPT) -c evaluator.ml && \
-	$(OCAMLOPT) -c bytecode.ml && \
-	$(OCAMLOPT) -c compiler.ml && \
-	$(OCAMLOPT) -c vm.ml && \
-	$(OCAMLOPT) -c repl.ml && \
-	$(OCAMLOPT) -c main.ml && \
-	$(OCAMLOPT) -linkpkg -o ../pp-native types.cmx hasher.cmx store.cmx runtime.cmx reader.cmx capabilities.cmx island.cmx primitives.cmx evaluator.cmx bytecode.cmx compiler.cmx vm.cmx repl.cmx main.cmx
+pp:
+	$(DUNE) build
+	@ln -sf $(PP) pp
 
 run: pp
 	./pp
@@ -55,16 +17,25 @@ run: pp
 repl: pp
 	./pp
 
+native:
+	$(DUNE) build --profile release
+	@ln -sf _build/default/src/main.exe pp-native
+
 # differential fuzzer (tools/fuzz.ml, OCaml stdlib + unix only)
 fuzz: pp tools/fuzz.ml
-	$(OCAMLC) -I +unix unix.cma -I tools -o fuzz tools/fuzz.ml
+	ocamlc -I +unix unix.cma -I tools -o fuzz tools/fuzz.ml
 
 test: pp
-	@for f in tests/001-eval-apply-test.pp tests/002-list-test.pp tests/003-print-deep-test.pp tests/004-type-test.pp tests/005-island-test.pp tests/006-config-test.pp; do \
+	@for f in tests/001-eval-apply-test.pp tests/002-list-test.pp tests/003-print-deep-test.pp tests/004-type-test.pp tests/005-island-test.pp tests/006-config-test.pp tests/007-phase0-laws.pp; do \
 		./pp --bytecode $$f > /tmp/bc.out 2>&1; ./pp $$f > /tmp/tw.out 2>&1; \
 		diff /tmp/bc.out /tmp/tw.out || { echo "MISMATCH in $$f"; exit 1; }; \
 		echo "ok $$f"; \
 	done
 
+cap-test: pp
+	@echo "--- capability adversarial suite ---"
+	PP=./pp tests/capability-adversarial.sh
+
 clean:
-	rm -f $(SRC)/*.cm* $(SRC)/*.o pp pp-native
+	$(DUNE) clean
+	rm -f pp pp-native fuzz
