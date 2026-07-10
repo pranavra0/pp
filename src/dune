@@ -1,6 +1,6 @@
 (executable
  (name main)
- (modules types hasher runtime reader capabilities island primitives
+ (modules types hasher runtime store reader capabilities island primitives
    evaluator bytecode compiler vm repl main)
  (libraries cryptokit)
  (flags -no-strict-sequence -w -8-10-26-27-39))

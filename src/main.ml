@@ -51,6 +51,7 @@ let () =
   in
   let initial_caps = List.map parse_grant (List.rev !grants) in
   Runtime.initial_capabilities := initial_caps;
+  Store.init ();
 
   match !eval_str, !files with
   | Some e, [] ->

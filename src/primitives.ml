@@ -367,7 +367,7 @@ let () =
         in
         let arg_values = list_to_ocaml args_list in
         (match fn with
-         | VClosure c when c.vm_bc != Types.dummy_bytecode ->
+         | VClosure c when Array.length c.vm_bc.code > 0 ->
              let new_frame = Types.make_frame (List.length c.params) in
              List.iteri (fun i arg -> Types.frame_set new_frame i arg) arg_values;
              !vm_run_thunk_ref c.vm_bc c.vm_offset (new_frame :: c.vm_frames)

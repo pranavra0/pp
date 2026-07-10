@@ -196,7 +196,15 @@ let empty_env =
 (*  hash_value).                                                        *)
 (* =================================================================== *)
 
-let hash_string (s : string) : string = Cryptokit.hash_string (Cryptokit.Hash.sha256 ()) s
+let hex_encode (s : string) : string =
+  let chars = "0123456789abcdef" in
+  String.init (String.length s * 2) (fun i ->
+    let c = Char.code s.[i / 2] in
+    let nibble = if i mod 2 = 0 then c lsr 4 else c land 0xf in
+    chars.[nibble])
+
+let hash_string (s : string) : string =
+  hex_encode (Cryptokit.hash_string (Cryptokit.Hash.sha256 ()) s)
 
 let hash_concat (parts : string list) : string =
   hash_string (String.concat ":" parts)
