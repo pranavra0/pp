@@ -264,7 +264,8 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       in
       let saved_caps = !current_capabilities in
       current_capabilities := caps @ saved_caps;
-      let result = eval_tail body env k in
+      let result = try eval_tail body env k
+        with exn -> current_capabilities := saved_caps; raise exn in
       current_capabilities := saved_caps;
       result
 
@@ -281,7 +282,8 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
           apply handler_val args env)
       ) handlers in
       handler_stack := new_handlers @ saved_handlers;
-      let result = eval_tail body env k in
+      let result = try eval_tail body env k
+        with exn -> handler_stack := saved_handlers; raise exn in
       handler_stack := saved_handlers;
       result
 
@@ -385,7 +387,8 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
        | VMap _ ->
            let saved = !config_stack in
            config_stack := cfg :: !config_stack;
-           let result = eval_tail body env k in
+           let result = try eval_tail body env k
+             with exn -> config_stack := saved; raise exn in
            config_stack := saved;
            result
        | _ -> failwith "with-config expects a map")

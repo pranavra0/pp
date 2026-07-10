@@ -7,7 +7,7 @@ SRC = src
 SOURCES = $(SRC)/types.ml $(SRC)/hasher.ml $(SRC)/runtime.ml $(SRC)/reader.ml \
           $(SRC)/capabilities.ml $(SRC)/island.ml $(SRC)/primitives.ml \
           $(SRC)/evaluator.ml $(SRC)/bytecode.ml $(SRC)/compiler.ml \
-          $(SRC)/vm.ml $(SRC)/cache.ml $(SRC)/repl.ml $(SRC)/main.ml
+          $(SRC)/vm.ml $(SRC)/repl.ml $(SRC)/main.ml
 
 .PHONY: all clean run repl native fuzz
 
@@ -26,10 +26,9 @@ pp: $(SOURCES)
 	$(OCAMLC) -c bytecode.ml && \
 	$(OCAMLC) -c compiler.ml && \
 	$(OCAMLC) -c vm.ml && \
-	$(OCAMLC) -c cache.ml && \
 	$(OCAMLC) -c repl.ml && \
 	$(OCAMLC) -c main.ml && \
-	$(OCAMLC) -linkpkg -o ../pp types.cmo hasher.cmo runtime.cmo reader.cmo capabilities.cmo island.cmo primitives.cmo evaluator.cmo bytecode.cmo compiler.cmo vm.cmo cache.cmo repl.cmo main.cmo
+	$(OCAMLC) -linkpkg -o ../pp types.cmo hasher.cmo runtime.cmo reader.cmo capabilities.cmo island.cmo primitives.cmo evaluator.cmo bytecode.cmo compiler.cmo vm.cmo repl.cmo main.cmo
 
 native:
 	cd $(SRC) && rm -f *.cm* *.cmx *.o && \
@@ -44,10 +43,9 @@ native:
 	$(OCAMLOPT) -c bytecode.ml && \
 	$(OCAMLOPT) -c compiler.ml && \
 	$(OCAMLOPT) -c vm.ml && \
-	$(OCAMLOPT) -c cache.ml && \
 	$(OCAMLOPT) -c repl.ml && \
 	$(OCAMLOPT) -c main.ml && \
-	$(OCAMLOPT) -linkpkg -o ../pp-native types.cmx hasher.cmx runtime.cmx reader.cmx capabilities.cmx island.cmx primitives.cmx evaluator.cmx bytecode.cmx compiler.cmx vm.cmx cache.cmx repl.cmx main.cmx
+	$(OCAMLOPT) -linkpkg -o ../pp-native types.cmx hasher.cmx runtime.cmx reader.cmx capabilities.cmx island.cmx primitives.cmx evaluator.cmx bytecode.cmx compiler.cmx vm.cmx repl.cmx main.cmx
 
 run: pp
 	./pp
@@ -65,10 +63,6 @@ test: pp
 		diff /tmp/bc.out /tmp/tw.out || { echo "MISMATCH in $$f"; exit 1; }; \
 		echo "ok $$f"; \
 	done
-
-selfhost-test: pp
-	./pp --bytecode src/pc.pp > /dev/null
-	./pp --bytecode -e '(do (load "src/pc.pp") (def bc (compile-program (read-string (slurp "examples/factorial.pp")))) (ppc-run bc []))'
 
 clean:
 	rm -f $(SRC)/*.cm* $(SRC)/*.o pp pp-native

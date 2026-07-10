@@ -23,7 +23,7 @@ let process_expr (e : expr) : value =
 let execute_string ?(source : string = "<?>") (input : string) : value list =
   init ();
   let exprs = read_string ~source input in
-  List.map (fun e -> process_expr (ELocated ((source, 1), e))) exprs
+  List.map process_expr exprs
 
 (* Tree-walker: execute a source file *)
 let execute_file (path : string) : value list =
@@ -38,7 +38,7 @@ let execute_string_bytecode ?(source : string = "<?>") (use_vm : bool) (input : 
     let exprs = read_string ~source input in
     Vm.init ();
     List.map (fun e ->
-      let bc = Compiler.compile_program [ELocated ((source, 1), e)] in
+      let bc = Compiler.compile_program [e] in
       Vm.run_program_expr bc
     ) exprs
   end else

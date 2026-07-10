@@ -279,6 +279,10 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
                    (ELiteral VNil)
                    empty_env
         in
+        (match t with
+         | VThunk th ->
+             th.thunk_hash <- Some (hash_concat ["vm-thunk"; string_of_int offset; cfg_hash])
+         | _ -> ());
         push t;
         incr pc;
         loop ()

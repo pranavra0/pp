@@ -94,8 +94,6 @@ and capability =
   | CapFilesystem of { path : string; mode : fs_mode }
   | CapNetwork of { protocol : string }
   | CapProcess
-  | CapTime of int       (* CPU time budget in ms *)
-  | CapMemory of int     (* memory budget in bytes *)
   | CapCompose of capability list
   | CapRestrict of { cap : capability; scope : string }
   | CapNone
@@ -325,8 +323,6 @@ and hash_capability (c : capability) : string =
   | CapNetwork { protocol } ->
       hash_concat ["cap_net"; protocol]
   | CapProcess -> hash_string "cap_process"
-  | CapTime ms -> hash_concat ["cap_time"; string_of_int ms]
-  | CapMemory bytes -> hash_concat ["cap_mem"; string_of_int bytes]
   | CapCompose caps ->
       hash_concat ("cap_compose" :: List.map hash_capability caps)
   | CapRestrict { cap; scope } ->
@@ -554,8 +550,6 @@ and string_of_capability (c : capability) : string =
       "#<cap fs " ^ path ^ " " ^ m ^ ">"
   | CapNetwork { protocol } -> "#<cap net " ^ protocol ^ ">"
   | CapProcess -> "#<cap process>"
-  | CapTime ms -> "#<cap time " ^ string_of_int ms ^ "ms>"
-  | CapMemory bytes -> "#<cap memory " ^ string_of_int bytes ^ ">"
   | CapCompose caps -> "#<cap compose " ^ string_of_int (List.length caps) ^ ">"
   | CapRestrict { scope; _ } -> "#<cap restrict " ^ scope ^ ">"
   | CapNone -> "#<cap none>"

@@ -332,6 +332,7 @@ let () =
           | [] ->
               if !new_defs = [] then VNil
               else VEnvMap (List.rev !new_defs)
+          | [ELocated (_, inner)] -> go [inner]
           | [EDef (name, params, body)] ->
               let closure = Types.make_closure ~name:(Some name) params body local_env in
               local_env := Types.extend_env !local_env name closure;
@@ -341,6 +342,7 @@ let () =
           | [last] ->
               (* Pure expression: evaluate and force *)
               force_one (!eval_ref last !local_env)
+          | (ELocated (_, inner)) :: rest -> go (inner :: rest)
           | (EDef (name, params, body)) :: rest ->
               let closure = Types.make_closure ~name:(Some name) params body local_env in
               local_env := Types.extend_env !local_env name closure;
@@ -350,8 +352,7 @@ let () =
           | e :: rest ->
               ignore (force_one (!eval_ref e !local_env));
               go rest
-        in
-        go exprs
+        in go exprs
     | _ -> failwith "eval-pp expects a string"
   );
 
@@ -390,6 +391,8 @@ let () =
     let args = force_args args in
     match args with
     | [VString path] ->
+        if not (List.exists (fun cap -> Capabilities.check_fs_read cap path) !Runtime.current_capabilities) then
+          failwith ("slurp: permission denied for " ^ path);
         (try
            let ch = open_in path in
            let content = really_input_string ch (in_channel_length ch) in
@@ -460,6 +463,40 @@ let () =
 
   register "ppc-pop-cenv-frame" (fun args ->
     failwith "ppc-pop-cenv-frame: not yet implemented for self-hosting"
+  );
+
+  let rec quasiquote_walk v =
+    match v with
+    | VPair (VSymbol "unquote", VPair (arg, VNil)) -> arg
+    | VPair (VPair (VSymbol "unquote-splicing", VPair (spliced, VNil)), cdr) ->
+        (* Splice: append the walked cdr to the spliced list *)
+        qq_append spliced (quasiquote_walk cdr)
+    | VPair (car, cdr) ->
+        VPair (quasiquote_walk car, quasiquote_walk cdr)
+    | VVector arr ->
+        VVector (Array.map quasiquote_walk arr)
+    | other -> other
+
+  and qq_append a b =
+    match a with
+    | VNil -> b
+    | VPair (x, xs) -> VPair (x, qq_append xs b)
+    | _ -> failwith "unquote-splicing expects a list"
+  in
+
+  register "quasiquote" (fun args ->
+    let args = force_args args in
+    match args with
+    | [v] -> quasiquote_walk v
+    | _ -> failwith "quasiquote expects one argument"
+  );
+
+  register "unquote" (fun _ ->
+    failwith "unquote not allowed outside quasiquote"
+  );
+
+  register "unquote-splicing" (fun _ ->
+    failwith "unquote-splicing not allowed outside quasiquote"
   );
 
   ()

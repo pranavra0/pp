@@ -7,8 +7,6 @@ let cap_none = VCapability CapNone
 let cap_filesystem ~path ~mode = VCapability (CapFilesystem { path; mode })
 let cap_network ~protocol = VCapability (CapNetwork { protocol })
 let cap_process = VCapability CapProcess
-let cap_time ms = VCapability (CapTime ms)
-let cap_memory bytes = VCapability (CapMemory bytes)
 
 let cap_compose caps =
   let caps = List.map (fun v ->

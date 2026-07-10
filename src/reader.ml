@@ -33,13 +33,17 @@ let string_of_token t =
   | TokIsland s -> "<" ^ s ^ ">"
   | TokEOF -> "<eof>"
 
-(* Lex a string into a list of tokens *)
-let lex (input : string) : token list =
+(* Line tracking: updated during lexing so each token can record its source line. *)
+let lex_line = ref 1
+let current_file = ref ""
+
+(* Lex a string into a list of (token, start_line) pairs. *)
+let lex (input : string) : (token * int) list =
   let len = String.length input in
   let pos = ref 0 in
   let tokens = ref [] in
 
-  let add t = tokens := t :: !tokens in
+  let add t = tokens := (t, !lex_line) :: !tokens in
   let peek () = if !pos < len then Some input.[!pos] else None in
   let advance () = let c = input.[!pos] in pos := !pos + 1; c in
 
@@ -47,8 +51,8 @@ let lex (input : string) : token list =
     match peek () with
     | None -> ()
     | Some c ->
-      if c = ' ' || c = '\t' || c = '\n' || c = '\r' || c = ',' then
-        (ignore (advance ()); next_delim ())
+      if c = ' ' || c = '\t' || c = '\n' || c = '\r' then
+        (if c = '\n' then incr lex_line; ignore (advance ()); next_delim ())
       else if c = ';' then
         (ignore (advance ()); skip_comment ())
       else
@@ -56,7 +60,8 @@ let lex (input : string) : token list =
 
   and skip_comment () =
     match peek () with
-    | Some '\n' | Some '\r' | None -> ignore (advance ()); next_delim ()
+    | Some '\n' -> incr lex_line; ignore (advance ()); next_delim ()
+    | Some '\r' | None -> ignore (advance ()); next_delim ()
     | Some _ -> ignore (advance ()); skip_comment ()
 
   and token () =
@@ -115,7 +120,11 @@ let lex (input : string) : token list =
            | Some '"' -> advance (); Buffer.add_char buf '"'; loop ()
            | Some c -> advance (); Buffer.add_char buf c; loop ()
            | None -> failwith "unterminated escape")
-      | Some c -> advance (); Buffer.add_char buf c; loop ()
+      | Some c ->
+          if c = '\n' then incr lex_line;
+          advance ();
+          Buffer.add_char buf c;
+          loop ()
     in loop ()
 
   and read_number () =
@@ -182,12 +191,15 @@ let lex (input : string) : token list =
 (* ---- Parser ---- *)
 
 type parse_state = {
-  mutable tokens : token list;
+  mutable tokens : (token * int) list;
   mutable pos : int;
 }
 
 let make_ps tokens = { tokens; pos = 0 }
-let peek ps = if ps.pos < List.length ps.tokens then List.nth ps.tokens ps.pos else TokEOF
+let peek ps =
+  if ps.pos < List.length ps.tokens then fst (List.nth ps.tokens ps.pos) else TokEOF
+let peek_line ps =
+  if ps.pos < List.length ps.tokens then snd (List.nth ps.tokens ps.pos) else 1
 let advance ps = let t = peek ps in ps.pos <- ps.pos + 1; t
 
 (* Check if a token is a specific symbol *)
@@ -212,7 +224,7 @@ let rec parse_expr ps : expr =
   | TokQuote ->
       advance ps; EQuote (parse_expr ps)
   | TokQuasiquote ->
-      advance ps; EApply (ESymbol "quasiquote", [parse_expr ps])
+      advance ps; EApply (ESymbol "quasiquote", [parse_qq_expr ps])
   | TokUnquote ->
       advance ps; EApply (ESymbol "unquote", [parse_expr ps])
   | TokUnquoteSplicing ->
@@ -733,10 +745,95 @@ and parse_set ps =
   loop ();
   EApply (ESymbol "hash-set", List.rev !result)
 
+(* ---- Quasiquote mode parsers ----
+   In quasiquote mode, everything is treated as quoted data.  , and ,@
+   escape back to normal evaluation.  The emitted AST builds a value
+   structure (with unquote markers) that the quasiquote function walks. *)
+
+and parse_qq_expr ps =
+  match peek ps with
+  | TokEOF -> failwith "unexpected end of input in quasiquote"
+  | TokRParen | TokRBracket | TokRBrace ->
+      failwith "unexpected closing delimiter in quasiquote"
+  | TokUnquote ->
+      (* ,form  →  (list 'unquote form) — form evaluated NORMALLY *)
+      ignore (advance ps);
+      EApply (ESymbol "list", [EQuote (ESymbol "unquote"); parse_expr ps])
+  | TokUnquoteSplicing ->
+      (* ,@form  →  (list 'unquote-splicing form) *)
+      ignore (advance ps);
+      EApply (ESymbol "list", [EQuote (ESymbol "unquote-splicing"); parse_expr ps])
+  | TokQuote ->
+      (* 'form inside quasiquote: quote the qq-parsed form *)
+      ignore (advance ps);
+      EQuote (parse_qq_expr ps)
+  | TokQuasiquote ->
+      (* nested quasiquote: (quasiquote <qq-parsed>) *)
+      ignore (advance ps);
+      EApply (ESymbol "quasiquote", [parse_qq_expr ps])
+  | TokLParen ->
+      parse_qq_list ps
+  | TokLBracket ->
+      parse_qq_vector ps
+  | TokLBrace ->
+      (* {k v ...} → (hash-map (qq k) (qq v) ...) *)
+      ignore (advance ps);
+      let rec loop acc =
+        match peek ps with
+        | TokRBrace -> ignore (advance ps); List.rev acc
+        | TokEOF -> failwith "unterminated map in quasiquote"
+        | _ ->
+            let k = parse_qq_expr ps in
+            let v = parse_qq_expr ps in
+            loop (v :: k :: acc)
+      in
+      let args = loop [] in
+      EApply (ESymbol "hash-map", args)
+  | TokSharpLBrace ->
+      (* #{e ...} → (hash-set (qq e) ...) *)
+      ignore (advance ps);
+      let rec loop acc =
+        match peek ps with
+        | TokRBrace -> ignore (advance ps); List.rev acc
+        | TokEOF -> failwith "unterminated set in quasiquote"
+        | _ -> loop (parse_qq_expr ps :: acc)
+      in
+      EApply (ESymbol "hash-set", loop [])
+  | _ ->
+      (* Any atom: wrap in quote so it evaluates to itself *)
+      EQuote (parse_expr ps)
+
+(* Parse a list in quasiquote mode: (a b c) → (cons (qq a) (cons (qq b) (cons (qq c) '()))) *)
+and parse_qq_list ps =
+  ignore (advance ps);  (* consume ( *)
+  let rec collect acc =
+    match peek ps with
+    | TokRParen -> ignore (advance ps); List.rev acc
+    | TokEOF -> failwith "unterminated list in quasiquote"
+    | _ -> collect (parse_qq_expr ps :: acc)
+  in
+  let elems = collect [] in
+  List.fold_right (fun e acc ->
+    EApply (ESymbol "cons", [e; acc])
+  ) elems (EQuote (ELiteral VNil))
+
+(* Parse a vector in quasiquote mode: [a b c] → (vector (qq a) (qq b) (qq c)) *)
+and parse_qq_vector ps =
+  ignore (advance ps);  (* consume [ *)
+  let rec collect acc =
+    match peek ps with
+    | TokRBracket -> ignore (advance ps); List.rev acc
+    | TokEOF -> failwith "unterminated vector in quasiquote"
+    | _ -> collect (parse_qq_expr ps :: acc)
+  in
+  EApply (ESymbol "vector", collect [])
+
 
 (* ---- Public API ---- *)
 
 let read_string ?(source : string = "<?>") (input : string) : expr list =
+  current_file := source;
+  lex_line := 1;
   let tokens = lex input in
   let ps = make_ps tokens in
   let result = ref [] in
@@ -744,8 +841,9 @@ let read_string ?(source : string = "<?>") (input : string) : expr list =
     match peek ps with
     | TokEOF -> ()
     | _ ->
+        let line = peek_line ps in
         let e = parse_expr ps in
-        result := e :: !result;
+        result := ELocated ((source, line), e) :: !result;
         loop ()
   in
   loop ();

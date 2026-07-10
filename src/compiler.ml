@@ -381,6 +381,7 @@ let compile_program (exprs : expr list) : bytecode =
     | [last] -> compile_expr st last true
     | e :: rest ->
         (* Non-last: compile non-tail (CALL not TAIL_CALL), then POP result *)
+        let e = match e with ELocated (_, inner) -> inner | _ -> e in
         (match e with
          | ELoadModule _ ->
              (* Tree-walker merges a statement-position load-module's
