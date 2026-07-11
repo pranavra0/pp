@@ -188,6 +188,24 @@ let force_node ~(key : string) ~(run : unit -> value) (t : thunk) : value =
        | _ -> failwith "node failed (cached)")
   | Store.Miss -> run_node_body ~key ~run t
 
+(* Module exports: the bindings of [bindings] not present in [base]
+   (insertion order preserved). With [dedup], each name is exported once —
+   newest binding wins (a value def's backpatched poison pre-binding must not
+   shadow the real binding). *)
+let new_bindings ?(dedup = false) ~(base : (string * value) list)
+    (bindings : (string * value) list) : (string * value) list =
+  let rec collect all acc =
+    match all with
+    | [] -> List.rev acc
+    | (n, v) :: rest ->
+        if List.exists (fun (pn, _) -> pn = n) base
+           || (dedup && List.exists (fun (an, _) -> an = n) acc) then
+          collect rest acc
+        else
+          collect rest ((n, v) :: acc)
+  in
+  collect bindings []
+
 (* letrec* poison for value defs in blocks: a fresh (non-content-addressed)
    thunk pre-bound at block entry so the whole block sees the binding; forcing
    it before the def executes raises, and the def backpatches it in place. The
@@ -423,22 +441,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
             ignore (eval_expressions exprs env_ref);
             go rest
         | (ELoadModule path) :: rest ->
-            let source = Runtime.loader_read path in
-            let exprs = Reader.read_string source in
-            let mod_ref = ref (Primitives.initial_env ()) in
-            ignore (eval_expressions exprs mod_ref);
-            let base_bindings = (Primitives.initial_env ()).bindings in
-            let rec collect_new all parent acc =
-              match all with
-              | [] -> List.rev acc
-              | (n, v) :: rest ->
-                  if List.exists (fun (pn, _) -> pn = n) parent then
-                    collect_new rest parent acc
-                  else
-                    collect_new rest parent ((n, v) :: acc)
-            in
-            let mod_val = VEnvMap (collect_new (!mod_ref).bindings base_bindings []) in
-            (match mod_val with
+            (match eval_module_file path with
              | VEnvMap bindings ->
                  env_ref := List.fold_left (fun e (n, v) ->
                    extend_env e n v) !env_ref bindings;
@@ -462,12 +465,8 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
         | VNil -> []
         | _ -> extract_capabilities caps_val
       in
-      let saved_caps = !current_capabilities in
-      current_capabilities := caps @ saved_caps;
-      let result = try eval_tail body env k
-        with exn -> current_capabilities := saved_caps; raise exn in
-      current_capabilities := saved_caps;
-      result
+      with_ref current_capabilities (caps @ !current_capabilities)
+        (fun () -> eval_tail body env k)
 
   | EPerform (name, arg_exprs) ->
       let args = List.map (fun e -> make_thunk_ca e env) arg_exprs in
@@ -475,18 +474,14 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       k (perform_effect name forced_args)
 
   | EWithHandler (handlers, body) ->
-      let saved_handlers = !handler_stack in
       let new_handlers = List.map (fun (name, handler_expr) ->
         let handler_val = force (eval handler_expr env) in
         (name,
          (fun args -> apply handler_val args env),
          hash_value handler_val)   (* D17: handler identity in the key *)
       ) handlers in
-      handler_stack := new_handlers @ saved_handlers;
-      let result = try eval_tail body env k
-        with exn -> handler_stack := saved_handlers; raise exn in
-      handler_stack := saved_handlers;
-      result
+      with_ref handler_stack (new_handlers @ !handler_stack)
+        (fun () -> eval_tail body env k)
 
   | EDef (name, params, body) ->
       k (make_closure ~name:(Some name) params body (ref env))
@@ -544,20 +539,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
             ignore (force (eval e env_acc));
             env_acc
       ) !mod_env body_exprs in
-      (* Newest binding wins and each name is exported once (a value def's
-         backpatched poison pre-binding must not shadow the real binding). *)
-      let rec collect_new all parent acc =
-        match all with
-        | [] -> List.rev acc
-        | (n, v) :: rest ->
-            if List.exists (fun (pn, _) -> pn = n) parent
-               || List.exists (fun (an, _) -> an = n) acc then
-              collect_new rest parent acc
-            else
-              collect_new rest parent ((n, v) :: acc)
-      in
-      let new_bindings = collect_new final_env.bindings base_env.bindings [] in
-      k (VEnvMap new_bindings)
+      k (VEnvMap (new_bindings ~dedup:true ~base:base_env.bindings final_env.bindings))
 
   | EImport mod_expr ->
       let mod_val = force (eval mod_expr env) in
@@ -570,21 +552,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       k (eval_expressions exprs env_ref)
 
   | ELoadModule path ->
-      let source = Runtime.loader_read path in
-      let exprs = Reader.read_string source in
-      let mod_ref = ref (Primitives.initial_env ()) in
-      ignore (eval_expressions exprs mod_ref);
-      let base_bindings = (Primitives.initial_env ()).bindings in
-      let rec collect_new all parent acc =
-        match all with
-        | [] -> List.rev acc
-        | (n, v) :: rest ->
-            if List.exists (fun (pn, _) -> pn = n) parent then
-              collect_new rest parent acc
-            else
-              collect_new rest parent ((n, v) :: acc)
-      in
-      k (VEnvMap (collect_new (!mod_ref).bindings base_bindings []))
+      k (eval_module_file path)
 
   | ELocated (loc, ETyped (e, ty)) ->
       (* Mirror the compiler (compiler.ml ELocated+ETyped): a located
@@ -605,12 +573,8 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       let cfg = force (eval map_expr env) in
       (match cfg with
        | VMap _ ->
-           let saved = !config_stack in
-           config_stack := cfg :: !config_stack;
-           let result = try eval_tail body env k
-             with exn -> config_stack := saved; raise exn in
-           config_stack := saved;
-           result
+           with_ref config_stack (cfg :: !config_stack)
+             (fun () -> eval_tail body env k)
        | _ -> failwith "with-config expects a map")
   | EConfig (key_expr, default_opt) ->
       let key_val = force (eval key_expr env) in
@@ -818,6 +782,16 @@ and extract_capabilities (v : value) : capability list =
       collect [] v
   | _ -> failwith ("expected capability, got: " ^ string_of_value v)
 
+
+(* (load-module "file.pp"): evaluate the file against a fresh initial env and
+   package the bindings it added as a module value. Shared by the tail
+   evaluator and EDo. *)
+and eval_module_file (path : string) : value =
+  let source = Runtime.loader_read path in
+  let exprs = Reader.read_string source in
+  let mod_ref = ref (Primitives.initial_env ()) in
+  ignore (eval_expressions exprs mod_ref);
+  VEnvMap (new_bindings ~base:(Primitives.initial_env ()).bindings (!mod_ref).bindings)
 
 (* Evaluate expressions sequentially with mutable env — used by ELoad, ELoadModule, and REPL *)
 and eval_expressions (exprs : expr list) (env : env ref) : value =

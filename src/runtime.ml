@@ -23,6 +23,16 @@ let config_stack : value list ref = ref []
 (* Content-addressed thunk store *)
 let thunk_store : (string, thunk) Hashtbl.t = Hashtbl.create 1024
 
+(* Dynamic scoping: set [r] to [v] for the extent of [f], restoring the saved
+   value on normal return AND on exception. The shape behind effect blocks,
+   handler installation, and config scoping. *)
+let with_ref (r : 'a ref) (v : 'a) (f : unit -> 'b) : 'b =
+  let saved = !r in
+  r := v;
+  match f () with
+  | result -> r := saved; result
+  | exception e -> r := saved; raise e
+
 (* ---- Trace recording: the verifying-trace cache-validity mechanism ----
 
    A node's persistent-store key covers only its *identity* (code + argument

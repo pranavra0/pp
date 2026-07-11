@@ -194,15 +194,15 @@ let lex (input : string) : (token * int) list =
 (* ---- Parser ---- *)
 
 type parse_state = {
-  mutable tokens : (token * int) list;
+  tokens : (token * int) array;
   mutable pos : int;
 }
 
-let make_ps tokens = { tokens; pos = 0 }
+let make_ps tokens = { tokens = Array.of_list tokens; pos = 0 }
 let peek ps =
-  if ps.pos < List.length ps.tokens then fst (List.nth ps.tokens ps.pos) else TokEOF
+  if ps.pos < Array.length ps.tokens then fst ps.tokens.(ps.pos) else TokEOF
 let peek_line ps =
-  if ps.pos < List.length ps.tokens then snd (List.nth ps.tokens ps.pos) else 1
+  if ps.pos < Array.length ps.tokens then snd ps.tokens.(ps.pos) else 1
 let advance ps = ps.pos <- ps.pos + 1
 let next ps = let t = peek ps in advance ps; t
 
@@ -214,6 +214,17 @@ let parse_error ps msg =
   let file = !current_file in
   let line = peek_line ps in
   failwith (Printf.sprintf "%s at %s:%d" msg file line)
+
+(* Collect items until the [closing] delimiter (consumed); [what] names the
+   form in the unterminated-at-EOF error. One loop for every bracketed form. *)
+let parse_until ps ~(closing : token) ~(what : string) (item : parse_state -> 'a) : 'a list =
+  let rec loop acc =
+    match peek ps with
+    | t when t = closing -> advance ps; List.rev acc
+    | TokEOF -> parse_error ps ("unterminated " ^ what)
+    | _ -> loop (item ps :: acc)
+  in
+  loop []
 
 (* Parse a symbol from a token or error *)
 let expect_symbol ps =
@@ -331,18 +342,7 @@ and parse_special_form ps car_sym =
 
 (* Parse the rest of a list (all expressions until closing paren) *)
 and parse_rest ps =
-  let result = ref [] in
-  let rec loop () =
-    match peek ps with
-    | TokRParen -> advance ps
-    | TokEOF -> parse_error ps "unterminated list"
-    | _ ->
-        let e = parse_expr ps in
-        result := e :: !result;
-        loop ()
-  in
-  loop ();
-  List.rev !result
+  parse_until ps ~closing:TokRParen ~what:"list" parse_expr
 
 (* Parse a vector of expressions [e1 e2 ...] *)
 and parse_vector_exprs ps =
@@ -350,18 +350,7 @@ and parse_vector_exprs ps =
     | TokLBracket -> ()
     | t -> parse_error ps ("expected '[', got " ^ string_of_token t)
   end;
-  let result = ref [] in
-  let rec loop () =
-    match peek ps with
-    | TokRBracket -> advance ps
-    | TokEOF -> parse_error ps "unterminated vector"
-    | _ ->
-        let e = parse_expr ps in
-        result := e :: !result;
-        loop ()
-  in
-  loop ();
-  List.rev !result
+  parse_until ps ~closing:TokRBracket ~what:"vector" parse_expr
 
 (* Parse a vector parameter list [name1 : type1 name2 : type2 ...]
    Returns (name, type-annotation option) pairs; annotations are CHECKED —
@@ -776,52 +765,19 @@ and parse_config ps =
 (* (vector e1 e2 ...) — already inside a [ ... ] parsed as EApply *)
 and parse_vector ps =
   advance ps;  (* consume [ *)
-  let result = ref [] in
-  let rec loop () =
-    match peek ps with
-    | TokRBracket -> advance ps
-    | TokEOF -> parse_error ps "unterminated vector"
-    | _ ->
-        let e = parse_expr ps in
-        result := e :: !result;
-        loop ()
-  in
-  loop ();
-  EApply (ESymbol "vector", List.rev !result)
+  EApply (ESymbol "vector", parse_until ps ~closing:TokRBracket ~what:"vector" parse_expr)
 
 (* {key val ...} — map literal *)
 and parse_map ps =
   advance ps;  (* consume { *)
-  let result = ref [] in
-  let rec loop () =
-    match peek ps with
-    | TokRBrace -> advance ps
-    | TokEOF -> parse_error ps "unterminated map"
-    | _ ->
-        let k = parse_expr ps in
-        let v = parse_expr ps in
-        result := (k, v) :: !result;
-        loop ()
-  in
-  loop ();
-  let args = List.concat_map (fun (k, v) -> [k; v]) (List.rev !result) in
-  EApply (ESymbol "hash-map", args)
+  let pairs = parse_until ps ~closing:TokRBrace ~what:"map"
+    (fun ps -> let k = parse_expr ps in let v = parse_expr ps in (k, v)) in
+  EApply (ESymbol "hash-map", List.concat_map (fun (k, v) -> [k; v]) pairs)
 
 (* #{expr ...} — set literal *)
 and parse_set ps =
   advance ps;  (* consume #{ *)
-  let result = ref [] in
-  let rec loop () =
-    match peek ps with
-    | TokRBrace -> advance ps
-    | TokEOF -> parse_error ps "unterminated set"
-    | _ ->
-        let e = parse_expr ps in
-        result := e :: !result;
-        loop ()
-  in
-  loop ();
-  EApply (ESymbol "hash-set", List.rev !result)
+  EApply (ESymbol "hash-set", parse_until ps ~closing:TokRBrace ~what:"set" parse_expr)
 
 (* ---- Quasiquote mode parsers ----
    In quasiquote mode, everything is treated as quoted data.  , and ,@
@@ -856,27 +812,14 @@ and parse_qq_expr ps =
   | TokLBrace ->
       (* {k v ...} → (hash-map (qq k) (qq v) ...) *)
       advance ps;
-      let rec loop acc =
-        match peek ps with
-        | TokRBrace -> advance ps; List.rev acc
-        | TokEOF -> parse_error ps "unterminated map in quasiquote"
-        | _ ->
-            let k = parse_qq_expr ps in
-            let v = parse_qq_expr ps in
-            loop (v :: k :: acc)
-      in
-      let args = loop [] in
-      EApply (ESymbol "hash-map", args)
+      let pairs = parse_until ps ~closing:TokRBrace ~what:"map in quasiquote"
+        (fun ps -> let k = parse_qq_expr ps in let v = parse_qq_expr ps in (k, v)) in
+      EApply (ESymbol "hash-map", List.concat_map (fun (k, v) -> [k; v]) pairs)
   | TokSharpLBrace ->
       (* #{e ...} → (hash-set (qq e) ...) *)
       advance ps;
-      let rec loop acc =
-        match peek ps with
-        | TokRBrace -> advance ps; List.rev acc
-        | TokEOF -> parse_error ps "unterminated set in quasiquote"
-        | _ -> loop (parse_qq_expr ps :: acc)
-      in
-      EApply (ESymbol "hash-set", loop [])
+      EApply (ESymbol "hash-set",
+              parse_until ps ~closing:TokRBrace ~what:"set in quasiquote" parse_qq_expr)
   | _ ->
       (* Any atom: wrap in quote so it evaluates to itself *)
       EQuote (parse_expr ps)
@@ -884,13 +827,7 @@ and parse_qq_expr ps =
 (* Parse a list in quasiquote mode: (a b c) → (cons (qq a) (cons (qq b) (cons (qq c) '()))) *)
 and parse_qq_list ps =
   advance ps;  (* consume ( *)
-  let rec collect acc =
-    match peek ps with
-    | TokRParen -> advance ps; List.rev acc
-    | TokEOF -> parse_error ps "unterminated list in quasiquote"
-    | _ -> collect (parse_qq_expr ps :: acc)
-  in
-  let elems = collect [] in
+  let elems = parse_until ps ~closing:TokRParen ~what:"list in quasiquote" parse_qq_expr in
   List.fold_right (fun e acc ->
     EApply (ESymbol "cons", [e; acc])
   ) elems (EQuote (ELiteral VNil))
@@ -898,13 +835,8 @@ and parse_qq_list ps =
 (* Parse a vector in quasiquote mode: [a b c] → (vector (qq a) (qq b) (qq c)) *)
 and parse_qq_vector ps =
   advance ps;  (* consume [ *)
-  let rec collect acc =
-    match peek ps with
-    | TokRBracket -> advance ps; List.rev acc
-    | TokEOF -> parse_error ps "unterminated vector in quasiquote"
-    | _ -> collect (parse_qq_expr ps :: acc)
-  in
-  EApply (ESymbol "vector", collect [])
+  EApply (ESymbol "vector",
+          parse_until ps ~closing:TokRBracket ~what:"vector in quasiquote" parse_qq_expr)
 
 
 (* ---- Public API ---- *)

@@ -41,6 +41,51 @@ let register (name : string) (f : value list -> value) : unit =
 let lookup (name : string) : value option =
   Hashtbl.find_opt builtins name
 
+(* Variadic + and *: fold from the first arg with an identity for zero args;
+   int/float mixing promotes to float. A single argument is returned as-is. *)
+let arith_fold (name : string) (identity : int)
+    (int_op : int -> int -> int) (float_op : float -> float -> float) : unit =
+  register name (fun args ->
+    let args = force_args args in
+    match args with
+    | [] -> VInt identity
+    | first :: rest ->
+        List.fold_left (fun acc arg ->
+          match acc, arg with
+          | VInt a, VInt b -> VInt (int_op a b)
+          | VInt a, VFloat b -> VFloat (float_op (float_of_int a) b)
+          | VFloat a, VInt b -> VFloat (float_op a (float_of_int b))
+          | VFloat a, VFloat b -> VFloat (float_op a b)
+          | (VInt _ | VFloat _), v | v, _ ->
+              failwith (Printf.sprintf "%s expects numbers, got %s" name (string_of_value v))
+        ) first rest)
+
+(* Variadic chained numeric comparison (< > <= >=): true iff every adjacent
+   pair satisfies the operator; int/float mixing compares as float. *)
+let chained_cmp (name : string)
+    (int_cmp : int -> int -> bool) (float_cmp : float -> float -> bool) : unit =
+  register name (fun args ->
+    let args = force_args args in
+    match args with
+    | [] | [_] -> VBool true
+    | _ ->
+        let rec chained = function
+          | [] | [_] -> true
+          | VInt a :: VInt b :: rest -> int_cmp a b && chained (VInt b :: rest)
+          | VFloat a :: VFloat b :: rest -> float_cmp a b && chained (VFloat b :: rest)
+          | VInt a :: VFloat b :: rest -> float_cmp (float_of_int a) b && chained (VFloat b :: rest)
+          | VFloat a :: VInt b :: rest -> float_cmp a (float_of_int b) && chained (VInt b :: rest)
+          | _ -> failwith (name ^ " expects numbers")
+        in
+        VBool (chained args))
+
+(* One-argument type predicate: forces the argument and tests its shape. *)
+let predicate (name : string) (test : value -> bool) : unit =
+  register name (fun args ->
+    match args with
+    | [arg] -> VBool (test (force_val arg))
+    | _ -> failwith (name ^ " expects one arg"))
+
 let initial_env () : env =
   let bindings = Hashtbl.fold (fun name v acc -> (name, v) :: acc) builtins [] in
   env_of_bindings bindings
@@ -63,24 +108,7 @@ let vm_define_ref : (string -> Types.value -> unit) ref =
   ref (fun _ _ -> ())
 let () =
   (* Arithmetic — strict: force all args, variadic + and * with identity *)
-  register "+" (fun args ->
-    let args = force_args args in
-    match args with
-    | [] -> VInt 0
-    | _ ->
-        let rec add acc = function
-          | [] -> acc
-          | VInt n :: rest -> add (match acc with
-              | VInt a -> VInt (a + n)
-              | VFloat a -> VFloat (a +. float_of_int n)
-              | v -> failwith (Printf.sprintf "+ expects numbers, got %s" (string_of_value v))) rest
-          | VFloat f :: rest -> add (match acc with
-              | VInt a -> VFloat (float_of_int a +. f)
-              | VFloat a -> VFloat (a +. f)
-              | v -> failwith (Printf.sprintf "+ expects numbers, got %s" (string_of_value v))) rest
-          | v :: _ -> failwith (Printf.sprintf "+ expects numbers, got %s" (string_of_value v))
-        in
-        add (List.hd args) (List.tl args));
+  arith_fold "+" 0 ( + ) ( +. );
 
   register "-" (fun args ->
     let args = force_args args in
@@ -89,24 +117,7 @@ let () =
     | [VFloat a; VFloat b] -> VFloat (a -. b)
     | _ -> failwith "- expects two numbers");
 
-  register "*" (fun args ->
-    let args = force_args args in
-    match args with
-    | [] -> VInt 1
-    | _ ->
-        let rec mul acc = function
-          | [] -> acc
-          | VInt n :: rest -> mul (match acc with
-              | VInt a -> VInt (a * n)
-              | VFloat a -> VFloat (a *. float_of_int n)
-              | v -> failwith (Printf.sprintf "* expects numbers, got %s" (string_of_value v))) rest
-          | VFloat f :: rest -> mul (match acc with
-              | VInt a -> VFloat (float_of_int a *. f)
-              | VFloat a -> VFloat (a *. f)
-              | v -> failwith (Printf.sprintf "* expects numbers, got %s" (string_of_value v))) rest
-          | v :: _ -> failwith (Printf.sprintf "* expects numbers, got %s" (string_of_value v))
-        in
-        mul (List.hd args) (List.tl args));
+  arith_fold "*" 1 ( * ) ( *. );
 
   register "/" (fun args ->
     let args = force_args args in
@@ -129,65 +140,10 @@ let () =
     | a :: rest ->
         VBool (List.for_all (fun b -> try a = b with Invalid_argument _ -> a == b) rest));
 
-  register "<" (fun args ->
-    let args = force_args args in
-    match args with
-    | [] | [_] -> VBool true
-    | _ ->
-        let rec chained = function
-          | [] | [_] -> true
-          | VInt a :: VInt b :: rest -> a < b && chained (VInt b :: rest)
-          | VFloat a :: VFloat b :: rest -> a < b && chained (VFloat b :: rest)
-          | VInt a :: VFloat b :: rest -> float_of_int a < b && chained (VFloat b :: rest)
-          | VFloat a :: VInt b :: rest -> a < float_of_int b && chained (VInt b :: rest)
-          | _ -> failwith "< expects numbers"
-        in
-        VBool (chained args));
-
-  register ">" (fun args ->
-    let args = force_args args in
-    match args with
-    | [] | [_] -> VBool true
-    | _ ->
-        let rec chained = function
-          | [] | [_] -> true
-          | VInt a :: VInt b :: rest -> a > b && chained (VInt b :: rest)
-          | VFloat a :: VFloat b :: rest -> a > b && chained (VFloat b :: rest)
-          | VInt a :: VFloat b :: rest -> float_of_int a > b && chained (VFloat b :: rest)
-          | VFloat a :: VInt b :: rest -> a > float_of_int b && chained (VInt b :: rest)
-          | _ -> failwith "> expects numbers"
-        in
-        VBool (chained args));
-
-  register "<=" (fun args ->
-    let args = force_args args in
-    match args with
-    | [] | [_] -> VBool true
-    | _ ->
-        let rec chained = function
-          | [] | [_] -> true
-          | VInt a :: VInt b :: rest -> a <= b && chained (VInt b :: rest)
-          | VFloat a :: VFloat b :: rest -> a <= b && chained (VFloat b :: rest)
-          | VInt a :: VFloat b :: rest -> float_of_int a <= b && chained (VFloat b :: rest)
-          | VFloat a :: VInt b :: rest -> a <= float_of_int b && chained (VInt b :: rest)
-          | _ -> failwith "<= expects numbers"
-        in
-        VBool (chained args));
-
-  register ">=" (fun args ->
-    let args = force_args args in
-    match args with
-    | [] | [_] -> VBool true
-    | _ ->
-        let rec chained = function
-          | [] | [_] -> true
-          | VInt a :: VInt b :: rest -> a >= b && chained (VInt b :: rest)
-          | VFloat a :: VFloat b :: rest -> a >= b && chained (VFloat b :: rest)
-          | VInt a :: VFloat b :: rest -> float_of_int a >= b && chained (VFloat b :: rest)
-          | VFloat a :: VInt b :: rest -> a >= float_of_int b && chained (VInt b :: rest)
-          | _ -> failwith ">= expects numbers"
-        in
-        VBool (chained args));
+  chained_cmp "<"  ( < )  ( < );
+  chained_cmp ">"  ( > )  ( > );
+  chained_cmp "<=" ( <= ) ( <= );
+  chained_cmp ">=" ( >= ) ( >= );
 
   (* List operations — car/cdr force the pair, cons/list are lazy *)
   register "cons" (fun args ->
@@ -256,29 +212,18 @@ let () =
     VSet args);  (* lazy *)
 
   (* Type predicates — force to check *)
-  register "int?" (fun args ->
-    match args with [arg] -> VBool (match force_val arg with VInt _ -> true | _ -> false) | _ -> failwith "int? expects one arg");
-  register "float?" (fun args ->
-    match args with [arg] -> VBool (match force_val arg with VFloat _ -> true | _ -> false) | _ -> failwith "float? expects one arg");
-  register "string?" (fun args ->
-    match args with [arg] -> VBool (match force_val arg with VString _ -> true | _ -> false) | _ -> failwith "string? expects one arg");
-  register "bool?" (fun args ->
-    match args with [arg] -> VBool (match force_val arg with VBool _ -> true | _ -> false) | _ -> failwith "bool? expects one arg");
-  register "keyword?" (fun args ->
-    match args with [arg] -> VBool (match force_val arg with VKeyword _ -> true | _ -> false) | _ -> failwith "keyword? expects one arg");
-  register "symbol?" (fun args ->
-    match args with [arg] -> VBool (match force_val arg with VSymbol _ -> true | _ -> false) | _ -> failwith "symbol? expects one arg");
-  register "pair?" (fun args ->
-    match args with [arg] -> (match force_val arg with VPair _ -> VBool true | VNil -> VBool true | _ -> VBool false) | _ -> failwith "pair? expects one arg");
-  register "vector?" (fun args ->
-    match args with [arg] -> VBool (match force_val arg with VVector _ -> true | _ -> false) | _ -> failwith "vector? expects one arg");
-  register "map?" (fun args ->
-    match args with [arg] -> VBool (match force_val arg with VMap _ -> true | _ -> false) | _ -> failwith "map? expects one arg");
-  register "set?" (fun args ->
-    match args with [arg] -> VBool (match force_val arg with VSet _ -> true | _ -> false) | _ -> failwith "set? expects one arg");
-  register "fn?" (fun args ->
-    match args with [arg] -> VBool (match force_val arg with VClosure _ | VBuiltin _ -> true | _ -> false) | _ -> failwith "fn? expects one arg");
-  register "thunk?" (fun args ->
+  predicate "int?"     (function VInt _ -> true | _ -> false);
+  predicate "float?"   (function VFloat _ -> true | _ -> false);
+  predicate "string?"  (function VString _ -> true | _ -> false);
+  predicate "bool?"    (function VBool _ -> true | _ -> false);
+  predicate "keyword?" (function VKeyword _ -> true | _ -> false);
+  predicate "symbol?"  (function VSymbol _ -> true | _ -> false);
+  predicate "pair?"    (function VPair _ | VNil -> true | _ -> false);
+  predicate "vector?"  (function VVector _ -> true | _ -> false);
+  predicate "map?"     (function VMap _ -> true | _ -> false);
+  predicate "set?"     (function VSet _ -> true | _ -> false);
+  predicate "fn?"      (function VClosure _ | VBuiltin _ -> true | _ -> false);
+  register "thunk?" (fun args ->  (* unforced by design: tests thunk-ness *)
     match args with [arg] -> VBool (match arg with VThunk _ -> true | _ -> false) | _ -> failwith "thunk? expects one arg");
 
   (* I/O — strict, deep-forces for display *)

@@ -224,11 +224,6 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       ignore (emit_thunk_region st e)
   | ENode e ->
       ignore (emit_node_region st e)
-  | EDefNode (name, params, body) ->
-      ignore (emit_closure_region ~name:(Some name) st params body);
-      emit st (STORE_GLOBAL (intern_name st name));
-      if tail && st.cenv = [] then
-        emit st (LOAD_GLOBAL (intern_name st name))
   | EDo exprs ->
       let is_top_level = (st.cenv = []) in
       (* Pass 1: collect defs — function defs AND value defs share the block's
@@ -328,7 +323,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       compile_expr st body false;
       emit st EXIT_EFFECT
 
-  | EDef (name, params, body) ->
+  | EDef (name, params, body) | EDefNode (name, params, body) ->
       ignore (emit_closure_region ~name:(Some name) st params body);
       emit st (STORE_GLOBAL (intern_name st name));
       if tail && st.cenv = [] then
