@@ -40,9 +40,10 @@ maps (inline or `blob:` CAS refs) under `pp --reconcile` (Q4/LAW 30), and
 groundwork is live:** `pp --watch` (polling pull-in-loop, re-evaluates on
 cell change), `pp --once` (explicit one-shot), and `pp graph` (cell→node
 dependency graph from stored traces) exist, proving exit criteria 3+4
-(same keys, same store in `--once` vs `--watch`). The process-domain
-reconciler, fenced effects (LAW 31), and true push `stabilize`
-(dirty-propagation optimization) remain Phase 2–4 work
+(same keys, same store in `--once` vs `--watch`). Push `stabilize` is
+now live (`pp --watch --stabilize`), and `tests/032` proves it produces
+the same results as pull mode. The process-domain reconciler and fenced
+effects (LAW 31) remain Phase 2–4 work
 ([ROADMAP.md](ROADMAP.md)).
 
 The scaffolding is good: the O(1) env-hash design, the CPS tail-call
@@ -117,8 +118,9 @@ non-list `def` is a value binding — `tests/025`.)
   produces a byte-identical result — the comment-only-header-edit story (exit
   criterion 5: compile re-runs, link does not) works today when the build
   threads values through free vars. No dirty-propagation graph was needed for
-  pull mode; the reverse-edge graph remains Phase-2 work (push `stabilize`,
-  inline-nested cutoff). Pinned by `tests/016-cutoff.sh`, both backends.
+  pull mode; the reverse-edge graph is now live for push `stabilize`
+  (`tests/032`), while inline-nested cutoff remains future work. Pinned by
+  `tests/016-cutoff.sh`, both backends.
 - **Config and handler trace cells (LAW 33/26).** `(config k)` inside a node
   records a `config:<k>` cell (absence is a distinct observation); every
   `perform` records a `handler:<effect>` cell whose observed hash is the
@@ -193,8 +195,14 @@ non-list `def` is a value binding — `tests/025`.)
   `--watch` and `--once` (exit criteria 3+4). `pp graph file.pp` runs the
   program then scans `~/.pp/store/traces/` and prints the cell→node
   dependency graph (the reverse-edge index, computed lazily). Both backends.
-  Pinned by `tests/031-watch-once.sh`. True push `stabilize`
-  (dirty-propagation) and the process-domain reconciler remain Phase 2.
+  Pinned by `tests/031-watch-once.sh`. The process-domain reconciler
+  remains Phase 2 work.
+- **`pp --watch --stabilize` (push scheduler).** Uses a reverse-edge index
+  from stored traces to compute the dirty node-key set when cells change;
+  only those thunks are reset to `Unevaluated`, so clean nodes skip
+  `Store.hit` entirely on re-execute. Produces identical results to the
+  pull-mode `--watch` loop on the `tests/032` battery of cell-change
+  sequences. Pinned by `tests/032-stabilize.sh`.
 - **Loader authority bounded + runtime cells (Q6/D8c, LAW 24).**
   `load`/`load-module`/`island` go through `Runtime.loader_read`: confined to
   the CLI programs' directories, the cwd, and `~/.pp` (anything else errors,

@@ -106,7 +106,7 @@ handler-cell refinement, LAW 38's containment half, and inline-nested cutoff
 
 ## Phase 2 — The reactive gear (push scheduler, same rebuilder) 🚧 IN PROGRESS
 
-- Reverse-edge index over traces; fs watchers + process-supervision cells;
+- ✅ Reverse-edge index over traces; fs watchers + process-supervision cells;
   push `stabilize`; `--once` vs `--watch` as the only build/service difference.
 - Process-domain reconciler (start/stop/restart on spec-hash change); fenced
   effects + intent journal (Q3), reconciler-only.
@@ -120,16 +120,17 @@ handler-cell refinement, LAW 38's containment half, and inline-nested cutoff
    the same store** — the store-level collapse, made auditable.
 5. Kill the reconciler mid-apply of a fenced action → on restart it is not
    re-performed and the unknown-status policy fires.
-6. Differential test: push `stabilize` result hashes equal the pull-scheduler
+6. ✅ Differential test: push `stabilize` result hashes equal the pull-scheduler
    reference (re-force-from-root) on a battery of cell-change sequences.
 
 **Groundwork landed:** `pp --watch` (polling pull-in-loop, clears in-memory
 state between iterations so the persistent store's trace-verification handles
-incremental rebuild), `pp --once` (explicit one-shot), and `pp graph` (lazy
-cell→node dependency graph from stored traces) are live with `tests/031`.
-True push `stabilize` (dirty-propagation via a reverse-edge index that resets
-only dirty thunks — the optimization that avoids re-walking all traces from
-root), the process-domain reconciler, and fenced effects remain.
+incremental rebuild), `pp --once` (explicit one-shot), `pp graph` (lazy
+cell→node dependency graph from stored traces), and true push `stabilize`
+(dirty-propagation via a reverse-edge index that resets only dirty thunks —
+the optimization that avoids re-walking all traces from root) are live with
+`tests/031` and `tests/032`. The process-domain reconciler and fenced effects
+remain.
 ---
 
 ## Phase 3 — Parallelism (process pool)

@@ -11,6 +11,7 @@ let main () =
   let watch = ref false in
   let watch_interval = ref 1.0 in
   let graph_mode = ref false in
+  let stabilize = ref false in
 
   let rec parse = function
     | "--" :: rest ->
@@ -42,6 +43,7 @@ let main () =
         Printf.printf "  pp --check <file.pp>     Determinism audit: run each node twice, flag volatile\n";
         Printf.printf "  pp --once <file.pp>        Run once and exit (explicit; default behavior)\n";
         Printf.printf "  pp --watch <file.pp>       Run, then watch cell changes and re-evaluate\n";
+        Printf.printf "  pp --watch --stabilize <file>  Watch with push stabilize (dirty-propagation)\n";
         Printf.printf "  pp graph                  Print the cell->node dependency graph from traces\n";
         Printf.printf "  pp run <file>            Run a pp source file\n";
         Printf.printf "  pp --version             Print version\n";
@@ -51,6 +53,7 @@ let main () =
     | "--watch" :: rest -> watch := true; parse rest
     | "--watch-interval" :: secs :: rest ->
         watch_interval := float_of_string secs; parse rest
+    | "--stabilize" :: rest -> stabilize := true; parse rest
     | "graph" :: rest -> graph_mode := true; parse rest
     | "run" :: f :: rest -> files := f :: !files; parse rest
     | f :: rest -> files := f :: !files; parse rest
@@ -103,7 +106,7 @@ let main () =
       match Store.observe_cell id with
       | Some h -> Some (id, h) | None -> None) cell_ids
   in
-  let watch_loop ~bytecode ~reconcile_root ~files ~interval =
+  let watch_loop ~bytecode ~reconcile_root ~files ~interval ~stabilize =
     Runtime.observe_all := true;
     let run_once () =
       (* Clear in-memory state for a fresh evaluation. The persistent store
@@ -122,9 +125,36 @@ let main () =
        | None, _ -> ()
        | Some _, None -> failwith "reconcile: the program produced no value");
       (* Collect the cells we need to poll and snapshot their current hashes. *)
-      let cell_ids = List.map fst !(Runtime.observed_all) in
+      let cell_ids = List.sort_uniq compare (List.map fst !(Runtime.observed_all)) in
       snapshot_cell_hashes cell_ids
     in
+    let run_once_stabilize ~prev_snapshot changed_cells =
+      let rev = Store.build_reverse_index () in
+      let dirty = Store.dirty_keys_for changed_cells rev in
+      Stabilize.reset_dirty dirty;
+      Runtime.keep_thunks := true;  (* set BEFORE execute_file_bytecode's internal init *)
+      Hashtbl.clear Store.run_pins;  (* fresh world observations, not last run's pins *)
+      Runtime.observed_all := [];
+      Runtime.current_capabilities := !Runtime.initial_capabilities;
+      (* execute_file_bytecode calls init internally — keep_thunks gates thunk_store *)
+      let last = List.fold_left (fun _ f ->
+        match List.rev (Repl.execute_file_bytecode bytecode f) with
+        | v :: _ -> Some v | [] -> None) None files in
+      (match reconcile_root, last with
+       | Some root, Some v -> Reconciler.reconcile ~root v
+       | None, _ -> ()
+       | Some _, None -> failwith "reconcile: the program produced no value");
+      let cell_ids = List.sort_uniq compare (List.map fst !(Runtime.observed_all)) in
+      let new_obs = snapshot_cell_hashes cell_ids in
+      let new_set = List.map fst new_obs in
+      let prev_clean = List.filter (fun (id, _) -> not (List.mem id new_set)) prev_snapshot in
+      new_obs @ prev_clean
+    in
+    (* First iteration: cold run. *)
+    if stabilize then begin
+      Runtime.keep_thunks := false;
+      Stabilize.clear_side_table ()
+    end;
     let snapshot = run_once () in
     let rec loop snapshot =
       begin try Unix.sleepf interval
@@ -132,18 +162,34 @@ let main () =
       (* Clear run pins so observe_cell reads the current world, not the
          snapshot from the last run (Q11 CAS-ingest pins the first read). *)
       Hashtbl.clear Store.run_pins;
-      let changed =
-        List.exists (fun (cell_id, recorded_hash) ->
-          match Store.observe_cell cell_id with
-          | Some h -> h <> recorded_hash
-          | None -> false) snapshot
-      in
-      if changed then begin
-        Printf.eprintf "[watch] cell(s) changed — re-evaluating\n%!";
-        let new_snapshot = run_once () in
-        loop new_snapshot
-      end else
-        loop snapshot
+      if stabilize then begin
+        let changed_cells =
+          List.filter_map (fun (cell_id, recorded_hash) ->
+            match Store.observe_cell cell_id with
+            | Some h when h <> recorded_hash -> Some cell_id
+            | _ -> None) snapshot
+        in
+        if changed_cells <> [] then begin
+          Printf.eprintf "[watch] %d cell(s) changed — stabilizing\n%!"
+            (List.length changed_cells);
+          let new_snapshot = run_once_stabilize ~prev_snapshot:snapshot changed_cells in
+          loop new_snapshot
+        end else
+          loop snapshot
+      end else begin
+        let changed =
+          List.exists (fun (cell_id, recorded_hash) ->
+            match Store.observe_cell cell_id with
+            | Some h -> h <> recorded_hash
+            | None -> false) snapshot
+        in
+        if changed then begin
+          Printf.eprintf "[watch] cell(s) changed — re-evaluating\n%!";
+          let new_snapshot = run_once () in
+          loop new_snapshot
+        end else
+          loop snapshot
+      end
     in
     loop snapshot
   in
@@ -165,7 +211,7 @@ let main () =
       let files = List.rev files in
       if !watch then
         watch_loop ~bytecode:!bytecode ~reconcile_root:!reconcile_root
-          ~files ~interval:!watch_interval
+          ~files ~interval:!watch_interval ~stabilize:!stabilize
       else if !diff then begin
         List.iter (fun f ->
           let tw_results = Repl.execute_file f in

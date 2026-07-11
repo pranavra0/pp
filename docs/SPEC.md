@@ -299,9 +299,11 @@ force" story is preserved — at node granularity, not per-expression.
 a language whose graph expands under evaluation gets it natively. Demand
 pruning is Excel not recalculating sheets nobody looks at.
 
-**Status: unimplemented** — `(node e)` and the store exist (D1), but there is no
-root desired-state formula, no wanted-set, and no dirty-propagation graph, so
-demand-pruning at node granularity is not realized (Q1/Q5).
+**Status: partial** — `(node e)` and the store exist (D1), and the reverse-edge
+dirty-propagation graph now exists for push `stabilize` (`pp --watch --stabilize`,
+`tests/032`). What is still missing: a formal root desired-state formula and an
+explicit wanted-set, so demand-pruning remains pull-mode "re-force from root"
+rather than a declared target set (Q1/Q5).
 
 **Test:** a root demanding 1 of a manifest's 3 children executes exactly 1
 child (journal/trace proves it), in both backends.
@@ -618,10 +620,12 @@ identically when a recompute produces a byte-identical result — the
 comment-only-header-edit story holds today when the build threads values
 through free variables (compile re-runs, link hits; `tests/016`). Not
 implemented: cutoff for a node *inline-nested* in its dependent's body (the
-parent's trace subsumes the child's reads, so the parent re-runs), and the
-reverse-edge/dirty-propagation graph — pull-mode re-verification walks from
-the root; push-mode `stabilize` (Phase 2) requires the graph. Glob and
-toolchain-closure cells are not yet recorded.
+parent's trace subsumes the child's reads, so the parent re-runs). The
+reverse-edge/dirty-propagation graph now exists and is used by push-mode
+`stabilize` (`Store.build_reverse_index`, `Stabilize.reset_dirty`;
+`pp --watch --stabilize`; `tests/032`); pull-mode re-verification still walks
+from the root when `--stabilize` is not used. Glob and toolchain-closure cells
+are not yet recorded.
 
 **Test:** editing a file read by a node re-runs it; an unchanged read hits;
 reverting the file hits the original trace in the set (`tests/010`); a
@@ -872,8 +876,11 @@ requires an fs write grant, and refuses stratification (`tests/018`). Desired
 contents may be inline strings or `blob:<sha256>` CAS references (`tests/023`).
 **Watch mode is now live:** `pp --watch --reconcile ROOT prog.pp` runs the
 program, reconciles, polls cells for changes, and re-runs on change
-(`tests/031`). Not yet: the process domain, true push `stabilize`, and fenced
-effects (LAW 31).
+(`tests/031`). **Push stabilize is now live:** `pp --watch --stabilize
+prog.pp` uses the reverse-edge index from stored traces to reset only dirty
+thunks, so clean nodes skip `Store.hit` entirely; differential test
+`tests/032` confirms identical re-evaluation patterns to pull mode on both
+backends. Not yet: the process domain and fenced effects (LAW 31).
 
 **Test:** first reconcile creates the tree; a null reconcile writes nothing;
 manual drift and foreign files converge away; a shrunk desired map deletes
@@ -1102,7 +1109,7 @@ signatures, not line numbers — the source is under active migration.)
 | LAW 4 | one scope model | partial | value defs (`(def x v)`) bind values with letrec* block scope, identical in both backends (`tests/025`); modules sequential in tree-walker; VM resolves module-body sibling refs globally and leaks bare-top-level-`do` defs to globals (D22) |
 | LAW 5 | `let*` sequential sugar | holds | reader emits `ELetStar`; both backends sequential; `tests/007-phase0-laws.pp` |
 | LAW 6 | node CBV + memoization | partial | application is CBV (Q1); `(node e)` memoizes persistently, keyed on code + free-var value hashes (LAW 20; `tests/011`); `(defnode x e)` binds the node thunk (`tests/025`), but applied `defnode` is still a named closure, so aggregator-keyed-on-child-result-hashes doesn't yet arise |
-| LAW 7 | demand-pruning at node granularity | unimplemented | Q1/Q5; no wanted-set / dirty-propagation graph yet |
+| LAW 7 | demand-pruning at node granularity | partial | reverse-edge dirty-propagation graph exists for push `stabilize` (`pp --watch --stabilize`, `tests/032`); root desired-state formula / explicit wanted-set still absent (Q1/Q5) |
 | LAW 8 | `delay` ephemeral vs `node` persistent | partial | the split exists in both backends (`node` → `~/.pp/store`; `delay` never persists); residual: tree-walker's in-memory dedup table isn't mirrored in the VM (D7), separate from the node cache |
 | LAW 11 | stack-safe non-tail recursion | unimplemented | D4; fuzz `exitdiff:tw-err: Out_of_memory`, `crash:bc:timeout` |
 | LAW 12 | total quotation, quasiquote | holds | D11/D19 fixed; `tests/007-phase0-laws.pp` |
@@ -1112,7 +1119,7 @@ signatures, not line numbers — the source is under active migration.)
 | LAW 18 | sandbox-scratch writes | partial | per-node scratch sandbox real: relative node writes/reads are scratch-local, absolute node writes error, `run` cwd = scratch (`tests/017`); reconciled domains absent (Q4) |
 | LAW 19 | sound content hashing | partial | SHA-256 (D5 fixed); closure-env + handler holes closed → in-memory dedup sound (D6/D17 fixed); store objects content-addressed by result hash, shared by both backends (D1, D7); tree-walker's in-memory dedup table not mirrored in the VM |
 | LAW 20 | key = code ‖ arg-values | partial | persistent `(node e)` key = code + free-var value hashes; caps, whole-env, config, and handlers all excluded (`tests/011`, `tests/015`); binding-order not canonicalized (LAW 3) |
-| LAW 21 | cutoff via traces | partial | validity-via-verifying-trace real (key→SET of traces, cells re-checked on hit; `tests/010`, `tests/015`); hash-equality cutoff proven at scale — comment-only header edit on a 101-TU C build and on Lua 5.4.7 recompiles dependents and cuts off the link (`tests/016`, `tests/024`, `scripts/build-lua.sh`); inline-nested cutoff and the reverse-edge graph (Phase 2 push) absent |
+| LAW 21 | cutoff via traces | partial | validity-via-verifying-trace real (key→SET of traces, cells re-checked on hit; `tests/010`, `tests/015`); hash-equality cutoff proven at scale — comment-only header edit on a 101-TU C build and on Lua 5.4.7 recompiles dependents and cuts off the link (`tests/016`, `tests/024`, `scripts/build-lua.sh`); reverse-edge/dirty-propagation graph now used by push `stabilize` (`pp --watch --stabilize`, `tests/032`); inline-nested cutoff still absent |
 | LAW 22 | unforgeable root-minted caps | holds | D18 fixed; constructors removed; `tests/capability-adversarial.sh` |
 | LAW 23 | component/full-path + transitive hit check | partial | (a) component-aware paths; (b) hits gated on the caller's caps covering the trace's transitive read closure in both backends, cap denials not memoized (`tests/013`, `tests/014`); (c) capability-filtered `pp why` real (`tests/019`); uniform realpath canonicalization still open |
 | LAW 24 | loader = runtime authority | holds | loader bounded to source roots + ~/.pp, reads traced as authority-exempt `runtime:file:` cells (`tests/020`); realpath canonicalization still open |
@@ -1121,7 +1128,7 @@ signatures, not line numbers — the source is under active migration.)
 | LAW 27 | exception/tail-safe dynamic extent | holds | D9/D16/D20 fixed; save-stack restore on every exit |
 | LAW 28 | failure traces, error memoization | partial | both backends memoize `Failure` outcomes as failing traces, re-served until a recorded read changes; D16 `Evaluating`-leak fixed (`tests/012`, `tests/014`); non-`Failure` exceptions uncached |
 | LAW 29 | source locations in errors | holds | D12 closed: every top-level form's location is appended to unlocated runtime errors in both backends; arity/capability errors name the callee/operation; `pp: error:` single-line reporting (`tests/027`); residual: `load`ed-file errors cite the loading form |
-| LAW 30 | desired-state + single writer | partial | fs-domain reconciler v1: plan/journal/atomic-apply/verify, single-writer deletes, stratification check, blob-hash desired values (Q4, `tests/018`, `tests/023`); drives a real 101-TU C build and Lua 5.4.7 end-to-end (`tests/024`); process domain absent |
+| LAW 30 | desired-state + single writer | partial | fs-domain reconciler v1: plan/journal/atomic-apply/verify, single-writer deletes, stratification check, blob-hash desired values (Q4, `tests/018`, `tests/023`); drives a real 101-TU C build and Lua 5.4.7 end-to-end (`tests/024`); push `stabilize` live (`pp --watch --stabilize`, `tests/032`); process domain absent |
 | LAW 31 | fenced effects, intent journal | unimplemented | Q3/Phase 2 |
 | LAW 32 | gradual types, strictest oracle | holds | D3 fixed; both backends enforce; tests 004/005 restored; `tests/007-phase0-laws.pp` |
 | LAW 33 | config: computed keys, tail-safe scoping | holds | D15 fixed; computed keys and tail-safe scoping in both backends; config reads inside nodes are `config:<key>` trace cells, ambient config out of the node key (`tests/015`) |

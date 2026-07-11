@@ -243,3 +243,8 @@ let initial_capabilities : capability list ref = ref []
    main.ml). Read by the `argv` primitive, which records an `argv:` trace
    cell so a node that observed them recomputes when they change. *)
 let program_argv : string list ref = ref []
+
+(* --stabilize: when true, init skips Hashtbl.clear thunk_store so
+   clean thunks remain Evaluated and skip Store.hit on re-execute.
+   Set false for cold runs and --once; true for stabilize iterations. *)
+let keep_thunks = ref false

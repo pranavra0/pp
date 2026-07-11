@@ -245,6 +245,16 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
         | VThunk t ->
             begin match t.thunk_status with
             | Evaluated result ->
+                (* Trace replay for persistent node thunks: when a caller forces
+                   an already-Evaluated node, replay its stored trace reads into
+                   active trace frames for transitive dependency capture. *)
+                (if t.thunk_persist && !Runtime.trace_stack <> [] then
+                   let nk = vm_node_key t in
+                   let open Store in
+                   let traces = load_traces ~key:nk in
+                   List.iter (fun tr ->
+                     List.iter (fun (c, h) -> Runtime.record_read c h) tr.tr_reads
+                   ) traces);
                 push result;
                 incr pc;
                 loop ()
@@ -682,7 +692,17 @@ and vm_force (v : value) : value =
   match v with
   | VThunk t ->
       begin match t.thunk_status with
-      | Evaluated result -> vm_force result
+      | Evaluated result ->
+          (* Trace replay for persistent node thunks (same mechanism as
+             evaluator.ml force and Store.hit hit-replay). *)
+          (if t.thunk_persist && !Runtime.trace_stack <> [] then
+             let nk = vm_node_key t in
+             let open Store in
+             let traces = load_traces ~key:nk in
+             List.iter (fun tr ->
+               List.iter (fun (c, h) -> Runtime.record_read c h) tr.tr_reads
+             ) traces);
+          vm_force result
       | Evaluating -> failwith "VM force: infinite recursion"
       | Unevaluated ->
           if t.thunk_persist then
@@ -742,6 +762,7 @@ and vm_node_key (t : thunk) : string =
    however it is demanded. Assumes t is persistent and Unevaluated. *)
 and force_node_thunk (t : thunk) : value =
   let nk = vm_node_key t in
+  Stabilize.register_node_key ~key:nk ~thunk:t;
   match Store.hit ~key:nk ~authorized:Evaluator.cell_authorized with
   | Store.HitOk cached -> t.thunk_status <- Evaluated cached; cached
   | Store.HitFailed errval ->
@@ -856,7 +877,7 @@ let rec init () =
   config_stack := [];
   caps_save_stack := [];
   handler_save_stack := [];
-  Hashtbl.clear thunk_store;
+  if not !Runtime.keep_thunks then Hashtbl.clear thunk_store;
   Primitives.set_force vm_force;
   (* Config-cell observations (LAW 33) hash the forced value; under the VM the
      forcing is vm_force (Evaluator.init is not run on this path). *)

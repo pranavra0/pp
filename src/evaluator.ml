@@ -136,6 +136,18 @@ let rec force (v : value) : value =
       (match t.thunk_status with
        | Evaluated result ->
            decr force_depth;
+           (* Trace replay: when a caller forces an already-Evaluated
+              persistent node, replay the node's stored trace reads into
+              active trace frames so the caller's trace transitively
+              captures this node's world-reads (same mechanism as
+              Store.hit's hit-replay). *)
+           (if t.thunk_persist && !Runtime.trace_stack <> [] then
+              let nk = node_key_of t in
+              let open Store in
+              let traces = load_traces ~key:nk in
+              List.iter (fun tr ->
+                List.iter (fun (c, h) -> Runtime.record_read c h) tr.tr_reads
+              ) traces);
            force result
        | Evaluating ->
            decr force_depth;
@@ -146,6 +158,7 @@ let rec force (v : value) : value =
               validity. A stale trace falls through to recompute. *)
            if t.thunk_persist then
              let nk = node_key_of t in
+             Stabilize.register_node_key ~key:nk ~thunk:t;
              (match Store.hit ~key:nk ~authorized:cell_authorized with
               | Store.HitOk cached ->
                   t.thunk_status <- Evaluated cached;
@@ -673,6 +686,7 @@ and trampoline_force (v : value) : value =
                 if t.thunk_persist then
                   begin
                   let h = node_key_of t in
+                  Stabilize.register_node_key ~key:h ~thunk:t;
                   begin match Store.hit ~key:h ~authorized:cell_authorized with
                       | Store.HitOk cached ->
                           t.thunk_status <- Evaluated cached;
@@ -941,7 +955,7 @@ let eval_and_force (e : expr) : value =
 let init () =
   handler_stack := [];
   current_capabilities := !initial_capabilities;
-  Hashtbl.clear thunk_store;
+  if not !Runtime.keep_thunks then Hashtbl.clear thunk_store;
   Primitives.set_force force;
   Primitives.set_eval eval;
   Primitives.set_apply apply;

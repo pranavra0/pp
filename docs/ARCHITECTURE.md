@@ -159,8 +159,12 @@ is served only if the caller is authorized to read the trace's whole closure
 `MAKE_NODE` records the free-var descriptors the compiler resolved, `vm_node_key`
 rebuilds the LAW 20 key from the captured frames/globals (byte-identical to the
 tree-walker for data free vars, so entries are shared), and `force_node_thunk`
-runs the same hit/verify/trace/failure/cap logic. Still narrow: file cells only,
-config/handlers still folded into the key, no cutoff/dirty-propagation.
+runs the same hit/verify/trace/failure/cap logic. With `pp --watch --stabilize`,
+the reverse-edge index (`Store.build_reverse_index`) maps changed cells to dirty node keys,
+`Stabilize.reset_dirty` marks only those in-memory thunks `Unevaluated`, and `Runtime.keep_thunks`
+keeps the `thunk_store` alive across watch iterations so clean nodes remain `Evaluated` and skip
+`Store.hit` entirely. Still narrow: file cells only, config/handlers still folded into the key,
+no inline-nested cutoff.
 
 ## Not yet wired
 
@@ -184,6 +188,7 @@ config/handlers still folded into the key, no cutoff/dirty-propagation.
 | `src/island.ml` | Island URI → pin → local path resolution (stub). |
 | `src/store.ml` | Persistent content-addressed store + verifying traces; wired into the tree-walker's `force` for `(node e)`. |
 | `src/repl.ml` | REPL and file-execution helpers for both back ends. |
+| `src/stabilize.ml` | Push scheduler: side-table (`node_key` → `thunk`) + dirty reset; the reverse-edge index is in `store.ml`. |
 | `src/main.ml` | CLI entry point: flag parsing, `--grant`, dispatch to REPL/file/`-e`/`--diff`. |
 | `tools/fuzz.ml` | The differential fuzzer ([TESTING.md](TESTING.md)). |
 
@@ -199,6 +204,7 @@ pp --grant <spec>        grant a capability (fs:/path:ro|rw|wo, net:<proto>, pro
 pp --once <file.pp>      run once and exit (explicit; default behavior)
 pp --watch <file.pp>     run, then watch cell changes and re-evaluate (polling)
 pp --watch-interval <s>  poll interval for --watch (default 1.0)
+pp --watch --stabilize <file.pp>  watch with push stabilize (dirty-propagation)
 pp graph <file.pp>       print the cell→node dependency graph from traces
 pp --update              enable island pin-update mode (stub)
 pp --version | --help

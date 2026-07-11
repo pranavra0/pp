@@ -83,6 +83,10 @@ two shell suites:
     coexist in one desired map; `rm -rf build/` + re-reconcile restores from
     the store with zero tool re-runs (exit criterion 4 at unit scale); a
     dangling blob ref is a hard error; VM included.
+  - **032** — push stabilize differential test: a battery of cell-change
+    sequences on a 4-node program; push (`--watch --stabilize`) and pull
+    (`--watch`) produce identical re-evaluation patterns at each step;
+    both backends.
   - **029** — REPL (ROADMAP §1): paren-balanced multi-line continuation,
     defs persisting across lines in BOTH backends, promptless piped output,
     `:why` toggling, `(exit N)` status control, deep-forced printing.

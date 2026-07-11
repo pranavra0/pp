@@ -178,4 +178,11 @@ else
   fail=1
 fi
 
+echo "--- Phase 2 push stabilize (differential) suite ---"
+if PP="$PP" bash tests/032-stabilize.sh; then
+  echo "ok   032-stabilize"
+else
+  echo "FAIL 032-stabilize"; fail=1
+fi
+
 exit $fail
