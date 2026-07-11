@@ -135,14 +135,14 @@ let store_trace ~key ~outcome ~result_hash ~reads =
    together) is future work; canonicalizing only the cell would desync it from
    the raw-path grant check (e.g. /var vs /private/var on macOS). *)
 let file_cell_id (path : string) : string =
-  "file:" ^ path
+  Cell.(to_string (File path))
 
 (* A stat cell — "stat:<path>" — records what a file *predicate* observed:
    presence and kind, never contents. Precise for file-exists?/dir?: creating
    or deleting the path invalidates, content edits do not; a trace that
    observed absence re-verifies while the path stays absent. *)
 let stat_cell_id (path : string) : string =
-  "stat:" ^ path
+  Cell.(to_string (Stat path))
 
 let stat_kind (path : string) : string =
   match Unix.lstat path with
@@ -154,22 +154,16 @@ let stat_kind_hash (kind : string) : string =
   hash_string ("stat:" ^ kind)
 
 (* Environment observations: "env:<NAME>" — value or absence. *)
-let env_cell_id (name : string) : string = "env:" ^ name
+let env_cell_id (name : string) : string = Cell.(to_string (Env name))
 let env_observed_hash (v : string option) : string =
   match v with
   | Some s -> hash_string ("env:" ^ s)
   | None -> hash_string "env:absent"
 
 (* The single argv cell: the program-argument list after `--`. *)
-let argv_cell_id : string = "argv:"
+let argv_cell_id : string = Cell.to_string Cell.Argv
 let argv_observed_hash () : string =
   hash_concat ("argv" :: !Runtime.program_argv)
-
-let strip_prefix (prefix : string) (s : string) : string option =
-  let plen = String.length prefix in
-  if String.length s >= plen && String.sub s 0 plen = prefix then
-    Some (String.sub s plen (String.length s - plen))
-  else None
 
 let hash_file_opt (path : string) : string option =
   try
@@ -238,50 +232,34 @@ let run_pins : (string, string) Hashtbl.t = Hashtbl.create 64
 let unpin_file (path : string) : unit =
   Hashtbl.remove run_pins (file_cell_id path)
 
+(* Re-observe a cell's current world state (one arm per Cell kind). *)
 let observe_cell (cell_id : string) : string option =
-  match strip_prefix "file:" cell_id with
-  | Some path ->
+  match Cell.of_string cell_id with
+  | Cell.File path ->
       (* Q11: a pinned cell re-observes its run snapshot, keeping validity
          decisions consistent with what this run's nodes actually read. *)
       (match Hashtbl.find_opt run_pins cell_id with
        | Some h -> Some h
        | None -> hash_file_opt path)
-  | None ->
-  match strip_prefix "runtime:file:" cell_id with
-  | Some path ->
+  | Cell.RuntimeFile path ->
       (* A loader read (Q6): re-observed like a file cell; authority-exempt
          at hit time (the read was the interpreter's, not the user's). *)
       hash_file_opt path
-  | None ->
-  match strip_prefix "tool:" cell_id with
-  | Some path ->
+  | Cell.Tool path ->
       (* The command binary a `run` resolved to (D13): re-observed as its
          current content hash, like a file cell under a different authority
          rule (process grant, not fs — see cell_authorized). *)
       hash_file_opt path
-  | None ->
-  match strip_prefix "tree:" cell_id with
-  | Some root -> (try Some (tree_hash root) with _ -> None)
-  | None ->
-  match strip_prefix "stat:" cell_id with
-  | Some path -> Some (stat_kind_hash (stat_kind path))
-  | None ->
-  match strip_prefix "env:" cell_id with
-  | Some name -> Some (env_observed_hash (Sys.getenv_opt name))
-  | None ->
-  if cell_id = argv_cell_id then Some (argv_observed_hash ())
-  else
-      (* Config and handler cells re-observe the CALLER's ambient stacks
-         (LAW 33/26) through the same helpers that recorded them. *)
-      match strip_prefix "config:" cell_id with
-      | Some key -> (try Some (Runtime.observe_config key) with _ -> None)
-      | None ->
-          match strip_prefix "handler:" cell_id with
-          | Some name -> (try Some (Runtime.observe_handler name) with _ -> None)
-          | None ->
-              match strip_prefix "proc:" cell_id with
-              | Some name -> (try Runtime.observe_proc name with _ -> None)
-              | None -> None  (* unknown cell kind: cannot re-observe ⇒ never verifies *)
+  | Cell.Tree root -> (try Some (tree_hash root) with _ -> None)
+  | Cell.Stat path -> Some (stat_kind_hash (stat_kind path))
+  | Cell.Env name -> Some (env_observed_hash (Sys.getenv_opt name))
+  | Cell.Argv -> Some (argv_observed_hash ())
+  (* Config and handler cells re-observe the CALLER's ambient stacks
+     (LAW 33/26) through the same helpers that recorded them. *)
+  | Cell.Config key -> (try Some (Runtime.observe_config key) with _ -> None)
+  | Cell.Handler name -> (try Some (Runtime.observe_handler name) with _ -> None)
+  | Cell.Proc name -> (try Runtime.observe_proc name with _ -> None)
+  | Cell.Unknown _ -> None  (* cannot re-observe ⇒ never verifies *)
 
 let trace_verifies (tr : trace) : bool =
   List.for_all (fun (cell_id, recorded_hash) ->
@@ -444,106 +422,9 @@ let hit ~key ~authorized : hit_result =
              (match tr.tr_outcome with Ok -> HitOk v | Failed -> HitFailed v))
   end
 
-(* ---- Reconciler journal (Q4) ----
-   An append-only audit log: `intent <hash> ...` before an apply, `done <hash>`
-   after it. Recovery is not replay for convergent domains — desired state is
-   cheap to recompute and observed state is re-derived from cells, so crash
-   recovery = re-running reconcile; the journal exists to make what happened
-   inspectable.
-
-   Fenced effects (LAW 31) use the same journal as a WAL:
-     intent fenced <key> <kind> <spec-hash>
-     done fenced <key> <result-hash>
-   A `done` without a matching `intent` is ignored; an `intent` with no later
-   matching `done` is an unknown-status fenced action that must be resolved by
-   policy (`retry | abort | ask`) before normal reconciliation proceeds. *)
-
-let journal_dir = Filename.concat store_root "journal"
-let journal_log_path () = Filename.concat journal_dir "log"
-
-let journal_append (line : string) : unit =
-  ensure_dir journal_dir;
-  let oc = open_out_gen [Open_append; Open_creat] 0o644 (journal_log_path ()) in
-  output_string oc (line ^ "\n");
-  close_out oc
-
-(* ---- Fenced-effect journal scanner (Q3 / LAW 31) ---- *)
-
-type fenced_entry = {
-  fe_key : string;
-  fe_epoch : string;
-  fe_kind : string;
-  fe_spec_hash : string;
-  fe_done_hash : string option;  (* Some result-hash if a done follows it *)
-}
-
-(* Parse one journal line.  We only care about fenced intents/dones; convergent
-   fs/proc entries are ignored for the purpose of unknown-status recovery. *)
-let parse_journal_line (line : string) : [`Intent of string * string * string * string | `Done of string | `Other] =
-  let line = String.trim line in
-  if line = "" then `Other
-  else
-    let parts = String.split_on_char ' ' line in
-    match parts with
-    | "intent" :: "fenced" :: key :: epoch :: kind :: spec_hash :: _ ->
-        `Intent (key, epoch, kind, spec_hash)
-    | "done" :: "fenced" :: key :: _ ->
-        `Done key
-    | _ -> `Other
-
-(* Scan the journal for fenced intents without a matching done.  Returns them
-   in journal order (oldest first).  Only the most recent unmatched intent for
-   a given key is meaningful, but the scanner returns all unmatched intents so
-   callers can decide; recovery should process them in order. *)
-let find_unknown_fenced () : fenced_entry list =
-  let path = journal_log_path () in
-  if not (Sys.file_exists path) then []
-  else begin
-    let ic = open_in path in
-    let pending : (string, string * string * string) Hashtbl.t = Hashtbl.create 16 in
-    let rec loop () =
-      match input_line ic with
-      | line ->
-          (match parse_journal_line line with
-           | `Intent (key, epoch, kind, spec_hash) ->
-               Hashtbl.replace pending key (epoch, kind, spec_hash)
-           | `Done key ->
-               Hashtbl.remove pending key
-           | `Other -> ());
-          loop ()
-      | exception End_of_file -> ()
-    in
-    loop ();
-    close_in ic;
-    Hashtbl.fold (fun key (epoch, kind, spec_hash) acc ->
-      { fe_key = key; fe_epoch = epoch; fe_kind = kind; fe_spec_hash = spec_hash; fe_done_hash = None } :: acc)
-      pending []
-  end
-
-(* Check whether a fenced key already has a done entry anywhere in the journal.
-   Used at action time to avoid re-executing an action that was already
-   completed in a prior pass. *)
-let fenced_is_done (key : string) : bool =
-  let path = journal_log_path () in
-  if not (Sys.file_exists path) then false
-  else begin
-    let ic = open_in path in
-    let pending = ref false in
-    let seen = ref false in
-    let rec loop () =
-      match input_line ic with
-      | line ->
-          (match parse_journal_line line with
-           | `Intent (k, _, _, _) when k = key -> pending := true; seen := true
-           | `Done k when k = key -> pending := false; seen := true
-           | _ -> ());
-          loop ()
-      | exception End_of_file -> ()
-    in
-    loop ();
-    close_in ic;
-    !seen && not !pending
-  end
+(* The intent/done audit log lives in journal.ml (typed entries, one
+   to_line/of_line pair). Fenced-spec persistence stays here: it is content-
+   addressed object storage, same as the rest of the store. *)
 
 (* Fenced specs are persisted by content hash so recovery can re-execute an
    unknown-status action with the same spec that produced the intent. *)

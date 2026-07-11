@@ -23,18 +23,10 @@ let cap_restrict cap scope =
 
 (* Path-component-aware scope check: [scope] grants [target] iff target
    equals scope or is inside the directory named by scope. "/tmp" grants
-   "/tmp" and "/tmp/x" but NOT "/tmpevil". Trailing slashes on either side
-   are ignored (except a bare "/"). *)
+   "/tmp" and "/tmp/x" but NOT "/tmpevil" (Paths.under — the one shared
+   containment predicate). *)
 let path_grants ~(scope : string) (target : string) : bool =
-  let strip s =
-    let n = String.length s in
-    if n > 1 && s.[n - 1] = '/' then String.sub s 0 (n - 1) else s
-  in
-  let scope = strip scope in
-  let target = strip target in
-  scope = target
-  || (let prefix = if scope = "/" then "/" else scope ^ "/" in
-      String.starts_with ~prefix target)
+  Paths.under ~root:scope target
 
 (* Check if a capability grants a specific permission *)
 let rec check_fs_read (cap : capability) (target_path : string) : bool =

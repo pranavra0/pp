@@ -157,8 +157,8 @@ let proc_observer : (string -> string option) ref = ref (fun _ -> None)
 let observe_proc (name : string) : string option =
   !proc_observer name
 
-let config_cell_id (key : string) : string = "config:" ^ key
-let handler_cell_id (name : string) : string = "handler:" ^ name
+let config_cell_id (key : string) : string = Cell.(to_string (Config key))
+let handler_cell_id (name : string) : string = Cell.(to_string (Handler name))
 
 (* Observed hash for a config key with no binding: absence is a real,
    re-observable observation (providing the key later must invalidate). *)
@@ -230,17 +230,11 @@ let normalize_path (p : string) : string =
   in
   "/" ^ String.concat "/" (go [] (String.split_on_char '/' p))
 
-let path_under ~(root : string) (path : string) : bool =
-  path = root
-  || (String.length path > String.length root
-      && String.sub path 0 (String.length root) = root
-      && (root = "/" || path.[String.length root] = '/'))
-
 let loader_authorized (path : string) : bool =
   let p = normalize_path path in
   let home = try Sys.getenv "HOME" with Not_found -> "/tmp" in
   let roots = Filename.concat home ".pp" :: !source_roots in
-  List.exists (fun r -> path_under ~root:(normalize_path r) p) roots
+  List.exists (fun r -> Paths.under ~root:(normalize_path r) p) roots
 
 let loader_read (path : string) : string =
   if not (loader_authorized path) then
@@ -250,7 +244,7 @@ let loader_read (path : string) : string =
   let ic = open_in path in
   let content = really_input_string ic (in_channel_length ic) in
   close_in ic;
-  record_read ("runtime:file:" ^ path) (hash_string content);
+  record_read (Cell.(to_string (RuntimeFile path))) (hash_string content);
   content
 
 (* Initial capabilities from --grant (set by main.ml before init) *)
@@ -272,5 +266,14 @@ let keep_thunks = ref false
    a time, journaling intent/done around each. *)
 let fenced_actions : (string * value) list ref = ref []
 
-(* Unknown-status policy set by --fenced-policy (retry | abort | ask). *)
-let fenced_policy = ref "abort"
+(* Unknown-status policy set by --fenced-policy: what to do with a journaled
+   fenced intent that has no matching done (a crash mid-action). Parsed once
+   in main.ml; everything downstream matches exhaustively. *)
+type fenced_policy = Retry | Abort | Ask
+
+let fenced_policy : fenced_policy ref = ref Abort
+
+let fenced_policy_name = function
+  | Retry -> "retry"
+  | Abort -> "abort"
+  | Ask -> "ask"

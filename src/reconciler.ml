@@ -37,16 +37,9 @@ let strip_suffix suffix s =
   else None
 
 (* Component-boundary "is [path] under [root]" — "/out" covers "/out/a" but
-   not "/output". *)
+   not "/output" (Paths.under, the one shared containment predicate). *)
 let under_root ~(root : string) (path : string) : bool =
-  let root =
-    let n = String.length root in
-    if n > 1 && root.[n - 1] = '/' then String.sub root 0 (n - 1) else root
-  in
-  path = root
-  || (String.length path > String.length root
-      && String.sub path 0 (String.length root) = root
-      && path.[String.length root] = '/')
+  Paths.under ~root path
 
 (* Relative output paths only, no traversal: the desired map cannot name
    anything outside its domain. *)
@@ -119,15 +112,8 @@ let reconcile ~(root : string) (desired_val : value) : unit =
              ("capability error: no write access for domain root " ^ root));
   (* Stratification (LAW 30): desired state may not read its own domain. *)
   List.iter (fun (cell, _) ->
-    let observed_path =
-      match strip_prefix "file:" cell with
-      | Some p -> Some p
-      | None -> (match strip_prefix "tree:" cell with
-                 | Some p -> Some p
-                 | None -> None)
-    in
-    match observed_path with
-    | Some p when under_root ~root p ->
+    match Cell.of_string cell with
+    | (Cell.File p | Cell.Tree p) when under_root ~root p ->
         failwith ("reconcile: stratification violation (LAW 30): the desired \
                    state observed its own domain: " ^ cell)
     | _ -> ())
@@ -202,10 +188,10 @@ let reconcile ~(root : string) (desired_val : value) : unit =
     List.filter (fun (rel, _) -> not (List.mem_assoc rel desired)) observed
   in
   (* Journal the intent, apply, mark done (Q4). *)
-  Store.journal_append
-    (Printf.sprintf "intent %s root=%s create=%d update=%d delete=%d"
-       desired_hash root (List.length creates) (List.length updates)
-       (List.length deletes));
+  Journal.append (Journal.FsIntent {
+    hash = desired_hash; root;
+    create = List.length creates; update = List.length updates;
+    delete = List.length deletes });
   List.iter (fun (rel, content) ->
     let path = Filename.concat root rel in
     write_atomic path (content_bytes rel content);
@@ -221,7 +207,7 @@ let reconcile ~(root : string) (desired_val : value) : unit =
     (try Sys.remove path with _ -> ());
     prune_empty_dirs ~root (Filename.dirname path))
     deletes;
-  Store.journal_append (Printf.sprintf "done %s" desired_hash);
+  Journal.append (Journal.FsDone { hash = desired_hash });
   Printf.eprintf "[reconcile] root=%s create=%d update=%d delete=%d unchanged=%d\n%!"
     root (List.length creates) (List.length updates) (List.length deletes)
     unchanged

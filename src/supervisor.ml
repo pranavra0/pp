@@ -49,7 +49,10 @@ let has_process_cap () =
 
 (* ---- Desired-spec parsing ---- *)
 
-let force = !Runtime.force_hook
+(* Deref at call time: the hook is installed by Evaluator.init/Vm.init AFTER
+   this module loads — a module-init-time deref would freeze the identity
+   default forever. *)
+let force v = !Runtime.force_hook v
 
 let rec force_deep v =
   match force v with
@@ -224,8 +227,7 @@ let start_service name spec : int =
     | Some p -> p
     | None -> failwith ("supervise: command not found for service " ^ name ^ ": " ^ spec.cmd)
   in
-  Store.journal_append
-    (Printf.sprintf "intent proc start %s %s" name (spec_hash spec));
+  Journal.append (Journal.ProcStartIntent { name; spec_hash = spec_hash spec });
   let argv = resolved :: spec.args in
   let env = env_array spec.env in
   let out_f = out_file name in
@@ -250,15 +252,14 @@ let start_service name spec : int =
     | pid -> pid
   in
   save_state { name; pid; spec_hash = spec_hash spec; start_time = Unix.gettimeofday () };
-  Store.journal_append
-    (Printf.sprintf "done proc start %s %s pid=%d" name (spec_hash spec) pid);
+  Journal.append (Journal.ProcStartDone { name; spec_hash = spec_hash spec; pid });
   pid
 
 let stop_service state =
-  Store.journal_append (Printf.sprintf "intent proc stop %s" state.name);
+  Journal.append (Journal.ProcStopIntent { name = state.name });
   stop_process state.pid;
   remove_state state.name;
-  Store.journal_append (Printf.sprintf "done proc stop %s" state.name)
+  Journal.append (Journal.ProcStopDone { name = state.name })
 
 (* ---- Cell observation hook ---- *)
 
@@ -294,9 +295,11 @@ let reconcile (desired_val : value) : unit =
   (* Stratification (LAW 30): desired process state may not read its own
      proc cells — otherwise reconcile loops forever. *)
   List.iter (fun (cell, _) ->
-    if String.starts_with ~prefix:"proc:" cell then
-      failwith ("supervise: stratification violation (LAW 30): the desired \
-                 process state observed its own domain: " ^ cell))
+    match Cell.of_string cell with
+    | Cell.Proc _ ->
+        failwith ("supervise: stratification violation (LAW 30): the desired \
+                   process state observed its own domain: " ^ cell)
+    | _ -> ())
     !Runtime.observed_all;
   let desired = parse_desired desired_val in
   let desired_names = List.map fst desired in

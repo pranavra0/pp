@@ -13,7 +13,7 @@ let main () =
   let graph_mode = ref false in
   let stabilize = ref false in
   let supervise = ref false in
-  let fenced_policy = ref "abort" in
+  let fenced_policy = ref Runtime.Abort in
 
   let rec parse = function
     | "--" :: rest ->
@@ -26,9 +26,12 @@ let main () =
     | "--reconcile" :: root :: rest -> reconcile_root := Some root; parse rest
     | "--supervise" :: rest -> supervise := true; parse rest
     | "--fenced-policy" :: policy :: rest ->
-        if policy <> "retry" && policy <> "abort" && policy <> "ask" then
-          failwith ("invalid --fenced-policy: " ^ policy);
-        fenced_policy := policy; parse rest
+        (match policy with
+         | "retry" -> fenced_policy := Runtime.Retry
+         | "abort" -> fenced_policy := Runtime.Abort
+         | "ask" -> fenced_policy := Runtime.Ask
+         | _ -> failwith ("invalid --fenced-policy: " ^ policy));
+        parse rest
     | "why" :: rest | "--why" :: rest -> Store.why_mode := true; parse rest
     | "--no-cache" :: rest -> Store.no_cache := true; parse rest
     | "--check" :: rest -> Store.check_mode := true; parse rest
@@ -136,7 +139,7 @@ let main () =
       (* Run fenced actions once per reconcile pass, after all convergent work
          (Q3 / LAW 31).  Recovery set the epoch if resuming a crashed pass. *)
       if reconcile_root <> None || supervise then
-        Fenced.drain ~policy:!Runtime.fenced_policy
+        Fenced.drain ()
     in
     let run_program () =
       (* Clear in-memory state for a fresh evaluation. The persistent store
@@ -271,7 +274,7 @@ let main () =
            | Some v -> Supervisor.reconcile v
            | None -> failwith "supervise: the program produced no value");
         if !reconcile_root <> None || !supervise then
-          Fenced.drain ~policy:!Runtime.fenced_policy
+          Fenced.drain ()
       end);
 
   (* --check verdict: any volatile node fails the audit (LAW 38). *)

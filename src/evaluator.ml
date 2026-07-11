@@ -62,39 +62,31 @@ let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
                 type_name (string_of_value v) loc_str)
 
 (* LAW 23b: whether the caller's current capabilities permit reading a trace
-   cell. Used to gate cache hits on the transitive read closure. Cells that
-   carry no user authority — config:, handler:, and runtime:file: (loader
-   reads run under interpreter authority, Q6/D8c) — pass unconditionally via
-   the final default. *)
+   cell. Used to gate cache hits on the transitive read closure. The match is
+   exhaustive over Cell.t so adding a cell kind forces an authority decision
+   here. *)
 let cell_authorized (cell_id : string) : bool =
-  let strip prefix =
-    let plen = String.length prefix in
-    if String.length cell_id >= plen && String.sub cell_id 0 plen = prefix then
-      Some (String.sub cell_id plen (String.length cell_id - plen))
-    else None
+  let has_fs_read path =
+    List.exists (fun cap -> Capabilities.check_fs_read cap path) !current_capabilities
   in
-  match strip "file:" with
-  | Some path ->
-      List.exists (fun cap -> Capabilities.check_fs_read cap path) !current_capabilities
-  | None ->
-  match strip "tree:" with
-  | Some root ->
-      (* A coarse tree observation (run effect, Q2) is covered by an fs-read
-         grant over the root. *)
-      List.exists (fun cap -> Capabilities.check_fs_read cap root) !current_capabilities
-  | None ->
-  match strip "tool:" with
-  | Some _ ->
-      (* A tool observation came from a `run`; serving a result that embeds
-         one requires process authority, not an fs grant over the binary. *)
+  match Cell.of_string cell_id with
+  | Cell.File path -> has_fs_read path
+  (* A coarse tree observation (run effect, Q2) is covered by an fs-read
+     grant over the root. *)
+  | Cell.Tree root -> has_fs_read root
+  (* A tool observation came from a `run`; serving a result that embeds
+     one requires process authority, not an fs grant over the binary. *)
+  | Cell.Tool _ ->
       List.exists (function CapProcess -> true | _ -> false) !current_capabilities
-  | None ->
-  match strip "stat:" with
-  | Some path ->
-      (* A file-predicate observation (file-exists?/dir?) discloses presence,
-         so serving it requires the same fs-read authority as recording it. *)
-      List.exists (fun cap -> Capabilities.check_fs_read cap path) !current_capabilities
-  | None -> true  (* config:/handler:/env:/argv: cells carry no authority *)
+  (* A file-predicate observation (file-exists?/dir?) discloses presence,
+     so serving it requires the same fs-read authority as recording it. *)
+  | Cell.Stat path -> has_fs_read path
+  (* No user authority attaches: config/handler are ambient (LAW 33/26),
+     runtime:file loader reads ran under interpreter authority (Q6/D8c),
+     env/argv/proc are program-level inputs. Unknown cells never verify, so
+     authorizing them is moot. *)
+  | Cell.RuntimeFile _ | Cell.Env _ | Cell.Argv
+  | Cell.Config _ | Cell.Handler _ | Cell.Proc _ | Cell.Unknown _ -> true
 
 (* Trace replay for an already-Evaluated persistent node: replay its stored
    trace reads into the active trace frames so the caller's trace transitively

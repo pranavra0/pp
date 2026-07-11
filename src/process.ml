@@ -47,7 +47,7 @@ let resolve_cmd (cmd : string) : string option =
 
 let record_tool_cell (resolved : string) : unit =
   match Store.hash_file_opt resolved with
-  | Some h -> Runtime.record_read ("tool:" ^ resolved) h
+  | Some h -> Runtime.record_read (Cell.(to_string (Tool resolved))) h
   | None -> ()
 
 (* The coarse-cell soundness floor (Q2): one whole-tree hash per fs-read
@@ -56,7 +56,7 @@ let record_tool_cell (resolved : string) : unit =
 let record_tree_cells () : unit =
   List.iter (function
     | CapFilesystem { path; mode = (Read | ReadWrite) } ->
-        Runtime.record_read ("tree:" ^ path) (Store.tree_hash path)
+        Runtime.record_read (Cell.(to_string (Tree path))) (Store.tree_hash path)
     | _ -> ())
     !Runtime.current_capabilities
 
@@ -78,7 +78,7 @@ let read_all (path : string) : string =
    journaled — "null rebuild executes zero external processes" is proved by
    the journal, not asserted (ROADMAP Phase-1 exit criterion 1). *)
 let exec (argv : string list) : int * string * string =
-  (try Store.journal_append ("exec " ^ String.concat " " argv) with _ -> ());
+  (try Journal.append (Journal.Exec argv) with _ -> ());
   let out_f = Filename.temp_file "pp-run" ".out" in
   let err_f = Filename.temp_file "pp-run" ".err" in
   let cleanup () =
@@ -177,7 +177,7 @@ let record_depfile_cells (deps : string list) : unit =
       then ignore (Store.read_file_cell dep)
       else
         match Store.hash_file_opt dep with
-        | Some h -> Runtime.record_read ("tool:" ^ dep) h
+        | Some h -> Runtime.record_read (Cell.(to_string (Tool dep))) h
         | None -> ()
     end)
     deps

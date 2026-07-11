@@ -111,20 +111,22 @@ forced before its body runs. Tail calls run in constant stack in both back ends
   `cap-restrict`/`cap-compose` to narrow or union. Filesystem reads/writes and
   `slurp` are checked at perform time with full-path, component-aware scope.
 
-## The VM path (`compiler.ml` + `vm.ml` + `bytecode.ml`)
+## The VM path (`compiler.ml` + `vm.ml`)
 
-`compiler.ml` lowers the `expr` AST to a flat array of **31 opcodes** operating
+`compiler.ml` lowers the `expr` AST to a flat array of **29 opcodes** operating
 on a stack machine with `LOAD_LOCAL (depth, slot)` / `STORE_LOCAL slot` against
 mutable **frames**. Locals get O(1) indexed access instead of name lookup. The
 compiler tracks a compile-time environment (`cenv`) to resolve names to
 `(depth, slot)`; a subtlety here — reusing a slot across binding lifetimes while
 a captured frame is still live — was the D21 bug (fixed, pinned by `tests/008`).
 `vm.ml` executes the opcodes, creating thunks (`MAKE_THUNK`) and closures
-(`MAKE_CLOSURE`) that capture live frames. `bytecode.ml` can serialize bytecode
-to `.ppc` — complete but currently **dead code**; the persistent value/trace
-store supersedes it. The VM compiles `ENode` to a dedicated `MAKE_NODE` opcode
+(`MAKE_CLOSURE`) that capture live frames; effect dispatch, capability
+extraction, type checks, and node forcing delegate to `evaluator.ml`, so the
+semantics exist once. The VM compiles `ENode` to a dedicated `MAKE_NODE` opcode
 (carrying the body AST + free-var descriptors) and forces it through the same
-persistent store as the tree-walker (D7 closed; see below).
+persistent store as the tree-walker (D7 closed; see below). A `.ppc`
+bytecode-serialization module existed through Phase 2 but was dead code —
+deleted; the persistent value/trace store supersedes it.
 
 ## Shared state (`runtime.ml`)
 
@@ -179,16 +181,18 @@ no inline-nested cutoff.
 |---|---|
 | `src/types.ml` | All core types (`expr`/`value`/`thunk`/`env`/`closure`/`capability`/`frame`/opcodes) **and** content-addressed hashing. The foundation. |
 | `src/hasher.ml` | Thin re-export of the hashing functions from `types.ml`. |
+| `src/paths.ml` | The one component-boundary path-containment predicate (`Paths.under`) behind capability scopes, loader authority, and reconciler domain bounds. |
+| `src/cell.ml` | The typed cell taxonomy: `Cell.t` variant + `of_string`/`to_string` (on-disk strings frozen). Naming only; observation and authority live in `store.ml`/`evaluator.ml`. |
 | `src/reader.ml` | Lexer + parser: source text → `expr` AST. Also desugars `and`/`or`, quasiquote. |
 | `src/runtime.ml` | Shared mutable runtime state used by both back ends. |
-| `src/evaluator.ml` | The tree-walking evaluator — the oracle. `force`, `eval`, effects, the `thunk_store`. |
+| `src/journal.ml` | The append-only intent/done audit log: typed `entry` variant, `to_line`/`of_line`, fenced-effect scanners (Q4/LAW 31). |
+| `src/evaluator.ml` | The tree-walking evaluator — the oracle. `force`, `eval`, effects, the `thunk_store`, and the shared node rebuilder (`force_node`/`run_node_body`) both back ends use. |
 | `src/compiler.ml` | `expr` AST → bytecode; compile-time environment / slot allocation. |
-| `src/vm.ml` | The bytecode stack machine. |
-| `src/bytecode.ml` | `.ppc` serialization + disassembly (currently dead). |
+| `src/vm.ml` | The bytecode stack machine. Effect dispatch, type checks, and node forcing delegate to `evaluator.ml` — one implementation, two back ends. |
 | `src/capabilities.ml` | Capability scope checks (path-component-aware). |
 | `src/primitives.ml` | Built-in functions and the initial environment. |
 | `src/island.ml` | Island URI → pin → local path resolution (stub). |
-| `src/store.ml` | Persistent content-addressed store + verifying traces; wired into the tree-walker's `force` for `(node e)`. |
+| `src/store.ml` | Persistent content-addressed store + verifying traces; wired into `force` for `(node e)` in both back ends. |
 | `src/reconciler.ml` | Filesystem-domain reconciler v1 (Q4/LAW 30); applies convergent fs state, then `main.ml` drains fenced actions. |
 | `src/supervisor.ml` | Process-domain reconciler (Phase 2): desired process map → start/stop/restart on spec-hash change, zombie reaping, intent/done journal; convergent proc work, then `main.ml` drains fenced actions. |
 | `src/fenced.ml` | Fenced-effect executor (Q3/LAW 31): registers scripting-tier actions, journals intent/done, resolves unknown-status entries by policy. |

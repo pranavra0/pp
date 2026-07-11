@@ -1,6 +1,7 @@
 (executable
  (name main)
- (modules types hasher runtime store reader capabilities process reconciler
-   supervisor fenced island primitives evaluator compiler stabilize vm repl main)
+ (modules types hasher paths cell runtime store journal reader capabilities process
+   reconciler supervisor fenced island primitives evaluator compiler stabilize vm
+   repl main)
  (libraries cryptokit)
  (flags -no-strict-sequence))

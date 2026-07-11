@@ -126,73 +126,70 @@ let execute_current ~(kind : string) ~(spec : value) : unit =
   ensure_epoch ();
   let spec_hash = hash_spec spec in
   let key = action_key ~epoch:!current_epoch ~kind ~spec_hash in
-  if Store.fenced_is_done key then ()
+  if Journal.fenced_is_done key then ()
   else begin
     Store.store_fenced_spec ~hash:spec_hash spec;
-    Store.journal_append
-      (Printf.sprintf "intent fenced %s %s %s %s" key !current_epoch kind spec_hash);
+    Journal.append (Journal.FencedIntent {
+      key; epoch = !current_epoch; kind; spec_hash });
     let result = run_command spec in
-    Store.journal_append
-      (Printf.sprintf "done fenced %s %s" key (result_hash result))
+    Journal.append (Journal.FencedDone { key; result_hash = result_hash result })
   end
 
 (* Execute a single unknown-status fenced action during recovery.  Uses the
    key/epoch/kind/spec-hash stored in the journal; loads the persisted spec by
    hash so the action runs with the same inputs. *)
-let execute_recovery ~(policy : string) ~(entry : Store.fenced_entry) : unit =
+let execute_recovery ~(policy : Runtime.fenced_policy) ~(entry : Journal.fenced_entry) : unit =
   let spec =
-    match Store.load_fenced_spec entry.Store.fe_spec_hash with
+    match Store.load_fenced_spec entry.Journal.fe_spec_hash with
     | Some v -> v
     | None ->
         (* Spec missing: we cannot safely retry.  Abort regardless of policy. *)
-        VMap [(VString "kind", VString entry.Store.fe_kind);
-              (VString "spec-hash", VString entry.Store.fe_spec_hash);
+        VMap [(VString "kind", VString entry.Journal.fe_kind);
+              (VString "spec-hash", VString entry.Journal.fe_spec_hash);
               (VString "error", VString "spec missing from store")]
   in
   let result =
-    if policy = "retry" then
-      run_command spec
-    else if policy = "abort" then
-      VMap [(VString "aborted", VBool true);
-            (VString "policy", VString "abort");
-            (VString "kind", VString entry.Store.fe_kind);
-            (VString "spec-hash", VString entry.Store.fe_spec_hash)]
-    else if policy = "ask" then begin
-      if not (Unix.isatty Unix.stdin) then
-        failwith ("fenced: unknown-status policy is 'ask' but stdin is not a tty; " ^
-                  "use --fenced-policy retry|abort for non-interactive use");
-      Printf.printf "Fenced action %s (kind=%s) has unknown status.  Retry? [y/N]: %!"
-        entry.Store.fe_key entry.Store.fe_kind;
-      let line = try input_line stdin with End_of_file -> "n" in
-      if String.lowercase_ascii line = "y" then run_command spec
-      else VMap [(VString "aborted", VBool true);
-                 (VString "policy", VString "ask");
-                 (VString "kind", VString entry.Store.fe_kind)]
-    end else
-      failwith ("fenced: unknown --fenced-policy: " ^ policy)
+    match policy with
+    | Runtime.Retry -> run_command spec
+    | Runtime.Abort ->
+        VMap [(VString "aborted", VBool true);
+              (VString "policy", VString "abort");
+              (VString "kind", VString entry.Journal.fe_kind);
+              (VString "spec-hash", VString entry.Journal.fe_spec_hash)]
+    | Runtime.Ask ->
+        if not (Unix.isatty Unix.stdin) then
+          failwith ("fenced: unknown-status policy is 'ask' but stdin is not a tty; " ^
+                    "use --fenced-policy retry|abort for non-interactive use");
+        Printf.printf "Fenced action %s (kind=%s) has unknown status.  Retry? [y/N]: %!"
+          entry.Journal.fe_key entry.Journal.fe_kind;
+        let line = try input_line stdin with End_of_file -> "n" in
+        if String.lowercase_ascii line = "y" then run_command spec
+        else VMap [(VString "aborted", VBool true);
+                   (VString "policy", VString "ask");
+                   (VString "kind", VString entry.Journal.fe_kind)]
   in
-  Store.journal_append
-    (Printf.sprintf "done fenced %s %s" entry.Store.fe_key (result_hash result))
+  Journal.append (Journal.FencedDone {
+    key = entry.Journal.fe_key; result_hash = result_hash result })
 
 (* Resolve any unknown-status fenced actions from the journal before normal
    reconciliation proceeds.  The recovered epoch becomes the epoch for the
    current pass, so a subsequently registered action with the same kind/spec
    deduplicates against the recovered intent. *)
-let recover_unknown ~(policy : string) : unit =
-  let unknowns = Store.find_unknown_fenced () in
+let recover_unknown ~(policy : Runtime.fenced_policy) : unit =
+  let unknowns = Journal.find_unknown_fenced () in
   if unknowns <> [] then
     Printf.eprintf "[fenced] %d unknown-status action(s) in journal; applying policy=%s\n%!"
-      (List.length unknowns) policy;
+      (List.length unknowns) (Runtime.fenced_policy_name policy);
   List.iter (fun entry ->
     execute_recovery ~policy ~entry;
-    current_epoch := entry.Store.fe_epoch) unknowns
+    current_epoch := entry.Journal.fe_epoch) unknowns
 
 (* Drain all fenced actions registered during this evaluation.  Called once
    per reconcile pass, after all convergent fs/proc work.  Uses an existing
    epoch when resuming a crashed pass (set by recover_unknown); otherwise
    generates a fresh epoch.  The epoch is cleared at the end so the next pass
    starts fresh. *)
-let drain ~(policy : string) : unit =
+let drain () : unit =
   ensure_epoch ();
   let actions = List.rev !Runtime.fenced_actions in
   Runtime.fenced_actions := [];
