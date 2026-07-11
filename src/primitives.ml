@@ -22,7 +22,6 @@ let vm_run_thunk_ref : (Types.bytecode -> int -> Types.frame list -> Types.value
 (* Force helpers for builtins *)
 let force_val (v : value) : value = !force_ref v
 let force_args (args : value list) : value list = List.map force_val args
-let force_one (v : value) : value = force_val v
 
 (* Deep force: recursively force all thunks in a data structure *)
 let rec force_deep (v : value) : value =
@@ -199,7 +198,7 @@ let () =
   register "car" (fun args ->
     match args with
     | [arg] ->
-        (match force_one arg with
+        (match force_val arg with
          | VPair (a, _) -> a  (* return car as-is, may be thunk *)
          | VNil -> VNil
          | _ -> failwith "car expects a pair")
@@ -208,7 +207,7 @@ let () =
   register "cdr" (fun args ->
     match args with
     | [arg] ->
-        (match force_one arg with
+        (match force_val arg with
          | VPair (_, d) -> d  (* return cdr as-is *)
          | VNil -> VNil
          | _ -> failwith "cdr expects a pair")
@@ -219,7 +218,7 @@ let () =
 
   register "nil?" (fun args ->
     match args with
-    | [arg] -> VBool (match force_one arg with VNil -> true | _ -> false)
+    | [arg] -> VBool (match force_val arg with VNil -> true | _ -> false)
     | _ -> failwith "nil? expects one argument");
 
   (* Vector operations — lazy *)
@@ -238,7 +237,7 @@ let () =
   register "hash-map" (fun args ->
     let rec make_pairs = function
       | [] -> []
-      | k :: v :: rest -> (force_one k, v) :: make_pairs rest
+      | k :: v :: rest -> (force_val k, v) :: make_pairs rest
       | _ -> failwith "hash-map expects even number of arguments"
     in
     VMap (make_pairs args));  (* keys forced, values lazy *)
@@ -247,7 +246,7 @@ let () =
     let args = force_args args in
     match args with
     | [VMap kvs; key] ->
-        (match List.find_opt (fun (k, _) -> force_one k = key) kvs with
+        (match List.find_opt (fun (k, _) -> force_val k = key) kvs with
          | Some (_, v) -> v
          | None -> VNil)
     | _ -> failwith "hash-map-get expects a map and a key");
@@ -258,27 +257,27 @@ let () =
 
   (* Type predicates — force to check *)
   register "int?" (fun args ->
-    match args with [arg] -> VBool (match force_one arg with VInt _ -> true | _ -> false) | _ -> failwith "int? expects one arg");
+    match args with [arg] -> VBool (match force_val arg with VInt _ -> true | _ -> false) | _ -> failwith "int? expects one arg");
   register "float?" (fun args ->
-    match args with [arg] -> VBool (match force_one arg with VFloat _ -> true | _ -> false) | _ -> failwith "float? expects one arg");
+    match args with [arg] -> VBool (match force_val arg with VFloat _ -> true | _ -> false) | _ -> failwith "float? expects one arg");
   register "string?" (fun args ->
-    match args with [arg] -> VBool (match force_one arg with VString _ -> true | _ -> false) | _ -> failwith "string? expects one arg");
+    match args with [arg] -> VBool (match force_val arg with VString _ -> true | _ -> false) | _ -> failwith "string? expects one arg");
   register "bool?" (fun args ->
-    match args with [arg] -> VBool (match force_one arg with VBool _ -> true | _ -> false) | _ -> failwith "bool? expects one arg");
+    match args with [arg] -> VBool (match force_val arg with VBool _ -> true | _ -> false) | _ -> failwith "bool? expects one arg");
   register "keyword?" (fun args ->
-    match args with [arg] -> VBool (match force_one arg with VKeyword _ -> true | _ -> false) | _ -> failwith "keyword? expects one arg");
+    match args with [arg] -> VBool (match force_val arg with VKeyword _ -> true | _ -> false) | _ -> failwith "keyword? expects one arg");
   register "symbol?" (fun args ->
-    match args with [arg] -> VBool (match force_one arg with VSymbol _ -> true | _ -> false) | _ -> failwith "symbol? expects one arg");
+    match args with [arg] -> VBool (match force_val arg with VSymbol _ -> true | _ -> false) | _ -> failwith "symbol? expects one arg");
   register "pair?" (fun args ->
-    match args with [arg] -> (match force_one arg with VPair _ -> VBool true | VNil -> VBool true | _ -> VBool false) | _ -> failwith "pair? expects one arg");
+    match args with [arg] -> (match force_val arg with VPair _ -> VBool true | VNil -> VBool true | _ -> VBool false) | _ -> failwith "pair? expects one arg");
   register "vector?" (fun args ->
-    match args with [arg] -> VBool (match force_one arg with VVector _ -> true | _ -> false) | _ -> failwith "vector? expects one arg");
+    match args with [arg] -> VBool (match force_val arg with VVector _ -> true | _ -> false) | _ -> failwith "vector? expects one arg");
   register "map?" (fun args ->
-    match args with [arg] -> VBool (match force_one arg with VMap _ -> true | _ -> false) | _ -> failwith "map? expects one arg");
+    match args with [arg] -> VBool (match force_val arg with VMap _ -> true | _ -> false) | _ -> failwith "map? expects one arg");
   register "set?" (fun args ->
-    match args with [arg] -> VBool (match force_one arg with VSet _ -> true | _ -> false) | _ -> failwith "set? expects one arg");
+    match args with [arg] -> VBool (match force_val arg with VSet _ -> true | _ -> false) | _ -> failwith "set? expects one arg");
   register "fn?" (fun args ->
-    match args with [arg] -> VBool (match force_one arg with VClosure _ | VBuiltin _ -> true | _ -> false) | _ -> failwith "fn? expects one arg");
+    match args with [arg] -> VBool (match force_val arg with VClosure _ | VBuiltin _ -> true | _ -> false) | _ -> failwith "fn? expects one arg");
   register "thunk?" (fun args ->
     match args with [arg] -> VBool (match arg with VThunk _ -> true | _ -> false) | _ -> failwith "thunk? expects one arg");
 
@@ -303,7 +302,7 @@ let () =
 
   register "not" (fun args ->
     match args with
-    | [arg] -> VBool (match force_one arg with VBool b -> not b | VNil -> true | _ -> false)
+    | [arg] -> VBool (match force_val arg with VBool b -> not b | VNil -> true | _ -> false)
     | _ -> failwith "not expects one argument");
 
   register "error" (fun args ->
@@ -314,7 +313,7 @@ let () =
 
 
   register "cap-compose" (fun args ->
-    let caps = List.map (fun v -> match force_one v with VCapability c -> c | _ -> failwith "cap-compose expects capabilities") args in
+    let caps = List.map (fun v -> match force_val v with VCapability c -> c | _ -> failwith "cap-compose expects capabilities") args in
     VCapability (CapCompose caps));
 
   register "cap-restrict" (fun args ->
@@ -327,7 +326,7 @@ let () =
     match args with [] -> VCapability CapNone | _ -> failwith "cap-none takes no arguments");
 
   register "capability?" (fun args ->
-    match args with [arg] -> VBool (match force_one arg with VCapability _ -> true | _ -> false) | _ -> failwith "capability? expects one arg");
+    match args with [arg] -> VBool (match force_val arg with VCapability _ -> true | _ -> false) | _ -> failwith "capability? expects one arg");
 
   (* ---- eval-pp and apply-pp ---- *)
 
@@ -359,7 +358,7 @@ let () =
               VEnvMap (List.rev !new_defs)
           | [last] ->
               (* Pure expression: evaluate and force *)
-              force_one (!eval_ref last !local_env)
+              force_val (!eval_ref last !local_env)
           | (ELocated (_, inner)) :: rest -> go (inner :: rest)
           | (EDef (name, params, body)) :: rest ->
               let closure = Types.make_closure ~name:(Some name) params body local_env in
@@ -374,7 +373,7 @@ let () =
               new_defs := (name, v) :: !new_defs;
               go rest
           | e :: rest ->
-              ignore (force_one (!eval_ref e !local_env));
+              ignore (force_val (!eval_ref e !local_env));
               go rest
         in go exprs
     | _ -> failwith "eval-pp expects a string"
@@ -518,9 +517,9 @@ let () =
   register "map-remove" (fun args ->
     match args with
     | [m; k] ->
-        (match force_one m with
+        (match force_val m with
          | VMap kvs ->
-             let key = force_one k in
+             let key = force_val k in
              VMap (List.filter (fun (k', _) -> k' <> key) kvs)
          | _ -> failwith "map-remove expects a map and a key")
     | _ -> failwith "map-remove expects a map and a key");
@@ -588,9 +587,9 @@ let () =
   register "map-insert" (fun args ->
     match args with
     | [m; k; v] ->
-        (match force_one m with
+        (match force_val m with
          | VMap kvs ->
-             let key = force_one k in
+             let key = force_val k in
              VMap ((key, v) :: List.filter (fun (k', _) -> k' <> key) kvs)
          | _ -> failwith "map-insert expects a map, a key, and a value")
     | _ -> failwith "map-insert expects a map, a key, and a value");

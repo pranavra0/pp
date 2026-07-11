@@ -1,5 +1,5 @@
-(* pp hasher — thin re-export; all hashing logic lives in Types.ml
-   v2 should upgrade to SHA-256. *)
+(* pp hasher — thin re-export; all hashing logic (SHA-256 via Cryptokit)
+   lives in Types.ml. *)
 
 open Types
 

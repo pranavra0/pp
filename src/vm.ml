@@ -428,25 +428,6 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
     | HALT ->
         result := (if !sp > 0 then pop () else VNil)
 
-    | BUILTIN i ->
-        let name =
-          match (!bc_ref).consts.(i) with
-          | VString s -> s
-          | _ -> failwith "VM: BUILTIN constant is not a string"
-        in
-        (match Primitives.lookup name with
-         | Some v -> push v
-         | None -> failwith ("VM: unknown builtin: " ^ name));
-        incr pc;
-        loop ()
-
-    | CONS ->
-        let b = pop () in
-        let a = pop () in
-        push (VPair (a, b));
-        incr pc;
-        loop ()
-
     | ENTER_EFFECT ->
         let caps_val = pop () in
         let caps =
@@ -644,10 +625,6 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
            ELoadModule only returns the module value. Statement-position
            merging is done by an explicit IMPORT emitted by the compiler. *)
         push (VEnvMap (List.rev !new_bindings));
-        incr pc;
-        loop ()
-
-    | NOP ->
         incr pc;
         loop ()
 

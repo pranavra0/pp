@@ -1,4 +1,4 @@
-(* pp persistent store — ~/.pp/store/ with BLAKE2B objects + trace sets
+(* pp persistent store — ~/.pp/store/ with SHA-256-addressed objects + trace sets
 
    Layout:
      ~/.pp/store/

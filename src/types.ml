@@ -146,8 +146,6 @@ and opcode =
                                   Global = -1,-1), type annotation, source location *)
   | MAKE_CLOSURE of int * int(* code offset, nparams *)
   | CALL of int | TAIL_CALL of int | RETURN | HALT
-  | BUILTIN of int           (* cp idx of name; pushes the VBuiltin value *)
-  | CONS                     (* pop b, pop a, push VPair(a,b) *)
   | ENTER_EFFECT | EXIT_EFFECT
   | PERFORM of int * int     (* cp idx of effect name, nargs *)
   | PUSH_HANDLER of int      (* n (name,closure) pairs already on stack *)
@@ -155,7 +153,6 @@ and opcode =
   | MAKE_MODULE of int       (* nexports; pops name+thunk pairs, pushes VEnvMap *)
   | IMPORT                   (* pop VEnvMap, merge bindings into current frame *)
   | LOAD_FILE of int | LOAD_MODULE_FILE of int  (* cp idx of path *)
-  | NOP
   | PUSH_CONFIG              (* pop config-map, push onto config stack *)
   | POP_CONFIG               (* pop config stack *)
   | READ_CONFIG              (* pop key from stack; push config value or VNil *)
@@ -576,7 +573,7 @@ let rec quote_to_value (e : expr) : value =
         VPair (VPair (VSymbol n, VPair (quote_to_value e, VNil)), acc)
       ) bindings VNil in
       VPair (VSymbol "let",
-        VPair (list_to_list_v qbindings,
+        VPair (qbindings,
           VPair (quote_to_value body, VNil)))
   | EFn (params, body) ->
       VPair (VSymbol "fn",
@@ -594,7 +591,7 @@ let rec quote_to_value (e : expr) : value =
   | EDefNode (name, params, body) ->
       VPair (VSymbol "defnode",
         VPair (VSymbol name,
-          VPair (list_to_list_v (List.fold_right (fun p acc -> VPair (VSymbol p, acc)) params VNil),
+          VPair (List.fold_right (fun p acc -> VPair (VSymbol p, acc)) params VNil,
             VPair (quote_to_value body, VNil))))
   | EDo exprs ->
       let qexprs = List.map quote_to_value exprs in
@@ -602,26 +599,26 @@ let rec quote_to_value (e : expr) : value =
   | EDef (name, params, body) ->
       VPair (VSymbol "def",
         VPair (VSymbol name,
-          VPair (list_to_list_v (List.fold_right (fun p acc -> VPair (VSymbol p, acc)) params VNil),
+          VPair (List.fold_right (fun p acc -> VPair (VSymbol p, acc)) params VNil,
             VPair (quote_to_value body, VNil))))
   | EDefValue (name, e) ->
       VPair (VSymbol "def",
         VPair (VSymbol name, VPair (quote_to_value e, VNil)))
   | ELetStar (bindings, body) ->
       VPair (VSymbol "let*",
-        VPair (list_to_list_v (List.fold_right (fun (n, e) acc ->
-          VPair (VPair (VSymbol n, VPair (quote_to_value e, VNil)), acc)) bindings VNil),
+        VPair (List.fold_right (fun (n, e) acc ->
+          VPair (VPair (VSymbol n, VPair (quote_to_value e, VNil)), acc)) bindings VNil,
           VPair (quote_to_value body, VNil)))
   | EEffect (caps, body) ->
       VPair (VSymbol "effect", VPair (quote_to_value caps, VPair (quote_to_value body, VNil)))
   | EPerform (name, args) ->
       let qargs = List.map quote_to_value args in
       VPair (VSymbol "perform",
-        VPair (VSymbol name, list_to_list_v (List.fold_right (fun a acc -> VPair (a, acc)) qargs VNil)))
+        VPair (VSymbol name, List.fold_right (fun a acc -> VPair (a, acc)) qargs VNil))
   | EWithHandler (handlers, body) ->
       VPair (VSymbol "with-handler",
-        VPair (list_to_list_v (List.fold_right (fun (n, h) acc ->
-          VPair (VPair (VSymbol n, VPair (quote_to_value h, VNil)), acc)) handlers VNil),
+        VPair (List.fold_right (fun (n, h) acc ->
+          VPair (VPair (VSymbol n, VPair (quote_to_value h, VNil)), acc)) handlers VNil,
           VPair (quote_to_value body, VNil)))
   | EModule exprs ->
       let qexprs = List.map quote_to_value exprs in
@@ -647,11 +644,8 @@ let rec quote_to_value (e : expr) : value =
   | ETyped (e, ty) ->
       VPair (VSymbol ":",
         VPair (quote_to_value e, VPair (quote_to_value ty, VNil)))
-  | ELocated ((file, line), e) ->
+  | ELocated (_, e) ->
       quote_to_value e
-
-and list_to_list_v (v : value) : value = v  (* identity *)
-
 
 (* =================================================================== *)
 (*  Pretty-print a value for the REPL                                   *)
