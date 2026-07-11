@@ -171,4 +171,11 @@ else
   fail=1
 fi
 
+echo "--- Phase 2 watch/once suite ---"
+if PP="$PP" bash tests/031-watch-once.sh; then
+  :
+else
+  fail=1
+fi
+
 exit $fail

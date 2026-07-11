@@ -867,17 +867,13 @@ plan/apply — done with a language that makes `desired` cheap to recompute
 **Status: partial** — the filesystem domain has a v1 reconciler in both
 backends: `pp --reconcile ROOT prog.pp` takes the program's final value —
 `{relative-path → content}` — as the domain's desired state, diffs it against
-observed reality (content hashes, re-derived from the tree, never a trusted
-state file), applies atomically (temp + `rename(2)`, parents created,
-verify-after-write), deletes unmanaged files (single writer), journals
-`intent`/`done` to `~/.pp/store/journal`, requires an fs write grant over the
-root, and refuses a program whose evaluation observed any `file:`/`tree:`
-cell under its own root (stratification) — `tests/018`. Desired contents may
-be inline strings or `blob:<sha256>` CAS references (optionally `:x` for the
-executable bit), diffed by hash and materialized from the store
-(`tests/023`) — which is what makes `rm -rf build/` a zero-recompile restore
-(`tests/024`). Not yet: the process domain, `stabilize`/watch mode (Phase 2),
-and fenced effects (LAW 31).
+observed reality, applies atomically, deletes unmanaged files, journals,
+requires an fs write grant, and refuses stratification (`tests/018`). Desired
+contents may be inline strings or `blob:<sha256>` CAS references (`tests/023`).
+**Watch mode is now live:** `pp --watch --reconcile ROOT prog.pp` runs the
+program, reconciles, polls cells for changes, and re-runs on change
+(`tests/031`). Not yet: the process domain, true push `stabilize`, and fenced
+effects (LAW 31).
 
 **Test:** first reconcile creates the tree; a null reconcile writes nothing;
 manual drift and foreign files converge away; a shrunk desired map deletes

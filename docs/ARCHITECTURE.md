@@ -196,6 +196,10 @@ pp --bytecode <file>     run via the bytecode VM
 pp --diff <file>         run both back ends, exit 1 if returned values differ
 pp -e '<expr>'           evaluate one expression
 pp --grant <spec>        grant a capability (fs:/path:ro|rw|wo, net:<proto>, process)
+pp --once <file.pp>      run once and exit (explicit; default behavior)
+pp --watch <file.pp>     run, then watch cell changes and re-evaluate (polling)
+pp --watch-interval <s>  poll interval for --watch (default 1.0)
+pp graph <file.pp>       print the cell→node dependency graph from traces
 pp --update              enable island pin-update mode (stub)
 pp --version | --help
 ```

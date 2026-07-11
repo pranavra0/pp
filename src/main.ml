@@ -8,6 +8,9 @@ let main () =
   let files = ref [] in
   let grants = ref [] in
   let reconcile_root = ref None in
+  let watch = ref false in
+  let watch_interval = ref 1.0 in
+  let graph_mode = ref false in
 
   let rec parse = function
     | "--" :: rest ->
@@ -37,10 +40,18 @@ let main () =
         Printf.printf "  pp why <file.pp>         Explain node cache hits/misses (capability-filtered)\n";
         Printf.printf "  pp --no-cache <file.pp>  Skip cache reads (recompute); results still stored\n";
         Printf.printf "  pp --check <file.pp>     Determinism audit: run each node twice, flag volatile\n";
+        Printf.printf "  pp --once <file.pp>        Run once and exit (explicit; default behavior)\n";
+        Printf.printf "  pp --watch <file.pp>       Run, then watch cell changes and re-evaluate\n";
+        Printf.printf "  pp graph                  Print the cell->node dependency graph from traces\n";
         Printf.printf "  pp run <file>            Run a pp source file\n";
         Printf.printf "  pp --version             Print version\n";
         Printf.printf "  pp --help                Print this help\n";
         exit 0
+    | "--once" :: rest -> parse rest  (* no-op: explicit one-shot *)
+    | "--watch" :: rest -> watch := true; parse rest
+    | "--watch-interval" :: secs :: rest ->
+        watch_interval := float_of_string secs; parse rest
+    | "graph" :: rest -> graph_mode := true; parse rest
     | "run" :: f :: rest -> files := f :: !files; parse rest
     | f :: rest -> files := f :: !files; parse rest
     | [] -> ()
@@ -73,10 +84,71 @@ let main () =
             else f))
          !files;
   Store.init ();
-  (* --reconcile: collect every cell observation the program makes so the
-     reconciler can enforce stratification (LAW 30). *)
-  if !reconcile_root <> None then Runtime.observe_all := true;
+  (* Collect every cell observation made by the program: needed for
+     --reconcile stratification (LAW 30) and for --watch polling. *)
+  if !reconcile_root <> None || !watch then Runtime.observe_all := true;
 
+
+  (* ---- Phase 2: pp graph — delegates to Store.print_graph ---- *)
+  let print_graph ?(verbose = false) () = Store.print_graph ~verbose () in
+
+  (* ---- Phase 2: --watch polling loop ----
+     Run the program, snapshot observed cell hashes, poll for changes,
+     re-run on change. Uses the pull scheduler in a loop — the persistent
+     store's trace verification naturally skips unchanged nodes (hits)
+     and recomputes changed ones (misses), proving the store-level collapse
+     between --watch and --once modes. *)
+  let snapshot_cell_hashes (cell_ids : string list) : (string * string) list =
+    List.filter_map (fun id ->
+      match Store.observe_cell id with
+      | Some h -> Some (id, h) | None -> None) cell_ids
+  in
+  let watch_loop ~bytecode ~reconcile_root ~files ~interval =
+    Runtime.observe_all := true;
+    let run_once () =
+      (* Clear in-memory state for a fresh evaluation. The persistent store
+         survives — this is the store-level collapse. *)
+      if bytecode then Vm.init ()  (* clears thunk_store, globals, etc. *)
+      else Repl.init ();            (* clears thunk_store, resets global_env *)
+      Hashtbl.clear Store.run_pins;  (* clear pinned cell observations *)
+      Runtime.observed_all := [];     (* clear collected observations *)
+      Runtime.current_capabilities := !Runtime.initial_capabilities;
+      (* Re-read and execute the program. *)
+      let last = List.fold_left (fun _ f ->
+        match List.rev (Repl.execute_file_bytecode bytecode f) with
+        | v :: _ -> Some v | [] -> None) None files in
+      (match reconcile_root, last with
+       | Some root, Some v -> Reconciler.reconcile ~root v
+       | None, _ -> ()
+       | Some _, None -> failwith "reconcile: the program produced no value");
+      (* Collect the cells we need to poll and snapshot their current hashes. *)
+      let cell_ids = List.map fst !(Runtime.observed_all) in
+      snapshot_cell_hashes cell_ids
+    in
+    let snapshot = run_once () in
+    let rec loop snapshot =
+      begin try Unix.sleepf interval
+        with _ -> Unix.sleep 1 end;
+      (* Clear run pins so observe_cell reads the current world, not the
+         snapshot from the last run (Q11 CAS-ingest pins the first read). *)
+      Hashtbl.clear Store.run_pins;
+      let changed =
+        List.exists (fun (cell_id, recorded_hash) ->
+          match Store.observe_cell cell_id with
+          | Some h -> h <> recorded_hash
+          | None -> false) snapshot
+      in
+      if changed then begin
+        Printf.eprintf "[watch] cell(s) changed — re-evaluating\n%!";
+        let new_snapshot = run_once () in
+        loop new_snapshot
+      end else
+        loop snapshot
+    in
+    loop snapshot
+  in
+  (* pp graph: just scan and print, no file needed. *)
+  if !graph_mode then (print_graph (); exit 0);
   (match !eval_str, !files with
   | Some e, [] ->
       if !diff then begin
@@ -91,7 +163,10 @@ let main () =
       else Repl.repl ()
   | _, files ->
       let files = List.rev files in
-      if !diff then begin
+      if !watch then
+        watch_loop ~bytecode:!bytecode ~reconcile_root:!reconcile_root
+          ~files ~interval:!watch_interval
+      else if !diff then begin
         List.iter (fun f ->
           let tw_results = Repl.execute_file f in
           let bc_results = Repl.execute_file_bytecode true f in
@@ -113,8 +188,6 @@ let main () =
               ignore (Repl.execute_file_bytecode !bytecode f)
             ) files
         | Some root ->
-            (* The program's FINAL value is the desired state of the domain
-               rooted at [root] (Q4/LAW 30); the reconciler is the writer. *)
             let last =
               List.fold_left (fun _ f ->
                 match List.rev (Repl.execute_file_bytecode !bytecode f) with

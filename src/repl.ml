@@ -285,7 +285,8 @@ let read_input ~(tty : bool) ~(prompt : string) : string option =
 let help_text =
   "Commands:\n\
   \  :help          show this help\n\
-  \  :why on|off    explain node-cache hits/misses (pp why)\n\
+  \  :why on|off    explain node-cache hits/misses\n\
+  \  :graph         show cell->node dependency graph\n\
   \  :quit          leave (also exit, quit, Ctrl-D)\n\
    A form left open continues on the next line; results print deep-forced.\n"
 
@@ -331,6 +332,7 @@ let repl_loop ~(use_vm : bool) =
                                     Printf.printf "why: on\n%!"; loop ())
         else if t = ":why off" then (Store.why_mode := false;
                                      Printf.printf "why: off\n%!"; loop ())
+        else if t = ":graph" then (Store.print_graph (); loop ())
         else begin
           if tty then append_history input;
           (try

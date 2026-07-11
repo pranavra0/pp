@@ -36,8 +36,14 @@ are snapshot-consistent per run (CAS ingest + pins, Q11). Tools run via
 coarse tree floor or refined by depfiles (Q2). The journaled, atomic,
 verified, single-writer filesystem reconciler materializes desired-state
 maps (inline or `blob:` CAS refs) under `pp --reconcile` (Q4/LAW 30), and
-`pp why` / `--no-cache` / `--check` make the cache auditable. No process
-domain or scheduler exists yet; those are Phase 2–4 ([ROADMAP.md](ROADMAP.md)).
+`pp why` / `--no-cache` / `--check` make the cache auditable. **Phase 2
+groundwork is live:** `pp --watch` (polling pull-in-loop, re-evaluates on
+cell change), `pp --once` (explicit one-shot), and `pp graph` (cell→node
+dependency graph from stored traces) exist, proving exit criteria 3+4
+(same keys, same store in `--once` vs `--watch`). The process-domain
+reconciler, fenced effects (LAW 31), and true push `stabilize`
+(dirty-propagation optimization) remain Phase 2–4 work
+([ROADMAP.md](ROADMAP.md)).
 
 The scaffolding is good: the O(1) env-hash design, the CPS tail-call
 optimization, and the dual backend with `--diff` are real assets.
@@ -178,6 +184,17 @@ non-list `def` is a value binding — `tests/025`.)
   compares result hashes: a divergence flags the node volatile and fails the
   run (LAW 38's detection half; containment-as-cell is future). Both
   backends. Pinned by `tests/019-why-nocache-check.sh`.
+- **`pp --watch`, `pp --once`, `pp graph` (Phase 2 groundwork).** `pp --once
+  file.pp` is the explicit one-shot mode (the current default). `pp --watch
+  file.pp` runs the program, then polls observed cells for content-hash
+  changes and re-runs on change — a pull scheduler in a loop, using the
+  persistent store's trace verification to skip unchanged nodes (hits) and
+  recompute changed ones (misses), proving the store-level collapse between
+  `--watch` and `--once` (exit criteria 3+4). `pp graph file.pp` runs the
+  program then scans `~/.pp/store/traces/` and prints the cell→node
+  dependency graph (the reverse-edge index, computed lazily). Both backends.
+  Pinned by `tests/031-watch-once.sh`. True push `stabilize`
+  (dirty-propagation) and the process-domain reconciler remain Phase 2.
 - **Loader authority bounded + runtime cells (Q6/D8c, LAW 24).**
   `load`/`load-module`/`island` go through `Runtime.loader_read`: confined to
   the CLI programs' directories, the cwd, and `~/.pp` (anything else errors,

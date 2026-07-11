@@ -456,6 +456,51 @@ let journal_append (line : string) : unit =
   output_string oc (line ^ "\n");
   close_out oc
 
+(* ---- Phase 2: pp graph — print the cell→node dependency graph ----
+   Scans ~/.pp/store/traces/ and shows which cells each node reads,
+   and which nodes depend on each cell (the reverse-edge index).
+   By default filters out handler:log cells (internal noise); pass
+   ~verbose:true to show every cell. *)
+let print_graph ?(verbose = false) () =
+  let trace_files = if Sys.file_exists traces_dir then
+    Array.to_list (Sys.readdir traces_dir) else [] in
+  let cell_to_keys = Hashtbl.create 64 in
+  let key_to_cells = Hashtbl.create 64 in
+  let noise = function
+    | c when verbose -> false
+    | c -> c = "handler:log"
+  in
+  List.iter (fun key ->
+    let traces = load_traces ~key in
+    let cells = List.sort_uniq compare
+      (List.concat_map (fun tr ->
+        List.filter (fun (c, _) -> not (noise c)) tr.tr_reads
+        |> List.map (fun (c, _) -> c)) traces) in
+    if cells <> [] || verbose then begin
+      Hashtbl.add key_to_cells key cells;
+      List.iter (fun c ->
+        let prev = try Hashtbl.find cell_to_keys c with Not_found -> [] in
+        Hashtbl.replace cell_to_keys c (key :: prev)) cells
+    end
+  ) (List.sort compare trace_files);
+  if Hashtbl.length key_to_cells = 0 then
+    Printf.printf "(no traces in store — run a program first)\n"
+  else begin
+    Printf.printf "pp graph — dependency graph from ~/.pp/store/traces\n\n";
+    Printf.printf "Nodes → Cells (forward edges):\n";
+    Hashtbl.iter (fun key cells ->
+      let cells_str = if cells = [] then "(none)" else String.concat ", " cells in
+      Printf.printf "  node %s\n    reads: %s\n" (short_key key) cells_str
+    ) key_to_cells;
+    Printf.printf "\nCells → Nodes (reverse edges):\n";
+    Hashtbl.iter (fun cell keys ->
+      Printf.printf "  %s\n    used by: %s\n" cell
+        (String.concat ", " (List.map short_key keys))
+    ) cell_to_keys;
+    Printf.printf "\n%d node(s), %d unique cell(s)\n"
+      (Hashtbl.length key_to_cells) (Hashtbl.length cell_to_keys)
+  end
+  
 (* ---- Init called at startup ---- *)
 
 let init () =

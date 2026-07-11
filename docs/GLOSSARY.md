@@ -98,23 +98,23 @@ Terms marked *(planned)* do not exist in the code yet — see
   v1 (`reconciler.ml`, `pp --reconcile ROOT`): diff desired vs observed by
   content hash, journal `intent`/`done`, apply via temp+rename with
   verify-after-write, delete unmanaged files, refuse self-reading desired
-  state (stratification, LAW 30). Process domain / watch mode are Phase 2.
-- **reconciler** *(planned)* — the single privileged writer for a domain. Diffs
-  desired vs observed and applies the minimal change. The only code holding
-  domain write authority.
+  state (stratification, LAW 30). Watch mode live (`--watch --reconcile`
+  polling loop). Process domain and fenced effects (LAW 31) are Phase 2.
 - **domain** *(planned)* — a slice of external state under single ownership (an
   output subtree, a process set, a DB schema).
 
 ### Scheduling
 
-- **rebuilder** *(planned)* — the one implementation of `force` over the store:
+- **rebuilder** *(real)* — the one implementation of `force` over the store:
   verify traces, cutoff on hash equality, record new traces on a miss. Shared by
   both schedulers.
-- **pull scheduler** *(planned)* — suspending; forces the root and recurses on
-  demand. For builds/provisioning (`--once`).
-- **push scheduler** *(planned)* — dirty-propagating over the reverse-edge index
-  derived from traces; re-forces only dirtied nodes. For services (`--watch`).
-
+- **pull scheduler** *(real)* — suspending; forces the root and recurses on
+  demand. For builds/provisioning (`--once`). The current default (and only
+  scheduler — `--watch` runs this in a polling loop).
+- **push scheduler** *(partly real)* — dirty-propagating over the reverse-edge
+  index derived from traces; re-forces only dirtied nodes. For services
+  (`--watch`). The polling pull-in-loop `--watch` is live; true push `stabilize`
+  (dirty-propagation) is planned.
 ### Authority
 
 - **capability** — an authority token: a ceiling on what a computation *may*
