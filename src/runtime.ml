@@ -255,3 +255,12 @@ let program_argv : string list ref = ref []
    clean thunks remain Evaluated and skip Store.hit on re-execute.
    Set false for cold runs and --once; true for stabilize iterations. *)
 let keep_thunks = ref false
+
+(* ---- Fenced-effect registry (Q3 / LAW 31) ----
+   Scripting-tier `(fenced KIND SPEC)` registers an action here.  The
+   reconciler/supervisor drains this list after convergent work, one action at
+   a time, journaling intent/done around each. *)
+let fenced_actions : (string * value) list ref = ref []
+
+(* Unknown-status policy set by --fenced-policy (retry | abort | ask). *)
+let fenced_policy = ref "abort"

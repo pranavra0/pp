@@ -617,6 +617,21 @@ let () =
     | _ -> failwith "island-fetch expects a URI string"
   );
 
+  (* ---- fenced: register a non-convergent action for reconciler sequencing
+     (Q3 / LAW 31).  May not appear inside a node body.  The action is not
+     executed during evaluation; the active reconciler drains it after
+     convergent state is applied. *)
+  register "fenced" (fun args ->
+    let args = force_args args in
+    match args with
+    | [VString kind; spec] ->
+        Fenced.register kind spec;
+        VNil
+    | [VKeyword kind; spec] ->
+        Fenced.register kind spec;
+        VNil
+    | _ -> failwith "fenced expects a kind string and a spec map");
+
 
   register "ppc-emit-opcode" (fun args ->
     let args = force_args args in

@@ -104,7 +104,7 @@ handler-cell refinement, LAW 38's containment half, and inline-nested cutoff
 
 ---
 
-## Phase 2 — The reactive gear (push scheduler, same rebuilder) 🚧 IN PROGRESS
+## Phase 2 — The reactive gear (push scheduler, same rebuilder) ✅ DONE
 
 - ✅ Reverse-edge index over traces; fs watchers + process-supervision cells;
   push `stabilize`; `--once` vs `--watch` as the only build/service difference.
@@ -118,8 +118,8 @@ handler-cell refinement, LAW 38's containment half, and inline-nested cutoff
 3. ✅ The same program file with `--once` provisions once and terminates.
 4. ✅ Introspection shows `--watch` and `--once` hitting the **same node keys in
    the same store** — the store-level collapse, made auditable.
-5. Kill the reconciler mid-apply of a fenced action → on restart it is not
-   re-performed and the unknown-status policy fires.
+5. ✅ Kill the reconciler mid-apply of a fenced action → on restart it is not
+   silently re-performed and the unknown-status policy fires.
 6. ✅ Differential test: push `stabilize` result hashes equal the pull-scheduler
    reference (re-force-from-root) on a battery of cell-change sequences.
 
@@ -132,7 +132,9 @@ the optimization that avoids re-walking all traces from root) are live with
 `tests/031` and `tests/032`. The process-domain reconciler is live with
 `pp --supervise` / `pp --watch --supervise`, start/stop/restart on spec-hash
 change, zombie reaping, and journal intent/done pairs (`tests/033`). Fenced
-effects remain.
+effects (LAW 31) are live: `(fenced KIND SPEC)` in the scripting tier,
+`--fenced-policy retry|abort|ask`, intent/done journal, and recovery of a
+killed mid-apply action without double-execution (`tests/034`).
 ---
 
 ## Phase 3 — Parallelism (process pool)

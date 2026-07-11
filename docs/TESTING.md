@@ -91,6 +91,11 @@ two shell suites:
     starts/stops services from a desired process map; `kill -9` restarts
     within one poll interval; config edits restart exactly the affected
     service; journal contains intent/done proc entries; both backends.
+  - **034** — fenced effects (LAW 31): `(fenced KIND SPEC)` errors inside a
+    node body, is a no-op without a reconciler, executes once and journals
+    intent/done under `--reconcile`, has VM parity, and recovers a killed
+    mid-apply action without silent double-execution under
+    `--fenced-policy retry` or aborts under `--fenced-policy abort`.
   - **029** — REPL (ROADMAP §1): paren-balanced multi-line continuation,
     defs persisting across lines in BOTH backends, promptless piped output,
     `:why` toggling, `(exit N)` status control, deep-forced printing.

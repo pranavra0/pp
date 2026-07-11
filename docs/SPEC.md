@@ -886,8 +886,10 @@ service-name → spec, and keeps observed processes in sync: starts missing
 services, stops removed ones, restarts on spec-hash change, reaps zombies,
 and restarts a `kill -9`'d service within one poll interval. Requires
 `--grant process`, journals intent/done pairs, and refuses stratification on
-`proc:` observations (`tests/033`). Fenced effects (LAW 31) remain
-unimplemented.
+`proc:` observations (`tests/033`). **Fenced effects (LAW 31) are live:**
+`(fenced KIND SPEC)` registers a scripting-tier action; `--fenced-policy
+retry|abort|ask` resolves unknown-status intents; a killed mid-apply action
+is recovered without silent double-execution (`tests/034`).
 
 **Test:** first reconcile creates the tree; a null reconcile writes nothing;
 manual drift and foreign files converge away; a shrunk desired map deletes
@@ -900,21 +902,31 @@ lot replicate on Lua 5.4.7 (`scripts/build-lua.sh`).
 
 Non-convergent actions (send email, charge card) may not appear in node
 bodies at all — nodes are cache-replayable and must not contain irreversible
-actions. The reconciler sequences fenced actions through an intent journal
-(`intent(key)` → perform → `done(key, result)`), keyed
-`H(reconcile-epoch, action-args)`; an `intent` without `done` after a crash
-is status **unknown** and resolves by policy (`:retry | :abort | :ask`),
-never by silent retry.
+actions. The scripting-tier primitive `(fenced KIND SPEC-MAP)` registers an
+action for reconciler sequencing.  Under `--reconcile` or `--supervise`, the
+reconciler executes fenced actions after all convergent work, journaling
+`intent fenced KEY EPOCH KIND SPEC-HASH` → perform →
+`done fenced KEY RESULT-HASH`.  Action identity within a pass is
+`KEY = H("fenced", EPOCH, KIND, SPEC-HASH)`; the epoch is a fresh nonce per
+reconcile pass, and on crash recovery the resumed pass reuses the epoch from
+the unknown intent so a re-registered identical action deduplicates.  An
+`intent` without a matching `done` after a crash is status **unknown** and
+resolves by `--fenced-policy retry | abort | ask`, never by silent retry.
 
 *Grounding.* The desired-state law covers convergent writes only; pretending
 it tames non-idempotent actions is how systems double-charge cards. The
 carve-out is named, not hidden (DESIGN Q3/E1).
 
-**Status: unimplemented** (Q3/Phase 2).
+**Status: holds** — both backends share the same primitive and journal
+format; a `(fenced ...)` inside a node body raises an error; an unknown-
+status action is resolved by policy; a killed mid-apply action is retried
+exactly once under `--fenced-policy retry` and marked done under `--fenced-
+policy abort` (`tests/034`).
 
-**Test:** kill the reconciler between `intent` and `done`: on restart the
-action is not re-performed and the unknown-status policy fires (ROADMAP
-Phase 2 exit 5).
+**Test:** kill `pp --watch --reconcile ROOT --fenced-policy retry` between
+`intent fenced` and `done fenced`; on restart the action is retried exactly
+once (crashed run + one recovery retry) and no silent double-execution
+occurs (ROADMAP Phase 2 exit 5).
 
 ---
 
@@ -1136,7 +1148,7 @@ signatures, not line numbers — the source is under active migration.)
 | LAW 28 | failure traces, error memoization | partial | both backends memoize `Failure` outcomes as failing traces, re-served until a recorded read changes; D16 `Evaluating`-leak fixed (`tests/012`, `tests/014`); non-`Failure` exceptions uncached |
 | LAW 29 | source locations in errors | holds | D12 closed: every top-level form's location is appended to unlocated runtime errors in both backends; arity/capability errors name the callee/operation; `pp: error:` single-line reporting (`tests/027`); residual: `load`ed-file errors cite the loading form |
 | LAW 30 | desired-state + single writer | partial | fs-domain reconciler v1: plan/journal/atomic-apply/verify, single-writer deletes, stratification check, blob-hash desired values (Q4, `tests/018`, `tests/023`); drives a real 101-TU C build and Lua 5.4.7 end-to-end (`tests/024`); push `stabilize` live (`pp --watch --stabilize`, `tests/032`); process-domain reconciler live (`pp --supervise`, `tests/033`) |
-| LAW 31 | fenced effects, intent journal | unimplemented | Q3/Phase 2 |
+| LAW 31 | fenced effects, intent journal | holds | scripting-tier `(fenced KIND SPEC)`, `--fenced-policy retry|abort|ask`, intent/done journal, recovery without silent retry; `tests/034` |
 | LAW 32 | gradual types, strictest oracle | holds | D3 fixed; both backends enforce; tests 004/005 restored; `tests/007-phase0-laws.pp` |
 | LAW 33 | config: computed keys, tail-safe scoping | holds | D15 fixed; computed keys and tail-safe scoping in both backends; config reads inside nodes are `config:<key>` trace cells, ambient config out of the node key (`tests/015`) |
 | LAW 34 | no location surface / scheduler exists | partial | negative half holds; no scheduler at all |

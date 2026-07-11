@@ -13,6 +13,7 @@ let main () =
   let graph_mode = ref false in
   let stabilize = ref false in
   let supervise = ref false in
+  let fenced_policy = ref "abort" in
 
   let rec parse = function
     | "--" :: rest ->
@@ -24,6 +25,10 @@ let main () =
     | "--grant" :: grant :: rest -> grants := grant :: !grants; parse rest
     | "--reconcile" :: root :: rest -> reconcile_root := Some root; parse rest
     | "--supervise" :: rest -> supervise := true; parse rest
+    | "--fenced-policy" :: policy :: rest ->
+        if policy <> "retry" && policy <> "abort" && policy <> "ask" then
+          failwith ("invalid --fenced-policy: " ^ policy);
+        fenced_policy := policy; parse rest
     | "why" :: rest | "--why" :: rest -> Store.why_mode := true; parse rest
     | "--no-cache" :: rest -> Store.no_cache := true; parse rest
     | "--check" :: rest -> Store.check_mode := true; parse rest
@@ -41,6 +46,7 @@ let main () =
         Printf.printf "  pp --grant <spec>        Grant capability (fs:/path:rw, net:tcp, process)\n";
         Printf.printf "  pp --reconcile <root>    Materialize the program's map value under <root>\n";
         Printf.printf "  pp --supervise <file.pp>  Reconcile program's process-map value (use with --watch)\n";
+        Printf.printf "  pp --fenced-policy retry|abort|ask  Unknown-status fenced-action policy (default: abort)\n";
         Printf.printf "  pp why <file.pp>         Explain node cache hits/misses (capability-filtered)\n";
         Printf.printf "  pp --no-cache <file.pp>  Skip cache reads (recompute); results still stored\n";
         Printf.printf "  pp --check <file.pp>     Determinism audit: run each node twice, flag volatile\n";
@@ -91,9 +97,14 @@ let main () =
          !files;
   Store.init ();
   Runtime.proc_observer := Supervisor.observe_proc;
+  Runtime.fenced_policy := !fenced_policy;
   (* Collect every cell observation made by the program: needed for
      --reconcile stratification (LAW 30) and for --watch polling. *)
   if !reconcile_root <> None || !watch || !supervise then Runtime.observe_all := true;
+  (* Recover any unknown-status fenced actions from a prior crash before
+     applying new state (Q3 / LAW 31). *)
+  if !reconcile_root <> None || !supervise then
+    Fenced.recover_unknown ~policy:!fenced_policy;
 
 
   (* ---- Phase 2: pp graph — delegates to Store.print_graph ---- *)
@@ -121,7 +132,11 @@ let main () =
       (if supervise then
          match last with
          | Some v -> Supervisor.reconcile v
-         | None -> failwith "supervise: the program produced no value")
+         | None -> failwith "supervise: the program produced no value");
+      (* Run fenced actions once per reconcile pass, after all convergent work
+         (Q3 / LAW 31).  Recovery set the epoch if resuming a crashed pass. *)
+      if reconcile_root <> None || supervise then
+        Fenced.drain ~policy:!Runtime.fenced_policy
     in
     let run_program () =
       (* Clear in-memory state for a fresh evaluation. The persistent store
@@ -130,6 +145,7 @@ let main () =
       else Repl.init ();            (* clears thunk_store, resets global_env *)
       Hashtbl.clear Store.run_pins;  (* clear pinned cell observations *)
       Runtime.observed_all := [];     (* clear collected observations *)
+      Runtime.fenced_actions := [];   (* clear stale fenced registrations *)
       Runtime.current_capabilities := !Runtime.initial_capabilities;
       (* Re-read and execute the program. *)
       let last = List.fold_left (fun _ f ->
@@ -148,6 +164,7 @@ let main () =
       Runtime.keep_thunks := true;  (* set BEFORE execute_file_bytecode's internal init *)
       Hashtbl.clear Store.run_pins;  (* fresh world observations, not last run's pins *)
       Runtime.observed_all := [];
+      Runtime.fenced_actions := [];
       Runtime.current_capabilities := !Runtime.initial_capabilities;
       (* execute_file_bytecode calls init internally — keep_thunks gates thunk_store *)
       let last = List.fold_left (fun _ f ->
@@ -242,6 +259,7 @@ let main () =
       end else begin
         let last =
           List.fold_left (fun _ f ->
+            Runtime.fenced_actions := [];
             match List.rev (Repl.execute_file_bytecode !bytecode f) with
             | v :: _ -> Some v | [] -> None) None files
         in
@@ -251,7 +269,9 @@ let main () =
         (if !supervise then
            match last with
            | Some v -> Supervisor.reconcile v
-           | None -> failwith "supervise: the program produced no value")
+           | None -> failwith "supervise: the program produced no value");
+        if !reconcile_root <> None || !supervise then
+          Fenced.drain ~policy:!Runtime.fenced_policy
       end);
 
   (* --check verdict: any volatile node fails the audit (LAW 38). *)

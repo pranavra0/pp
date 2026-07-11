@@ -131,8 +131,10 @@ persistent store as the tree-walker (D7 closed; see below).
 Both back ends read and write one set of module-global refs: the handler stack,
 the current capability set, the config stack, the thunk store, the trace-frame
 stack (the collector nodes push while forcing, so world-reads land in the right
-trace), and the initial `--grant` capabilities. Consolidating these into one `Runtime` module (done in
-Phase 0) removed a class of parity bugs where the two back ends kept separate
+trace), the initial `--grant` capabilities, the registry of scripting-tier
+fenced actions (`Runtime.fenced_actions`), and the unknown-status policy
+(`Runtime.fenced_policy`). Consolidating these into one `Runtime` module (done
+in Phase 0) removed a class of parity bugs where the two back ends kept separate
 copies. It is also what a future process-pool parallelism (Phase 3) must
 refactor, since global mutable state can't be shared across worker processes.
 
@@ -187,8 +189,9 @@ no inline-nested cutoff.
 | `src/primitives.ml` | Built-in functions and the initial environment. |
 | `src/island.ml` | Island URI → pin → local path resolution (stub). |
 | `src/store.ml` | Persistent content-addressed store + verifying traces; wired into the tree-walker's `force` for `(node e)`. |
-| `src/reconciler.ml` | Filesystem-domain reconciler v1 (Q4/LAW 30). |
-| `src/supervisor.ml` | Process-domain reconciler (Phase 2): desired process map → start/stop/restart on spec-hash change, zombie reaping, intent/done journal. |
+| `src/reconciler.ml` | Filesystem-domain reconciler v1 (Q4/LAW 30); applies convergent fs state, then `main.ml` drains fenced actions. |
+| `src/supervisor.ml` | Process-domain reconciler (Phase 2): desired process map → start/stop/restart on spec-hash change, zombie reaping, intent/done journal; convergent proc work, then `main.ml` drains fenced actions. |
+| `src/fenced.ml` | Fenced-effect executor (Q3/LAW 31): registers scripting-tier actions, journals intent/done, resolves unknown-status entries by policy. |
 | `src/repl.ml` | REPL and file-execution helpers for both back ends. |
 | `src/stabilize.ml` | Push scheduler: side-table (`node_key` → `thunk`) + dirty reset; the reverse-edge index is in `store.ml`. |
 | `src/main.ml` | CLI entry point: flag parsing, `--grant`, dispatch to REPL/file/`-e`/`--diff`. |
@@ -208,6 +211,7 @@ pp --watch <file.pp>     run, then watch cell changes and re-evaluate (polling)
 pp --watch-interval <s>  poll interval for --watch (default 1.0)
 pp --watch --stabilize <file.pp>  watch with push stabilize (dirty-propagation)
 pp --supervise <file.pp>  reconcile program's process-map value (use with --watch)
+pp --fenced-policy retry|abort|ask  unknown-status fenced-action policy (default: abort)
 pp graph <file.pp>       print the cell→node dependency graph from traces
 pp --update              enable island pin-update mode (stub)
 pp --version | --help

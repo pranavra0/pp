@@ -221,10 +221,19 @@ tool's own report).
 *Convergent* effects (write file, ensure process) are safely re-appliable —
 these are what nodes may do (in sandbox) and what the reconciler applies.
 *Fenced* effects (send email, charge card) are not convergent and **may not
-appear in node bodies at all**. The idempotency epoch is the reconcile pass:
-at-most-once **per pass**. WAL: `intent(key)` → perform → `done(key, hash)`.
-Replay: `done` ⇒ skip; `intent` without `done` ⇒ status **unknown** →
-policy (`:retry | :abort | :ask`), never silent retry.
+appear in node bodies at all**; the `(fenced KIND SPEC-MAP)` primitive raises
+an error if called inside a node.  The scripting tier registers fenced
+actions in `Runtime.fenced_actions`; the reconciler/supervisor drains them
+once per pass, after all convergent work.  The idempotency epoch is the
+reconcile pass: at-most-once **per pass**.  WAL:
+`intent fenced KEY EPOCH KIND SPEC-HASH` → perform →
+`done fenced KEY RESULT-HASH`.  The spec value is persisted by content hash
+at `~/.pp/store/fenced-specs/<spec-hash>` so recovery can re-run an unknown-
+status action with the same inputs.  Replay: `done` ⇒ skip; `intent` without
+`done` ⇒ status **unknown** → policy (`retry | abort | ask`), never silent
+retry.  On recovery the epoch from the unknown intent is reused for the
+resumed pass, so a re-registered identical action deduplicates and is not
+silently doubled.
 
 ### Q4 — Reconciler crash-safety. **Journaled apply over the CAS; convergence driven by re-observed reality, not a trusted state file.**
 

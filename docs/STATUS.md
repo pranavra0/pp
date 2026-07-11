@@ -46,8 +46,10 @@ the same results as pull mode. **The process-domain reconciler is live:**
 `pp --watch --supervise` takes a program whose final value is a map of
 service-name → spec, starts/stops/restarts services on spec-hash change,
 reaps zombie children, and restarts a `kill -9`'d service within one poll
-interval (`tests/033`). Fenced effects (LAW 31) remain Phase 2–4 work
-([ROADMAP.md](ROADMAP.md)).
+interval (`tests/033`). **Fenced effects (LAW 31) are live:**
+`(fenced KIND SPEC)` in the scripting tier, `--fenced-policy retry|abort|ask`,
+an intent/done journal, and recovery of a killed mid-apply action without
+silent double-execution (`tests/034`).
 
 The scaffolding is good: the O(1) env-hash design, the CPS tail-call
 optimization, and the dual backend with `--diff` are real assets.
@@ -190,6 +192,15 @@ non-list `def` is a value binding — `tests/025`.)
   Requires `--grant process`; a desired state that observed a `proc:` cell
   (its own domain) is refused (LAW 30 stratification). Both backends.
   Pinned by `tests/033-process-reconciler.sh`.
+- **Fenced effects (LAW 31).** `(fenced KIND SPEC)` is a scripting-tier
+  primitive that registers a non-convergent action (e.g., send email, charge
+  card) for reconciler sequencing.  It raises an error if used inside a node
+  body.  Under `--reconcile` or `--supervise`, actions are executed once per
+  pass with an `intent fenced KEY EPOCH KIND SPEC-HASH` → perform →
+  `done fenced KEY RESULT-HASH` journal in `~/.pp/store/journal/log`.  On
+  recovery, an intent without a matching done is resolved by
+  `--fenced-policy retry|abort|ask`, never by silent retry.  Both backends.
+  Pinned by `tests/034-fenced-effects.sh`.
 - **`pp why`, `--no-cache`, `--check`.** `pp why file.pp` explains every node
   force to stderr: first build, per-trace stale cell, unauthorized (with the
   offending cell REDACTED when the caller lacks authority over it — LAW 23c,

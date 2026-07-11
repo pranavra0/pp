@@ -192,4 +192,11 @@ else
   echo "FAIL 033-process-reconciler"; fail=1
 fi
 
+echo "--- Fenced effects (LAW 31) suite ---"
+if PP="$PP" bash tests/034-fenced-effects.sh; then
+  echo "ok   034-fenced-effects"
+else
+  echo "FAIL 034-fenced-effects"; fail=1
+fi
+
 exit $fail

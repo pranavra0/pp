@@ -95,15 +95,15 @@ Terms marked *(planned)* do not exist in the code yet — see
   `pp --reconcile ROOT` (`tests/018`, `tests/023`), and for the process
   domain as `{service-name → spec}` consumed by `pp --supervise`
   (`tests/033`).
-- **reconciler** *(partly real)* — the one privileged writer per domain.
-  v1 filesystem (`reconciler.ml`, `pp --reconcile ROOT`): diff desired vs
-  observed by content hash, journal `intent`/`done`, apply via temp+rename
-  with verify-after-write, delete unmanaged files, refuse self-reading
-  desired state (stratification, LAW 30). Watch mode live
-  (`--watch --reconcile` polling loop). Process domain (`supervisor.ml`,
-  `pp --supervise`) is live: start/stop/restart on spec-hash change, zombie
-  reaping, journal intent/done (`tests/033`). Fenced effects (LAW 31) are
-  Phase 2.
+- **reconciler** — the one privileged writer per domain.  v1 filesystem
+  (`reconciler.ml`, `pp --reconcile ROOT`): diff desired vs observed by
+  content hash, journal `intent`/`done`, apply via temp+rename with
+  verify-after-write, delete unmanaged files, refuse self-reading desired
+  state (stratification, LAW 30). Watch mode live (`--watch --reconcile`
+  polling loop). Process domain (`supervisor.ml`, `pp --supervise`) is live:
+  start/stop/restart on spec-hash change, zombie reaping, journal intent/done
+  (`tests/033`). Fenced effects (LAW 31) are sequenced after convergent work
+  and recovered by `--fenced-policy retry|abort|ask` (`tests/034`).
 - **domain** *(planned)* — a slice of external state under single ownership (an
   output subtree, a process set, a DB schema).
 
@@ -143,9 +143,12 @@ Terms marked *(planned)* do not exist in the code yet — see
   fault injection). Records a synthetic `handler:<effect>` cell into the trace
   so swapping it invalidates correctly (`tests/015`). Today every user handler
   is treated as semantic; the per-arg refinement in LAW 26 is *(planned)*.
-- **fenced effect** *(planned)* — a non-convergent, irreversible action (send
-  email, charge card). Barred from node bodies; sequenced reconciler-only with a
-  WAL and at-most-once-per-pass.
+- **fenced effect** — a non-convergent, irreversible action (send email,
+  charge card).  Barred from node bodies; surfaced as scripting-tier
+  `(fenced KIND SPEC-MAP)`; sequenced reconciler-only with an intent/done
+  journal and at-most-once-per-pass.  Unknown-status entries after a crash
+  are resolved by `--fenced-policy retry|abort|ask`, never silent retry
+  (LAW 31; `tests/034`).
 
 ### Language surface
 

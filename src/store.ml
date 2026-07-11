@@ -446,18 +446,120 @@ let hit ~key ~authorized : hit_result =
 
 (* ---- Reconciler journal (Q4) ----
    An append-only audit log: `intent <hash> ...` before an apply, `done <hash>`
-   after it. Recovery is not replay — desired state is cheap to recompute and
-   observed state is re-derived from cells, so crash recovery = re-running
-   reconcile; the journal exists to make what happened inspectable. *)
+   after it. Recovery is not replay for convergent domains — desired state is
+   cheap to recompute and observed state is re-derived from cells, so crash
+   recovery = re-running reconcile; the journal exists to make what happened
+   inspectable.
+
+   Fenced effects (LAW 31) use the same journal as a WAL:
+     intent fenced <key> <kind> <spec-hash>
+     done fenced <key> <result-hash>
+   A `done` without a matching `intent` is ignored; an `intent` with no later
+   matching `done` is an unknown-status fenced action that must be resolved by
+   policy (`retry | abort | ask`) before normal reconciliation proceeds. *)
 
 let journal_dir = Filename.concat store_root "journal"
+let journal_log_path () = Filename.concat journal_dir "log"
 
 let journal_append (line : string) : unit =
   ensure_dir journal_dir;
-  let oc = open_out_gen [Open_append; Open_creat] 0o644
-      (Filename.concat journal_dir "log") in
+  let oc = open_out_gen [Open_append; Open_creat] 0o644 (journal_log_path ()) in
   output_string oc (line ^ "\n");
   close_out oc
+
+(* ---- Fenced-effect journal scanner (Q3 / LAW 31) ---- *)
+
+type fenced_entry = {
+  fe_key : string;
+  fe_epoch : string;
+  fe_kind : string;
+  fe_spec_hash : string;
+  fe_done_hash : string option;  (* Some result-hash if a done follows it *)
+}
+
+(* Parse one journal line.  We only care about fenced intents/dones; convergent
+   fs/proc entries are ignored for the purpose of unknown-status recovery. *)
+let parse_journal_line (line : string) : [`Intent of string * string * string * string | `Done of string | `Other] =
+  let line = String.trim line in
+  if line = "" then `Other
+  else
+    let parts = String.split_on_char ' ' line in
+    match parts with
+    | "intent" :: "fenced" :: key :: epoch :: kind :: spec_hash :: _ ->
+        `Intent (key, epoch, kind, spec_hash)
+    | "done" :: "fenced" :: key :: _ ->
+        `Done key
+    | _ -> `Other
+
+(* Scan the journal for fenced intents without a matching done.  Returns them
+   in journal order (oldest first).  Only the most recent unmatched intent for
+   a given key is meaningful, but the scanner returns all unmatched intents so
+   callers can decide; recovery should process them in order. *)
+let find_unknown_fenced () : fenced_entry list =
+  let path = journal_log_path () in
+  if not (Sys.file_exists path) then []
+  else begin
+    let ic = open_in path in
+    let pending : (string, string * string * string) Hashtbl.t = Hashtbl.create 16 in
+    let rec loop () =
+      match input_line ic with
+      | line ->
+          (match parse_journal_line line with
+           | `Intent (key, epoch, kind, spec_hash) ->
+               Hashtbl.replace pending key (epoch, kind, spec_hash)
+           | `Done key ->
+               Hashtbl.remove pending key
+           | `Other -> ());
+          loop ()
+      | exception End_of_file -> ()
+    in
+    loop ();
+    close_in ic;
+    Hashtbl.fold (fun key (epoch, kind, spec_hash) acc ->
+      { fe_key = key; fe_epoch = epoch; fe_kind = kind; fe_spec_hash = spec_hash; fe_done_hash = None } :: acc)
+      pending []
+  end
+
+(* Check whether a fenced key already has a done entry anywhere in the journal.
+   Used at action time to avoid re-executing an action that was already
+   completed in a prior pass. *)
+let fenced_is_done (key : string) : bool =
+  let path = journal_log_path () in
+  if not (Sys.file_exists path) then false
+  else begin
+    let ic = open_in path in
+    let pending = ref false in
+    let seen = ref false in
+    let rec loop () =
+      match input_line ic with
+      | line ->
+          (match parse_journal_line line with
+           | `Intent (k, _, _, _) when k = key -> pending := true; seen := true
+           | `Done k when k = key -> pending := false; seen := true
+           | _ -> ());
+          loop ()
+      | exception End_of_file -> ()
+    in
+    loop ();
+    close_in ic;
+    !seen && not !pending
+  end
+
+(* Fenced specs are persisted by content hash so recovery can re-execute an
+   unknown-status action with the same spec that produced the intent. *)
+let fenced_specs_dir = Filename.concat store_root "fenced-specs"
+
+let store_fenced_spec ~(hash : string) (value : Types.value) : unit =
+  ensure_dir fenced_specs_dir;
+  let path = Filename.concat fenced_specs_dir hash in
+  if not (Sys.file_exists path) then
+    atomic_write path (Marshal.to_string value [])
+
+let load_fenced_spec (hash : string) : Types.value option =
+  let path = Filename.concat fenced_specs_dir hash in
+  if Sys.file_exists path then
+    try Some (Marshal.from_string (read_raw path) 0) with _ -> None
+  else None
 
 
 (* ---- Phase 2: reverse-edge index for push stabilize ----
