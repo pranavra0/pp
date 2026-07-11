@@ -200,8 +200,13 @@ Options (defaults in parens):
   sibling-referencing `let` bindings, quoted special forms. This **now passes**
   (Phase 0 is closed); a regression here is a new bug.
 
-Never generated: `random`, `island`, wall-clock forms, file-write effects,
-capability constructors (all nondeterministic or unsafe).
+Never generated: `random`, wall-clock forms, file-write effects, capability
+constructors (all nondeterministic or unsafe), and **network** islands.
+Pinned `file:` islands over a fixed fixture ARE sampled in the `full`
+grammar (the fixture is pinned once at fuzzer startup via `pp --update`,
+which also exercises the pin rewriter); `tests/035-islands.sh` covers the
+rest, with a network subcase against a local bare git repo behind
+`PP_ISLAND_NET_TEST=1`.
 
 ### Verdicts
 

@@ -170,10 +170,22 @@ keeps the `thunk_store` alive across watch iterations so clean nodes remain `Eva
 `Store.hit` entirely. Still narrow: file cells only, config/handlers still folded into the key,
 no inline-nested cutoff.
 
-## Not yet wired
+## Islands (`island.ml`, D2)
 
-- **`island.ml`** — island resolution/pinning exists in stub form; `island`
-  currently does a local file read and ignores the pin (D2).
+`(island <uri> "64-hex-pin")` is a content-addressed module: the **inline
+pin** is the canonical tree hash of the island's source, and — because
+`hash_expr` folds uri+pin — it is part of any enclosing node's LAW-20 key:
+island identity is structural, so there is no lockfile and no synthetic
+trace cell. Resolution serves only the immutable cached tree at
+`~/.pp/islands/src/<pin>/`, re-verified against the pin on every resolve
+(tamper is a hard error). Both backends evaluate the pinned `entry.pp` as a
+module (`VEnvMap` exports) — the tree-walker via `EIsland`, the VM via the
+dedicated `ISLAND` opcode. Unpinned forms are a hard error naming the fix;
+`pp --update` re-resolves (file: re-hash; git: fetch) and rewrites the pins
+in the source text, refusing rather than half-writing on any ambiguity.
+`git:`/`github:` fetching is opt-in runtime authority (`--fetch-islands`,
+LAW 24 — not a user capability), journaled as `island fetch` entries, and
+governed by [THREAT-MODEL-islands.md](THREAT-MODEL-islands.md).
 
 ## File-by-file responsibilities
 
@@ -191,7 +203,7 @@ no inline-nested cutoff.
 | `src/vm.ml` | The bytecode stack machine. Effect dispatch, type checks, and node forcing delegate to `evaluator.ml` — one implementation, two back ends. |
 | `src/capabilities.ml` | Capability scope checks (path-component-aware). |
 | `src/primitives.ml` | Built-in functions and the initial environment. |
-| `src/island.ml` | Island URI → pin → local path resolution (stub). |
+| `src/island.ml` | Islands (D2): URI parse (file/git/github), content-addressed cache + tamper verification, `--update` pin rewriter, `island-pins`, opt-in git fetch. |
 | `src/store.ml` | Persistent content-addressed store + verifying traces; wired into `force` for `(node e)` in both back ends. |
 | `src/reconciler.ml` | Filesystem-domain reconciler v1 (Q4/LAW 30); applies convergent fs state, then `main.ml` drains fenced actions. |
 | `src/supervisor.ml` | Process-domain reconciler (Phase 2): desired process map → start/stop/restart on spec-hash change, zombie reaping, intent/done journal; convergent proc work, then `main.ml` drains fenced actions. |
@@ -217,6 +229,8 @@ pp --watch --stabilize <file.pp>  watch with push stabilize (dirty-propagation)
 pp --supervise <file.pp>  reconcile program's process-map value (use with --watch)
 pp --fenced-policy retry|abort|ask  unknown-status fenced-action policy (default: abort)
 pp graph <file.pp>       print the cell→node dependency graph from traces
-pp --update              enable island pin-update mode (stub)
+pp island-pins <file.pp> list island forms with pin + cache status
+pp --update <file.pp>    re-resolve islands, rewrite inline pins (implies --fetch-islands)
+pp --fetch-islands       allow git fetch for uncached island pins (default: off)
 pp --version | --help
 ```

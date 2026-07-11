@@ -266,6 +266,12 @@ let keep_thunks = ref false
    a time, journaling intent/done around each. *)
 let fenced_actions : (string * value) list ref = ref []
 
+(* Island fetching (--fetch-islands / --update): runtime authority for the
+   loader to run git and populate the island cache (LAW 24). NOT a user
+   capability — procurement is the interpreter's job, and with it disabled
+   (the default) island resolution never touches the network. *)
+let island_fetch_enabled = ref false
+
 (* Unknown-status policy set by --fenced-policy: what to do with a journaled
    fenced intent that has no matching done (a crash mid-action). Parsed once
    in main.ml; everything downstream matches exhaustively. *)

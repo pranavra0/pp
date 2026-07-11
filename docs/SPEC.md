@@ -701,6 +701,14 @@ the interpreter's runtime authority, are tagged `runtime` in traces, and are
 **excluded** from user capability accounting — both at perform time and in
 the hit-time closure check.
 
+`island` is a real resolve (D2): the form's **inline 64-hex pin** names an
+immutable, verified tree in the island cache, and the URI→pin mapping is
+*identity* — it lives in the code hash (LAW 20), never in a trace cell. An
+unpinned island form is a hard error; fetching new pins (`git:`/`github:`)
+is opt-in runtime authority (`--fetch-islands`/`--update`, journaled — see
+docs/THREAT-MODEL-islands.md), so with it disabled evaluation never touches
+the network.
+
 *Grounding.* Every program loads its own source; charging that to user
 capabilities would make a caller scoped to `src/` unable to hit any node
 whose closure touches the stdlib (DESIGN Q6). The runtime/user split is

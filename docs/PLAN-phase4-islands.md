@@ -1,9 +1,23 @@
 # Handoff: Islands — fetch, pin, cache, content-address (D2 / Phase 4)
 
+> **IMPLEMENTED 2026-07-11.** All tasks (offline + network halves, fuzzer
+> branch, docs) landed; D2 is closed in STATUS.md. This document remains as
+> the design record; current reality lives in STATUS/ARCHITECTURE/SPEC.
+
+> **Revised 2026-07-11** after review against the post-refactor codebase:
+> (a) **locks are inline** — the pin lives in the `(island <uri> <pin>)` form
+> itself, not in a lockfile or a global index (`hash_expr` already folds
+> uri+pin into the code hash, so identity needs zero new machinery;
+> `~/.pp/islands` demotes to a pure content cache); (b) implementation goes
+> through the new **typed seams** — `Cell.t` (no new cell kind needed for
+> pinned islands; the rule for any future one is documented), `Journal.entry`
+> (fetches are journaled as a typed `IslandFetch`), `Paths.under`, and the
+> `Runtime` observer-hook pattern.
+
 **Goal:** implement D2 — Islands as a real content-addressed module system
-(fetch a remote/local source tree, pin it by a verified content hash, cache
-it under `~/.pp/islands`, and make island imports become node boundaries whose
-cache key depends on the pinned content) — and close D2.
+(fetch a remote/local source tree, pin it by a verified content hash inline
+in the source form, cache it under `~/.pp/islands`, and make island imports
+node boundaries whose cache key depends on the pinned content) — and close D2.
 
 **Why this shape:** D2 is the last discrepancy in the ledger that is named but
 does nothing (`island` does a local `open_in`, the pin is ignored,
@@ -69,9 +83,9 @@ let write_pin uri pin / clear_pin uri …
 The evaluator and compiler both handle `EIsland (uri, _)` *as a local file
 load through `Runtime.loader_read uri`*:
 
-- `src/evaluator.ml` (`EIsland`): `let source = Runtime.n uri in … eval_expressions`.
+- `src/evaluator.ml` (`EIsland`): `let source = Runtime.loader_read uri in … eval_expressions`.
 - `src/compiler.ml` (`EIsland`): `emit st (LOAD_FILE (intern_name st uri))`,
-  and the VM's `LOAD_FILE` calls the same `Runtime.n`.
+  and the VM's `LOAD_FILE` calls the same `Runtime.loader_read`.
 
 So today `(island github:foo/bar v1)` is exactly `(load "github:foo/bar v1")`
 against the filesystem and fails (`No such file or directory`) unless the URI
@@ -121,89 +135,146 @@ Rejected alternative: make the second argument a symbolic version like
 a free-form pin string, but normalize: a 64-hex SHA is a *pin*; anything else
 is a *ref hint* used only at fetch time.
 
-### 3.2 Pin store, content-addressed
+### 3.2 The lock is inline; the store is only a cache
 
-Replace `~/.pp/islands/<Digest(uri)>.pin` with a two-file layout under
-`~/.pp/islands`:
+The pin is written **inline in the island form**:
+
+```
+(island github:foo/bar#main a1b2c3…64hex)
+```
+
+There is no lockfile and no authoritative index. This is deliberate, and it
+falls out of pp's own identity rule: `hash_expr` **already** folds the URI
+and pin into the code hash (`types.ml`, `EIsland` arm), so a node whose body
+imports a pinned island is keyed on the pin with zero new machinery —
+identity, not observation (the LAW 20/21 split). Consequences:
+
+- **Reproducibility travels with the source.** Clone the repo, run `pp`: the
+  program text fully determines every dependency. No second artifact, and no
+  project-root discovery rule — pp has no manifest concept, and a lockfile
+  would have forced inventing one.
+- **Transitive locking is automatic and immutable.** A pinned island's own
+  island forms are inside its pinned bytes — frozen by construction. (This
+  is the property lockfile designs have to build explicitly.)
+- **An unpinned island form is a hard error at evaluation time** unless
+  fetching is enabled (§3.5): `island: no pin for <uri>; run pp --update`.
+  Unpinned forms never evaluate, so there is nothing mutable to observe —
+  and therefore no synthetic cell, no lockfile parser, no index authority.
+- **Multi-site convention, not mechanism:** a project importing one island
+  from many files should define it once in a `deps.pp` module and import
+  that (the deps.ts pattern). Skew between files is possible but visible and
+  greppable; centralization stays a convention so the language stays small.
+
+> **Decision (2026-07-11): inline pins; no lockfile.** Measured against the
+> language's goals, inline wins on every axis: identity stays *structural*
+> (uri+pin already in the code hash — LAW 20 with zero new machinery); eval
+> stays pure (the only impure step, fetch, is quarantined in `--update`);
+> island expressions stay *closed* — copy-paste one anywhere and it denotes
+> the same bytes, which is the composability property flakes lack; and
+> transitive pins are frozen by construction (a pinned island's own island
+> forms are inside its pinned bytes). The rejected `pp.lock` alternative
+> would have re-introduced ambient resolution scope (the flakes failure),
+> required a project-root discovery rule in a language with no manifest
+> concept, and turned the URI→pin mapping back into an *observation*
+> (a `Cell.t` constructor + `Runtime.island_observer` hook). Pin-free-source
+> aesthetics are recoverable by the `deps.pp` convention; the one real cost
+> is the `--update` source rewriter (bounded, dev-time, refuses rather than
+> half-writes).
+
+`~/.pp/islands/` demotes to a pure content-addressed **cache**:
 
 ```
 ~/.pp/islands/
-  index                 ; append-only: <uri>\t<pin>\t<ref-resolved>\t<ts>
-  src/<pin>/            ; the materialized source tree, content-addressed by pin
+  index                 ; append-only resolution LOG: <uri>\t<pin>\t<ts> (advisory)
+  src/<pin>/            ; immutable materialized tree, content-addressed by pin
     entry.pp
     …
 ```
 
-- **`pin`** = `H(canonical-tree-hash)`, where canonical-tree-hash digests a
-  deterministic serialization of the tree (sorted file list, each file's
-  `hash_string` of its bytes — reuse `Types.hash_string`/Cryptokit SHA-256,
-  the same hasher used for `~/.pp/store/blobs`). This is the identity.
+- **`pin`** = the canonical tree hash: a deterministic serialization of the
+  tree (sorted file list, each file's `hash_string` of its bytes — reuse
+  `Types.hash_string`/Cryptokit SHA-256, the same hasher as
+  `~/.pp/store/blobs`; don't invent a second hash).
 - `src/<pin>/` is immutable; two trees with the same pin are the same dir.
-- `index` records the latest *resolved* ref per URI (so `--update` can move
-  it; without `--update`, the index is the frozen source of truth — hermetic
-  and offline-reproducible). This index is the **lockfile** analogue.
+  Safe to share across projects and users precisely because it is keyed by
+  content.
+- `index` is a fetch-history log for `pp island-pins` and debugging. It is
+  never consulted to *decide* a pin — the source text is the single source
+  of truth, so two checkouts of one project cannot diverge.
 
 Pin verification (anti-tamper): on every resolve, re-hash the on-disk
 `src/<pin>/` and assert it equals `pin`. A mismatch is a hard error, never a
 silent re-fetch — that's the content-addressing invariant.
 
-### 3.3 Import as a node boundary
+### 3.3 Import as a node boundary — identity does all the work
 
 Per DESIGN, island imports are explicit node boundaries. Concretely:
 
 - `(island …)`, when standalone, evaluates the materialized `entry.pp` and
   returns its exports as a `VEnvMap` (mirror `ELoadModule`, not `ELoad`):
-  `(import (island file:./lib))` merges the island's bindings into scope.
+  `(import (island file:./lib <pin>))` merges the island's bindings into
+  scope. (This is a deliberate semantic change from today's `ELoad`-like
+  behavior — the form is currently broken for anything non-local, so this is
+  the free moment to fix its meaning.)
 - Reads of the pinned source go via `Runtime.loader_read` (existing path),
-  producing `runtime:file:~/.pp/islands/src/<pin>/entry.pp` cells.
-- Additionally record one synthetic cell per island resolve —
-  `island:<uri>` with observed-hash = `pin` — so that the *URI → pin* mapping
-  is itself a validity input. A node that imported
-  `github:foo/bar@main` invalidates exactly when the index's pin for that URI
-  changes, independent of whether the on-disk path moved.
-  - This cell is `runtime:`-tagged (authority-exempt) like the file cells.
-- Because the resolved path encodes the pin and the synthetic cell carries
-  it, a node key (`H(code ‖ free-var value-hashes)`, LAW 20) already varies
-  with the pin via the env-hash (the imported module value's hash), and the
-  trace varies via the synthetic cell. Both halves of validity are covered
-  without adding the pin into the node *key* (keeping key = identity, not
-  observations — consistent with LAW 21/33].
+  producing `runtime:file:~/.pp/islands/src/<pin>/entry.pp` cells — over an
+  *immutable* tree, so they can never go stale underneath a trace.
+- **No `island:` cell exists.** The URI→pin mapping lives in the code, so it
+  is identity (the code hash → LAW 20 node key), not an observation.
+  Changing a pin edits the source → new node keys → recompute; an unchanged
+  pin is a stable hit. The LAW 21/33 identity-vs-validity split stays clean.
+- **Typed-seam rule (post-refactor):** if a future mode ever reintroduces an
+  out-of-source URI→pin mapping, it MUST be a new `Cell.t` constructor —
+  the exhaustive matches in `Store.observe_cell` and
+  `Evaluator.cell_authorized` will then force the re-observation rule and
+  the authority decision at compile time — re-observed through a
+  `Runtime.island_observer` hook, because store.ml cannot call island.ml
+  (module order). That is exactly the existing `proc:` cell pattern
+  (`Runtime.proc_observer` → `Supervisor.observe_proc`, wired in main.ml).
 
 ### 3.4 Backend parity
 
 The fetch/resolve/path-computation must run **before** the per-backend
 mechanism, identically, so both backends see the same resolved path and pin:
 
-- Move URI parsing + resolution into `Island.resolve : uri:string -> pin:string option -> resolved_path * pin` (shared).
-- The evaluator's `EIsland` branch and the VM's `LOAD_FILE`/new `ISLAND` op
-  *both* call `Island.resolve` first, then `Runtime.loader_read` the resolved
-  path. The compiler may emit a dedicated `ISLAND <uri-cp-idx>` opcode so the
-  VM records the synthetic `island:` cell before the `LOAD_FILE`-equivalent
-  read — keeping op inventories in sync (VM must mirror `runtime:island:` cell
-  recording the tree-walker does).
-- Node keys stay shared: both backends key a node importing an island on the
-  same free-var value hash (the `VEnvMap` produced from the same pinned bytes)
-  and the same store entry. `tests/014` parity discipline carries over
-  unchanged.
+- Move URI parsing + resolution into `Island.resolve : uri:string -> pin:string option -> string (* resolved path *)` (shared).
+- The evaluator's `EIsland` branch and a new VM `ISLAND` opcode *both* call
+  `Island.resolve` first, then `Runtime.loader_read` the resolved path, then
+  module-evaluate. A dedicated opcode (not `LOAD_MODULE_FILE`) is needed
+  because resolution is *runtime* state — cache presence and the fetch flag —
+  so the path cannot be a compile-time constant.
+- Node keys stay shared: `hash_expr` folds uri+pin identically for both
+  backends, and both produce the `VEnvMap` from the same pinned bytes, so a
+  node importing an island hits the same store entry. `tests/014` parity
+  discipline carries over unchanged.
 
 ### 3.5 Fetch authority and the network half
 
 Fetching touches network + runs `git` — a real effect. It is **not** ambient:
 
 - New CLI flag `--fetch-islands` (and `--update` continues to imply it):
-  - **off (default):** island resolution may only consult `~/.pp/islands`
-    (the existing index + `src/<pin>/`). A URI whose pin is absent is a
-    **hard error**: *(island: missing pin for <uri>; run `pp --fetch-islands`)*.
+  - **off (default):** island resolution may only consult the inline pin +
+    the `~/.pp/islands` cache. An island form with no pin, or a pin whose
+    tree is not cached, is a **hard error**:
+    *(island: no pin for <uri>; run `pp --update`)* /
+    *(island: pin <p> not in cache; run `pp --fetch-islands`)*.
     This is the hermetic default — a build is reproducible exactly because pp
     refuses to phone home.
-  - **on:** pp may spawn `git` to obtain the ref, hash the tree, write
-    `src/<pin>/` and append to `index`. The flag is a runtime authority, **not**
+  - **on:** pp may spawn `git` to obtain a ref/pin, hash the tree, and write
+    `src/<pin>/` + an `index` log line. The flag is a runtime authority, **not**
     a `--grant net`/`--grant process` user capability — fetching is the
     loader's job (LAW 24), so it is not counted against user caps and not
     memoized into node traces as a user observation.
-- `--update` is made real: it means "re-resolve every URI's ref to the latest
-  pin and re-pin," implying `--fetch-islands`. Without `--update`, the index
-  is frozen even if the remote moved.
+- `--update` is made real and means **rewrite inline pins in the source**:
+  for each island form in the named program, re-resolve (file: → re-hash the
+  source dir; git: → re-fetch the ref) and splice the new 64-hex pin into
+  the form in place. The rewriter works on lexer token spans, never regexes;
+  when a span cannot be rewritten safely it prints the exact replacement for
+  the user to paste — it never half-writes a file. Update diffs touching
+  every import site are reviewable dependency bumps: that churn is a feature.
+- Every fetch/re-pin is journaled: add `IslandFetch of { uri : string; pin : string }`
+  to `Journal.entry` (typed `to_line`/`of_line` colocated — the Journal
+  module makes a write-only dialect impossible).
 - Threat model (network half): a *short* note in `docs/THREAT-MODEL-islands.md`
   covering: what a malicious git host can do (run during clone via hooks/fsmon
   — mitigate by `git clone --no-local --filter=blob:none` into a temp dir,
@@ -214,15 +285,17 @@ Fetching touches network + runs `git` — a real effect. It is **not** ambient:
 
 ### 3.6 `file:` islands: the first, fully-offline half
 
-`file:` needs no `--fetch-islands`: a `file:./path` (or absolute) URI is
-resolved through `loader_read` against the existing loader authority (source
-roots + cwd + `~/.pp`). Pinning a `file:` island = hash the directory tree,
-write `index` + symlink/copy into `src/<pin>/` (or, for a true local read,
-record the pin but keep reading in place — *copy* is safer for hermeticity
-since the source can mutate; caching the bytes makes the snapshot stable).
-This half delivers 80% of the value (content-addressed deps, real node
-keying, real `--update` lockfile) with **zero network and no threat model**,
-so it ships first and is the bulk of the test plan.
+`file:` needs no `--fetch-islands` for *reads*: a pinned `file:` island reads
+from the immutable cache copy. Pinning (`--update`) hashes the source
+directory tree and **copies** it into `src/<pin>/` — copy, not symlink or
+in-place read, because the source can mutate and the snapshot must not.
+Dev-loop consequence to design for: after editing `lib/`, the program keeps
+using the old pin until `pp --update` — that is the contract working, but
+the staleness must be *visible*: `pp why` should say the source dir's
+current hash differs from the pinned one. This half delivers 80% of the
+value (content-addressed deps, real node keying, real `--update`) with
+**zero network and no threat model**, so it ships first and is the bulk of
+the test plan.
 
 ---
 
@@ -237,61 +310,74 @@ is gated behind the §3.5 threat-model note.
 - `src/island.ml`: add `type scheme = File | Git | GitHub` and
   `type uri = { scheme; raw; locator; ref_hint; pin : string option }`.
   Add `parse_uri : string -> uri` and `parse_island_arg : string -> uri option`.
+  Normalization rule: a 64-hex second argument is a *pin*; anything else is a
+  *ref hint* used only at fetch time.
 - Reject an unknown scheme with a clear error (`island: unknown scheme …`).
-- Update `primitives.ml`'s `island-fetch` to return the **parsed** uri
-  (still a string repr for now; it stops being identity in Task 4).
-- Test (`tests/035-islands.sh` subcase): `(island file:./x)` parses;
+- **Delete the `island-fetch` primitive** (it is identity today; nothing can
+  depend on it). Add an `island-resolve` returning `{"pin","path"}` later
+  only if introspection is ever actually needed — smallest surface wins.
+- Test (`tests/035-islands.sh` subcase): `(island file:./x <pin>)` parses;
   `(island noscheme:foo)` errors identically in both backends.
 
-### Task 2 — content-addressed pin store (offline)
+### Task 2 — content-addressed cache (offline)
 
-- Replace `pin_path uri`/`resolve`/`write_pin` with the `index` + `src/<pin>/`
-  layout (§3.2). Add `Island.canonical_tree_hash : dir:string -> pin` and
+- Replace `pin_path uri`/`resolve`/`write_pin` with the cache layout (§3.2).
+  Add `Island.canonical_tree_hash : dir:string -> pin` and
   `Island.verify_pin : dir:string -> pin -> (unit, string) result`.
 - `Island.pin_local : path:string -> pin` hashes a local dir, copies it into
-  `src/<pin>/` (refuse overwrite; idempotent if hash matches), appends `index`.
-- `Island.resolve` reads `index`; if the URI is pinned, returns the existing
-  pin path (verifying the on-disk tree hash matches — tamper check).
-- Missing pin with fetching disabled → the hard error in §3.5.
+  `src/<pin>/` (refuse overwrite; idempotent if hash matches), appends an
+  `index` log line (advisory history only — never consulted for resolution).
+- `Island.resolve ~uri ~pin` takes the **inline** pin: verifies `src/<pin>/`
+  exists and its re-hash matches (tamper check), returns the path.
+- No/unknown pin with fetching disabled → the hard errors in §3.5.
+- Containment checks on cache paths use `Paths.under` (the one shared
+  predicate) — no hand-rolled prefix logic.
 - Unit-test the tree hash is stable across re-hashes and across move; test the
   tamper check (mutate a byte inside `src/<pin>/`, expect resolve to error).
 
 ### Task 3 — `EIsland` resolves through `Island` (offline, both backends)
 
-- `src/evaluator.ml` `EIsland`: call `Island.resolve uri pin`, then
+- `src/evaluator.ml` `EIsland`: call `Island.resolve ~uri ~pin`, then
   `Runtime.loader_read resolved_path`, then evaluate as a **module**
-  (`VEnvMap` exports, like `ELoadModule`), not a bare `ELoad`. Add a
-  `Runtime.record_read ("runtime:island:" ^ uri) pin` synthetic cell.
+  (`VEnvMap` exports, like `ELoadModule`), not a bare `ELoad`. No synthetic
+  cell (§3.3 — the pin is identity via the code hash, not an observation).
 - `src/compiler.ml` `EIsland`: emit a new `ISLAND <uri-idx> <pin-idx-opt>` op
-  (mirrors `LOAD_MODULE_FILE` but resolves via `Island` first).
-- `src/vm.ml` `ISLAND`: same `Island.resolve` + `loader_read` + module-eval +
-  synthetic cell, mirroring the tree-walker exactly.
+  (mirrors `LOAD_MODULE_FILE` but resolves via `Island` at run time).
+- `src/vm.ml` `ISLAND`: same `Island.resolve` + `loader_read` + module-eval,
+  mirroring the tree-walker exactly.
 - `Runtime` gains `island_fetch_enabled : bool ref` (set by `--fetch-islands`).
-- Test: `(import (island file:./lib))` binds an exported name; the same import
-  inside a `node` records both a `runtime:file:` and `runtime:island:` cell;
-  editing the source *outside* the pin does nothing (it's pinned), bumping the
-  pin (re-running with the source changed and `--fetch-islands` / a forced
-  re-pin) invalidates the node; both backends agree.
+- Test: `(import (island file:./lib <pin>))` binds an exported name; a `node`
+  importing it records `runtime:file:` cells over the immutable cache tree;
+  editing the source dir does nothing (it's pinned); re-pinning via
+  `--update` (which rewrites the inline pin → new code hash → new node key)
+  recomputes; both backends agree and share store entries.
 
-### Task 4 — `--update` / `--fetch-islands` semantics for `file:` (offline)
+### Task 4 — `--update` rewrites inline pins; `--fetch-islands` (offline)
 
-- `main.ml`: keep `--update` setting `Island.update_mode`; add
-  `--fetch-islands`; wire both to the new `Runtime.island_fetch_enabled`.
-- For `file:`, "update" = re-hash the source dir and re-pin if the hash
-  changed (writes a new `index` line + new `src/<pin>/`). Without the flag,
-  the existing index pin is frozen.
-- Test: a node caches on the old pin; running `pp --update` bumps the pin;
-  the node recomputes; running plain `pp` again (no `--update`) keeps using
-  the new pin and hits. Both backends agree.
+- `main.ml`: `--update` implies `--fetch-islands`; both wire to
+  `Runtime.island_fetch_enabled` (+ an update flag). `Island.update_mode` is
+  finally read — or deleted in favor of the new flags.
+- For `file:`, "update" = re-hash the source dir; if the hash changed, copy
+  the new tree into `src/<pin'>/` and **rewrite the island form's pin in the
+  source file** (lexer-token-span splice; on any doubt, print the exact
+  replacement instead of writing — never half-write). Without `--update`,
+  the inline pin is frozen no matter how the source dir drifts.
+- `pp why` learns to report pin drift: "island file:./lib pinned <p> but the
+  source dir now hashes <p'> — run pp --update".
+- Test: a node caches on the old pin; `pp --update prog.pp` rewrites the pin
+  in `prog.pp`; the node recomputes; plain `pp` again hits on the new pin.
+  Both backends agree.
 
-### Task 5 — lockfile / offline reproducibility (offline)
+### Task 5 — offline reproducibility (offline)
 
-- The `index` file *is* the lockfile. Add `pp island-pins` (read-only) and a
-  documented convention that checking `~/.pp/islands/index` into a project's
-  pinned store location yields reproducible offline builds.
-- Test: copy a populated `index` + `src/` into an isolated `$HOME` containing
-  *no network access* and *no original source dir*; a `file:`/`git:` island
-  resolves purely from the pin store; both backends agree.
+- Reproducibility = source (with inline pins) + populated cache. Add
+  `pp island-pins` (read-only: list island forms + pin/cache status for a
+  program).
+- Test: copy the *program* + populated `src/<pin>/` cache into an isolated
+  `$HOME` with *no network* and *no original source dir*; the island
+  resolves purely from the cache; both backends agree. A missing cache entry
+  errors with the §3.5 message (and the fix is `--fetch-islands`, never
+  silent).
 
 ### Task 6 — make `tests/005-island-test.pp` actually pin content (offline)
 
@@ -307,7 +393,8 @@ is gated behind the §3.5 threat-model note.
   without it.
 - `Island.fetch_git : uri -> pin` shells out to `git clone --no-local …` into
   a temp dir, checks out `ref_hint`, canonical-tree-hashes, copies into
-  `src/<pin>/`, appends `index`. Never executes hooks.
+  `src/<pin>/`, appends an `index` log line, and journals
+  `Journal.IslandFetch { uri; pin }`. Never executes hooks.
 - Gated strictly on `Runtime.island_fetch_enabled`; disabled → hard error on
   a missing pin (never silent network).
 - Test (`tests/035` network subcase, **opt-in**, skipped without a
@@ -338,14 +425,18 @@ See section 7.
 
 | File | Change |
 |------|--------|
-| `src/island.ml` | Real URI type + `parse_uri`; `index` + `src/<pin>/` pin store; `canonical_tree_hash`; `verify_pin`; `pin_local`; `fetch_git` (Task 7); `resolve` consults index + verifies; `update_mode` finally read. |
-| `src/runtime.ml` | Add `island_fetch_enabled : bool ref`; add `record_island_read uri pin` (records the `runtime:island:` cell, gated like `record_config_read`). Keep reads through existing `loader_read`. |
-| `src/evaluator.ml` | `EIsland`: resolve via `Island.resolve`, `loader_read` the path, evaluate as a module (`VEnvMap`), record the synthetic island cell. |
+| `src/island.ml` | Real URI type + `parse_uri`; `src/<pin>/` content cache + advisory `index` log; `canonical_tree_hash`; `verify_pin`; `pin_local`; `fetch_git` (Task 7); `resolve ~uri ~pin` verifies the inline pin against the cache; the `--update` source rewriter. |
+| `src/runtime.ml` | Add `island_fetch_enabled : bool ref`. Reads stay through existing `loader_read`. (No new cell, no observer hook — see §3.3; the hook pattern is documented for any future out-of-source mapping.) |
+| `src/journal.ml` | Add `IslandFetch of { uri : string; pin : string }` to `entry` (+ `to_line`/`of_line` arms — the variant forces both). |
+| `src/cell.ml` | **No change** for pinned islands (identity covers them). Any future unpinned/indexed mode must add a constructor here first. |
+| `src/paths.ml` | No change — `Island` uses `Paths.under` for cache-path containment. |
+| `src/evaluator.ml` | `EIsland`: resolve via `Island.resolve`, `loader_read` the path, evaluate as a module (`VEnvMap`). |
 | `src/compiler.ml` | `EIsland`: emit new `ISLAND (uri-cp-idx, pin-cp-idx-opt)` opcode; keep `LOAD_FILE` for `ELoad`. |
-| `src/vm.ml` | `ISLAND` op mirrors the tree-walker's `EIsland` (resolve → `loader_read` → module-eval → synthetic cell). |
-| `src/types.ml` | Add `ISLAND of int * int option` to the opcode variant (and its opcode-count/parity plumbing); `hash_expr` for `EIsland` already includes uri+pin — verify pin now means *content* hash if present. |
-| `src/main.ml` | Wire `--update` to `Island.update_mode` (now read) and `--fetch-islands` to `Runtime.island_fetch_enabled`; `--update` implies fetch. |
-| `src/primitives.ml` | `island-fetch`: return parsed uri (or, better, rename/deprecate to `island-resolve` returning `{"pin","path"}`) — only meaningful once fetch lands; keep both backends identical. |
+| `src/vm.ml` | `ISLAND` op mirrors the tree-walker's `EIsland` (resolve → `loader_read` → module-eval). |
+| `src/types.ml` | Add `ISLAND of int * int option` to the opcode variant (warning 8 will surface every match to extend); `hash_expr` for `EIsland` already includes uri+pin — with inline pins that IS the lock. |
+| `src/reader.ml` | Token spans for the `--update` pin rewriter (reuse the existing `(token, line)` stream; add column/offset if splicing needs it). |
+| `src/main.ml` | `--fetch-islands`; `--update` implies it and runs the rewriter; delete or wire `Island.update_mode`. |
+| `src/primitives.ml` | **Delete** the identity `island-fetch` primitive. |
 | `tests/035-islands.sh` + `tests/035` fixtures | New shell harness; mirror `tests/020`/`tests/025` conventions (isolated `$HOME`, both backends, `assert NAME PAT present|absent`). |
 | `docs/THREAT-MODEL-islands.md` | New, Task 7 prerequisite — the narrow network-fetch threat model. |
 
@@ -360,25 +451,30 @@ an `--- Islands (D2) suite ---` header.
 
 Subcases (each asserted in *both* backends unless noted):
 
-1. **Parse & scheme dispatch.** `(island file:./x)` parses; unknown schemes
-   error identically; an explicit hex pin is accepted; a non-hex second arg
-   is treated as a ref hint.
-2. **`file:` import binds exports.** `(import (island file:./lib))` brings an
-   exported name into scope; using it logs the value.
-3. **Pin is content-addressed.** Resolve the same `file:` island twice; the
-   recorded `<pin>` is stable; a copy reads as the same `src/<pin>/`.
+1. **Parse & scheme dispatch.** `(island file:./x <pin>)` parses; unknown
+   schemes error identically; a 64-hex second arg is a pin; a non-hex second
+   arg is a ref hint.
+2. **`file:` import binds exports.** `(import (island file:./lib <pin>))`
+   brings an exported name into scope; using it logs the value.
+3. **Pin is content-addressed.** Pinning the same `file:` island twice gives
+   a stable `<pin>`; a byte-identical copy of the source dir pins to the
+   same `src/<pin>/`.
 4. **Tamper check.** Mutate one byte inside `src/<pin>/`; the next resolve
    errors (content hash mismatch), never silently re-uses.
-5. **Island import is a node boundary.** A `(node … (import (island file:./lib))
-   use)` caches; editing the *source dir outside the pin* does nothing (it's
-   pinned); re-pinning with `--update` (new content) invalidates and
-   recomputes; the synthetic `runtime:island:` cell is the validity lever.
-6. **`--fetch-islands` gating (offline analog).** With fetching *disabled*, an
-   island whose pin is absent errors cleanly; with it enabled, a `file:`
-   island pins and resolves; never silent.
-7. **Offline reproducibility.** Drop the populated `index` + `src/` into an
-   isolated `$HOME` with the original source dir removed; the island resolves
-   and nodes hit — proving the lockfile is self-sufficient.
+5. **Island import is a node boundary.** A `(node … (import (island
+   file:./lib <pin>)) use)` caches; editing the source dir does nothing
+   (it's pinned); `--update` rewrites the inline pin (assert the source file
+   changed!) → new code hash → the node recomputes.
+6. **Unpinned/uncached gating.** With fetching *disabled*: an unpinned form
+   errors cleanly; a pinned-but-uncached form errors cleanly (distinct
+   messages). With `--fetch-islands`/`--update`: a `file:` island pins,
+   caches, and resolves; never silent.
+7. **Offline reproducibility.** Copy the program (inline pins) + populated
+   `src/<pin>/` cache into an isolated `$HOME` with the original source dir
+   removed and no network; the island resolves and nodes hit — the source
+   is self-sufficient given the content cache.
+7b. **Journal.** Each fetch/re-pin appends an `island fetch` line (typed
+   `Journal.IslandFetch`); a null re-run appends none.
 8. **VM parity throughout.** Every assertion runs under `--bytecode` and must
    match the tree-walker (the `--diff` discipline; node keys for imported
    islands must share store entries, à la `tests/014`).
@@ -388,8 +484,8 @@ Subcases (each asserted in *both* backends unless noted):
    errors exactly once. Skipped in default CI to keep the suite hermetic.
 
 Re-run the full `tests/010`–`tests/024`, `tests/028`–`tests/034` battery after
-touching `Runtime`/store/keying — island cells are a new trace kind and must
-not perturb LAW 21/23b/33 cache decisions.
+touching `Runtime`/loader/keying — island resolution sits on the loader path
+and must not perturb LAW 21/23b/33 cache decisions.
 
 ---
 
@@ -401,14 +497,14 @@ Update docs in the same commit as the code that makes them true.
   - D2 row: change "**Open (Phase 4).** island does a local open_in …" to
     "**Fixed (offline half: `file:`). / Network half: `git:`/`github:` live
     behind `--fetch-islands`**" once each task lands.
-  - Add bullets under "What actually works" describing the content-addressed
-    pin store, the `runtime:island:` cell, island imports as node boundaries,
-    and `--fetch-islands`/`--update` semantics.
+  - Add bullets under "What actually works" describing inline content pins,
+    the content-addressed cache, island imports as node boundaries, and
+    `--fetch-islands`/`--update` semantics.
 
 - [ ] `docs/SPEC.md`
-  - Add a sentence to LAW 24 noting that `island` is now a real resolve (not a
-    naive local read) and that the synthetic `runtime:island:<uri>` cell is the
-    validity carrier for the URI→pin mapping.
+  - Add a sentence to LAW 24 noting that `island` is now a real resolve (not
+    a naive local read) and that the URI→pin mapping is *identity* — it lives
+    in the code hash (LAW 20), not in any trace cell.
   - Add a short dedicated subsection (or a new LAW if you prefer a normative
     pin) under §12 (Location transparency) making explicit: *identity is the
     pinned content, not the URI*; *fetching is opt-in runtime authority, not a
@@ -464,11 +560,15 @@ All of these must be green:
       `dune exec ./tools/fuzz.exe -- --grammar full --count 1000`.
 - [ ] `tests/005` now asserts real island behavior (not identical-error).
 - [ ] A node importing a `file:` island caches and is invalidated *only* by a
-      pin bump (content change + `--update`), never by source-dir mutation.
+      pin bump (content change + `--update` rewriting the inline pin), never
+      by source-dir mutation.
 - [ ] Tamper inside `src/<pin>/` is detected and errors.
-- [ ] Offline reproducibility: `index` + `src/` alone (no original source,
-      no network) resolves and hits.
-- [ ] `--fetch-islands` gating: missing pin errors cleanly when disabled.
+- [ ] Offline reproducibility: source (inline pins) + `src/<pin>/` cache
+      alone (no original source dir, no network) resolves and hits.
+- [ ] Unpinned form and pinned-but-uncached form error cleanly (distinct
+      messages) when fetching is disabled.
+- [ ] `--update` rewrites pins in source safely (token-span splice or
+      print-the-replacement; never a half-written file).
 - [ ] (Network half, gated) `git:` fetch + pin + invalidation works against a
       local bare-repo fake remote; never executes git hooks.
 - [ ] Both backends agree on every island assertion (shared node keys and
@@ -485,20 +585,27 @@ only D2.
 
 ## 9. Risks and open questions
 
-- **Identity vs ref.** The hardest call: should `(island …)` with a ref hint
-  and *no* explicit pin be allowed to resolve at all without a locked index
-  entry, given that the ref can move? Recommendation: NO — an unresolved ref
-  with fetch disabled is the hard error of §3.5; the *first* `--fetch-islands`
-  run freezes it into `index`, after which plain `pp` is hermetic. This keeps
-  the LAW-21/LAW-37 honesty rule (declared nondeterminism; identity =
-  content) literally true.
+- **Identity vs ref.** An `(island uri#ref)` with no pin never evaluates —
+  hard error (§3.5). The first `--update`/`--fetch-islands` run resolves the
+  ref and writes the pin into the form, after which plain `pp` is hermetic.
+  This keeps the LAW-21/LAW-37 honesty rule (declared nondeterminism;
+  identity = content) literally true.
+- **Multi-site pin skew.** The same URI pinned differently in two files is
+  legal (it names two different contents — that is the semantics working).
+  The convention for teams is a single `deps.pp` module. `pp island-pins`
+  should list all pins per URI so skew is one command away from visible.
+- **`--update` rewriter robustness.** Source rewriting is the one genuinely
+  new mechanism. Keep it conservative: operate on lexer token spans; any
+  ambiguity → print the replacement and exit nonzero rather than write. A
+  half-written source file is the worst possible failure; refuse instead.
 - **Pin format.** Reusing `Types.hash_string` over a canonicalized tree
   serialization keeps one hasher in the project (the store/blobs one). Don't
   invent a second hash.
-- **VM opcode parity.** Adding `ISLAND` bumps the opcode count and the
-  `--diff` micro-suite; mirror the VM's cell recording precisely so a node
-  importing an island hits the *same store entry* in both backends (D7
-  discipline). Watch `tests/014`.
+- **VM opcode parity.** Adding `ISLAND` extends the opcode variant — with
+  warning 8 enabled the compiler surfaces every match to extend. Both
+  backends must produce the same `VEnvMap` from the same pinned bytes so an
+  importing node hits the *same store entry* (D7 discipline). Watch
+  `tests/014`.
 - **Pin verification cost.** Re-hashing the tree on every resolve is O(tree).
   For v1 accept the linear cost; a cached `src/<pin>/.verified` marker
   (content hash of a manifest) can short-circuit in a later pass — but the
@@ -511,9 +618,6 @@ only D2.
   this note. Islands trust a *content hash*; a malicious host cannot escape
   that because pp never trusts the ref after first pin — and never runs
   fetched code as part of fetch (only `git`'s plumbing, no hooks).
-- **`island-fetch` primitive.** Decide whether the primitive survives or is
-  replaced by `island-resolve` returning `{"pin","path"}`. Keep whichever the
-  two backends agree on; do not leave it as identity.
 
 ---
 
@@ -539,15 +643,18 @@ unread for another release; wire it in Task 4 or remove it.
 ## 11. Suggested first commit
 
 ```
-island: parse URIs into a typed scheme; content-address the pin store
+island: typed URIs; inline content pins; content-addressed cache
 
 Replaces the inert `~/.pp/islands/<Digest(uri)>.pin` stub with a typed
-URI (file|git|github) and an index + src/<pin>/ layout pinned by a
-canonical tree hash. `file:` islands resolve and import through
-`loader_read` as a node boundary (VEnvMap exports, runtime:island:
-validity cell); `git:`/`github:` still error with "fetch disabled"
-pending the threat-model note. `--update` is now read (re-pins on
-content change). No network yet.
+URI (file|git|github) and a src/<pin>/ content cache keyed by a
+canonical tree hash. The pin lives INLINE in the island form — it is
+already part of the code hash (LAW 20), so pinned islands are identity,
+not observation: no lockfile, no synthetic cell. `file:` islands
+resolve and import through `loader_read` as a node boundary (VEnvMap
+exports); an unpinned form is a hard error naming the fix
+(`pp --update`); `git:`/`github:` still error with "fetch disabled"
+pending the threat-model note. Deletes the identity `island-fetch`
+primitive. No network yet.
 
 Adds tests/035-islands.sh (offline subcases, both backends).
 ```

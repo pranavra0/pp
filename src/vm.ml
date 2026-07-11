@@ -462,29 +462,22 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
           | VString s -> s
           | _ -> failwith "VM: LOAD_MODULE_FILE constant is not a string"
         in
-        let source =
-          try Runtime.loader_read path
-          with Sys_error msg -> failwith ("VM: cannot load module file: " ^ msg)
+        push (eval_module_from path !local_frames);
+        incr pc;
+        loop ()
+
+    | ISLAND (uri_i, pin_i) ->
+        (* D2: resolve the inline pin to the verified cached tree, then
+           module-evaluate its entry.pp — mirrors the tree-walker's EIsland. *)
+        let const_string i what =
+          match (!bc_ref).consts.(i) with
+          | VString s -> s
+          | _ -> failwith ("VM: ISLAND " ^ what ^ " constant is not a string")
         in
-        let exprs = Reader.read_string source in
-        let prog = Compiler.compile_program exprs in
-        let saved_globals = Hashtbl.copy globals in
-        Hashtbl.clear globals;
-        let initial = Primitives.initial_env () in
-        List.iter (fun (n, v) -> Hashtbl.add globals n v) initial.bindings;
-        ignore (run_isolated prog 0 !local_frames);
-        (* Collect bindings that are NOT part of the initial env. *)
-        let new_bindings = ref [] in
-        Hashtbl.iter (fun n v ->
-          if not (List.exists (fun (pn, _) -> pn = n) initial.bindings) then
-            new_bindings := (n, v) :: !new_bindings
-        ) globals;
-        Hashtbl.clear globals;
-        Hashtbl.iter (fun n v -> Hashtbl.add globals n v) saved_globals;
-        (* D20: do NOT merge into caller globals here; the tree-walker's
-           ELoadModule only returns the module value. Statement-position
-           merging is done by an explicit IMPORT emitted by the compiler. *)
-        push (VEnvMap (List.rev !new_bindings));
+        let uri = const_string uri_i "uri" in
+        let pin = Option.map (fun i -> const_string i "pin") pin_i in
+        let tree = Island.resolve ~uri ~pin in
+        push (eval_module_from (Island.entry_file tree) !local_frames);
         incr pc;
         loop ()
 
@@ -520,6 +513,33 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
   in
   loop ();
   !result
+
+(* Evaluate a module file: run it against fresh globals and package the
+   bindings it added as a VEnvMap. Shared by LOAD_MODULE_FILE and ISLAND.
+   D20: does NOT merge into caller globals — the tree-walker's ELoadModule
+   only returns the module value; statement-position merging is an explicit
+   compiler-emitted IMPORT. *)
+and eval_module_from (path : string) (frames : frame list) : value =
+  let source =
+    try Runtime.loader_read path
+    with Sys_error msg -> failwith ("VM: cannot load module file: " ^ msg)
+  in
+  let exprs = Reader.read_string source in
+  let prog = Compiler.compile_program exprs in
+  let saved_globals = Hashtbl.copy globals in
+  Hashtbl.clear globals;
+  let initial = Primitives.initial_env () in
+  List.iter (fun (n, v) -> Hashtbl.add globals n v) initial.bindings;
+  ignore (run_isolated prog 0 frames);
+  (* Collect bindings that are NOT part of the initial env. *)
+  let new_bindings = ref [] in
+  Hashtbl.iter (fun n v ->
+    if not (List.exists (fun (pn, _) -> pn = n) initial.bindings) then
+      new_bindings := (n, v) :: !new_bindings
+  ) globals;
+  Hashtbl.clear globals;
+  Hashtbl.iter (fun n v -> Hashtbl.add globals n v) saved_globals;
+  VEnvMap (List.rev !new_bindings)
 
 (* Run a bytecode region on a fresh, isolated operand stack, restoring the
    caller's stack on return. Every nested execution (calls, thunk forcing,

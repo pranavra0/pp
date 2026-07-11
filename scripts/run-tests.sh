@@ -199,4 +199,11 @@ else
   echo "FAIL 034-fenced-effects"; fail=1
 fi
 
+echo "--- Islands (D2) suite ---"
+if PP="$PP" bash tests/035-islands.sh; then
+  echo "ok   035-islands"
+else
+  echo "FAIL 035-islands"; fail=1
+fi
+
 exit $fail

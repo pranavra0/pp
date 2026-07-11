@@ -160,9 +160,15 @@ Terms marked *(planned)* do not exist in the code yet — see
   body, position-free. "A `let` is a local Excel sheet." (`let*` is explicit
   sequential sugar.)
 - **module / `import`** — a block of code whose exports are a value you import.
-- **island** *(mostly planned)* — a module that lives elsewhere (a git repo, a
-  URL), pinned by hash and content-addressed. Today does a local read; fetch/pin
-  is Phase 4 (D2).
+- **island** — a module that lives elsewhere (a local dir, a git repo),
+  referenced by URI and pinned **inline** by the canonical content hash of
+  its source tree: `(island <github:owner/repo#ref> "64-hex-pin")`. The pin
+  is part of the code hash, so a pinned island form is a *closed*
+  expression — paste it anywhere and it denotes the same bytes — and an
+  enclosing **node** is keyed on it (LAW 20). Resolution serves only the
+  verified, immutable cache copy; unpinned forms are a hard error;
+  `pp --update` re-resolves and rewrites pins in the source; fetching is
+  opt-in runtime authority (`--fetch-islands`, LAW 24), never ambient. D2.
 - **fexpr** *(cut)* — operatives that receive unevaluated arguments. Removed;
   metaprogramming is served by total `quote`/quasiquote and a future `defmacro`.
 

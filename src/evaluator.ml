@@ -556,11 +556,13 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
          checked at force time — same semantics as the VM (compiler.ml
          emit_thunk_region + vm.ml FORCE/check_type). *)
       k (make_thunk_ca_typed e ty None env)
-  | EIsland (uri, _) ->
-      let source = Runtime.loader_read uri in
-      let exprs = Reader.read_string source in
-      let env_ref = ref env in
-      k (eval_expressions exprs env_ref)
+  | EIsland (uri, pin) ->
+      (* D2: resolve the inline pin to the immutable cached tree (verified
+         against the pin on every resolve), then evaluate its entry.pp as a
+         module. The pin is part of this expression's hash, so island
+         identity is structural (LAW 20) — no trace cell. *)
+      let tree = Island.resolve ~uri ~pin in
+      k (eval_module_file (Island.entry_file tree))
   | EWithConfig (map_expr, body) ->
       let cfg = force (eval map_expr env) in
       (match cfg with

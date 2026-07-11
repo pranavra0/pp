@@ -78,7 +78,10 @@ layer. Two syntactically different paths naming the same inode are one cell.
 
 **Node (the cacheable computation).** A suspended strict computation created
 only at explicit boundaries: `(node e)`, `(defnode …)`, island imports. Not
-`let`/argument thunks (those are strict, Q1).
+`let`/argument thunks (those are strict, Q1). An island's boundary is its
+*materialized content*, not its URI: the inline pin (the source tree's
+canonical hash) is part of the code hash, so an island-importing node keys
+on exactly the bytes it imported (D2).
 - **Key** = `H(code-hash ‖ arg-value-hashes)` **[R4/Q5 unified]** — always
   argument *value* hashes. A path argument `"src/a.c"` contributes the hash of
   the *string*, not the file content. An aggregator argument (a child node's
@@ -266,7 +269,9 @@ code already holds. Capability values are sealed, unforgeable tokens.
 *Interpreter-level loads are runtime authority.* `load`/`import`/`island`/module
 resolution run with the interpreter's own authority (bounded to source roots +
 store), **outside** user capability accounting. They are the loader, not user
-effects.
+effects. Island *fetching* (`--fetch-islands`/`--update`) is the same runtime
+authority extended to procurement — distinct from user `net`/`process` caps,
+opt-in per invocation, never ambient (docs/THREAT-MODEL-islands.md).
 
 *Hit-time check is TRANSITIVE [R3].* A node `PUB = f(SECRET)` where `SECRET`
 reads `/etc/passwd` has, in `PUB`'s own trace, only the child key. A

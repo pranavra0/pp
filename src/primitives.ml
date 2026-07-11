@@ -553,14 +553,6 @@ let () =
     | _ -> failwith "read-string expects a source string"
   );
 
-  (* ---- island-fetch: resolve a remote island URI to a local path ---- *)
-  register "island-fetch" (fun args ->
-    let args = force_args args in
-    match args with
-    | [VString uri] -> VString uri
-    | _ -> failwith "island-fetch expects a URI string"
-  );
-
   (* ---- fenced: register a non-convergent action for reconciler sequencing
      (Q3 / LAW 31).  May not appear inside a node body.  The action is not
      executed during evaluation; the active reconciler drains it after

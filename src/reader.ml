@@ -732,7 +732,11 @@ and parse_load_module ps =
       ELoadModule path
   | _ -> parse_error ps "load-module expects a string path"
 
-(* Stubs for new special forms — parsed but not yet evaluated. *)
+(* (island <uri>[#ref] ["64-hex-pin"]) — content-addressed remote module (D2).
+   The URI may be written bare (file:./lib), as an island literal
+   (<github:owner/repo#main> — '#' is not a symbol char), or as a string.
+   The optional pin is the canonical tree hash, usually written as a string
+   (a bare 64-hex symbol starting with a digit would lex as a number). *)
 and parse_island ps =
   let uri = match next ps with
     | TokIsland s -> s
@@ -740,13 +744,13 @@ and parse_island ps =
     | TokSymbol s -> s
     | t -> parse_error ps ("island expects <uri>, got " ^ string_of_token t)
   in
-  let version = match peek ps with
+  let pin = match peek ps with
     | TokString s -> advance ps; Some s
     | TokSymbol s -> advance ps; Some s
     | _ -> None
   in
   ignore (parse_rest ps);
-  EIsland (uri, version)
+  EIsland (uri, pin)
 (* (with-config {key val ...} body...) — ambient configuration block *)
 and parse_with_config ps =
   let map_expr = parse_expr ps in

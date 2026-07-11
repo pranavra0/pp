@@ -153,6 +153,9 @@ and opcode =
   | MAKE_MODULE of int       (* nexports; pops name+thunk pairs, pushes VEnvMap *)
   | IMPORT                   (* pop VEnvMap, merge bindings into current frame *)
   | LOAD_FILE of int | LOAD_MODULE_FILE of int  (* cp idx of path *)
+  | ISLAND of int * int option (* cp idx of uri, cp idx of inline pin (D2);
+                                  resolves via Island at run time, then
+                                  module-evaluates the pinned entry.pp *)
   | PUSH_CONFIG              (* pop config-map, push onto config stack *)
   | POP_CONFIG               (* pop config stack *)
   | READ_CONFIG              (* pop key from stack; push config value or VNil *)

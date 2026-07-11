@@ -302,6 +302,13 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
             emit st IMPORT;
             emit st POP;
             compile_subs rest
+        | (EIsland _ as isl) :: rest ->
+            (* Same rule as ELoadModule: an island statement's exports merge
+               into the enclosing env in the tree-walker; mirror with IMPORT. *)
+            compile_expr st isl false;
+            emit st IMPORT;
+            emit st POP;
+            compile_subs rest
         | e :: rest ->
             compile_expr st e false;
             emit st FORCE;
@@ -414,8 +421,8 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       ignore (emit_thunk_region st e ~type_ann:(Some ty))
   | ELocated (_, e) ->
       compile_expr st e tail
-  | EIsland (uri, _) ->
-      emit st (LOAD_FILE (intern_name st uri))
+  | EIsland (uri, pin) ->
+      emit st (ISLAND (intern_name st uri, Option.map (intern_name st) pin))
   | EWithConfig (map_expr, body) ->
       compile_expr st map_expr false;
       emit st FORCE;
@@ -469,11 +476,11 @@ let compile_program (exprs : expr list) : bytecode =
         (* Non-last: compile non-tail (CALL not TAIL_CALL), then POP result *)
         let e = match e with ELocated (_, inner) -> inner | _ -> e in
         (match e with
-         | ELoadModule _ ->
-             (* Tree-walker merges a statement-position load-module's
-                bindings into the top-level env (eval_expressions); emit an
-                explicit IMPORT to match, now that LOAD_MODULE_FILE itself
-                no longer merges (D20). *)
+         | ELoadModule _ | EIsland _ ->
+             (* Tree-walker merges a statement-position load-module's (and
+                island's) bindings into the top-level env (eval_expressions);
+                emit an explicit IMPORT to match, now that LOAD_MODULE_FILE
+                itself no longer merges (D20). *)
              compile_expr st e true;
              emit st IMPORT;
              emit st POP

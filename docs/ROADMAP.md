@@ -152,10 +152,14 @@ handler swap with zero language-surface change.
 ## Phase 4 / stretch — Distribution + ecosystem (gated)
 
 Cluster forcing, by-hash object sync, signed capability tokens with remote
-enforcement — **only after a written threat-model doc**. Islands that actually
-fetch/pin (git; content-addressed by commit+tree; `--update` made real, D2).
-LSP, cache GC. Self-hosting reconsidered. Exit criteria drafted
-when Phase 3 closes.
+enforcement — **only after a written threat-model doc**. ✅ **Islands (D2)
+landed early** (2026-07-11): content-addressed modules with inline pins
+(identity = pinned content, LAW 20), a verified immutable cache, `--update`
+pin rewriting, and opt-in `git:`/`github:` fetch under the narrow
+[THREAT-MODEL-islands.md](THREAT-MODEL-islands.md) (package-procurement
+trust — NOT the cluster-forcing threat model, which still gates the rest of
+this phase). Still here: LSP, cache GC, self-hosting reconsidered. Exit
+criteria drafted when Phase 3 closes.
 
 ---
 

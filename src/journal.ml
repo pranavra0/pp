@@ -23,6 +23,8 @@ type entry =
   | ProcStopDone of { name : string }
   | FencedIntent of { key : string; epoch : string; kind : string; spec_hash : string }
   | FencedDone of { key : string; result_hash : string }
+  | IslandFetch of { uri : string; pin : string }
+      (* every island fetch/re-pin — procurement is auditable (D2) *)
 
 let to_line = function
   | Exec argv -> "exec " ^ String.concat " " argv
@@ -40,6 +42,8 @@ let to_line = function
       Printf.sprintf "intent fenced %s %s %s %s" key epoch kind spec_hash
   | FencedDone { key; result_hash } ->
       Printf.sprintf "done fenced %s %s" key result_hash
+  | IslandFetch { uri; pin } ->
+      Printf.sprintf "island fetch %s %s" uri pin
 
 (* Best-effort inverse. Only the fenced dialect is ever read back for
    recovery decisions; other shapes parse when unambiguous and fall to None
@@ -48,6 +52,7 @@ let to_line = function
 let of_line (line : string) : entry option =
   match String.split_on_char ' ' (String.trim line) with
   | "exec" :: argv -> Some (Exec argv)
+  | ["island"; "fetch"; uri; pin] -> Some (IslandFetch { uri; pin })
   | "intent" :: "fenced" :: key :: epoch :: kind :: spec_hash :: _ ->
       Some (FencedIntent { key; epoch; kind; spec_hash })
   | "done" :: "fenced" :: key :: result_hash :: _ ->

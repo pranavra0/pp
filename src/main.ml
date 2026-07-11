@@ -14,6 +14,7 @@ let main () =
   let stabilize = ref false in
   let supervise = ref false in
   let fenced_policy = ref Runtime.Abort in
+  let island_pins_file = ref None in
 
   let rec parse = function
     | "--" :: rest ->
@@ -21,7 +22,13 @@ let main () =
         Runtime.program_argv := rest
     | "--bytecode" :: rest -> bytecode := true; parse rest
     | "--diff" :: rest -> diff := true; bytecode := true; parse rest
-    | "--update" :: rest -> Island.update_mode := true; parse rest
+    | "--update" :: rest ->
+        (* Re-resolve island refs and rewrite inline pins (implies fetch). *)
+        Island.update_mode := true;
+        Runtime.island_fetch_enabled := true;
+        parse rest
+    | "--fetch-islands" :: rest -> Runtime.island_fetch_enabled := true; parse rest
+    | "island-pins" :: f :: rest -> island_pins_file := Some f; parse rest
     | "--grant" :: grant :: rest -> grants := grant :: !grants; parse rest
     | "--reconcile" :: root :: rest -> reconcile_root := Some root; parse rest
     | "--supervise" :: rest -> supervise := true; parse rest
@@ -57,6 +64,10 @@ let main () =
         Printf.printf "  pp --watch <file.pp>       Run, then watch cell changes and re-evaluate\n";
         Printf.printf "  pp --watch --stabilize <file>  Watch with push stabilize (dirty-propagation)\n";
         Printf.printf "  pp graph                  Print the cell->node dependency graph from traces\n";
+        Printf.printf "  pp island-pins <file.pp>  List island forms with pin and cache status\n";
+        Printf.printf "  pp --update <file.pp>     Re-resolve islands and rewrite inline pins (implies --fetch-islands)\n";
+        Printf.printf "  pp --fetch-islands        Allow git fetch for uncached island pins (default: off)\n";
+        Printf.printf "  pp --watch-interval <s>   Poll interval for --watch (default 1.0)\n";
         Printf.printf "  pp run <file>            Run a pp source file\n";
         Printf.printf "  pp --version             Print version\n";
         Printf.printf "  pp --help                Print this help\n";
@@ -227,6 +238,18 @@ let main () =
   in
   (* pp graph: just scan and print, no file needed. *)
   if !graph_mode then (print_graph (); exit 0);
+  (* pp island-pins <file>: list island forms with pin + cache status. *)
+  (match !island_pins_file with
+   | Some f -> Island.print_pins f; exit 0
+   | None -> ());
+  (* --update: rewrite inline island pins in each named file, then run. *)
+  if !Island.update_mode then
+    List.iter (fun f ->
+      let updated, skipped = Island.update_file f in
+      if updated > 0 || skipped > 0 then
+        Printf.eprintf "[update] %s: %d pin(s) updated, %d skipped\n%!"
+          f updated skipped)
+      (List.rev !files);
   (match !eval_str, !files with
   | Some e, [] ->
       if !diff then begin
