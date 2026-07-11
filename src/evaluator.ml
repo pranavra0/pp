@@ -37,10 +37,8 @@ let make_thunk_ca_typed (expr : expr) (ty : expr) (loc : (string * int) option) 
       Hashtbl.add thunk_store h t;
       VThunk t
 
-(* Runtime check for gradual type annotations. This mirrors the VM's
-   check_type (vm.ml) EXACTLY — same recognized type names, same
-   "unknown types pass" policy, same error message — so both backends
-   fail identically. Keep the two in sync. *)
+(* Runtime check for gradual type annotations. Shared by both backends (the
+   VM calls it too), so they fail identically by construction. *)
 let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
   let type_name =
     match ty with
@@ -98,6 +96,98 @@ let cell_authorized (cell_id : string) : bool =
       List.exists (fun cap -> Capabilities.check_fs_read cap path) !current_capabilities
   | None -> true  (* config:/handler:/env:/argv: cells carry no authority *)
 
+(* Trace replay for an already-Evaluated persistent node: replay its stored
+   trace reads into the active trace frames so the caller's trace transitively
+   captures this node's world-reads (same mechanism as Store.hit's hit-replay).
+   [key_of] is the backend's node-key function (node_key_of / vm_node_key). *)
+let replay_node_reads (t : thunk) (key_of : thunk -> string) : unit =
+  if t.thunk_persist && !Runtime.trace_stack <> [] then
+    let traces = Store.load_traces ~key:(key_of t) in
+    List.iter (fun tr ->
+      List.iter (fun (c, h) -> Runtime.record_read c h) tr.Store.tr_reads
+    ) traces
+
+(* Run a persistent node's body and store the result (LAW 21) or the failure
+   (LAW 28) with its verifying trace. Shared by the tree-walker's force, the
+   trampoline, and the VM's force_node_thunk — the node caches identically
+   however it is demanded. [run] executes the body; the caller owns any
+   backend-specific bookkeeping (force_depth, operand-stack isolation). *)
+let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
+  t.thunk_status <- Evaluating;
+  (* The trace frame captures the world-reads (slurp, read-file, …) this node
+     makes as (cell-id, observed-hash) pairs. Popped on every exit — normal or
+     exceptional — so a raised error never leaks a dangling frame. *)
+  let frame = Runtime.push_trace_frame () in
+  let result =
+    try
+      let r = run () in
+      Runtime.pop_trace_frame ();
+      r
+    with
+    | Failure msg as e ->
+        Runtime.pop_trace_frame ();
+        (* LAW 28: store a FAILING trace — the error value plus the reads made
+           up to the failure — so a re-force with unchanged inputs re-serves the
+           failure, and re-runs only when a read changes. D16: reset the status
+           off `Evaluating` so the next force reports the real error, not a fake
+           "infinite recursion". A Capability_error is not a Failure and is
+           never memoized (LAW 15/20). *)
+        let errval = VString msg in
+        let err_hash = Hasher.hash_value errval in
+        (try Store.store_object ~key:err_hash ~value:errval with _ -> ());
+        (try Store.store_trace ~key ~outcome:Failed ~result_hash:err_hash
+               ~reads:(List.rev !frame) with _ -> ());
+        t.thunk_status <- Unevaluated;
+        raise e
+    | e ->
+        Runtime.pop_trace_frame ();
+        t.thunk_status <- Unevaluated;
+        raise e
+  in
+  (match t.type_ann with
+   | Some ty -> check_type result ty t.thunk_loc
+   | None -> ());
+  t.thunk_status <- Evaluated result;
+  let result_hash = Hasher.hash_value result in
+  (* Objects are content-addressed by result hash; the trace maps the node
+     key to that result plus the reads that justify it. *)
+  (try Store.store_object ~key:result_hash ~value:result with _ -> ());
+  (try Store.store_trace ~key ~outcome:Ok ~result_hash
+         ~reads:(List.rev !frame) with _ -> ());
+  (* --check (LAW 38): run the body a second time under a throwaway trace
+     frame; a different result hash means the node observed something no
+     cell captured — volatile, and unsafe to cache. *)
+  if !Store.check_mode then begin
+    ignore (Runtime.push_trace_frame ());
+    let r2 =
+      try run ()
+      with e -> Runtime.pop_trace_frame (); raise e
+    in
+    Runtime.pop_trace_frame ();
+    if Hasher.hash_value r2 <> result_hash then begin
+      incr Store.volatile_count;
+      Printf.eprintf
+        "[check] volatile node %s: an identical run produced a different result hash\n%!"
+        (Store.short_key key)
+    end
+  end;
+  result
+
+(* Force a persistent node through the store: serve a verified hit (gated on
+   the caller's authority over the trace's read closure, LAW 23b), re-serve a
+   memoized failure (LAW 28), or run and store on a miss. *)
+let force_node ~(key : string) ~(run : unit -> value) (t : thunk) : value =
+  Stabilize.register_node_key ~key ~thunk:t;
+  match Store.hit ~key ~authorized:cell_authorized with
+  | Store.HitOk cached ->
+      t.thunk_status <- Evaluated cached;
+      cached
+  | Store.HitFailed errval ->
+      (match errval with
+       | VString msg -> failwith msg
+       | _ -> failwith "node failed (cached)")
+  | Store.Miss -> run_node_body ~key ~run t
+
 (* letrec* poison for value defs in blocks: a fresh (non-content-addressed)
    thunk pre-bound at block entry so the whole block sees the binding; forcing
    it before the def executes raises, and the def backpatches it in place. The
@@ -136,125 +226,32 @@ let rec force (v : value) : value =
       (match t.thunk_status with
        | Evaluated result ->
            decr force_depth;
-           (* Trace replay: when a caller forces an already-Evaluated
-              persistent node, replay the node's stored trace reads into
-              active trace frames so the caller's trace transitively
-              captures this node's world-reads (same mechanism as
-              Store.hit's hit-replay). *)
-           (if t.thunk_persist && !Runtime.trace_stack <> [] then
-              let nk = node_key_of t in
-              let open Store in
-              let traces = load_traces ~key:nk in
-              List.iter (fun tr ->
-                List.iter (fun (c, h) -> Runtime.record_read c h) tr.tr_reads
-              ) traces);
+           replay_node_reads t node_key_of;
            force result
        | Evaluating ->
            decr force_depth;
            failwith "infinite recursion detected (forcing a thunk already being evaluated)"
        | Unevaluated ->
-           (* Check persistent store if this is a node thunk. Identity is the
+           (* Persistent nodes route through the store. Identity is the
               LAW 20 node key (code + free-var value hashes); the trace decides
               validity. A stale trace falls through to recompute. *)
            if t.thunk_persist then
              let nk = node_key_of t in
-             Stabilize.register_node_key ~key:nk ~thunk:t;
-             (match Store.hit ~key:nk ~authorized:cell_authorized with
-              | Store.HitOk cached ->
-                  t.thunk_status <- Evaluated cached;
-                  decr force_depth;
-                  force cached
-              | Store.HitFailed errval ->
-                  (* LAW 28: re-serve a memoized failure without re-running. *)
-                  decr force_depth;
-                  (match errval with
-                   | VString msg -> failwith msg
-                   | _ -> failwith "node failed (cached)")
-              | Store.Miss -> evaluate_and_store t nk)
+             let run () =
+               match t.vm_code with
+               | Some (bc, code_offset, frames) ->
+                   !Primitives.vm_run_thunk_ref bc code_offset frames
+               | None ->
+                   eval t.thunk_expr t.thunk_env
+             in
+             (match force_node ~key:nk ~run t with
+              | result -> decr force_depth; force result
+              | exception e -> decr force_depth; raise e)
            else
              evaluate_and_store_no_key t)
   | _ ->
       decr force_depth;
       v
-
-and evaluate_and_store (t : thunk) (h : string) : value =
-  t.thunk_status <- Evaluating;
-  (* Push a trace frame so the world-reads this node makes (slurp, read-file)
-     are captured as (cell-id, observed-hash) pairs and stored with the result.
-     Popped on every exit — normal or exceptional — so a raised error never
-     leaks a dangling frame onto the stack. *)
-  let frame = Runtime.push_trace_frame () in
-  let result =
-    try
-      let r =
-        match t.vm_code with
-        | Some (bc, code_offset, frames) ->
-            !Primitives.vm_run_thunk_ref bc code_offset frames
-        | None ->
-            eval t.thunk_expr t.thunk_env
-      in
-      Runtime.pop_trace_frame ();
-      r
-    with
-    | Failure msg as e ->
-        Runtime.pop_trace_frame ();
-        (* LAW 28: store a FAILING trace — the error value plus the reads made
-           up to the failure — so a re-force with unchanged inputs re-serves the
-           failure, and re-runs only when a read changes. D16: reset the status
-           off `Evaluating` so the next force reports the real error, not a fake
-           "infinite recursion". *)
-        if t.thunk_persist then begin
-          let errval = VString msg in
-          let err_hash = Hasher.hash_value errval in
-          (try Store.store_object ~key:err_hash ~value:errval with _ -> ());
-          (try Store.store_trace ~key:h ~outcome:Failed ~result_hash:err_hash
-                 ~reads:(List.rev !frame) with _ -> ())
-        end;
-        t.thunk_status <- Unevaluated;
-        decr force_depth;
-        raise e
-    | e ->
-        Runtime.pop_trace_frame ();
-        t.thunk_status <- Unevaluated;
-        decr force_depth;
-        raise e
-  in
-  (match t.type_ann with
-   | Some ty -> check_type result ty t.thunk_loc
-   | None -> ());
-  t.thunk_status <- Evaluated result;
-  if t.thunk_persist then begin
-    let result_hash = Hasher.hash_value result in
-    (* Objects are content-addressed by result hash; the trace maps the node
-       key to that result plus the reads that justify it. *)
-    (try Store.store_object ~key:result_hash ~value:result with _ -> ());
-    (try Store.store_trace ~key:h ~outcome:Ok ~result_hash
-           ~reads:(List.rev !frame) with _ -> ());
-    (* --check (LAW 38): run the body a second time under a throwaway trace
-       frame; a different result hash means the node observed something no
-       cell captured — volatile, and unsafe to cache. *)
-    if !Store.check_mode then begin
-      let frame2 = Runtime.push_trace_frame () in
-      ignore frame2;
-      let r2 =
-        try
-          (match t.vm_code with
-           | Some (bc, code_offset, frames) ->
-               !Primitives.vm_run_thunk_ref bc code_offset frames
-           | None -> eval t.thunk_expr t.thunk_env)
-        with e -> Runtime.pop_trace_frame (); decr force_depth; raise e
-      in
-      Runtime.pop_trace_frame ();
-      if Hasher.hash_value r2 <> result_hash then begin
-        incr Store.volatile_count;
-        Printf.eprintf
-          "[check] volatile node %s: an identical run produced a different result hash\n%!"
-          (Store.short_key h)
-      end
-    end
-  end;
-  decr force_depth;
-  force result
 
 and evaluate_and_store_no_key (t : thunk) : value =
   t.thunk_status <- Evaluating;
@@ -683,65 +680,23 @@ and trampoline_force (v : value) : value =
             | Evaluated result -> Queue.add result queue; loop ()
             | Evaluating -> failwith "infinite recursion detected (trampoline)"
             | Unevaluated ->
-                if t.thunk_persist then
-                  begin
+                if t.thunk_persist then begin
                   let h = node_key_of t in
-                  Stabilize.register_node_key ~key:h ~thunk:t;
-                  begin match Store.hit ~key:h ~authorized:cell_authorized with
-                      | Store.HitOk cached ->
-                          t.thunk_status <- Evaluated cached;
-                          Queue.add cached queue;
-                          loop ()
-                      | Store.HitFailed errval ->
-                          (match errval with
-                           | VString msg -> failwith msg
-                           | _ -> failwith "node failed (cached)")
-                      | Store.Miss ->
-                          t.thunk_status <- Evaluating;
-                          let frame = Runtime.push_trace_frame () in
-                          let result =
-                            try
-                              let r =
-                                match t.vm_code with
-                                | Some (bc, code_offset, frames) ->
-                                    !Primitives.vm_run_thunk_ref bc code_offset frames
-                                | None ->
-                                    let saved = !force_depth in
-                                    force_depth := 0;
-                                    let r = eval t.thunk_expr t.thunk_env in
-                                    force_depth := saved;
-                                    r
-                              in
-                              Runtime.pop_trace_frame ();
-                              r
-                            with
-                            | Failure msg as e ->
-                                Runtime.pop_trace_frame ();
-                                let errval = VString msg in
-                                let err_hash = Hasher.hash_value errval in
-                                (try Store.store_object ~key:err_hash ~value:errval with _ -> ());
-                                (try Store.store_trace ~key:h ~outcome:Failed
-                                       ~result_hash:err_hash ~reads:(List.rev !frame)
-                                     with _ -> ());
-                                t.thunk_status <- Unevaluated;
-                                raise e
-                            | e ->
-                                Runtime.pop_trace_frame ();
-                                t.thunk_status <- Unevaluated;
-                                raise e
-                          in
-                          (match t.type_ann with
-                           | Some ty -> check_type result ty t.thunk_loc
-                           | None -> ());
-                          t.thunk_status <- Evaluated result;
-                          let result_hash = Hasher.hash_value result in
-                          (try Store.store_object ~key:result_hash ~value:result with _ -> ());
-                          (try Store.store_trace ~key:h ~outcome:Ok ~result_hash
-                                 ~reads:(List.rev !frame) with _ -> ());
-                          Queue.add result queue;
-                          loop ()
-                      end
-                  end
+                  let run () =
+                    match t.vm_code with
+                    | Some (bc, code_offset, frames) ->
+                        !Primitives.vm_run_thunk_ref bc code_offset frames
+                    | None ->
+                        let saved = !force_depth in
+                        force_depth := 0;
+                        let r = eval t.thunk_expr t.thunk_env in
+                        force_depth := saved;
+                        r
+                  in
+                  let result = force_node ~key:h ~run t in
+                  Queue.add result queue;
+                  loop ()
+                end
                 else begin
                   (* ephemeral thunk — no store check *)
                   t.thunk_status <- Evaluating;
@@ -843,16 +798,19 @@ and has_fs_write (path : string) : bool =
   List.exists (fun cap -> Capabilities.check_fs_write cap path) !current_capabilities
 
 and extract_capabilities (v : value) : capability list =
+  (* Forces via the registered force (Primitives.force_val) so the active
+     backend forces its own thunks — this function is shared with the VM's
+     ENTER_EFFECT. *)
   match v with
   | VCapability c -> [c]
   | VVector vs -> Array.to_list (Array.map (fun v ->
-      match force v with VCapability c -> c | _ -> failwith "capability vector must contain capabilities"
+      match Primitives.force_val v with VCapability c -> c | _ -> failwith "capability vector must contain capabilities"
     ) vs)
   | VPair _ ->
       let rec collect acc = function
         | VNil -> List.rev acc
         | VPair (v, rest) ->
-            (match force v with
+            (match Primitives.force_val v with
              | VCapability c -> collect (c :: acc) rest
              | other -> failwith ("not a capability: " ^ string_of_value other))
         | _ -> failwith "capability list must be a proper list"
