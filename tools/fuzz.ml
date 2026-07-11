@@ -23,7 +23,8 @@
    - car/cdr of nil returns nil (no error); still, car is only applied to
      statically-nonempty lists so arithmetic on the element is well-typed.
    - / and mod only ever get a nonzero positive literal divisor.
-   - No random / island / wall-clock forms are ever generated. *)
+   - No random / wall-clock / network-island forms are ever generated;
+     pinned file: islands over a fixed fixture are sampled in `full`. *)
 
 (* ---------------------------------------------------------------- CLI ---- *)
 
@@ -477,6 +478,55 @@ let stmt_load_module env _d =
   [S [A "load-module"; A ("\"" ^ !stdlib_path ^ "\"")];
    S [A "print"; S [A "length"; S [A "range"; A "0"; A (string_of_int (rint 1 6))]]]]
 
+(* Islands (D2): a FIXED fixture island, pinned once at startup by running
+   `pp --update` on a seed file (which also exercises the pin rewriter and
+   fills the cache). Only pinned file: islands over this fixture are ever
+   generated — network islands stay out (real nondeterminism). Setup failure
+   degrades to disabled, never to a flaky grammar. *)
+let island_fixture : (string * string) option Lazy.t = lazy (
+  try
+    let dir = Filename.temp_file "ppfuzz-island" "" in
+    Sys.remove dir;
+    Unix.mkdir dir 0o755;
+    let oc = open_out (Filename.concat dir "entry.pp") in
+    output_string oc "(def isl-x 42)\n(def (isl-add n) (+ n 5))\n";
+    close_out oc;
+    let seed_f = Filename.temp_file "ppfuzz-island-seed" ".pp" in
+    let oc = open_out seed_f in
+    output_string oc ("(import (island file:" ^ dir ^ "))\n(print isl-x)\n");
+    close_out oc;
+    let rc = Sys.command (Filename.quote !pp_bin ^ " --update "
+                          ^ Filename.quote seed_f ^ " >/dev/null 2>&1") in
+    if rc <> 0 then None
+    else begin
+      let ch = open_in seed_f in
+      let line1 = input_line ch in
+      close_in ch;
+      let is_hex c = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') in
+      let n = String.length line1 in
+      let rec scan i =
+        if i >= n then None
+        else begin
+          let j = ref i in
+          while !j < n && is_hex line1.[!j] do incr j done;
+          if !j - i = 64 then Some (String.sub line1 i 64)
+          else scan (if !j > i then !j else i + 1)
+        end
+      in
+      match scan 0 with
+      | Some pin -> Some (dir, pin)
+      | None -> None
+    end
+  with _ -> None)
+
+let stmt_island env d =
+  match Lazy.force island_fixture with
+  | None -> stmt_print env d  (* setup failed: degrade, don't flake *)
+  | Some (dir, pin) ->
+      env.fns <- ("isl-add", 1, false) :: env.fns;
+      [S [A "import"; S [A "island"; A ("file:" ^ dir); A ("\"" ^ pin ^ "\"")]];
+       S [A "print"; S [A "isl-add"; A (string_of_int (rint 0 9))]]]
+
 let stmt_config_computed env d =
   (* computed config key — D15: VM requires compile-time literal *)
   let k = fresh "k" in
@@ -601,6 +651,7 @@ let gen_program (gram : string) (iter : int) : string =
     2, (fun () -> stmt_param_typed_def env d);
     2, (fun () -> stmt_module env d);
     1, (fun () -> stmt_load_module env d);
+    1, (fun () -> stmt_island env d);
     1, (fun () -> stmt_config_computed env d);
     2, (fun () -> stmt_perform env d);
     2, (fun () -> stmt_with_handler env d);
