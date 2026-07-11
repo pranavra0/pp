@@ -632,13 +632,11 @@ let () =
     | _ -> failwith "fenced expects a kind string and a spec map");
 
 
-  register "ppc-emit-opcode" (fun args ->
-    let args = force_args args in
+  register "ppc-emit-opcode" (fun _args ->
     failwith "ppc-emit-opcode: not yet implemented for self-hosting"
   );
 
-  register "ppc-emit-constant" (fun args ->
-    let args = force_args args in
+  register "ppc-emit-constant" (fun _args ->
     failwith "ppc-emit-constant: not yet implemented for self-hosting"
   );
 

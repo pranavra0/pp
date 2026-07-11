@@ -167,7 +167,6 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       compile_expr st then_e tail;
       let jmp_end_idx = current_offset st in
       emit st (JUMP 0);
-      let else_start = current_offset st in
       backpatch_jump st jmp_false_idx;
       compile_expr st else_e tail;
       backpatch_jump st jmp_end_idx

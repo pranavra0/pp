@@ -48,50 +48,50 @@ let lex (input : string) : (token * int) list =
 
   let add t = tokens := (t, !lex_line) :: !tokens in
   let peek () = if !pos < len then Some input.[!pos] else None in
-  let advance () = let c = input.[!pos] in pos := !pos + 1; c in
+  let advance () = pos := !pos + 1 in
 
   let rec next_delim () =
     match peek () with
     | None -> ()
     | Some c ->
       if c = ' ' || c = '\t' || c = '\n' || c = '\r' then
-        (if c = '\n' then incr lex_line; ignore (advance ()); next_delim ())
+        (if c = '\n' then incr lex_line; advance (); next_delim ())
       else if c = ';' then
-        (ignore (advance ()); skip_comment ())
+        (advance (); skip_comment ())
       else
         (token (); next_delim ())
 
   and skip_comment () =
     match peek () with
-    | Some '\n' -> incr lex_line; ignore (advance ()); next_delim ()
-    | Some '\r' | None -> ignore (advance ()); next_delim ()
-    | Some _ -> ignore (advance ()); skip_comment ()
+    | Some '\n' -> incr lex_line; advance (); next_delim ()
+    | Some '\r' | None -> advance (); next_delim ()
+    | Some _ -> advance (); skip_comment ()
 
   and token () =
     match peek () with
     | None -> add TokEOF
-    | Some '(' -> add TokLParen; ignore (advance ())
-    | Some ')' -> add TokRParen; ignore (advance ())
-    | Some '[' -> add TokLBracket; ignore (advance ())
-    | Some ']' -> add TokRBracket; ignore (advance ())
-    | Some '{' -> add TokLBrace; ignore (advance ())
-    | Some '}' -> add TokRBrace; ignore (advance ())
+    | Some '(' -> add TokLParen; advance ()
+    | Some ')' -> add TokRParen; advance ()
+    | Some '[' -> add TokLBracket; advance ()
+    | Some ']' -> add TokRBracket; advance ()
+    | Some '{' -> add TokLBrace; advance ()
+    | Some '}' -> add TokRBrace; advance ()
     | Some '<' ->
-        ignore (advance ());
+        advance ();
         (match peek () with
-         | Some '=' -> ignore (advance ()); add (TokSymbol "<=")
+         | Some '=' -> advance (); add (TokSymbol "<=")
          | Some c when (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ->
              read_island_rest ()
          | _ -> add (TokSymbol "<"))
-    | Some '\'' -> add TokQuote; ignore (advance ())
-    | Some '`' -> add TokQuasiquote; ignore (advance ())
+    | Some '\'' -> add TokQuote; advance ()
+    | Some '`' -> add TokQuasiquote; advance ()
     | Some ',' ->
-        ignore (advance ());
-        (match peek () with Some '@' -> ignore (advance ()); add TokUnquoteSplicing | _ -> add TokUnquote)
+        advance ();
+        (match peek () with Some '@' -> advance (); add TokUnquoteSplicing | _ -> add TokUnquote)
     | Some '#' ->
-        ignore (advance ());
+        advance ();
         (match peek () with
-         | Some '{' -> ignore (advance ()); add TokSharpLBrace
+         | Some '{' -> advance (); add TokSharpLBrace
          | _ -> lex_error !lex_line "unexpected character after #")
     | Some '"' -> read_string ()
     | Some '-' ->
@@ -108,7 +108,7 @@ let lex (input : string) : (token * int) list =
     | Some _ -> read_symbol ()
 
   and read_string () =
-    assert (advance () = '"');
+    assert (peek () = Some '"'); advance ();
     let buf = Buffer.create 16 in
     let rec loop () =
       match peek () with
@@ -157,7 +157,7 @@ let lex (input : string) : (token * int) list =
     loop ()
 
   and read_keyword () =
-    assert (advance () = ':');
+    assert (peek () = Some ':'); advance ();
     let buf = Buffer.create 8 in
     let rec loop () =
       match peek () with
@@ -203,7 +203,8 @@ let peek ps =
   if ps.pos < List.length ps.tokens then fst (List.nth ps.tokens ps.pos) else TokEOF
 let peek_line ps =
   if ps.pos < List.length ps.tokens then snd (List.nth ps.tokens ps.pos) else 1
-let advance ps = let t = peek ps in ps.pos <- ps.pos + 1; t
+let advance ps = ps.pos <- ps.pos + 1
+let next ps = let t = peek ps in advance ps; t
 
 (* Check if a token is a specific symbol *)
 let is_symbol ps name =
@@ -216,7 +217,7 @@ let parse_error ps msg =
 
 (* Parse a symbol from a token or error *)
 let expect_symbol ps =
-  match advance ps with
+  match next ps with
   | TokSymbol s -> s
   | TokKeyword k -> k
   | t -> parse_error ps ("expected symbol, got " ^ string_of_token t)
@@ -283,9 +284,9 @@ let rec parse_expr ps : expr =
 
 (* Parse a list: (expr ...)  or  (special-form ...) *)
 and parse_list ps =
-  ignore (advance ps);  (* consume ( *)
+  advance ps;  (* consume ( *)
   match peek ps with
-  | TokRParen -> ignore (advance ps); ELiteral VNil  (* empty list *)
+  | TokRParen -> advance ps; ELiteral VNil  (* empty list *)
   | TokSymbol s ->
       (* Check for special forms by looking at the car symbol *)
       parse_special_form ps s
@@ -297,7 +298,7 @@ and parse_list ps =
 
 (* Parse special forms where the car is a known symbol *)
 and parse_special_form ps car_sym =
-  ignore (advance ps);  (* consume the car symbol *)
+  advance ps;  (* consume the car symbol *)
   match car_sym with
   | "def" -> parse_def ps
   | "fn" -> parse_fn ps
@@ -333,7 +334,7 @@ and parse_rest ps =
   let result = ref [] in
   let rec loop () =
     match peek ps with
-    | TokRParen -> ignore (advance ps)
+    | TokRParen -> advance ps
     | TokEOF -> parse_error ps "unterminated list"
     | _ ->
         let e = parse_expr ps in
@@ -345,14 +346,14 @@ and parse_rest ps =
 
 (* Parse a vector of expressions [e1 e2 ...] *)
 and parse_vector_exprs ps =
-  begin match advance ps with
+  begin match next ps with
     | TokLBracket -> ()
     | t -> parse_error ps ("expected '[', got " ^ string_of_token t)
   end;
   let result = ref [] in
   let rec loop () =
     match peek ps with
-    | TokRBracket -> ignore (advance ps)
+    | TokRBracket -> advance ps
     | TokEOF -> parse_error ps "unterminated vector"
     | _ ->
         let e = parse_expr ps in
@@ -367,20 +368,20 @@ and parse_vector_exprs ps =
    the def/fn assembler desugars each into a located type check ahead of the
    body (LAW 32; they were parsed-then-discarded before). *)
 and parse_vector_param_list ps =
-  begin match advance ps with
+  begin match next ps with
     | TokLBracket -> ()
     | t -> parse_error ps ("expected '[', got " ^ string_of_token t)
   end;
   let result = ref [] in
   let rec loop () =
     match peek ps with
-    | TokRBracket -> ignore (advance ps)
+    | TokRBracket -> advance ps
     | TokEOF -> parse_error ps "unterminated parameter vector"
     | TokSymbol s ->
         advance ps;
         (match peek ps with
          | TokColon ->
-             ignore (advance ps);
+             advance ps;
              let ty = parse_expr ps in
              result := (s, Some ty) :: !result;
              loop ()
@@ -388,7 +389,7 @@ and parse_vector_param_list ps =
              result := (s, None) :: !result;
              loop ())
     | TokColon ->
-        ignore (advance ps);
+        advance ps;
         ignore (parse_expr ps);
         loop ()
     | _ -> parse_error ps "fn vector params must be symbols"
@@ -422,12 +423,12 @@ and parse_def ps =
   match peek ps with
   | TokLParen ->
       (* (def (name params...) [: type] body...) *)
-      ignore (advance ps);  (* consume ( *)
+      advance ps;  (* consume ( *)
       let name = expect_symbol ps in
       let params = parse_param_list ps in  (* consumes ) after params *)
       let ret_ty =
         match peek ps with
-        | TokColon -> ignore (advance ps); Some (parse_expr ps)
+        | TokColon -> advance ps; Some (parse_expr ps)
         | _ -> None in
       let body = block_body ps (parse_rest ps) in
       let param_names, body' = assemble_fn_body locate params ret_ty body in
@@ -435,7 +436,7 @@ and parse_def ps =
   | TokSymbol name ->
       (* (def name value) — a VALUE binding (evaluated at definition time),
          not a nullary closure: the ROADMAP §1 footgun fix. *)
-      ignore (advance ps);
+      advance ps;
       let value = parse_expr ps in
       ignore (parse_rest ps);  (* consume ) and any trailing *)
       EDefValue (name, locate value)
@@ -449,13 +450,13 @@ and parse_fn ps =
     match peek ps with
     | TokLBracket -> parse_vector_param_list ps
     | TokLParen ->
-        ignore (advance ps);
+        advance ps;
         parse_param_list ps
     | _ -> parse_error ps "fn requires parameter list"
   in
   let ret_ty =
     match peek ps with
-    | TokColon -> ignore (advance ps); Some (parse_expr ps)
+    | TokColon -> advance ps; Some (parse_expr ps)
     | _ -> None in
   let body = block_body ps (parse_rest ps) in
   let param_names, body' = assemble_fn_body locate params ret_ty body in
@@ -471,7 +472,7 @@ and parse_param_list ps =
     | TokColon ->
         (* Per-parameter type annotation before the parameter name is invalid,
            but consume it and the closing paren gracefully. *)
-        ignore (advance ps);
+        advance ps;
         ignore (parse_expr ps);
         expect_rparen ps;
         []
@@ -479,13 +480,13 @@ and parse_param_list ps =
         advance ps;
         (match peek ps with
          | TokColon ->
-             ignore (advance ps);
+             advance ps;
              let ty = parse_expr ps in
              (s, Some ty) :: loop ()
          | _ -> (s, None) :: loop ())
     | _ -> parse_error ps "expected parameter symbol"
   and expect_rparen ps =
-    match advance ps with
+    match next ps with
     | TokRParen -> ()
     | _ -> parse_error ps "expected ) after parameter type annotation"
   in
@@ -505,19 +506,19 @@ and parse_if ps =
 (* Parse a binding vector [name [: type] value ...] for let.
    If a type annotation is present the binding value is wrapped in ETyped. *)
 and parse_binding_vector ps =
-  begin match advance ps with
+  begin match next ps with
     | TokLBracket -> ()
     | t -> parse_error ps ("expected '[', got " ^ string_of_token t)
   end;
   let result = ref [] in
   let rec loop () =
     match peek ps with
-    | TokRBracket -> ignore (advance ps)
+    | TokRBracket -> advance ps
     | TokEOF -> parse_error ps "unterminated binding vector"
     | TokSymbol s ->
         advance ps;
         let ty = match peek ps with
-          | TokColon -> ignore (advance ps); Some (parse_expr ps)
+          | TokColon -> advance ps; Some (parse_expr ps)
           | _ -> None in
         let value = parse_expr ps in
         let value' = match ty with
@@ -536,16 +537,16 @@ and parse_let ps =
     match peek ps with
     | TokLBracket -> parse_binding_vector ps
     | TokLParen ->
-        ignore (advance ps);
+        advance ps;
         let rec loop pairs =
           match peek ps with
-          | TokRParen -> ignore (advance ps); List.rev pairs
+          | TokRParen -> advance ps; List.rev pairs
           | _ ->
               let name = match parse_expr ps with
                 | ESymbol s -> s | _ -> parse_error ps "let binding name must be symbol"
               in
               let ty = match peek ps with
-                | TokColon -> ignore (advance ps); Some (parse_expr ps)
+                | TokColon -> advance ps; Some (parse_expr ps)
                 | _ -> None in
               let value = parse_expr ps in
               let value' = match ty with
@@ -610,12 +611,12 @@ and parse_defnode ps =
   match peek ps with
   | TokLParen ->
       (* (defnode (name params...) [: type] body...) *)
-      ignore (advance ps);  (* consume ( *)
+      advance ps;  (* consume ( *)
       let name = expect_symbol ps in
       let params = parse_param_list ps in  (* consumes ) after params *)
       let ret_ty =
         match peek ps with
-        | TokColon -> ignore (advance ps); Some (parse_expr ps)
+        | TokColon -> advance ps; Some (parse_expr ps)
         | _ -> None in
       let body = block_body ps (parse_rest ps) in
       let param_names, body' = assemble_fn_body locate params ret_ty body in
@@ -623,7 +624,7 @@ and parse_defnode ps =
   | TokSymbol name ->
       (* (defnode name e) — a value binding of the node thunk of e, i.e.
          (def name (node e)): forcing `name` runs/caches the node. *)
-      ignore (advance ps);
+      advance ps;
       let value = parse_expr ps in
       ignore (parse_rest ps);  (* consume ) and any trailing *)
       EDefValue (name, locate (ENode value))
@@ -677,7 +678,7 @@ and parse_effect ps =
   let caps_expr =
     match peek ps with
     | TokKeyword "capabilities" ->
-        ignore (advance ps);
+        advance ps;
         (match peek ps with
          | TokLBracket ->
              let exprs = parse_vector_exprs ps in
@@ -728,7 +729,7 @@ and parse_import ps =
 and parse_load ps =
   match peek ps with
   | TokString path ->
-      ignore (advance ps);
+      advance ps;
       ignore (parse_rest ps);
       ELoad path
   | _ -> parse_error ps "load expects a string path"
@@ -737,22 +738,22 @@ and parse_load ps =
 and parse_load_module ps =
   match peek ps with
   | TokString path ->
-      ignore (advance ps);
+      advance ps;
       ignore (parse_rest ps);
       ELoadModule path
   | _ -> parse_error ps "load-module expects a string path"
 
 (* Stubs for new special forms — parsed but not yet evaluated. *)
 and parse_island ps =
-  let uri = match advance ps with
+  let uri = match next ps with
     | TokIsland s -> s
     | TokString s -> s
     | TokSymbol s -> s
     | t -> parse_error ps ("island expects <uri>, got " ^ string_of_token t)
   in
   let version = match peek ps with
-    | TokString s -> ignore (advance ps); Some s
-    | TokSymbol s -> ignore (advance ps); Some s
+    | TokString s -> advance ps; Some s
+    | TokSymbol s -> advance ps; Some s
     | _ -> None
   in
   ignore (parse_rest ps);
@@ -769,16 +770,16 @@ and parse_config ps =
   let default_opt = match peek ps with
     | TokRParen -> None
     | _ -> Some (parse_expr ps) in
-  ignore (advance ps);  (* consume ) *)
+  advance ps;  (* consume ) *)
   EConfig (key_expr, default_opt)
 
 (* (vector e1 e2 ...) — already inside a [ ... ] parsed as EApply *)
 and parse_vector ps =
-  ignore (advance ps);  (* consume [ *)
+  advance ps;  (* consume [ *)
   let result = ref [] in
   let rec loop () =
     match peek ps with
-    | TokRBracket -> ignore (advance ps)
+    | TokRBracket -> advance ps
     | TokEOF -> parse_error ps "unterminated vector"
     | _ ->
         let e = parse_expr ps in
@@ -790,11 +791,11 @@ and parse_vector ps =
 
 (* {key val ...} — map literal *)
 and parse_map ps =
-  ignore (advance ps);  (* consume { *)
+  advance ps;  (* consume { *)
   let result = ref [] in
   let rec loop () =
     match peek ps with
-    | TokRBrace -> ignore (advance ps)
+    | TokRBrace -> advance ps
     | TokEOF -> parse_error ps "unterminated map"
     | _ ->
         let k = parse_expr ps in
@@ -808,11 +809,11 @@ and parse_map ps =
 
 (* #{expr ...} — set literal *)
 and parse_set ps =
-  ignore (advance ps);  (* consume #{ *)
+  advance ps;  (* consume #{ *)
   let result = ref [] in
   let rec loop () =
     match peek ps with
-    | TokRBrace -> ignore (advance ps)
+    | TokRBrace -> advance ps
     | TokEOF -> parse_error ps "unterminated set"
     | _ ->
         let e = parse_expr ps in
@@ -834,19 +835,19 @@ and parse_qq_expr ps =
       parse_error ps "unexpected closing delimiter in quasiquote"
   | TokUnquote ->
       (* ,form  →  (list 'unquote form) — form evaluated NORMALLY *)
-      ignore (advance ps);
+      advance ps;
       EApply (ESymbol "list", [EQuote (ESymbol "unquote"); parse_expr ps])
   | TokUnquoteSplicing ->
       (* ,@form  →  (list 'unquote-splicing form) *)
-      ignore (advance ps);
+      advance ps;
       EApply (ESymbol "list", [EQuote (ESymbol "unquote-splicing"); parse_expr ps])
   | TokQuote ->
       (* 'form inside quasiquote: quote the qq-parsed form *)
-      ignore (advance ps);
+      advance ps;
       EQuote (parse_qq_expr ps)
   | TokQuasiquote ->
       (* nested quasiquote: (quasiquote <qq-parsed>) *)
-      ignore (advance ps);
+      advance ps;
       EApply (ESymbol "quasiquote", [parse_qq_expr ps])
   | TokLParen ->
       parse_qq_list ps
@@ -854,10 +855,10 @@ and parse_qq_expr ps =
       parse_qq_vector ps
   | TokLBrace ->
       (* {k v ...} → (hash-map (qq k) (qq v) ...) *)
-      ignore (advance ps);
+      advance ps;
       let rec loop acc =
         match peek ps with
-        | TokRBrace -> ignore (advance ps); List.rev acc
+        | TokRBrace -> advance ps; List.rev acc
         | TokEOF -> parse_error ps "unterminated map in quasiquote"
         | _ ->
             let k = parse_qq_expr ps in
@@ -868,10 +869,10 @@ and parse_qq_expr ps =
       EApply (ESymbol "hash-map", args)
   | TokSharpLBrace ->
       (* #{e ...} → (hash-set (qq e) ...) *)
-      ignore (advance ps);
+      advance ps;
       let rec loop acc =
         match peek ps with
-        | TokRBrace -> ignore (advance ps); List.rev acc
+        | TokRBrace -> advance ps; List.rev acc
         | TokEOF -> parse_error ps "unterminated set in quasiquote"
         | _ -> loop (parse_qq_expr ps :: acc)
       in
@@ -882,10 +883,10 @@ and parse_qq_expr ps =
 
 (* Parse a list in quasiquote mode: (a b c) → (cons (qq a) (cons (qq b) (cons (qq c) '()))) *)
 and parse_qq_list ps =
-  ignore (advance ps);  (* consume ( *)
+  advance ps;  (* consume ( *)
   let rec collect acc =
     match peek ps with
-    | TokRParen -> ignore (advance ps); List.rev acc
+    | TokRParen -> advance ps; List.rev acc
     | TokEOF -> parse_error ps "unterminated list in quasiquote"
     | _ -> collect (parse_qq_expr ps :: acc)
   in
@@ -896,10 +897,10 @@ and parse_qq_list ps =
 
 (* Parse a vector in quasiquote mode: [a b c] → (vector (qq a) (qq b) (qq c)) *)
 and parse_qq_vector ps =
-  ignore (advance ps);  (* consume [ *)
+  advance ps;  (* consume [ *)
   let rec collect acc =
     match peek ps with
-    | TokRBracket -> ignore (advance ps); List.rev acc
+    | TokRBracket -> advance ps; List.rev acc
     | TokEOF -> parse_error ps "unterminated vector in quasiquote"
     | _ -> collect (parse_qq_expr ps :: acc)
   in

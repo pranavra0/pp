@@ -4,4 +4,4 @@
  (name fuzz)
  (modules fuzz)
  (libraries unix)
- (flags -no-strict-sequence -w -8-10-26-27-39))
+ (flags -no-strict-sequence))
