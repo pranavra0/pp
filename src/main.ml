@@ -12,6 +12,7 @@ let main () =
   let watch_interval = ref 1.0 in
   let graph_mode = ref false in
   let stabilize = ref false in
+  let supervise = ref false in
 
   let rec parse = function
     | "--" :: rest ->
@@ -22,6 +23,7 @@ let main () =
     | "--update" :: rest -> Island.update_mode := true; parse rest
     | "--grant" :: grant :: rest -> grants := grant :: !grants; parse rest
     | "--reconcile" :: root :: rest -> reconcile_root := Some root; parse rest
+    | "--supervise" :: rest -> supervise := true; parse rest
     | "why" :: rest | "--why" :: rest -> Store.why_mode := true; parse rest
     | "--no-cache" :: rest -> Store.no_cache := true; parse rest
     | "--check" :: rest -> Store.check_mode := true; parse rest
@@ -38,6 +40,7 @@ let main () =
         Printf.printf "  pp -e '<expr>'           Evaluate an expression\n";
         Printf.printf "  pp --grant <spec>        Grant capability (fs:/path:rw, net:tcp, process)\n";
         Printf.printf "  pp --reconcile <root>    Materialize the program's map value under <root>\n";
+        Printf.printf "  pp --supervise <file.pp>  Reconcile program's process-map value (use with --watch)\n";
         Printf.printf "  pp why <file.pp>         Explain node cache hits/misses (capability-filtered)\n";
         Printf.printf "  pp --no-cache <file.pp>  Skip cache reads (recompute); results still stored\n";
         Printf.printf "  pp --check <file.pp>     Determinism audit: run each node twice, flag volatile\n";
@@ -87,9 +90,10 @@ let main () =
             else f))
          !files;
   Store.init ();
+  Runtime.proc_observer := Supervisor.observe_proc;
   (* Collect every cell observation made by the program: needed for
      --reconcile stratification (LAW 30) and for --watch polling. *)
-  if !reconcile_root <> None || !watch then Runtime.observe_all := true;
+  if !reconcile_root <> None || !watch || !supervise then Runtime.observe_all := true;
 
 
   (* ---- Phase 2: pp graph — delegates to Store.print_graph ---- *)
@@ -106,9 +110,20 @@ let main () =
       match Store.observe_cell id with
       | Some h -> Some (id, h) | None -> None) cell_ids
   in
-  let watch_loop ~bytecode ~reconcile_root ~files ~interval ~stabilize =
+  let watch_loop ~bytecode ~reconcile_root ~supervise ~files ~interval ~stabilize =
     Runtime.observe_all := true;
-    let run_once () =
+    let last_desired = ref None in
+    let apply_reconciliation last =
+      (match reconcile_root, last with
+       | Some root, Some v -> Reconciler.reconcile ~root v
+       | None, _ -> ()
+       | Some _, None -> failwith "reconcile: the program produced no value");
+      (if supervise then
+         match last with
+         | Some v -> Supervisor.reconcile v
+         | None -> failwith "supervise: the program produced no value")
+    in
+    let run_program () =
       (* Clear in-memory state for a fresh evaluation. The persistent store
          survives — this is the store-level collapse. *)
       if bytecode then Vm.init ()  (* clears thunk_store, globals, etc. *)
@@ -120,15 +135,13 @@ let main () =
       let last = List.fold_left (fun _ f ->
         match List.rev (Repl.execute_file_bytecode bytecode f) with
         | v :: _ -> Some v | [] -> None) None files in
-      (match reconcile_root, last with
-       | Some root, Some v -> Reconciler.reconcile ~root v
-       | None, _ -> ()
-       | Some _, None -> failwith "reconcile: the program produced no value");
+      last_desired := last;
+      apply_reconciliation last;
       (* Collect the cells we need to poll and snapshot their current hashes. *)
       let cell_ids = List.sort_uniq compare (List.map fst !(Runtime.observed_all)) in
       snapshot_cell_hashes cell_ids
     in
-    let run_once_stabilize ~prev_snapshot changed_cells =
+    let run_program_stabilize ~prev_snapshot changed_cells =
       let rev = Store.build_reverse_index () in
       let dirty = Store.dirty_keys_for changed_cells rev in
       Stabilize.reset_dirty dirty;
@@ -140,10 +153,8 @@ let main () =
       let last = List.fold_left (fun _ f ->
         match List.rev (Repl.execute_file_bytecode bytecode f) with
         | v :: _ -> Some v | [] -> None) None files in
-      (match reconcile_root, last with
-       | Some root, Some v -> Reconciler.reconcile ~root v
-       | None, _ -> ()
-       | Some _, None -> failwith "reconcile: the program produced no value");
+      last_desired := last;
+      apply_reconciliation last;
       let cell_ids = List.sort_uniq compare (List.map fst !(Runtime.observed_all)) in
       let new_obs = snapshot_cell_hashes cell_ids in
       let new_set = List.map fst new_obs in
@@ -155,40 +166,41 @@ let main () =
       Runtime.keep_thunks := false;
       Stabilize.clear_side_table ()
     end;
-    let snapshot = run_once () in
+    let snapshot = run_program () in
     let rec loop snapshot =
       begin try Unix.sleepf interval
         with _ -> Unix.sleep 1 end;
       (* Clear run pins so observe_cell reads the current world, not the
          snapshot from the last run (Q11 CAS-ingest pins the first read). *)
       Hashtbl.clear Store.run_pins;
-      if stabilize then begin
-        let changed_cells =
-          List.filter_map (fun (cell_id, recorded_hash) ->
-            match Store.observe_cell cell_id with
-            | Some h when h <> recorded_hash -> Some cell_id
-            | _ -> None) snapshot
-        in
-        if changed_cells <> [] then begin
+      (* Detect cell changes FIRST, before reconcile work, so config edits
+         are noticed promptly. Then reconcile processes only when no cell
+         changed — this still restarts killed services within one interval. *)
+      let changed_cells =
+        List.filter_map (fun (cell_id, recorded_hash) ->
+          match Store.observe_cell cell_id with
+          | Some h when h <> recorded_hash -> Some cell_id
+          | _ -> None) snapshot
+      in
+      if changed_cells <> [] then begin
+        if stabilize then begin
           Printf.eprintf "[watch] %d cell(s) changed — stabilizing\n%!"
             (List.length changed_cells);
-          let new_snapshot = run_once_stabilize ~prev_snapshot:snapshot changed_cells in
+          let new_snapshot = run_program_stabilize ~prev_snapshot:snapshot changed_cells in
           loop new_snapshot
-        end else
-          loop snapshot
-      end else begin
-        let changed =
-          List.exists (fun (cell_id, recorded_hash) ->
-            match Store.observe_cell cell_id with
-            | Some h -> h <> recorded_hash
-            | None -> false) snapshot
-        in
-        if changed then begin
+        end else begin
           Printf.eprintf "[watch] cell(s) changed — re-evaluating\n%!";
-          let new_snapshot = run_once () in
+          let new_snapshot = run_program () in
           loop new_snapshot
-        end else
-          loop snapshot
+        end
+      end else begin
+        (* Process supervision: re-reconcile every tick so a killed service
+           is restarted within one interval even if no input cell changed. *)
+        if supervise then
+          (match !last_desired with
+           | Some v -> Supervisor.reconcile v
+           | None -> ());
+        loop snapshot
       end
     in
     loop snapshot
@@ -211,7 +223,7 @@ let main () =
       let files = List.rev files in
       if !watch then
         watch_loop ~bytecode:!bytecode ~reconcile_root:!reconcile_root
-          ~files ~interval:!watch_interval ~stabilize:!stabilize
+          ~supervise:!supervise ~files ~interval:!watch_interval ~stabilize:!stabilize
       else if !diff then begin
         List.iter (fun f ->
           let tw_results = Repl.execute_file f in
@@ -228,22 +240,18 @@ let main () =
           end
         ) files
       end else begin
-        match !reconcile_root with
-        | None ->
-            List.iter (fun f ->
-              ignore (Repl.execute_file_bytecode !bytecode f)
-            ) files
-        | Some root ->
-            let last =
-              List.fold_left (fun _ f ->
-                match List.rev (Repl.execute_file_bytecode !bytecode f) with
-                | v :: _ -> Some v
-                | [] -> None)
-                None files
-            in
-            (match last with
-             | Some v -> Reconciler.reconcile ~root v
-             | None -> failwith "reconcile: the program produced no value")
+        let last =
+          List.fold_left (fun _ f ->
+            match List.rev (Repl.execute_file_bytecode !bytecode f) with
+            | v :: _ -> Some v | [] -> None) None files
+        in
+        (match !reconcile_root, last with
+         | Some root, Some v -> Reconciler.reconcile ~root v
+         | None, _ | Some _, None -> ());
+        (if !supervise then
+           match last with
+           | Some v -> Supervisor.reconcile v
+           | None -> failwith "supervise: the program produced no value")
       end);
 
   (* --check verdict: any volatile node fails the audit (LAW 38). *)

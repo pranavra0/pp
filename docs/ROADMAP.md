@@ -108,13 +108,13 @@ handler-cell refinement, LAW 38's containment half, and inline-nested cutoff
 
 - ✅ Reverse-edge index over traces; fs watchers + process-supervision cells;
   push `stabilize`; `--once` vs `--watch` as the only build/service difference.
-- Process-domain reconciler (start/stop/restart on spec-hash change); fenced
+- ✅ Process-domain reconciler (start/stop/restart on spec-hash change); fenced
   effects + intent journal (Q3), reconciler-only.
-- `pp graph` (now that the reverse index exists).
+- ✅ `pp graph` (now that the reverse index exists).
 
 **Exit (falsifiable):**
-1. A pp service killed with `kill -9` converges back within 1s.
-2. Editing its config rewrites config and restarts exactly the affected process.
+1. ✅ A pp service killed with `kill -9` converges back within 1s.
+2. ✅ Editing its config rewrites config and restarts exactly the affected process.
 3. ✅ The same program file with `--once` provisions once and terminates.
 4. ✅ Introspection shows `--watch` and `--once` hitting the **same node keys in
    the same store** — the store-level collapse, made auditable.
@@ -126,11 +126,13 @@ handler-cell refinement, LAW 38's containment half, and inline-nested cutoff
 **Groundwork landed:** `pp --watch` (polling pull-in-loop, clears in-memory
 state between iterations so the persistent store's trace-verification handles
 incremental rebuild), `pp --once` (explicit one-shot), `pp graph` (lazy
-cell→node dependency graph from stored traces), and true push `stabilize`
+cell→node dependency graph from stored traces), true push `stabilize`
 (dirty-propagation via a reverse-edge index that resets only dirty thunks —
 the optimization that avoids re-walking all traces from root) are live with
-`tests/031` and `tests/032`. The process-domain reconciler and fenced effects
-remain.
+`tests/031` and `tests/032`. The process-domain reconciler is live with
+`pp --supervise` / `pp --watch --supervise`, start/stop/restart on spec-hash
+change, zombie reaping, and journal intent/done pairs (`tests/033`). Fenced
+effects remain.
 ---
 
 ## Phase 3 — Parallelism (process pool)

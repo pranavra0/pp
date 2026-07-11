@@ -87,6 +87,10 @@ two shell suites:
     sequences on a 4-node program; push (`--watch --stabilize`) and pull
     (`--watch`) produce identical re-evaluation patterns at each step;
     both backends.
+  - **033** — process-domain reconciler (Phase 2, LAW 30): `--supervise`
+    starts/stops services from a desired process map; `kill -9` restarts
+    within one poll interval; config edits restart exactly the affected
+    service; journal contains intent/done proc entries; both backends.
   - **029** — REPL (ROADMAP §1): paren-balanced multi-line continuation,
     defs persisting across lines in BOTH backends, promptless piped output,
     `:why` toggling, `(exit N)` status control, deep-forced printing.

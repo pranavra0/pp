@@ -185,4 +185,11 @@ else
   echo "FAIL 032-stabilize"; fail=1
 fi
 
+echo "--- Phase 2 process-domain reconciler suite ---"
+if PP="$PP" bash tests/033-process-reconciler.sh; then
+  echo "ok   033-process-reconciler"
+else
+  echo "FAIL 033-process-reconciler"; fail=1
+fi
+
 exit $fail

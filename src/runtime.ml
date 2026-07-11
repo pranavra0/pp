@@ -140,6 +140,13 @@ let pop_trace_frame () : unit =
    observed hash is the hash of the forced value. *)
 let force_hook : (value -> value) ref = ref (fun v -> v)
 
+(* Process-domain reconciler cell observation hook. Set by Supervisor.init
+   so that Store.observe_cell can re-observe proc:<name> cells. *)
+let proc_observer : (string -> string option) ref = ref (fun _ -> None)
+
+let observe_proc (name : string) : string option =
+  !proc_observer name
+
 let config_cell_id (key : string) : string = "config:" ^ key
 let handler_cell_id (name : string) : string = "handler:" ^ name
 

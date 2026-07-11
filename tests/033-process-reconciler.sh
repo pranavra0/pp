@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+# Phase 2: process-domain reconciler.
+#
+#   pp --supervise prog.pp treats the program's final value as a desired
+#   process map {service-name -> spec-map}. The supervisor starts/stops/
+#   restarts services so that observed reality matches desired state:
+#     - a service killed with kill -9 is restarted within one poll interval;
+#     - editing config changes the spec hash and restarts exactly the
+#       affected service;
+#     - removing a service from desired state stops it.
+#
+#   Authority: --grant process is required. Start/stop operations are
+#   journaled intent/done pairs.
+#
+# Runs under an isolated HOME; both backends.
+set -uo pipefail
+PP=${PP:-bin/pp}
+case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
+
+TMP=$(mktemp -d)
+export HOME="$TMP"
+fail=0
+
+assert() {  # NAME PATTERN present|absent [FILE]
+  local name="$1" pat="$2" mode="$3" file="${4:-$TMP/out}"
+  if grep -qE "$pat" "$file"; then hit=present; else hit=absent; fi
+  if [ "$hit" = "$mode" ]; then echo "ok   $name"
+  else echo "FAIL $name: expected '$pat' $mode, got $hit"
+       echo "--- output ---"; cat "$file"; fail=1; fi
+}
+
+# Kill any services whose pidfiles we created.
+cleanup_services() {
+  for pidfile in "$TMP"/pid-*; do
+    [ -f "$pidfile" ] || continue
+    pid=$(cat "$pidfile" 2>/dev/null) || continue
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+  done
+}
+
+# Helper long-running service: writes its PID to the path given as arg $1 and sleeps.
+mkdir -p "$TMP/svc"
+cat > "$TMP/svc/run.sh" <<'EOF'
+#!/bin/sh
+echo $$ > "$1"
+exec sleep 1000
+EOF
+chmod +x "$TMP/svc/run.sh"
+
+# The program reads a config file so config edits change the spec hash.
+mkdir -p "$TMP/cfg"
+echo "v1" > "$TMP/cfg/env.txt"
+
+cat > "$TMP/supervise.pp" <<EOF
+(let [cfg (slurp "$TMP/cfg/env.txt")]
+  {"svc-a" {"cmd" "$TMP/svc/run.sh"
+             "args" ["$TMP/pid-a"]
+             "cwd" "$TMP"
+             "env" {"MARKER" cfg}}
+   "svc-b" {"cmd" "$TMP/svc/run.sh"
+             "args" ["$TMP/pid-b"]
+             "cwd" "$TMP"
+             "env" {"MARKER" "stable"}}})
+EOF
+
+# --- (a) no process grant ⇒ capability error ---
+"$PP" --supervise --grant "fs:$TMP/cfg:ro" "$TMP/supervise.pp" > "$TMP/out" 2>&1 || true
+assert "nogrant-denied" "capability error" present
+
+# --- (b) one-shot supervise starts both services ---
+rm -rf "$TMP/.pp"
+"$PP" --supervise --grant process --grant "fs:$TMP/cfg:ro" "$TMP/supervise.pp" > "$TMP/out" 2>&1
+assert "oneshot-started" "started=" present
+[ -f "$TMP/pid-a" ] || { echo "FAIL oneshot-pid-a: pidfile missing"; fail=1; }
+[ -f "$TMP/pid-b" ] || { echo "FAIL oneshot-pid-b: pidfile missing"; fail=1; }
+PID_A=$(cat "$TMP/pid-a")
+PID_B=$(cat "$TMP/pid-b")
+kill -0 "$PID_A" 2>/dev/null && echo "ok   oneshot-alive-a" \
+  || { echo "FAIL oneshot-alive-a: pid $PID_A not alive"; fail=1; }
+kill -0 "$PID_B" 2>/dev/null && echo "ok   oneshot-alive-b" \
+  || { echo "FAIL oneshot-alive-b: pid $PID_B not alive"; fail=1; }
+# Stop the orphans so they do not leak into later tests.
+kill "$PID_A" 2>/dev/null || true
+kill "$PID_B" 2>/dev/null || true
+cleanup_services
+
+# --- (c) watch mode: kill -9 restarts within one interval ---
+rm -rf "$TMP/.pp"
+echo "v1" > "$TMP/cfg/env.txt"
+timeout 20 "$PP" --watch --supervise --grant process --grant "fs:$TMP/cfg:ro" \
+  --watch-interval 0.3 "$TMP/supervise.pp" > "$TMP/watch-out" 2>&1 &
+WATCH_PID=$!
+sleep 2
+[ -f "$TMP/pid-a" ] || { echo "FAIL watch-pid-a: pidfile missing"; fail=1; }
+OLD_A=$(cat "$TMP/pid-a")
+kill -9 "$OLD_A"
+sleep 1
+[ -f "$TMP/pid-a" ] || { echo "FAIL watch-restart-pid-a: pidfile missing"; fail=1; }
+NEW_A=$(cat "$TMP/pid-a")
+if [ "$OLD_A" != "$NEW_A" ] && kill -0 "$NEW_A" 2>/dev/null; then
+  echo "ok   watch-kill9-restart"
+else
+  echo "FAIL watch-kill9-restart: old=$OLD_A new=$NEW_A"; fail=1
+fi
+kill "$WATCH_PID" 2>/dev/null || true
+wait "$WATCH_PID" 2>/dev/null || true
+cleanup_services
+
+# --- (d) config edit restarts exactly the affected service ---
+rm -rf "$TMP/.pp"
+echo "v1" > "$TMP/cfg/env.txt"
+timeout 20 "$PP" --watch --supervise --grant process --grant "fs:$TMP/cfg:ro" \
+  --watch-interval 0.3 "$TMP/supervise.pp" > "$TMP/watch-out2" 2>&1 &
+WATCH_PID=$!
+sleep 2
+OLD_A=$(cat "$TMP/pid-a")
+OLD_B=$(cat "$TMP/pid-b" 2>/dev/null || echo "")
+# Find svc-b pidfile if it exists under a different env name.
+[ -f "$TMP/pid-b" ] || { echo "FAIL watch-pid-b: pidfile missing"; fail=1; }
+OLD_B=$(cat "$TMP/pid-b")
+# Edit the config file read by svc-a only.
+echo "v2" > "$TMP/cfg/env.txt"
+sleep 2
+NEW_A=$(cat "$TMP/pid-a")
+NEW_B=$(cat "$TMP/pid-b")
+if [ "$OLD_A" != "$NEW_A" ] && kill -0 "$NEW_A" 2>/dev/null; then
+  echo "ok   config-edit-restarts-a"
+else
+  echo "FAIL config-edit-restarts-a: old=$OLD_A new=$NEW_A"; fail=1
+fi
+if [ "$OLD_B" = "$NEW_B" ] && kill -0 "$NEW_B" 2>/dev/null; then
+  echo "ok   config-edit-keeps-b"
+else
+  echo "FAIL config-edit-keeps-b: old=$OLD_B new=$NEW_B"; fail=1
+fi
+kill "$WATCH_PID" 2>/dev/null || true
+wait "$WATCH_PID" 2>/dev/null || true
+cleanup_services
+
+# --- (e) journal contains intent/done pairs for process ops ---
+if [ -f "$TMP/.pp/store/journal/log" ] && \
+   grep -q "intent proc start" "$TMP/.pp/store/journal/log" && \
+   grep -q "done proc start" "$TMP/.pp/store/journal/log"; then
+  echo "ok   journal-proc"
+else
+  echo "FAIL journal-proc: missing proc intent/done entries"; fail=1
+fi
+
+# --- (f) removing a service from desired state stops it ---
+# Refresh state so both services are alive.
+"$PP" --supervise --grant process --grant "fs:$TMP/cfg:ro" "$TMP/supervise.pp" > "$TMP/out-refresh" 2>&1
+[ -f "$TMP/pid-a" ] || { echo "FAIL stop-pid-a: pidfile missing"; fail=1; }
+PID_A=$(cat "$TMP/pid-a")
+# Shrink desired state to only svc-b.
+cat > "$TMP/supervise-stop.pp" <<EOF
+{"svc-b" {"cmd" "$TMP/svc/run.sh"
+           "args" ["$TMP/pid-b"]
+           "cwd" "$TMP"
+           "env" {"MARKER" "stable"}}}
+EOF
+"$PP" --supervise --grant process "$TMP/supervise-stop.pp" > "$TMP/out-stop" 2>&1
+assert "stop-summary" "stopped=1" present "$TMP/out-stop"
+kill -0 "$PID_A" 2>/dev/null && { echo "FAIL stop-a: svc-a still alive"; fail=1; } \
+  || echo "ok   stop-a"
+
+# --- (g) VM parity: bytecode backend supervises too ---
+rm -rf "$TMP/.pp"
+cat > "$TMP/supervise-vm.pp" <<EOF
+{"svc-vm" {"cmd" "$TMP/svc/run.sh"
+            "args" ["$TMP/pid-vm"]
+            "cwd" "$TMP"}}
+EOF
+"$PP" --bytecode --supervise --grant process \
+  "$TMP/supervise-vm.pp" > "$TMP/out-vm" 2>&1
+assert "vm-started" "started=" present
+[ -f "$TMP/pid-vm" ] || { echo "FAIL vm-pid: pidfile missing"; fail=1; }
+PID_VM=$(cat "$TMP/pid-vm")
+kill -0 "$PID_VM" 2>/dev/null && echo "ok   vm-alive" \
+  || { echo "FAIL vm-alive: pid $PID_VM not alive"; fail=1; }
+kill "$PID_VM" 2>/dev/null || true
+cleanup_services
+
+rm -rf "$TMP"
+if [ "$fail" -eq 0 ]; then echo "=== PROCESS RECONCILER TEST PASSED ==="; fi
+exit $fail

@@ -42,8 +42,11 @@ cell change), `pp --once` (explicit one-shot), and `pp graph` (cell→node
 dependency graph from stored traces) exist, proving exit criteria 3+4
 (same keys, same store in `--once` vs `--watch`). Push `stabilize` is
 now live (`pp --watch --stabilize`), and `tests/032` proves it produces
-the same results as pull mode. The process-domain reconciler and fenced
-effects (LAW 31) remain Phase 2–4 work
+the same results as pull mode. **The process-domain reconciler is live:**
+`pp --watch --supervise` takes a program whose final value is a map of
+service-name → spec, starts/stops/restarts services on spec-hash change,
+reaps zombie children, and restarts a `kill -9`'d service within one poll
+interval (`tests/033`). Fenced effects (LAW 31) remain Phase 2–4 work
 ([ROADMAP.md](ROADMAP.md)).
 
 The scaffolding is good: the O(1) env-hash design, the CPS tail-call
@@ -175,8 +178,18 @@ non-list `def` is a value binding — `tests/025`.)
   the tree with zero tool re-runs when the desired-map nodes hit
   (`tests/023`). Grant the output domain WRITE-ONLY (`fs:<root>:wo`): a
   read-capable grant over it would make `run`'s coarse tree cell observe the
-  domain and trip stratification. v1 limits: filesystem domain only,
-  pull-mode only.
+  domain and trip stratification. v1 limits: filesystem domain only;
+  combine with `--watch` for continuous reconciliation.
+- **Process-domain reconciler (Phase 2).** `pp --supervise prog.pp`
+  (typically `pp --watch --supervise`) treats the program's final value as a
+  map of service-name → spec, and keeps observed processes in sync with the
+  desired specs: starts missing services, stops removed ones, restarts a
+  service when its spec hash changes, and reaps/restarts a process killed
+  with `kill -9` within one poll interval. Process state lives in
+  `~/.pp/store/procs/` and every start/stop is journaled intent/done.
+  Requires `--grant process`; a desired state that observed a `proc:` cell
+  (its own domain) is refused (LAW 30 stratification). Both backends.
+  Pinned by `tests/033-process-reconciler.sh`.
 - **`pp why`, `--no-cache`, `--check`.** `pp why file.pp` explains every node
   force to stderr: first build, per-trace stale cell, unauthorized (with the
   offending cell REDACTED when the caller lacks authority over it — LAW 23c,
@@ -195,8 +208,7 @@ non-list `def` is a value binding — `tests/025`.)
   `--watch` and `--once` (exit criteria 3+4). `pp graph file.pp` runs the
   program then scans `~/.pp/store/traces/` and prints the cell→node
   dependency graph (the reverse-edge index, computed lazily). Both backends.
-  Pinned by `tests/031-watch-once.sh`. The process-domain reconciler
-  remains Phase 2 work.
+  Pinned by `tests/031-watch-once.sh`.
 - **`pp --watch --stabilize` (push scheduler).** Uses a reverse-edge index
   from stored traces to compute the dirty node-key set when cells change;
   only those thunks are reset to `Unevaluated`, so clean nodes skip

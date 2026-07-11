@@ -1,6 +1,6 @@
 (executable
  (name main)
  (modules types hasher runtime store reader capabilities process reconciler
-   island primitives evaluator bytecode compiler stabilize vm repl main)
+   supervisor island primitives evaluator bytecode compiler stabilize vm repl main)
  (libraries cryptokit)
  (flags -no-strict-sequence -w -8-10-26-27-39))

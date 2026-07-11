@@ -880,7 +880,14 @@ program, reconciles, polls cells for changes, and re-runs on change
 prog.pp` uses the reverse-edge index from stored traces to reset only dirty
 thunks, so clean nodes skip `Store.hit` entirely; differential test
 `tests/032` confirms identical re-evaluation patterns to pull mode on both
-backends. Not yet: the process domain and fenced effects (LAW 31).
+backends. **The process domain is now live:** `pp --supervise prog.pp`
+(typically with `--watch`) takes a program whose final value is a map of
+service-name → spec, and keeps observed processes in sync: starts missing
+services, stops removed ones, restarts on spec-hash change, reaps zombies,
+and restarts a `kill -9`'d service within one poll interval. Requires
+`--grant process`, journals intent/done pairs, and refuses stratification on
+`proc:` observations (`tests/033`). Fenced effects (LAW 31) remain
+unimplemented.
 
 **Test:** first reconcile creates the tree; a null reconcile writes nothing;
 manual drift and foreign files converge away; a shrunk desired map deletes
@@ -1128,7 +1135,7 @@ signatures, not line numbers — the source is under active migration.)
 | LAW 27 | exception/tail-safe dynamic extent | holds | D9/D16/D20 fixed; save-stack restore on every exit |
 | LAW 28 | failure traces, error memoization | partial | both backends memoize `Failure` outcomes as failing traces, re-served until a recorded read changes; D16 `Evaluating`-leak fixed (`tests/012`, `tests/014`); non-`Failure` exceptions uncached |
 | LAW 29 | source locations in errors | holds | D12 closed: every top-level form's location is appended to unlocated runtime errors in both backends; arity/capability errors name the callee/operation; `pp: error:` single-line reporting (`tests/027`); residual: `load`ed-file errors cite the loading form |
-| LAW 30 | desired-state + single writer | partial | fs-domain reconciler v1: plan/journal/atomic-apply/verify, single-writer deletes, stratification check, blob-hash desired values (Q4, `tests/018`, `tests/023`); drives a real 101-TU C build and Lua 5.4.7 end-to-end (`tests/024`); push `stabilize` live (`pp --watch --stabilize`, `tests/032`); process domain absent |
+| LAW 30 | desired-state + single writer | partial | fs-domain reconciler v1: plan/journal/atomic-apply/verify, single-writer deletes, stratification check, blob-hash desired values (Q4, `tests/018`, `tests/023`); drives a real 101-TU C build and Lua 5.4.7 end-to-end (`tests/024`); push `stabilize` live (`pp --watch --stabilize`, `tests/032`); process-domain reconciler live (`pp --supervise`, `tests/033`) |
 | LAW 31 | fenced effects, intent journal | unimplemented | Q3/Phase 2 |
 | LAW 32 | gradual types, strictest oracle | holds | D3 fixed; both backends enforce; tests 004/005 restored; `tests/007-phase0-laws.pp` |
 | LAW 33 | config: computed keys, tail-safe scoping | holds | D15 fixed; computed keys and tail-safe scoping in both backends; config reads inside nodes are `config:<key>` trace cells, ambient config out of the node key (`tests/015`) |

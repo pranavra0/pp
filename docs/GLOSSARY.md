@@ -92,14 +92,18 @@ Terms marked *(planned)* do not exist in the code yet — see
   `{proc → spec}`). Real today for the filesystem domain as
   `{relative-path → content}` where content is an inline string or a
   `blob:<sha256>` CAS reference from `(blob S)`, consumed by
-  `pp --reconcile ROOT` (`tests/018`, `tests/023`); the process domain is
-  planned.
+  `pp --reconcile ROOT` (`tests/018`, `tests/023`), and for the process
+  domain as `{service-name → spec}` consumed by `pp --supervise`
+  (`tests/033`).
 - **reconciler** *(partly real)* — the one privileged writer per domain.
-  v1 (`reconciler.ml`, `pp --reconcile ROOT`): diff desired vs observed by
-  content hash, journal `intent`/`done`, apply via temp+rename with
-  verify-after-write, delete unmanaged files, refuse self-reading desired
-  state (stratification, LAW 30). Watch mode live (`--watch --reconcile`
-  polling loop). Process domain and fenced effects (LAW 31) are Phase 2.
+  v1 filesystem (`reconciler.ml`, `pp --reconcile ROOT`): diff desired vs
+  observed by content hash, journal `intent`/`done`, apply via temp+rename
+  with verify-after-write, delete unmanaged files, refuse self-reading
+  desired state (stratification, LAW 30). Watch mode live
+  (`--watch --reconcile` polling loop). Process domain (`supervisor.ml`,
+  `pp --supervise`) is live: start/stop/restart on spec-hash change, zombie
+  reaping, journal intent/done (`tests/033`). Fenced effects (LAW 31) are
+  Phase 2.
 - **domain** *(planned)* — a slice of external state under single ownership (an
   output subtree, a process set, a DB schema).
 

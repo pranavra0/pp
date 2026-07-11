@@ -187,6 +187,8 @@ no inline-nested cutoff.
 | `src/primitives.ml` | Built-in functions and the initial environment. |
 | `src/island.ml` | Island URI → pin → local path resolution (stub). |
 | `src/store.ml` | Persistent content-addressed store + verifying traces; wired into the tree-walker's `force` for `(node e)`. |
+| `src/reconciler.ml` | Filesystem-domain reconciler v1 (Q4/LAW 30). |
+| `src/supervisor.ml` | Process-domain reconciler (Phase 2): desired process map → start/stop/restart on spec-hash change, zombie reaping, intent/done journal. |
 | `src/repl.ml` | REPL and file-execution helpers for both back ends. |
 | `src/stabilize.ml` | Push scheduler: side-table (`node_key` → `thunk`) + dirty reset; the reverse-edge index is in `store.ml`. |
 | `src/main.ml` | CLI entry point: flag parsing, `--grant`, dispatch to REPL/file/`-e`/`--diff`. |
@@ -205,6 +207,7 @@ pp --once <file.pp>      run once and exit (explicit; default behavior)
 pp --watch <file.pp>     run, then watch cell changes and re-evaluate (polling)
 pp --watch-interval <s>  poll interval for --watch (default 1.0)
 pp --watch --stabilize <file.pp>  watch with push stabilize (dirty-propagation)
+pp --supervise <file.pp>  reconcile program's process-map value (use with --watch)
 pp graph <file.pp>       print the cell→node dependency graph from traces
 pp --update              enable island pin-update mode (stub)
 pp --version | --help

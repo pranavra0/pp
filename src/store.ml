@@ -278,7 +278,10 @@ let observe_cell (cell_id : string) : string option =
       | None ->
           match strip_prefix "handler:" cell_id with
           | Some name -> (try Some (Runtime.observe_handler name) with _ -> None)
-          | None -> None  (* unknown cell kind: cannot re-observe ⇒ never verifies *)
+          | None ->
+              match strip_prefix "proc:" cell_id with
+              | Some name -> (try Runtime.observe_proc name with _ -> None)
+              | None -> None  (* unknown cell kind: cannot re-observe ⇒ never verifies *)
 
 let trace_verifies (tr : trace) : bool =
   List.for_all (fun (cell_id, recorded_hash) ->
