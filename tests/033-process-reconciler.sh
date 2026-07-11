@@ -17,6 +17,16 @@ set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
 
+# Portable `timeout`: macOS ships without coreutils. Must be a real executable,
+# not a shell function — `timeout N cmd &` has to put cmd's own pid in $! so
+# `kill $!` reaches it (alarm(2) survives the exec chain).
+if ! command -v timeout >/dev/null 2>&1; then
+  SHIM_DIR=$(mktemp -d)
+  printf '#!/bin/sh\nexec perl -e '\''alarm shift; exec @ARGV'\'' "$@"\n' > "$SHIM_DIR/timeout"
+  chmod +x "$SHIM_DIR/timeout"
+  PATH="$SHIM_DIR:$PATH"
+fi
+
 TMP=$(mktemp -d)
 export HOME="$TMP"
 fail=0
@@ -27,6 +37,18 @@ assert() {  # NAME PATTERN present|absent [FILE]
   if [ "$hit" = "$mode" ]; then echo "ok   $name"
   else echo "FAIL $name: expected '$pat' $mode, got $hit"
        echo "--- output ---"; cat "$file"; fail=1; fi
+}
+
+# Poll for a condition: the supervisor spawns services asynchronously, so
+# pidfile writes land shortly *after* pp returns. Bounded wait, 0.1s steps.
+wait_for() {  # SECONDS CMD ARGS...
+  local secs="$1"; shift
+  local i=0 max=$((secs * 10))
+  while [ "$i" -lt "$max" ]; do
+    "$@" 2>/dev/null && return 0
+    sleep 0.1; i=$((i + 1))
+  done
+  "$@" 2>/dev/null
 }
 
 # Kill any services whose pidfiles we created.
@@ -71,8 +93,8 @@ assert "nogrant-denied" "capability error" present
 rm -rf "$TMP/.pp"
 "$PP" --supervise --grant process --grant "fs:$TMP/cfg:ro" "$TMP/supervise.pp" > "$TMP/out" 2>&1
 assert "oneshot-started" "started=" present
-[ -f "$TMP/pid-a" ] || { echo "FAIL oneshot-pid-a: pidfile missing"; fail=1; }
-[ -f "$TMP/pid-b" ] || { echo "FAIL oneshot-pid-b: pidfile missing"; fail=1; }
+wait_for 5 test -f "$TMP/pid-a" || { echo "FAIL oneshot-pid-a: pidfile missing"; fail=1; }
+wait_for 5 test -f "$TMP/pid-b" || { echo "FAIL oneshot-pid-b: pidfile missing"; fail=1; }
 PID_A=$(cat "$TMP/pid-a")
 PID_B=$(cat "$TMP/pid-b")
 kill -0 "$PID_A" 2>/dev/null && echo "ok   oneshot-alive-a" \
@@ -91,11 +113,13 @@ timeout 20 "$PP" --watch --supervise --grant process --grant "fs:$TMP/cfg:ro" \
   --watch-interval 0.3 "$TMP/supervise.pp" > "$TMP/watch-out" 2>&1 &
 WATCH_PID=$!
 sleep 2
-[ -f "$TMP/pid-a" ] || { echo "FAIL watch-pid-a: pidfile missing"; fail=1; }
+wait_for 5 test -f "$TMP/pid-a" || { echo "FAIL watch-pid-a: pidfile missing"; fail=1; }
 OLD_A=$(cat "$TMP/pid-a")
 kill -9 "$OLD_A"
-sleep 1
-[ -f "$TMP/pid-a" ] || { echo "FAIL watch-restart-pid-a: pidfile missing"; fail=1; }
+# Restart lands within one 0.3s poll interval; the fresh pidfile write is
+# asynchronous, so poll for the *new* pid rather than sleeping a fixed beat.
+restarted_a() { p=$(cat "$TMP/pid-a" 2>/dev/null) && [ -n "$p" ] && [ "$p" != "$OLD_A" ]; }
+wait_for 5 restarted_a || { echo "FAIL watch-restart-pid-a: no new pid"; fail=1; }
 NEW_A=$(cat "$TMP/pid-a")
 if [ "$OLD_A" != "$NEW_A" ] && kill -0 "$NEW_A" 2>/dev/null; then
   echo "ok   watch-kill9-restart"
@@ -149,7 +173,7 @@ fi
 # --- (f) removing a service from desired state stops it ---
 # Refresh state so both services are alive.
 "$PP" --supervise --grant process --grant "fs:$TMP/cfg:ro" "$TMP/supervise.pp" > "$TMP/out-refresh" 2>&1
-[ -f "$TMP/pid-a" ] || { echo "FAIL stop-pid-a: pidfile missing"; fail=1; }
+wait_for 5 test -f "$TMP/pid-a" || { echo "FAIL stop-pid-a: pidfile missing"; fail=1; }
 PID_A=$(cat "$TMP/pid-a")
 # Shrink desired state to only svc-b.
 cat > "$TMP/supervise-stop.pp" <<EOF
@@ -173,7 +197,7 @@ EOF
 "$PP" --bytecode --supervise --grant process \
   "$TMP/supervise-vm.pp" > "$TMP/out-vm" 2>&1
 assert "vm-started" "started=" present
-[ -f "$TMP/pid-vm" ] || { echo "FAIL vm-pid: pidfile missing"; fail=1; }
+wait_for 5 test -f "$TMP/pid-vm" || { echo "FAIL vm-pid: pidfile missing"; fail=1; }
 PID_VM=$(cat "$TMP/pid-vm")
 kill -0 "$PID_VM" 2>/dev/null && echo "ok   vm-alive" \
   || { echo "FAIL vm-alive: pid $PID_VM not alive"; fail=1; }

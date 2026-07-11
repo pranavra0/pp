@@ -15,6 +15,16 @@ set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
 
+# Portable `timeout`: macOS ships without coreutils. Must be a real executable,
+# not a shell function — `timeout N cmd &` has to put cmd's own pid in $! so
+# `kill $!` reaches it (alarm(2) survives the exec chain).
+if ! command -v timeout >/dev/null 2>&1; then
+  SHIM_DIR=$(mktemp -d)
+  printf '#!/bin/sh\nexec perl -e '\''alarm shift; exec @ARGV'\'' "$@"\n' > "$SHIM_DIR/timeout"
+  chmod +x "$SHIM_DIR/timeout"
+  PATH="$SHIM_DIR:$PATH"
+fi
+
 TMP=$(mktemp -d)
 export HOME="$TMP"
 fail=0
@@ -28,10 +38,18 @@ assert() {  # NAME PATTERN present|absent  (matches named file or $TMP/out)
 }
 
 assert_count() {  # NAME PATTERN EXPECTED-COUNT FILE
+  # Watch iterations land asynchronously: poll (bounded) until the count
+  # arrives instead of trusting a fixed sleep, then assert exactness.
   local name="$1" pat="$2" want="$3" file="$4"
-  local got=$(grep -c "$pat" "$file" 2>/dev/null || printf "0")
+  local got="" i=0
+  while [ "$i" -lt 100 ]; do
+    got=$(grep -c "$pat" "$file" 2>/dev/null || printf "0")
+    [ "$got" = "$want" ] && break
+    sleep 0.1; i=$((i + 1))
+  done
   if [ "$got" = "$want" ]; then echo "ok   $name"
-  else echo "FAIL $name: expected $pat count $want, got $got"; fail=1; fi
+  else echo "FAIL $name: expected $pat count $want, got $got"
+       echo "--- content ---"; cat "$file"; fail=1; fi
 }
 
 # Build a simple two-node program: compile reads a.c, link depends on compile.

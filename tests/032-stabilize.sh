@@ -15,6 +15,16 @@ set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
 
+# Portable `timeout`: macOS ships without coreutils. Must be a real executable,
+# not a shell function — `timeout N cmd &` has to put cmd's own pid in $! so
+# `kill $!` reaches it (alarm(2) survives the exec chain).
+if ! command -v timeout >/dev/null 2>&1; then
+  SHIM_DIR=$(mktemp -d)
+  printf '#!/bin/sh\nexec perl -e '\''alarm shift; exec @ARGV'\'' "$@"\n' > "$SHIM_DIR/timeout"
+  chmod +x "$SHIM_DIR/timeout"
+  PATH="$SHIM_DIR:$PATH"
+fi
+
 TMP=$(mktemp -d)
 export HOME="$TMP"
 fail=0

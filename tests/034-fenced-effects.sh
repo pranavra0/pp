@@ -41,7 +41,7 @@ assert "bc-node-body-error" "fenced effects may not appear inside node bodies" p
 
 # --- (b) fenced in scripting tier without reconciler is a no-op ---
 cat > "$TMP/noop.pp" <<'EOF'
-(do (fenced "x" {"run" ["/bin/false"]}) (print 42))
+(do (fenced "x" {"run" ["/usr/bin/false"]}) (print 42))
 EOF
 "$PP" "$TMP/noop.pp" > "$TMP/outlog" 2>&1
 assert "scripting-noop" "^42$" present
@@ -51,7 +51,7 @@ rm -rf "$TMP/.pp" "$OUT"
 rm -f "$TMP/touched"
 cat > "$TMP/simple.pp" <<EOF
 (do
-  (fenced "touch-file" {"run" ["/bin/touch" "$TMP/touched"]})
+  (fenced "touch-file" {"run" ["/usr/bin/touch" "$TMP/touched"]})
   {"file.txt" "hello"})
 EOF
 "$PP" --fenced-policy retry --reconcile "$OUT" --grant "fs:$OUT:rw" "$TMP/simple.pp" > "$TMP/outlog" 2>&1
@@ -85,7 +85,7 @@ rm -rf "$TMP/.pp" "$OUT"
 rm -f "$TMP/touched"
 "$PP" --fenced-policy retry --reconcile "$OUT" --grant "fs:$OUT:rw" "$TMP/simple.pp" > "$TMP/outlog" 2>&1
 # Simulate a crash between intent and done by removing the done fenced line.
-sed -i '/^done fenced/d' "$JOURNAL"
+perl -ni -e 'print unless /^done fenced/' "$JOURNAL"
 rm -f "$TMP/touched"
 # Rerun with retry policy.  Recovery resumes the crashed pass's epoch, so the
 # fresh pass's identical action deduplicates: exactly one recovery retry.
@@ -103,7 +103,7 @@ fi
 rm -rf "$TMP/.pp" "$OUT"
 rm -f "$TMP/touched"
 "$PP" --fenced-policy retry --reconcile "$OUT" --grant "fs:$OUT:rw" "$TMP/simple.pp" > "$TMP/outlog" 2>&1
-sed -i '/^done fenced/d' "$JOURNAL"
+perl -ni -e 'print unless /^done fenced/' "$JOURNAL"
 rm -f "$TMP/touched"
 "$PP" --fenced-policy abort --reconcile "$OUT" --grant "fs:$OUT:rw" "$TMP/simple.pp" > "$TMP/outlog" 2>&1
 assert "recovery-abort-policy" "applying policy=abort" present
