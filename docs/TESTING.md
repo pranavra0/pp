@@ -110,7 +110,9 @@ two shell suites:
   - **027** — error messages (LAW 29/D12): top-level runtime errors carry
     the form's file:line, arity errors name the callee, capability errors
     name the operation, no double locations, single-line `pp: error:`
-    reporting with exit 1 — with stderr byte-identical across backends.
+    reporting with exit 1 — with stderr byte-identical across backends;
+    case (g) pins the D12 `load` residual fix: an error inside a `load`ed
+    file cites THAT file's line, not the loading form's.
   - **026** — per-parameter type annotations (LAW 32): well-typed calls pass,
     ill-typed calls raise the same located "type mismatch" on both backends
     (stderr byte-identical), unknown type names pass (gradual), vector param
@@ -168,6 +170,12 @@ two shell suites:
     node stores NO object (the non-data law) yet recomputes cleanly while
     a data node beside it still hits; a legacy Marshal-era store (garbage
     bytes, no VERSION) is wiped and rebuilt, exit 0.
+  - **039** — D22 VM global-scope holes (`.pp` differential): a bare
+    top-level `(do (def x ...) ...)` binds `x` block-local — referencing it
+    after the `do` closes is an unbound-symbol error in both backends; a
+    `(module ...)` body's later children (a function def, a value def, and
+    a bare statement) see EARLIER siblings, letrec*-style, exactly like the
+    tree-walker's `env_acc` fold.
 
 Two proofs run OUTSIDE `dune runtest` (they invoke dune / the network):
 
@@ -237,8 +245,12 @@ Options (defaults in parens):
   `module`/`import`/`load-module` and computed `config` keys,
   `effect`/`perform`/`with-handler` over the `log` effect, deep tail/non-tail
   recursion and long `map`s, `=` on structurally identical unforced lists,
-  sibling-referencing `let` bindings, quoted special forms. This **now passes**
-  (Phase 0 is closed); a regression here is a new bug.
+  sibling-referencing `let` bindings, quoted special forms, bare top-level
+  `do` with a def that must NOT leak past the block, and `module` bodies
+  whose function defs/value defs/bare statements reference EARLIER siblings
+  (the D22 VM scope holes, both fixed — `stmt_do_scoped_def`,
+  `stmt_module_sibling`). This **now passes** (Phase 0 is closed); a
+  regression here is a new bug.
 
 Never generated: `random`, wall-clock forms, file-write effects, capability
 constructors (all nondeterministic or unsafe), and **network** islands.
@@ -313,9 +325,12 @@ pp repro.pp; pp --bytecode repro.pp
 - **Core `let` never references sibling bindings** (the tree-walker's parallel
   vs the VM's sequential handling); the divergent case is generated
   deliberately only in `full`.
-- **Bare top-level `do` with defs and module-body sibling references** — the
-  two known D22 VM scope divergences — are never generated.
 
-(Two historical exclusions are gone: bare negative literals lex correctly
-now, and `(def x 5)` is a value binding — `stmt_def_value` generates it and
-later statements reference the bound name.)
+(Three historical exclusions are gone: bare negative literals lex correctly
+now; `(def x 5)` is a value binding — `stmt_def_value` generates it and later
+statements reference the bound name; and bare top-level `do` with defs plus
+module-body sibling references — the two D22 VM scope divergences — are
+fixed and now generated in `full` by `stmt_do_scoped_def` and
+`stmt_module_sibling` respectively: the former asserts a `do`-local def is
+unbound afterward in both backends, the latter has a module's function def,
+value def, and a bare statement all reference EARLIER siblings.)

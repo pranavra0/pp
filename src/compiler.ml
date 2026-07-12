@@ -225,7 +225,18 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
   | ENode e ->
       ignore (emit_node_region st e)
   | EDo exprs ->
-      let is_top_level = (st.cenv = []) in
+      (* A `do` block is ALWAYS a fresh block scope — even when it appears
+         directly at the top level (`st.cenv = []`). The tree-walker
+         (evaluator.ml EDo) threads a local `env_ref` forked from the
+         surrounding env; its defs are never merged back into the caller's
+         env, so a bare top-level `(do (def x ...) ...)` must not leak `x`
+         to later top-level forms (D22a). Top-level def VISIBILITY ACROSS
+         FORMS is a property of the top-level driver (EDef/EDefValue below,
+         and eval_expressions in the tree-walker), not of `do` — so `do`
+         must bind its own defs as local slots unconditionally, exactly like
+         a nested block. `extend_cenv` already does the right thing when
+         `st.cenv = []` (it starts the first frame at slot 0, matching the
+         VM's root frame, which is otherwise untouched at that point). *)
       (* Pass 1: collect defs — function defs AND value defs share the block's
          letrec* scope, so both get slots up front. *)
       let def_infos = ref [] in
@@ -237,15 +248,15 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
         | EDef (name, _, _) | EDefNode (name, _, _) ->
             def_infos := {name; slot= !slot_counter} :: !def_infos;
             names_to_add := name :: !names_to_add;
-            if not is_top_level then incr slot_counter
+            incr slot_counter
         | EDefValue (name, _) ->
             val_infos := (name, !slot_counter) :: !val_infos;
             names_to_add := name :: !names_to_add;
-            if not is_top_level then incr slot_counter
+            incr slot_counter
         | _ -> ()
       ) exprs;
       let start_slot, restore =
-        if is_top_level || !names_to_add = [] then (0, fun () -> ())
+        if !names_to_add = [] then (0, fun () -> ())
         else extend_cenv st (List.rev !names_to_add)
       in
       let def_map = Hashtbl.create 16 in
@@ -259,8 +270,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
         ignore (emit_thunk_region st
           (EApply (ESymbol "error",
                    [ELiteral (VString (name ^ ": referenced before its definition"))])));
-        if is_top_level then emit st (STORE_GLOBAL (intern_name st name))
-        else emit st (STORE_LOCAL (start_slot + slot))
+        emit st (STORE_LOCAL (start_slot + slot))
       ) (List.rev !val_infos);
       (* Pass 2: compile each sub-expression *)
       let rec compile_subs = function
@@ -269,21 +279,15 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
         | (EDef (name, params, body)) :: rest
         | (EDefNode (name, params, body)) :: rest ->
             ignore (emit_closure_region ~name:(Some name) st params body);
-            if is_top_level then
-              emit st (STORE_GLOBAL (intern_name st name))
-            else
-              (match Hashtbl.find_opt def_map name with
-               | Some di -> emit st (STORE_LOCAL di.slot)
-               | None -> failwith ("compiler: def " ^ name ^ " not found"));
+            (match Hashtbl.find_opt def_map name with
+             | Some di -> emit st (STORE_LOCAL di.slot)
+             | None -> failwith ("compiler: def " ^ name ^ " not found"));
             compile_subs rest
         | (EDefValue (name, rhs)) :: rest ->
             compile_expr st rhs false;
-            if is_top_level then
-              emit st (STORE_GLOBAL (intern_name st name))
-            else
-              (match Hashtbl.find_opt val_map name with
-               | Some slot -> emit st (STORE_LOCAL slot)
-               | None -> failwith ("compiler: def " ^ name ^ " not found"));
+            (match Hashtbl.find_opt val_map name with
+             | Some slot -> emit st (STORE_LOCAL slot)
+             | None -> failwith ("compiler: def " ^ name ^ " not found"));
             compile_subs rest
         | (EImport mod_expr) :: rest ->
             compile_expr st mod_expr false;
@@ -376,8 +380,68 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       emit st IMPORT
 
   | EModule exprs ->
+      (* Module children are a letrec*-style block, just like EDo: earlier
+         defs (function AND value) are visible to later module-body
+         expressions, including sibling exports and bare statements
+         (evaluator.ml EModule folds `env_acc` left-to-right, so `final_env`
+         sees every def that came before it) — D22(b). The VM must resolve
+         those sibling references via LOCAL slots, not the globals table
+         (a name is only stored into `globals` later, by IMPORT, once the
+         caller merges the finished module — during construction the names
+         are not globals yet, hence the "unbound symbol" the bug produced).
+
+         The whole module body is compiled as a fresh 0-param closure,
+         immediately CALLed, so its slots land in a BRAND NEW runtime frame:
+         module construction can appear inside an arbitrary enclosing scope
+         (a `let`, a function body, another `do`) whose OWN local slots
+         already occupy the ambient frame — reusing that frame here (the
+         way `do`/`let` reuse the enclosing frame) would silently clobber
+         those slots. A fresh call frame costs one CALL and stays name- and
+         slot-isolated from the surrounding scope, matching the tree-walker's
+         fresh `base_env = Primitives.initial_env ()`. *)
       let saved_cenv = st.cenv in
       st.cenv <- [];
+      let jmp_idx = current_offset st in
+      emit st (JUMP 0);
+      let body_start = current_offset st in
+      (* Pass 1: collect def/value-def names for the block's letrec* scope. *)
+      let def_infos = ref [] in
+      let val_infos = ref [] in
+      let slot_counter = ref 0 in
+      let names_to_add = ref [] in
+      List.iter (fun sub ->
+        match sub with
+        | EDef (name, _, _) | EDefNode (name, _, _) ->
+            def_infos := {name; slot= !slot_counter} :: !def_infos;
+            names_to_add := name :: !names_to_add;
+            incr slot_counter
+        | EDefValue (name, _) ->
+            val_infos := (name, !slot_counter) :: !val_infos;
+            names_to_add := name :: !names_to_add;
+            incr slot_counter
+        | _ -> ()
+      ) exprs;
+      let start_slot, restore =
+        if !names_to_add = [] then (0, fun () -> ())
+        else extend_cenv st (List.rev !names_to_add)
+      in
+      let def_map = Hashtbl.create 16 in
+      List.iter (fun di -> Hashtbl.add def_map di.name {di with slot = start_slot + di.slot}) !def_infos;
+      let val_map = Hashtbl.create 16 in
+      List.iter (fun (name, slot) -> Hashtbl.replace val_map name (start_slot + slot)) !val_infos;
+      (* Poison prologue: same discipline as EDo — a value def referenced
+         before it runs raises "<name>: referenced before its definition". *)
+      List.iter (fun (name, slot) ->
+        ignore (emit_thunk_region st
+          (EApply (ESymbol "error",
+                   [ELiteral (VString (name ^ ": referenced before its definition"))])));
+        emit st (STORE_LOCAL (start_slot + slot))
+      ) (List.rev !val_infos);
+      (* Pass 2: compile each child, storing defs/value-defs into their slot
+         (so later siblings can resolve them via LOAD_LOCAL) in addition to
+         pushing (name, value) onto the stack for MAKE_MODULE — DUP keeps a
+         copy for the STORE_LOCAL so MAKE_MODULE's stack protocol (n
+         contiguous (name, value) pushes) is unchanged. *)
       let count = ref 0 in
       List.iter (fun sub ->
         match sub with
@@ -385,13 +449,18 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
         | EDefNode (name, params, body) ->
             emit st (PUSH (intern st (VString name)));
             ignore (emit_closure_region ~name:(Some name) st params body);
+            emit st DUP;
+            (match Hashtbl.find_opt def_map name with
+             | Some di -> emit st (STORE_LOCAL di.slot)
+             | None -> failwith ("compiler: module def " ^ name ^ " not found"));
             incr count
         | EDefValue (name, rhs) ->
-            (* Evaluated at module-construction time, exported by name. (The
-               VM's known module-scope limitation applies: a sibling reference
-               resolves globally — see STATUS D-list.) *)
             emit st (PUSH (intern st (VString name)));
             compile_expr st rhs false;
+            emit st DUP;
+            (match Hashtbl.find_opt val_map name with
+             | Some slot -> emit st (STORE_LOCAL slot)
+             | None -> failwith ("compiler: module def " ^ name ^ " not found"));
             incr count
         | EImport _ ->
             (* Evaluated for its side effects like the tree-walker
@@ -401,13 +470,21 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
             emit st POP
         | _ ->
             (* Tree-walker evaluates every module child for side effects
-               (evaluator.ml EModule); do the same, discarding the value. *)
+               (evaluator.ml EModule), in an env that already sees the
+               preceding siblings; do the same, discarding the value. *)
             compile_expr st sub false;
             emit st FORCE;
             emit st POP
       ) exprs;
+      restore ();
+      emit st (MAKE_MODULE !count);
+      emit st RETURN;
       st.cenv <- saved_cenv;
-      emit st (MAKE_MODULE !count)
+      backpatch_jump st jmp_idx;
+      Hashtbl.add st.nparams_of body_start 0;
+      Hashtbl.add st.param_names_of body_start [];
+      emit st (MAKE_CLOSURE (body_start, 0));
+      emit st (CALL 0)
 
 
   | ELoad path ->

@@ -286,6 +286,49 @@ let loader_read (path : string) : string =
   record_read (Cell.(to_string (RuntimeFile canon))) (hash_string content);
   content
 
+(* ---- LAW 29 / D12: source locations on runtime errors, never doubled ----
+
+   A runtime error escaping a form's evaluation should report THAT form's
+   own file:line — unless its message already carries one (a trailing
+   " at <file>:<line>"), in which case it is left alone: a deeper, more
+   specific location already won and must not be overwritten by an outer,
+   less specific one.
+
+   One implementation, shared by every driver that evaluates a sequence of
+   located top-level-shaped forms: the top-level driver (repl.ml,
+   execute_file/execute_file_bytecode, both backends), the tree-walker's
+   `load` (evaluator.ml eval_expressions), and the VM's LOAD_FILE opcode
+   (vm.ml). Applying it at `load` granularity too (not just the outermost
+   top level) is what closes the D12 residual: an error inside a `load`ed
+   file is decorated with THAT file's line before it ever unwinds past the
+   loading form, so the `(load ...)` call site's own decorator (seeing a
+   message that already has a location) leaves it alone. *)
+let message_has_location (msg : string) : bool =
+  let n = String.length msg in
+  let contains_at =
+    let rec go i = i + 4 <= n && (String.sub msg i 4 = " at " || go (i + 1)) in
+    go 0 in
+  let all_digits i =
+    i < n &&
+    (let ok = ref true in
+     for k = i to n - 1 do
+       if not (msg.[k] >= '0' && msg.[k] <= '9') then ok := false
+     done; !ok) in
+  match String.rindex_opt msg ':' with
+  | Some i -> contains_at && all_digits (i + 1)
+  | None -> false
+
+let with_form_location (e : expr) (f : unit -> 'a) : 'a =
+  match e with
+  | ELocated ((file, line), _) ->
+      let relocate msg =
+        if message_has_location msg then msg
+        else Printf.sprintf "%s at %s:%d" msg file line in
+      (try f () with
+       | Failure msg -> failwith (relocate msg)
+       | Capability_error msg -> raise (Capability_error (relocate msg)))
+  | _ -> f ()
+
 (* Initial capabilities from --grant (set by main.ml before init) *)
 let initial_capabilities : capability list ref = ref []
 

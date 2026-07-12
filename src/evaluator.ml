@@ -463,8 +463,12 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
                  go rest
              | _ -> failwith "import expects a module value")
         | (ELoad path) :: rest ->
-            let source = Runtime.loader_read path in
-            let exprs = Reader.read_string source in
+            (* `~source:path`: the loaded file's OWN path, so its top-level
+               forms are located against it (not the reader's "<?>"
+               default) — LAW 29/D12, closed via eval_expressions below,
+               which per-form-locates each of the loaded file's forms. *)
+            let contents = Runtime.loader_read path in
+            let exprs = Reader.read_string ~source:path contents in
             ignore (eval_expressions exprs env_ref);
             go rest
         | (ELoadModule path) :: rest ->
@@ -573,8 +577,8 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       k mod_val
 
   | ELoad path ->
-      let source = Runtime.loader_read path in
-      let exprs = Reader.read_string source in
+      let contents = Runtime.loader_read path in
+      let exprs = Reader.read_string ~source:path contents in
       let env_ref = ref env in
       k (eval_expressions exprs env_ref)
 
@@ -822,82 +826,60 @@ and eval_module_file (path : string) : value =
   ignore (eval_expressions exprs mod_ref);
   VEnvMap (new_bindings ~base:(Primitives.initial_env ()).bindings (!mod_ref).bindings)
 
-(* Evaluate expressions sequentially with mutable env — used by ELoad, ELoadModule, and REPL *)
+(* Evaluate expressions sequentially with mutable env — used by ELoad, ELoadModule, and REPL.
+   `exprs` is always a list of top-level-shaped forms straight out of
+   Reader.read_string (the top-level file/REPL driver, or a `load`ed file's
+   own top-level forms), so every element is individually `ELocated`. *)
 and eval_expressions (exprs : expr list) (env : env ref) : value =
   let unwrap e = match e with ELocated (_, e') -> e' | _ -> e in
+  (* Evaluate ONE form, mutating `env` for defs/imports; wrapped in ITS OWN
+     location (LAW 29/D12): an error escaping this form is decorated with
+     this form's file:line before it can unwind past a `load` that brought
+     it in — never doubled if a deeper form already located it. *)
+  let step (e : expr) : value =
+    Runtime.with_form_location e (fun () ->
+      match unwrap e with
+      | EDef (name, params, body) ->
+          let closure = make_closure ~name:(Some name) params body env in
+          env := extend_env !env name closure;
+          closure
+      | EDefNode (name, params, body) ->
+          let closure = make_closure ~name:(Some name) params body env in
+          env := extend_env !env name closure;
+          closure
+      | EDefValue (name, rhs) ->
+          (* Top level is sequential: the RHS is evaluated now (a forward
+             reference is an unbound-symbol error), the value bound. *)
+          let v = eval rhs !env in
+          env := extend_env !env name v;
+          v
+      | EImport _ ->
+          let mod_val = force (eval e !env) in
+          (match mod_val with
+           | VEnvMap bindings ->
+               env := List.fold_left (fun env' (n, v) ->
+                 extend_env env' n v) !env bindings;
+               mod_val
+           | _ -> failwith "import expects a module value")
+      | ELoad path ->
+          (* `~source:path`: the loaded file's OWN path (not the reader's
+             "<?>" default), so ITS forms are in turn correctly located. *)
+          let contents = Runtime.loader_read path in
+          let sub_exprs = Reader.read_string ~source:path contents in
+          eval_expressions sub_exprs env
+      | _ ->
+          let result = force (eval e !env) in
+          (match result with
+           | VEnvMap bindings ->
+               env := List.fold_left (fun env' (n, v) ->
+                 extend_env env' n v) !env bindings;
+               result
+           | _ -> result))
+  in
   let rec go = function
     | [] -> VNil
-    | [e] ->
-        (match unwrap e with
-         | EDef (name, params, body) ->
-             let closure = make_closure ~name:(Some name) params body env in
-             env := extend_env !env name closure;
-             closure
-         | EDefNode (name, params, body) ->
-             let closure = make_closure ~name:(Some name) params body env in
-             env := extend_env !env name closure;
-             closure
-         | EDefValue (name, rhs) ->
-             (* Top level is sequential: the RHS is evaluated now (a forward
-                reference is an unbound-symbol error), the value bound. *)
-             let v = eval rhs !env in
-             env := extend_env !env name v;
-             v
-         | EImport mod_expr ->
-             let mod_val = force (eval e !env) in
-             (match mod_val with
-              | VEnvMap bindings ->
-                  env := List.fold_left (fun env' (n, v) ->
-                    extend_env env' n v) !env bindings;
-                  mod_val
-              | _ -> failwith "import expects a module value")
-         | ELoad path ->
-             let source = Runtime.loader_read path in
-             let exprs = Reader.read_string source in
-             eval_expressions exprs env
-         | _ ->
-             let result = force (eval e !env) in
-             (match result with
-              | VEnvMap bindings ->
-                  env := List.fold_left (fun env' (n, v) ->
-                    extend_env env' n v) !env bindings;
-                  result
-              | _ -> result))
-    | e :: rest ->
-        (match unwrap e with
-         | EDef (name, params, body) ->
-             let closure = make_closure ~name:(Some name) params body env in
-             env := extend_env !env name closure;
-             go rest
-         | EDefNode (name, params, body) ->
-             let closure = make_closure ~name:(Some name) params body env in
-             env := extend_env !env name closure;
-             go rest
-         | EDefValue (name, rhs) ->
-             let v = eval rhs !env in
-             env := extend_env !env name v;
-             go rest
-         | EImport mod_expr ->
-             let mod_val = force (eval e !env) in
-             (match mod_val with
-              | VEnvMap bindings ->
-                  env := List.fold_left (fun env' (n, v) ->
-                    extend_env env' n v) !env bindings;
-                  go rest
-              | _ -> failwith "import expects a module value")
-         | ELoad path ->
-             let source = Runtime.loader_read path in
-             let exprs = Reader.read_string source in
-             ignore (eval_expressions exprs env);
-             go rest
-         | _ ->
-             let result = force (eval e !env) in
-             (match result with
-              | VEnvMap bindings ->
-                  env := List.fold_left (fun env' (n, v) ->
-                    extend_env env' n v) !env bindings;
-                  go rest
-              | _ -> go rest))
+    | [e] -> step e
+    | e :: rest -> ignore (step e); go rest
   in
   go exprs
 

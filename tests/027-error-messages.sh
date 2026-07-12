@@ -87,6 +87,21 @@ if [ "$ec" -eq 1 ] && grep -q '^pp: error: ' "$TMP/e1" && ! grep -q "Fatal error
   ok "clean-error-line"
 else bad "clean-error-line" "exit=$ec" "stderr: $(cat "$TMP/e1")"; fi
 
+# ---- (g) an error inside a `load`ed file cites THAT file's line, not the
+# loading form's (D12 residual, closed) — both backends, byte-identical ----
+cat > "$TMP/g-inner.pp" <<'EOF'
+(print "inner-before")
+(car 5)
+EOF
+# Unquoted heredoc: embed $TMP as an absolute load path so this case does not
+# depend on cwd (loader authority resolves relative paths against cwd, not
+# the loading file's directory — tests/020).
+cat > "$TMP/g-outer.pp" <<EOF
+(print "outer-before")
+(load "$TMP/g-inner.pp")
+EOF
+assert_err_both "loaded-file-location" "$TMP/g-outer.pp" 'car expects a pair at .*g-inner\.pp:2'
+
 rm -rf "$TMP"
 if [ "$fail" -eq 0 ]; then echo "=== ERROR MESSAGE TEST PASSED ==="; fi
 exit $fail

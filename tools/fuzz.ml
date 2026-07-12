@@ -374,6 +374,20 @@ let stmt_do_print env d =
   let inner = List.init n (fun _ -> S [A "print"; gen_printable env (d - 1)]) in
   [S (A "do" :: inner)]
 
+let stmt_do_scoped_def env d =
+  (* D22(a), fixed: a bare top-level `(do (def x ...) ...)` binds x
+     BLOCK-LOCAL in both backends now — referencing it after the `do`
+     closes is an unbound-symbol error in both. Before the fix, the VM
+     stored the def as a VM global that leaked past the block, so the
+     second statement below would print a stale value instead of erroring
+     — a MISMATCH this generator would have caught. Not added to
+     `env.gvars`/`env.vars`: later statements must not see it either. *)
+  let x = fresh "g" in
+  let ty = random_ty env in
+  let e = gen_of_ty env d ty in
+  [S [A "do"; S [A "def"; A x; e]; S [A "print"; A x]];
+   S [A "print"; A x]]
+
 let stmt_def_value env d =
   (* (def x <expr>) — a VALUE binding (the ROADMAP §1 footgun fix): the RHS is
      evaluated at definition time and any later statement may reference x. *)
@@ -471,6 +485,31 @@ let stmt_module env d =
   env.fns <- (m, 1, false) :: env.fns;
   [S [A "import"; S (A "module" :: children)];
    S [A "print"; S [A m; gen_int_lit ()]]]
+
+let stmt_module_sibling env d =
+  (* D22(b), fixed: module-body children see EARLIER siblings, letrec*-style
+     — a sibling function def, a sibling value def, and a bare in-module
+     statement all resolve through the module's own local slots now.
+     Before the fix, any of these resolved globally at construction time and
+     raised "unbound symbol" in the VM (the tree-walker already threaded
+     `env_acc` forward across module children), e.g. exactly
+     `(import (module (def (f x) ...) (print (f 1))))` from STATUS D22. *)
+  let f = fresh "m" and a = fresh "m" and b = fresh "m" in
+  let p = fresh "p" in
+  let penv = { vars = [{ vname = p; vty = TInt; vne = false }];
+               fns = []; stdlib = false; gvars = [] } in
+  let def_f = S [A "def"; S [A f; A p]; gen_int penv (d - 1)] in
+  let def_a = S [A "def"; A a; gen_int_lit ()] in
+  (* def_b: a value def referencing BOTH a sibling value (a) and a sibling
+     function (f) *)
+  let def_b = S [A "def"; A b; S [A "+"; A a; S [A f; A "1"]]] in
+  (* bare module statement referencing siblings b and f *)
+  let stmt = S [A "print"; S [A "+"; A b; S [A f; A "2"]]] in
+  env.fns <- (f, 1, false) :: env.fns;
+  env.gvars <- { vname = b; vty = TInt; vne = false } :: env.gvars;
+  [S [A "import"; S [A "module"; def_f; def_a; def_b; stmt]];
+   S [A "print"; S [A f; gen_int_lit ()]];
+   S [A "print"; A b]]
 
 let stmt_load_module env _d =
   (* (load-module "<abs stdlib>") then use a stdlib fn — D15/D20 opcode probe *)
@@ -650,6 +689,8 @@ let gen_program (gram : string) (iter : int) : string =
     2, (fun () -> stmt_typed_def env d);
     2, (fun () -> stmt_param_typed_def env d);
     2, (fun () -> stmt_module env d);
+    2, (fun () -> stmt_module_sibling env d);
+    1, (fun () -> stmt_do_scoped_def env d);
     1, (fun () -> stmt_load_module env d);
     1, (fun () -> stmt_island env d);
     1, (fun () -> stmt_config_computed env d);

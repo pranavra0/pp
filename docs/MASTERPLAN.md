@@ -175,16 +175,26 @@ The pieces a userland devops library stands on.
   narrowing/threading only; domain write caps are minted solely at the root
   powerbox (`--grant domain:…`). The D18 adversarial suite extends to prove
   user code still cannot construct authority.
-- **Fix D22** (the two VM global-scope holes). Module/global correctness
-  stops being a curiosity the moment libraries are real.
+- ✅ **Fix D22** (the two VM global-scope holes). Module/global correctness
+  stops being a curiosity the moment libraries are real. `EDo` now binds its
+  defs as local slots unconditionally (never VM globals, even at
+  `st.cenv = []`); `EModule` compiles its body as a fresh 0-param closure so
+  sibling defs/value-defs resolve through local slots in their own runtime
+  frame, isolated from the enclosing scope. `tests/039-vm-global-scope.pp`;
+  fuzzer `stmt_do_scoped_def`/`stmt_module_sibling`.
 - **`defmacro`** on the total quote/quasiquote base (D10's promise). The
   design decision it forces: LAW 20's code-hash must hash the **expanded**
   form, or a macro edit becomes invisible to the store. Explicitly cuttable
   if M3 slips — it gates neither M4 nor M6.
-- **LAW 29 residual**: errors inside a `load`ed file cite the inner file.
+- ✅ **LAW 29 residual**: errors inside a `load`ed file cite the inner file.
+  `Reader.read_string` now reads a loaded file under its own path, and each
+  of its top-level forms is located/decorated individually
+  (`Runtime.with_form_location`, shared by both backends), so an error
+  inside it cites that file's line, not the loading form's.
+  `tests/027-error-messages.sh` case (g).
 
 **Exit (runnable):**
-1. The two deliberate D22 fuzzer generator exclusions
+1. ✅ The two deliberate D22 fuzzer generator exclusions
    ([TESTING.md](TESTING.md)) are **deleted** and the fuzzer stays green on
    `full`.
 2. Attenuation adversarial suite green, including capture-vs-ambient and

@@ -27,33 +27,11 @@ let init () =
 (* LAW 29 / D12: a runtime error escaping a top-level form reports that
    form's source location — unless its message already carries one (a
    " at …:<line>" suffix), so located errors are never double-located.
-   Shared by both backends' drivers, so the reported text is identical. *)
-let message_has_location (msg : string) : bool =
-  let n = String.length msg in
-  let contains_at =
-    let rec go i = i + 4 <= n && (String.sub msg i 4 = " at " || go (i + 1)) in
-    go 0 in
-  let all_digits i =
-    i < n &&
-    (let ok = ref true in
-     for k = i to n - 1 do
-       if not (msg.[k] >= '0' && msg.[k] <= '9') then ok := false
-     done; !ok) in
-  match String.rindex_opt msg ':' with
-  | Some i -> contains_at && all_digits (i + 1)
-  | None -> false
-
-let with_toplevel_location (e : expr) (f : unit -> 'a) : 'a =
-  match e with
-  | ELocated ((file, line), _) ->
-      let relocate msg =
-        if message_has_location msg then msg
-        else Printf.sprintf "%s at %s:%d" msg file line in
-      (try f () with
-       | Failure msg -> failwith (relocate msg)
-       | Types.Capability_error msg ->
-           raise (Types.Capability_error (relocate msg)))
-  | _ -> f ()
+   Runtime.with_form_location is the ONE implementation, shared by both
+   backends' top-level drivers here AND by `load` (evaluator.ml
+   eval_expressions, vm.ml LOAD_FILE) — so an error inside a `load`ed file
+   is decorated with THAT file's line, not the loading form's (D12). *)
+let with_toplevel_location = Runtime.with_form_location
 
 (* Tree-walker: process a single expression *)
 let process_expr (e : expr) : value =

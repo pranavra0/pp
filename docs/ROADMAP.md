@@ -208,14 +208,16 @@ speculative: every item below was hit in practice while building Phase 1.
   error for duplicate block defs; the top level stays sequential for value
   defs. Identical in both backends (SPEC LAW 4; `tests/025-def-value.sh`;
   fuzzer `stmt_def_value`). Two pre-existing VM scope holes surfaced while
-  fixing it are documented as D22.
+  fixing it (documented as D22) are now fixed too (`tests/039-vm-global-scope.pp`;
+  fuzzer `stmt_do_scoped_def`/`stmt_module_sibling`).
 - ✅ **Error messages — FIXED.** Runtime errors escaping any top-level form
   now report that form's `file:line` in both backends (D12 closed, LAW 29
   holds); arity errors name the function being called, capability errors
   name the operation, unbound-symbol text is backend-identical, and
   uncaught errors print as a single `pp: error: …` line with exit 1
-  (`tests/027-error-messages.sh`). Residual: errors inside a `load`ed file
-  cite the loading form's line, not the inner file's.
+  (`tests/027-error-messages.sh`). The `load` residual is closed too: an
+  error inside a `load`ed file now cites THAT file's line, not the loading
+  form's (`tests/027` case (g)).
 - ✅ **REPL quality — DONE.** Multi-line input (paren-balanced, string- and
   comment-aware, `..>` continuation prompt); history persisted to
   `~/.pp/history` with Up/Down recall; a raw-mode line editor (arrows,

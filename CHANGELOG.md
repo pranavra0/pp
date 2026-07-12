@@ -6,6 +6,28 @@ v0.2.0 predate this file and are reconstructed from history for context.
 
 ## [Unreleased] — v0.2.0
 
+- **M3: D22 VM global-scope holes fixed, LAW 29 `load` residual closed**:
+  (a) a bare top-level `(do (def x ...) ...)` no longer leaks its defs into
+  the VM's globals table — `EDo` now always binds its defs as local slots
+  (`extend_cenv`/`STORE_LOCAL`), matching the tree-walker's block-local
+  `env_ref`; (b) `module`-body children (function defs, value defs, and
+  bare statements) now see EARLIER siblings letrec*-style in the VM —
+  `EModule` compiles its whole body as a fresh 0-param closure, immediately
+  called, so sibling references resolve through local slots in a brand-new
+  runtime frame instead of the globals table (previously "unbound symbol").
+  Pinned by `tests/039-vm-global-scope.pp` and two new fuzzer generators
+  (`stmt_do_scoped_def`, `stmt_module_sibling`); the two `full`-grammar
+  generator exclusions this closes are gone from
+  [docs/TESTING.md](docs/TESTING.md). Separately, the LAW 29/D12 residual —
+  an error inside a `load`ed file citing the LOADING form's line instead of
+  the loaded file's own — is closed: `Reader.read_string` now reads a
+  loaded file under its own path (it previously fell back to the reader's
+  `"<?>"` placeholder), and each of the loaded file's top-level forms is
+  evaluated/compiled-and-run one at a time under the same never-doubled
+  location-decoration discipline as the outer top-level driver
+  (`Runtime.with_form_location`, one implementation shared by both
+  backends). See [docs/STATUS.md](docs/STATUS.md) (D12, D22),
+  [docs/SPEC.md](docs/SPEC.md) (LAW 4, LAW 29), `tests/027` case (g).
 - **Phase 1 closed**: pp is a proven incremental hermetic build engine — a
   101-TU C project builds through a real `build.pp` meeting every exit
   criterion (null rebuild, mtime-only touch, single-file recompile+link,

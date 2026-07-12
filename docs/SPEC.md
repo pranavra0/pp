@@ -221,11 +221,17 @@ Scope follows LAW 4 with statement timing:
 **Status: partial** — top-level and `do`-block `def`s are mutually recursive
 in both backends (they share a mutable global scope), and value defs behave
 identically in both backends including the letrec* poison error
-(`tests/025-def-value.sh`, fuzzer `stmt_def_value`). Module scope is not
-unified: the tree-walker's module `def`s capture the environment at
-definition time (value defs do participate in the letrec* prebinding), while
-the VM resolves module-body sibling references globally (D22) — the D15/D20
-residue.
+(`tests/025-def-value.sh`, fuzzer `stmt_def_value`). The VM/tree-walker
+module-body divergence is fixed (D22b closed: the VM now resolves
+module-body sibling references — function defs, value defs, and bare
+statements — through local slots in the module's own fresh frame, matching
+the tree-walker's `env_acc` fold; `tests/039-vm-global-scope.pp`, fuzzer
+`stmt_module_sibling`). A module is still its own fresh scope in both
+backends (`Primitives.initial_env ()`/a fresh frame), not literally "a
+bigger `let`" nested in the surrounding scope, so "one scope model
+everywhere" doesn't yet hold in LAW 4's strong sense — only the
+VM/tree-walker parity gap (D22) is closed, not the module-isolation-vs-`let`
+unification itself.
 
 **Test:** a module whose first `def` calls its second behaves identically to
 the same two `def`s at top level, in both backends; `load-module` without
@@ -860,11 +866,24 @@ errors include file and line. Arity errors name the function being called
 (`arity mismatch calling f: …`), capability errors name the operation
 (`read-file: capability error: …`), and unbound-symbol errors are
 byte-identical across backends. Uncaught errors print as one clean
-`pp: error: …` line with exit code 1. Residual: an error inside a `load`ed
-file reports the loading form's location, not the inner file's line.
+`pp: error: …` line with exit code 1.
+
+A `load`ed file's forms are located against THAT file, not the loading
+form: `Reader.read_string` reads a loaded file with its own path (previously
+it silently fell back to the reader's `"<?>"` placeholder), and each of its
+top-level forms is evaluated (tree-walker `eval_expressions`) or
+compiled-and-run (VM `LOAD_FILE`) ONE AT A TIME under the same
+never-doubled location decoration as the outer top-level driver
+(`Runtime.with_form_location`/`message_has_location` — one implementation,
+shared by both backends and both nesting levels). An error inside the
+loaded file is decorated with its own `file:line` before it can unwind past
+the `load`, so the `(load ...)` call site's own decorator — seeing a
+message that already carries a location — leaves it alone.
 
 **Test:** `(car 5)` at line 3 of `f.pp` reports `f.pp:3` in both backends,
-with byte-identical stderr (`tests/027`).
+with byte-identical stderr (`tests/027`); case (g) loads a file whose second
+form is `(car 5)` and asserts the reported location is the LOADED file's
+line, not the loading form's.
 
 ---
 
@@ -1168,7 +1187,7 @@ signatures, not line numbers — the source is under active migration.)
 | LAW 1 | mutual `let` scope | holds | `tests/007-phase0-laws.pp`; fuzzer `full` grammar |
 | LAW 2 | dependency-derived order, cycle errors | partial | cycles caught via `Evaluating` marker; report is generic, not named |
 | LAW 3 | binding-order-free identity | unimplemented | `hash_expr` order-sensitive (reordering changes the hash) |
-| LAW 4 | one scope model | partial | value defs (`(def x v)`) bind values with letrec* block scope, identical in both backends (`tests/025`); modules sequential in tree-walker; VM resolves module-body sibling refs globally and leaks bare-top-level-`do` defs to globals (D22) |
+| LAW 4 | one scope model | partial | value defs (`(def x v)`) bind values with letrec* block scope, identical in both backends (`tests/025`); `do`-block and module-body scoping now matches the tree-walker in the VM too (D22 closed: `do` defs are block-local, never VM globals; module-body siblings resolve via local slots, not globals — `tests/039`); a module is still its own fresh, outer-scope-isolated environment rather than truly nested `let`-style, so full unification remains partial |
 | LAW 5 | `let*` sequential sugar | holds | reader emits `ELetStar`; both backends sequential; `tests/007-phase0-laws.pp` |
 | LAW 6 | node CBV + memoization | partial | application is CBV (Q1); `(node e)` memoizes persistently, keyed on code + free-var value hashes (LAW 20; `tests/011`); `(defnode x e)` binds the node thunk (`tests/025`), but applied `defnode` is still a named closure, so aggregator-keyed-on-child-result-hashes doesn't yet arise |
 | LAW 7 | demand-pruning at node granularity | partial | reverse-edge dirty-propagation graph exists for push `stabilize` (`pp --watch --stabilize`, `tests/032`); root desired-state formula / explicit wanted-set still absent (Q1/Q5) |
@@ -1189,7 +1208,7 @@ signatures, not line numbers — the source is under active migration.)
 | LAW 26 | two handler classes, synthetic trace cells | partial | semantic half real at node granularity: `handler:<effect>` trace cells in both backends, mock/real coexist without cross-contamination (`tests/015`); cells coarser than the law's per-arg form; result-transparent class awaits schedulers (Phase 2/3) |
 | LAW 27 | exception/tail-safe dynamic extent | holds | D9/D16/D20 fixed; save-stack restore on every exit |
 | LAW 28 | failure traces, error memoization | partial | both backends memoize `Failure` outcomes as failing traces, re-served until a recorded read changes; D16 `Evaluating`-leak fixed (`tests/012`, `tests/014`); non-`Failure` exceptions uncached |
-| LAW 29 | source locations in errors | holds | D12 closed: every top-level form's location is appended to unlocated runtime errors in both backends; arity/capability errors name the callee/operation; `pp: error:` single-line reporting (`tests/027`); residual: `load`ed-file errors cite the loading form |
+| LAW 29 | source locations in errors | holds | D12 closed: every top-level form's location is appended to unlocated runtime errors in both backends; arity/capability errors name the callee/operation; `pp: error:` single-line reporting; a `load`ed file's own forms are individually located and decorated with THAT file's location before the error can unwind past the `load` (`tests/027`, including case (g)) |
 | LAW 30 | desired-state + single writer | partial | fs-domain reconciler v1: plan/journal/atomic-apply/verify, single-writer deletes, stratification check, blob-hash desired values (Q4, `tests/018`, `tests/023`); drives a real 101-TU C build and Lua 5.4.7 end-to-end (`tests/024`); push `stabilize` live (`pp --watch --stabilize`, `tests/032`); process-domain reconciler live (`pp --supervise`, `tests/033`) |
 | LAW 31 | fenced effects, intent journal | holds | scripting-tier `(fenced KIND SPEC)`, `--fenced-policy retry|abort|ask`, intent/done journal, recovery without silent retry; `tests/034` |
 | LAW 32 | gradual types, strictest oracle | holds | D3 fixed; both backends enforce; tests 004/005 restored; `tests/007-phase0-laws.pp` |

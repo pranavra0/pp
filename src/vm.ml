@@ -448,11 +448,27 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
         in
         (* Loader authority: bounded + runtime-cell recorded (Q6/D8c) —
            same helper as the tree-walker's ELoad/EIsland, so both backends
-           fail identically outside the source roots. *)
-        let source = Runtime.loader_read path in
-        let exprs = Reader.read_string source in
-        let prog = Compiler.compile_program exprs in
-        push (run_isolated prog 0 !local_frames);
+           fail identically outside the source roots. `~source:path`: the
+           loaded file's OWN path, so its forms are located against it, not
+           the reader's "<?>" default. *)
+        let contents = Runtime.loader_read path in
+        let exprs = Reader.read_string ~source:path contents in
+        (* Compile and run ONE top-level form at a time (mirroring
+           repl.ml's execute_file_bytecode for the outer file), each wrapped
+           in ITS OWN location (LAW 29/D12): an error escaping a form here
+           is decorated with the LOADED file's file:line before it can
+           unwind past this LOAD_FILE, so it never surfaces as the loading
+           `(load ...)` form's line. `run_isolated` (not run_program_expr)
+           keeps `!local_frames` — a `load` can appear inside a function or
+           block, and its forms only ever resolve names as VM globals
+           (compiled with a fresh top-level cenv), so the ambient frame is
+           passed through unused rather than replaced. *)
+        let result = List.fold_left (fun _ e ->
+          Runtime.with_form_location e (fun () ->
+            let bc = Compiler.compile_program [e] in
+            run_isolated bc 0 !local_frames)
+        ) VNil exprs in
+        push result;
         incr pc;
         loop ()
 
