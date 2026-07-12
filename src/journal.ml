@@ -91,11 +91,23 @@ let of_line (line : string) : entry option =
 let journal_dir = Filename.concat Store.store_root "journal"
 let log_path () = Filename.concat journal_dir "log"
 
+(* Phase 3 hardening: one line is one Unix.write_substring on an O_APPEND fd.
+   A buffered out_channel's [output_string]+[close_out] is two syscalls (a
+   write from the buffer, then the close's flush of whatever didn't fit) and
+   nothing stops the OCaml runtime from splitting a long line across more
+   than one underlying write() — under N concurrent writers, POSIX only
+   guarantees O_APPEND write() atomicity for a SINGLE write() call, so a
+   split write can interleave with another process's line and corrupt both.
+   One write_substring per line, on an fd opened O_APPEND every call (so the
+   "seek to end + write" is one atomic kernel operation), keeps every journal
+   line whole regardless of length or how many processes are appending. *)
 let append (e : entry) : unit =
   Store.ensure_dir journal_dir;
-  let oc = open_out_gen [Open_append; Open_creat] 0o644 (log_path ()) in
-  output_string oc (to_line e ^ "\n");
-  close_out oc
+  let line = to_line e ^ "\n" in
+  let fd = Unix.openfile (log_path ())
+             [Unix.O_WRONLY; Unix.O_APPEND; Unix.O_CREAT] 0o644 in
+  Fun.protect ~finally:(fun () -> try Unix.close fd with _ -> ()) (fun () ->
+    ignore (Unix.write_substring fd line 0 (String.length line)))
 
 (* Fold every parseable entry in journal order. *)
 let fold (f : 'a -> entry -> 'a) (init : 'a) : 'a =

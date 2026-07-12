@@ -663,6 +663,9 @@ let rec init () =
      forcing is vm_force (Evaluator.init is not run on this path). *)
   Runtime.force_hook := vm_force;
   Primitives.vm_run_thunk_ref := run_isolated;
+  (* Phase 3: let Primitives' scheduler-aware force-deep compute VM node keys
+     without a dependency cycle (Primitives is compiled before Vm). *)
+  Primitives.vm_node_key_ref := vm_node_key;
   Primitives.vm_run_bytecode_ref := (fun bc ->
     run_program bc
   );

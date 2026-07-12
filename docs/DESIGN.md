@@ -351,11 +351,38 @@ overclaim. Adapton's from-scratch-consistency is a *spec to test against*.
 
 ### Q9 — Distribution. **Scheduler-as-handler over a process pool; cluster deferred.**
 
-Phase 3 ships **process-pool parallelism only** — the `parallel` schedule
-handler over local worker *processes* (not OCaml 5 domains: the interpreter is
-saturated with global mutable state; processes give isolation and match the
-sandbox model). Cluster forcing, by-hash object sync, and signed capability
-tokens move to **Phase 4 / stretch**, gated behind a written threat-model doc.
+Phase 3 ships **process-pool parallelism only** — the `parallel`/`race`
+schedule handler over local worker *processes* (not OCaml 5 domains: the
+interpreter is saturated with global mutable state; processes give isolation
+and match the sandbox model). Cluster forcing, by-hash object sync, and
+signed capability tokens move to **Phase 4 / stretch**, gated behind a
+written threat-model doc.
+
+**Delivered (M1): fork-at-dispatch, not a persistent worker pool.** A
+dispatch point (`Primitives.force_deep`'s collect pass over a batch built by
+the new non-forcing `map` primitive, or a singleton `force_node`/`vm_force`
+Miss under `Race n`) holds a batch of `(key, run)` jobs; `Scheduler
+.dispatch_batch` (`src/scheduler.ml`) forks each up to the policy's
+concurrency, the child runs `Evaluator.run_node_body` — the SAME function
+the serial Miss arm calls, so there is no second "evaluate in a worker" code
+path — and exits 0/1; the parent reaps and falls through to `Store.hit`,
+never reading a value from a child. This resolves Wall B (below) in fork's
+favor over a persistent pool: `fork()` inherits ALL ambient state (the
+`handler_stack`'s live OCaml closures, `current_capabilities`,
+`config_stack`, `thunk_store`) byte-identically via copy-on-write, for free,
+at the one moment that state is already correct. A persistent pipe-fed pool
+or a fresh `pp` process targeting one node key would both need to MARSHAL
+that state across a channel that exists independently of any one
+dispatch — impossible for handler closures under the store's own non-data
+law, and buying nothing over a cheap `fork()` given that a node body never
+reaches back into the parent's live state once it starts running. The
+`Runtime` global-mutable-state refactor MASTERPLAN M1 originally named as
+"the real deliverable" is consequently NOT required to reach M1's exit
+(MASTERPLAN.md's M1 is amended accordingly) — but the state a REMOTE
+transport (M5, named/registrable handlers replacing closures) would need to
+marshal is the same inventory just enumerated, so M1 documents it instead of
+threading a `Runtime.t` against a fork-shaped worker that could never
+validate the refactor anyway.
 
 ### Q10 — Backend strategy. **Keep both; oracle is strictest; differential-test in CI; soften the parity rule.**
 
@@ -384,6 +411,27 @@ user code cannot obtain) cannot change the ambient set mid-run, so
 "captured at creation" and "ambient at force" are indistinguishable in a
 process. The capture becomes implementable — and testable — when in-language
 attenuation lands; adding it now would be dead, unfalsifiable code.
+
+**Q11-bis (Phase 3 / M1 narrowing — Wall C, docs/PLAN-phase3-parallel.md).**
+`Store.run_pins` is in-memory, per-process. A forked worker inherits the
+pin table as of the fork instant via COW, but any cell it observes for the
+FIRST time after that pins independently in its own copy — so N workers
+racing or batch-computing under `parallel`/`race` are no longer
+guaranteed to agree on a cell neither of them had pinned before dispatch.
+One parallel run is therefore **"at most N world snapshots agreeing on
+everything pinned before dispatch,"** not Q11's stronger single-process "one
+run, one world snapshot." This is still sound under R9: a divergent
+observed world across workers is a legitimate distinct trace (the store
+already models "the same code validly built under different observed
+worlds" as one key with a trace SET), so the worst case is a spurious
+recompute somewhere, never a wrong hit served across two workers'
+inconsistent worldviews. Closing the gap — a pre-dispatch snapshot barrier,
+or moving pins into the store itself so workers share one table — is out of
+M1's scope; it is M5 design work (the same milestone that would need the
+`Runtime.t` refactor for a remote transport, and for the same underlying
+reason: today's pin table, like the rest of ambient state, rides fork's COW
+for free, which is exactly what a barrier or a shared table would need to
+stop assuming).
 
 ### Q12 — Self-hosting: **cut now.** `pc.pp` is unrunnable on three independent counts (D14); deleted. The thesis-proving dogfood is Phase 1's exit: `pp` builds `pp` via a real `build.pp`. Self-hosting the compiler is a Phase 4+ curiosity.
 

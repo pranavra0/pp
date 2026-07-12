@@ -142,15 +142,37 @@ effects (LAW 31) are live: `(fenced KIND SPEC)` in the scripting tier,
 killed mid-apply action without double-execution (`tests/034`).
 ---
 
-## Phase 3 — Parallelism (process pool)
+## Phase 3 — Parallelism (process pool) ✅ DONE (M1, fork-at-dispatch)
 
-- `parallel` schedule handler over local worker **processes**; the
-  global-mutable-state refactor into `Runtime` this forces is the real
-  deliverable. Result-transparent handler discipline validated by `--check`.
+- ✅ `parallel`/`race` schedule handler over local worker **processes**
+  (`--schedule serial|parallel:N|race:N`, `src/scheduler.ml`). Result-
+  transparent handler discipline validated by `--check` (a non-serial policy
+  re-runs forced-serial against the same store and fails on any
+  desired-state hash mismatch). **Landed as fork-at-dispatch, not the
+  `Runtime` global-mutable-state refactor** originally planned as the real
+  deliverable: `fork()` inherits all ambient state byte-identically via
+  copy-on-write, so the refactor is not on this phase's critical path after
+  all (MASTERPLAN.md M1, Wall B) — it is documented as an M5 design item
+  (the inventory a REMOTE transport would need to marshal) instead.
+- ✅ The other real deliverable: a non-forcing `map` builtin closes Wall A
+  (`EApply` forces every argument, so no compound value could hold several
+  unforced node thunks at once — the missing batch fan-out point).
 
-**Exit:** the Phase-1 build runs across N local workers with byte-identical
-outputs to the serial build and a measured speedup; "run on 3, take first" is a
-handler swap with zero language-surface change.
+**Exit:**
+1. ✅ The Phase-1 101-TU build runs across N local workers with
+   byte-identical desired-state hash and materialized tree to the serial
+   build, and a measured speedup (4-5x observed) — `tests/024`'s `p3-*`
+   assertions.
+2. ✅ "Run on 3, take first" is a handler swap with zero language-surface
+   change — `tests/038`'s race:3 case.
+3. ✅ N-writer store stress (64 nodes, `parallel:16`, repeated cold;
+   `race:8` same-key with the trace lock disabled) — no corrupt traces, no
+   wrong hits, exact journal exec counts — `tests/038`.
+
+**Residual, out of scope:** Q11-bis (DESIGN.md Q11) — N forked workers agree
+only on cells pinned before dispatch, not a single global snapshot; sound,
+narrower than Q11's original claim, fix is M5 design work. Cluster/remote
+placement is unchanged Phase 4, gated on a threat-model doc.
 
 ---
 

@@ -19,18 +19,146 @@ let set_apply (f : value -> value list -> env -> value) = apply_ref := f
 let vm_run_thunk_ref : (Types.bytecode -> int -> Types.frame list -> Types.value) ref =
   ref (fun _ _ _ -> failwith "VM not initialized")
 
+(* ---- Phase 3: hooks the scheduler-aware force-deep needs from the two
+   backends' node-key functions and the shared node-body runner. Set by
+   Evaluator.init (node_key_of_ref, run_node_body_ref) and Vm.init
+   (vm_node_key_ref) — mirrors the vm_run_thunk_ref pattern above. Primitives
+   is compiled before Evaluator/Vm, so these are the only way this module can
+   reach backend-specific code without a dependency cycle. *)
+let node_key_of_ref : (Types.thunk -> string) ref =
+  ref (fun _ -> failwith "node_key_of not initialized")
+let vm_node_key_ref : (Types.thunk -> string) ref =
+  ref (fun _ -> failwith "vm_node_key not initialized")
+let run_node_body_ref : (key:string -> run:(unit -> Types.value) -> Types.thunk -> Types.value) ref =
+  ref (fun ~key:_ ~run:_ _ -> failwith "run_node_body not initialized")
+(* True (and, for a real result, marks [t] Evaluated in place — same as
+   force_node's HitOk arm) when [key] is ALREADY a valid store hit or a
+   memoized failure; false on a genuine Miss. Set by Evaluator.init, which
+   owns [cell_authorized]. The scheduler-aware force-deep's collect pass
+   uses this to skip forking a job for a node the store can already serve —
+   without it, a "null rebuild" batch would re-run_node_body (and so
+   re-execute every external process) EVERY node on EVERY force-deep call,
+   because a fresh run's thunk_store always starts Unevaluated regardless
+   of what the on-disk store already has cached. *)
+let resolve_if_hit_ref : (Types.thunk -> string -> bool) ref =
+  ref (fun _ _ -> false)
+
 (* Force helpers for builtins *)
 let force_val (v : value) : value = !force_ref v
 let force_args (args : value list) : value list = List.map force_val args
 
-(* Deep force: recursively force all thunks in a data structure *)
-let rec force_deep (v : value) : value =
+(* ---- Phase 3: scheduler-aware force-deep (docs/PLAN-phase3-parallel.md) ----
+
+   Wall A: EApply forces every argument, so a compound value built by
+   ordinary code forces its elements one at a time, inline — a batch of
+   sibling node thunks can only exist if something built the compound value
+   WITHOUT forcing its elements (the `map` primitive, below). force-deep is
+   the other half: given such a batch, it is the one place that can see many
+   sibling thunks before any of them are forced, so it is where the fork
+   fan-out point lives.
+
+   Two-phase protocol: (1) a non-forcing COLLECT walk over [v]'s structural
+   spine gathers every reachable Unevaluated, thunk_persist thunk together
+   with its LAW-20 key (tree-walker node_key_of or VM vm_node_key, chosen per
+   t.vm_code — a single run can contain thunks from both backends, e.g. via
+   eval-pp), deduplicated by key; (2) those are handed to
+   Scheduler.dispatch_batch, which forks them (up to the policy's
+   concurrency) and reaps; (3) only THEN does the ordinary recursive walk
+   run — every node it reaches is now a cache hit (or, for a dead worker,
+   falls through to an ordinary in-process compute — worker death degrades
+   to serial, never a wrong answer). Under [Serial] policy, collection is
+   skipped entirely and force-deep is exactly the original one-pass walk —
+   byte-identical to pre-Phase-3 behavior, no risk to existing tests. *)
+
+(* Non-forcing: only pattern-matches on values already in hand, so it can
+   never trigger the very one-at-a-time serialization it exists to avoid.
+   [seen_pairs] is a physical-equality cycle/sharing guard (structural
+   sharing from a `let`-bound sublist walked twice must not be re-collected
+   or infinite-loop on a cycle); [seen_keys] is the LAW-20 dedup the
+   contract requires. Stops at the boundary of a not-yet-run persistent node
+   (its body is opaque until it runs) and at an ephemeral Unevaluated thunk
+   (only nodes are ever batched — "What is parallelized: nodes only"). *)
+let collect_unevaluated_nodes (v : value) : Scheduler.job list =
+  let seen_keys : (string, unit) Hashtbl.t = Hashtbl.create 64 in
+  let seen_pairs : value list ref = ref [] in
+  let jobs = ref [] in
+  let race_width () = match !Scheduler.policy with Scheduler.Race n -> n | _ -> 1 in
+  let key_of (t : thunk) : string =
+    if t.vm_code <> None then !vm_node_key_ref t else !node_key_of_ref t
+  in
+  let job_run (t : thunk) (key : string) () : value =
+    let run () =
+      match t.vm_code with
+      | Some (bc, offset, frames) -> !vm_run_thunk_ref bc offset frames
+      | None -> !eval_ref t.thunk_expr t.thunk_env
+    in
+    !run_node_body_ref ~key ~run t
+  in
+  let rec walk (v : value) : unit =
+    match v with
+    | VThunk t ->
+        (match t.thunk_status with
+         | Evaluated result -> walk result
+         | Evaluating -> ()
+         | Unevaluated when t.thunk_persist ->
+             let k = key_of t in
+             if not (Hashtbl.mem seen_keys k) then begin
+               Hashtbl.add seen_keys k ();
+               if not (!resolve_if_hit_ref t k) then
+                 jobs := { Scheduler.j_key = k; j_run = job_run t k; j_width = race_width () }
+                         :: !jobs
+             end
+         | Unevaluated -> () (* ephemeral: stays in-process by design *))
+    | VPair (_, _) ->
+        if not (List.memq v !seen_pairs) then begin
+          seen_pairs := v :: !seen_pairs;
+          (match v with VPair (car, cdr) -> walk car; walk cdr | _ -> ())
+        end
+    | VVector vs -> Array.iter walk vs
+    | VMap kvs -> List.iter (fun (k, v) -> walk k; walk v) kvs
+    | VSet vs -> List.iter walk vs
+    | _ -> ()
+  in
+  walk v;
+  List.rev !jobs
+
+(* The ORIGINAL, single-pass definition — recurses into ITSELF only, never
+   back into the collect/dispatch step. This is exactly what force-deep was
+   before Phase 3, unchanged, and it is what actually walks the structure
+   after (or in [Serial]'s case, instead of) a batch dispatch. Critically,
+   collection must happen exactly ONCE per top-level force-deep call: were
+   this walk to re-run collect_unevaluated_nodes at every level (recursing
+   into [force_deep] instead of [force_deep_plain] below), each recursive
+   step would re-collect the shrinking REMAINING tail — the parent's
+   in-memory thunk_status stays Unevaluated until IT forces a thunk, even
+   though the store already has that node's result from the first wave's
+   child — and re-dispatch (and thus re-run_node_body, re-executing every
+   external process) an already-computed node all over again, once per
+   remaining list position (an O(n^2) blowup, not a correctness issue but a
+   catastrophic performance one — caught by tests/024's exec-count assert). *)
+let rec force_deep_plain (v : value) : value =
   match force_val v with
-  | VPair (car, cdr) -> VPair (force_deep car, force_deep cdr)
-  | VVector vs -> VVector (Array.map force_deep vs)
-  | VMap kvs -> VMap (List.map (fun (k, v) -> (force_deep k, force_deep v)) kvs)
-  | VSet vs -> VSet (List.map force_deep vs)
+  | VPair (car, cdr) -> VPair (force_deep_plain car, force_deep_plain cdr)
+  | VVector vs -> VVector (Array.map force_deep_plain vs)
+  | VMap kvs -> VMap (List.map (fun (k, v) -> (force_deep_plain k, force_deep_plain v)) kvs)
+  | VSet vs -> VSet (List.map force_deep_plain vs)
   | other -> other
+
+(* Deep force: recursively force all thunks in a data structure. Under a
+   non-serial schedule policy, collects and dispatches every reachable
+   unevaluated node in ONE batch BEFORE the recursive walk (see the
+   two-phase protocol above), then defers entirely to [force_deep_plain] —
+   every node it reaches from here on is now a store hit (or, for a dead
+   worker, an ordinary in-process compute). Under [Serial], collection is
+   skipped and this is exactly the original single-pass definition. *)
+let force_deep (v : value) : value =
+  (match !Scheduler.policy with
+   | Scheduler.Serial -> ()
+   | Scheduler.Parallel _ | Scheduler.Race _ ->
+       (match collect_unevaluated_nodes v with
+        | [] -> ()
+        | jobs -> Scheduler.dispatch_batch jobs));
+  force_deep_plain v
 
 (* A table of built-in functions: name -> value *)
 let builtins : (string, value) Hashtbl.t = Hashtbl.create 64
@@ -171,6 +299,65 @@ let () =
 
   register "list" (fun args ->
     List.fold_right (fun a acc -> VPair (a, acc)) args VNil);  (* lazy *)
+
+  (* (map f lst) — Phase 3 / Wall A's missing batch fan-out point
+     (docs/PLAN-phase3-parallel.md). Applies [f] to each element via the
+     apply hook and conses the results WITHOUT forcing them: `(map compile
+     names)` therefore yields a list of UNFORCED node thunks that
+     force-deep can dispatch as one parallel batch, instead of the usual
+     one-at-a-time-inline forcing every other application path gives you.
+     Only the list SPINE is forced (to walk it); elements are passed through
+     exactly as `cons`/`list` do.
+
+     THE PAIRING TRAP (adversarial-review correction — document this,
+     don't just fix the exit test): the mapped function's BODY must not put
+     the per-element node through an argument position of its own.
+     `(map (fn (n) (cons n (compile n))) names)` looks equivalent to
+     pairing afterward, but it is NOT: `(compile n)` there is an argument to
+     `cons`, and EApply forces every argument (Wall A applies inside the
+     closure body too) — so each node is forced eagerly, one at a time,
+     right there, silently serializing the whole build. Parallel fan-out
+     exists exactly when the node thunk IS the mapped element: write
+     `(map compile names)`, `force-deep` THAT batch, and only pair names
+     with the (now-hit, already-forced) results afterward. Zero placement
+     semantics of its own (LAW 34 untouched) — `map` behaves identically
+     under every schedule policy, including serial. *)
+  register "map" (fun args ->
+    match args with
+    | [f; lst] ->
+        let fn = force_val f in
+        (* Apply [fn] to one (possibly unforced — e.g. a node thunk) arg
+           without forcing the RESULT. A VM-compiled closure's tree-walker
+           `body` is a dummy `ELiteral VNil` (compiler.ml/vm.ml MAKE_CLOSURE
+           carry the real code as bytecode, not an AST) — routing it through
+           `!apply_ref` (the tree-walker's `apply`) would silently evaluate
+           that dummy body and return VNil for every element instead of
+           actually calling the function. Same VM-closure-detection pattern
+           as `apply-pp` above: a VM closure runs via `!vm_run_thunk_ref`
+           (== Vm.run_isolated) over a fresh one-slot frame; anything else
+           (a tree-walker closure or a builtin) goes through `!apply_ref`. *)
+        let apply1 (arg : value) : value =
+          match fn with
+          | VClosure c when Array.length c.vm_bc.code > 0 ->
+              if List.length c.params <> 1 then begin
+                let fname = match c.fn_name with Some n -> n | None -> "#<fn>" in
+                failwith (Printf.sprintf
+                  "arity mismatch calling %s: expected %d args, got 1"
+                  fname (List.length c.params))
+              end;
+              let new_frame = Types.make_frame 1 in
+              Types.frame_set new_frame 0 arg;
+              !vm_run_thunk_ref c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
+          | _ -> !apply_ref fn [arg] !current_env_ref
+        in
+        let rec go l =
+          match force_val l with
+          | VNil -> VNil
+          | VPair (car, cdr) -> VPair (apply1 car, go cdr)
+          | other -> failwith ("map expects a proper list, got " ^ string_of_value other)
+        in
+        go lst
+    | _ -> failwith "map expects a function and a list");
 
   register "nil?" (fun args ->
     match args with

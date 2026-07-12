@@ -49,7 +49,11 @@ reaps zombie children, and restarts a `kill -9`'d service within one poll
 interval (`tests/033`). **Fenced effects (LAW 31) are live:**
 `(fenced KIND SPEC)` in the scripting tier, `--fenced-policy retry|abort|ask`,
 an intent/done journal, and recovery of a killed mid-apply action without
-silent double-execution (`tests/034`).
+silent double-execution (`tests/034`). **Phase 3 (M1) process-pool
+parallelism is live:** `--schedule serial|parallel:N|race:N` forks worker
+processes at the dispatch point for persistent-node misses — the same
+101-TU build is 4-5x faster under `parallel:N` from cold, byte-identical to
+serial (`tests/024`'s `p3-*` assertions, `tests/038`'s race/stress cases).
 
 The scaffolding is good: the O(1) env-hash design, the CPS tail-call
 optimization, and the dual backend with `--diff` are real assets.
@@ -279,7 +283,50 @@ non-list `def` is a value binding — `tests/025`.)
   Q11's "node-captured caps" is resolved as vacuous for now: the ambient
   capability set cannot change mid-run (no in-language attenuation surface),
   so capture-at-creation is indistinguishable from ambient-at-force — see
-  DESIGN Q11. Pinned by `tests/021-cas-ingest.sh`.
+  DESIGN Q11. Pinned by `tests/021-cas-ingest.sh`. **Q11-bis (Phase 3
+  narrowing):** N forked workers each inherit `run_pins` as of the fork
+  instant via COW but pin their own later first-observations
+  independently — one parallel run is therefore "at most N world snapshots
+  agreeing on everything pinned before dispatch," not Q11's single-process
+  "one run, one snapshot." Still sound under R9 (a divergent observed world
+  is a legitimate distinct trace; the worst case is a recompute, never a
+  wrong hit) but narrower than stated; a snapshot barrier or pins-in-store
+  is M5 design work (DESIGN.md Q11).
+- **`parallel`/`race` schedule handler — process-pool parallelism (M1 /
+  Phase 3).** `--schedule serial|parallel:N|race:N` (`src/scheduler.ml`)
+  forks worker processes at the dispatch point for persistent-node misses:
+  `map` (a new non-forcing builtin — Wall A's missing batch fan-out point)
+  builds a batch of unforced node thunks, `force-deep` collects every
+  reachable unevaluated node, dispatches the batch (`Parallel n`: a
+  fork/waitpid wave capped at `n` concurrent workers; `Race n`: n redundant
+  forks of one job, first success wins, losers killed SIGTERM→SIGKILL), and
+  only then does its ordinary recursive walk — every node it reaches is
+  now a store hit. A singleton `force`d node miss forks too, but ONLY under
+  `Race n` (n redundant workers); under `Serial`/`Parallel n` a lone miss
+  stays in-process (forking one job buys nothing — only a batch benefits).
+  A worker runs `Evaluator.run_node_body` — the EXACT function the serial
+  miss arm calls, no second force path — and exits 0/1; the parent never
+  reads a value from a child, only `Store.hit` after reaping, so a dead
+  worker degrades to an ordinary serial recompute. `--schedule` is ambient:
+  read only by the miss arms and the scheduler, never by
+  `node_key_of`/`vm_node_key`, never in a trace. `--check` under a
+  non-serial policy re-runs the program forced Serial against the same
+  store and fails on any desired-state hash mismatch (the promised
+  schedule-transparency audit). Store hardening: a per-key `lockf` around
+  `store_trace`'s read-modify-write (disableable via the internal
+  `PP_TRACE_LOCK=0` escape hatch, exercised by `tests/038`) and
+  `Journal.append` as one `Unix.write_substring` on an O_APPEND fd, so N
+  concurrent writers can't drop or tear each other's lines. The Phase-1
+  101-TU build under `--schedule parallel:N` is 4-5x faster than serial
+  from cold with byte-identical desired-state hash and tree
+  (`tests/024`'s `p3-*` assertions); `race:3`/N-writer/same-key-no-lock
+  stress and `(fenced ...)` still raising inside a node under every policy
+  are `tests/038`. The `Runtime` global-mutable-state refactor MASTERPLAN
+  M1 originally called for is **not** on this critical path — `fork()`
+  inherits all ambient state (handler closures, capabilities, config,
+  thunk_store) byte-identically via COW, so M1 ships with fork workers and
+  documents the state inventory as M5's design item instead (Wall B,
+  docs/PLAN-phase3-parallel.md; MASTERPLAN.md M1).
 - **Depfile adapter (Q2 refinement).** `(perform run-dep DEPFILE CMD ARG…)`
   runs the tool, then parses its Makefile-style depfile: granted deps become
   precise `file:` cells (Q11-pinned + CAS-ingested), out-of-grant (system)

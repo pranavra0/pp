@@ -220,4 +220,11 @@ else
   echo "FAIL 037-portable-store"; fail=1
 fi
 
+echo "--- Phase 3 parallel scheduler stress suite ---"
+if PP="$PP" bash tests/038-parallel-stress.sh; then
+  echo "ok   038-parallel-stress"
+else
+  echo "FAIL 038-parallel-stress"; fail=1
+fi
+
 exit $fail

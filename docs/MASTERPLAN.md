@@ -67,29 +67,62 @@ Dependencies: M2's canonicalization gates M1's exit; M3's attenuation gates
 M4d; M2's cell grammar and M4 gate M5; everything gates M6. M1 and M2
 otherwise proceed in parallel.
 
-### M1 (= Phase 3) — Placement as a handler
+### M1 (= Phase 3) — Placement as a handler ✅ DONE (fork-at-dispatch)
 
 The keystone for all distribution: once placement is a result-transparent
 handler over worker *processes*, a remote worker is the same handler over a
-different transport (Q9). The real deliverable is the `Runtime`
-global-mutable-state refactor this forces.
+different transport (Q9).
 
-- `parallel` schedule handler over local worker processes; result-transparent
-  handler discipline (LAW 26's first class) validated by `--check`.
-- **Prerequisite: M2's cell-id canonicalization (LAW 23).** macOS temp dirs
-  are symlinked (`/var` → `/private/var`); N workers sharing one store
-  without realpath-canonical cell ids would reintroduce the D8 aliasing bug
-  class at the cell layer.
+**Wall B (amendment — docs/PLAN-phase3-parallel.md, adversarial review):**
+the `Runtime` global-mutable-state refactor named above as "the real
+deliverable" is **not** on M1's critical path after all. `fork()` at the
+dispatch point inherits ALL ambient state (handler closures, capabilities,
+config, thunk_store) byte-identically via copy-on-write, for free — a
+`Runtime.t` refactor is forced only by worker shapes that construct workers
+independently of the dispatch point (a persistent pipe-fed pool, fresh `pp`
+processes), which would need to MARSHAL that state across a channel
+existing independently of any one dispatch, impossible for handler closures
+under the store's own non-data law. M1 therefore ships fork workers and
+DOCUMENTS the state inventory (DESIGN.md Q9) as what M5's remote transport
+would need to marshal, instead of threading a `Runtime.t` now against a
+fork-shaped M1 that could never validate it. The real M1 deliverable was the
+missing batch fan-out point (Wall A: `EApply` forces every argument, so no
+compound value could hold several unforced node thunks at once) — closed by
+a new non-forcing `map` builtin — and the scheduler itself
+(`src/scheduler.ml`).
 
-**Exit (runnable):**
-1. The Phase-1 101-TU build across N local workers: byte-identical outputs to
-   the serial build, measured speedup.
-2. "Run on 3, take first" is a handler swap with zero language-surface change
-   (LAW 35 flips to holds; LAW 34's scheduler half lands).
-3. N-writer store stress test: workers hammering one store produce no corrupt
-   trace files and no wrong hits — the trace-SET's last-writer-wins drop is
-   *shown* sound (a dropped trace recomputes; it never serves a wrong
-   result) — and journal exec counts still prove the null rebuild.
+- ✅ `parallel`/`race` schedule handler over local worker processes
+  (`--schedule serial|parallel:N|race:N`); result-transparent handler
+  discipline (LAW 26's first class) validated by `--check` (a non-serial
+  policy re-runs forced-serial against the same store and fails on any
+  desired-state hash mismatch).
+- **Prerequisite: M2's cell-id canonicalization (LAW 23).** Satisfied —
+  landed in M2.1, ahead of M1's exit.
+
+**Exit (runnable) — checked against what `tests/024`/`tests/038` actually
+prove, not aspiration:**
+1. ✅ The Phase-1 101-TU build across N local workers: byte-identical
+   desired-state hash and materialized tree bytes to the serial build,
+   measured speedup (4-5x observed on the dev machine) — `tests/024`'s
+   `p3-*` assertions.
+2. ✅ "Run on 3, take first" is a handler swap with zero language-surface
+   change (LAW 35 flips to holds for local process-pool fan-out; LAW 34's
+   scheduler half lands) — `tests/038`'s race:3 case: identical result,
+   exactly one surviving trace, wall-clock ≈ one run not 3x.
+3. ✅ N-writer store stress test: workers hammering one store (64 nodes
+   under `parallel:16`, repeated cold; `race:8` on one key with the
+   internal `PP_TRACE_LOCK=0` escape hatch) produce no corrupt trace files
+   and no wrong hits — the trace-SET's last-writer-wins drop is *shown*
+   sound (a dropped trace recomputes; it never serves a wrong result), a
+   per-key `lockf` makes the drop not happen in practice, and journal exec
+   counts (one `Unix.write_substring` per line on an O_APPEND fd) still
+   prove exact counts under concurrent writers — `tests/038`.
+
+**Residual, out of M1's scope (documented, not silently dropped):**
+Q11-bis (DESIGN.md Q11) — N forked workers agree only on cells pinned
+*before* dispatch, not Q11's single-process "one run, one snapshot";
+sound under R9, narrower than stated, fix is M5 design work. Cluster/remote
+placement is unchanged Phase 4, gated on a threat-model doc.
 
 ### M2 — Portability floor (alongside M1; canonicalization first)
 

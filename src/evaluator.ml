@@ -165,20 +165,55 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
   end;
   result
 
-(* Force a persistent node through the store: serve a verified hit (gated on
-   the caller's authority over the trace's read closure, LAW 23b), re-serve a
-   memoized failure (LAW 28), or run and store on a miss. *)
-let force_node ~(key : string) ~(run : unit -> value) (t : thunk) : value =
-  Stabilize.register_node_key ~key ~thunk:t;
-  match Store.hit ~key ~authorized:cell_authorized with
+(* Serve a resolved Store.hit_result the same way in every miss-arm variant
+   below: a verified hit (gated on LAW 23b authority), a re-served memoized
+   failure (LAW 28), or [None] on Miss (caller decides what to do). *)
+let serve_hit ~(t : thunk) (h : Store.hit_result) : value option =
+  match h with
   | Store.HitOk cached ->
       t.thunk_status <- Evaluated cached;
-      cached
+      Some cached
   | Store.HitFailed errval ->
       (match errval with
        | VString msg -> failwith msg
        | _ -> failwith "node failed (cached)")
-  | Store.Miss -> run_node_body ~key ~run t
+  | Store.Miss -> None
+
+(* Force a persistent node through the store: serve a verified hit (gated on
+   the caller's authority over the trace's read closure, LAW 23b), re-serve a
+   memoized failure (LAW 28), or run and store on a miss.
+
+   Phase 3 miss-arm integration (docs/PLAN-phase3-parallel.md, "singleton,
+   width from policy"): under [Race n] with n > 1, a singleton miss is worth
+   forking — n redundant (key, run) forks of the SAME job race each other
+   (sound: LAW 37 nodes are deterministic), the parent never reads a value
+   from any of them, and re-enters Store.hit afterward exactly as the batch
+   path does — a hit if some child won, a Miss (falling through to the
+   ordinary in-process run below) if every child died. Under [Serial] or
+   [Parallel _], a LONE miss stays in-process (width 1): forking a single job
+   buys nothing (there is no second worker to race or overlap with) — only a
+   force-deep BATCH benefits from forking, and that path (Primitives
+   force-deep) dispatches its own batch before any of its members ever
+   reaches this function as a Miss. *)
+let force_node ~(key : string) ~(run : unit -> value) (t : thunk) : value =
+  Stabilize.register_node_key ~key ~thunk:t;
+  match serve_hit ~t (Store.hit ~key ~authorized:cell_authorized) with
+  | Some v -> v
+  | None ->
+      (match !Scheduler.policy with
+       | Scheduler.Race n when n > 1 ->
+           let job = { Scheduler.j_key = key;
+                       j_run = (fun () -> run_node_body ~key ~run t);
+                       j_width = n } in
+           Scheduler.dispatch_batch [job];
+           (match serve_hit ~t (Store.hit ~key ~authorized:cell_authorized) with
+            | Some v -> v
+            | None ->
+                (* Every racing worker died: degrade to the ordinary serial
+                   path — never a wrong answer, never a hang. *)
+                run_node_body ~key ~run t)
+       | Scheduler.Serial | Scheduler.Parallel _ | Scheduler.Race _ ->
+           run_node_body ~key ~run t)
 
 (* Module exports: the bindings of [bindings] not present in [base]
    (insertion order preserved). With [dedup], each name is exported once —
@@ -885,6 +920,16 @@ let init () =
   Primitives.set_force force;
   Primitives.set_eval eval;
   Primitives.set_apply apply;
+  (* Phase 3: let Primitives' scheduler-aware force-deep compute tree-walker
+     node keys and run node bodies without a dependency cycle (Primitives is
+     compiled before Evaluator). *)
+  Primitives.node_key_of_ref := node_key_of;
+  Primitives.run_node_body_ref := (fun ~key ~run t -> run_node_body ~key ~run t);
+  Primitives.resolve_if_hit_ref := (fun t key ->
+    match Store.hit ~key ~authorized:cell_authorized with
+    | Store.HitOk v -> t.thunk_status <- Evaluated v; true
+    | Store.HitFailed _ -> true (* known outcome; the ordinary force path re-raises it *)
+    | Store.Miss -> false);
   (* Config values may be unforced thunks; their trace-cell observation (LAW 33)
      hashes the forced value, both at record time and at hit re-observation. *)
   Runtime.force_hook := force

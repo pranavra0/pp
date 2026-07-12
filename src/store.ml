@@ -208,16 +208,51 @@ let load_traces ~key : trace list =
   ) else
     []
 
+(* ---- Phase 3 hardening: per-key lock around the traces/<key> RMW ----
+
+   Two workers computing DIFFERENT nodes never contend (distinct lock
+   files); two workers computing the SAME node (a Race, or two independent
+   `pp` invocations landing on one node) serialize here instead of racing
+   "read existing set, append, atomic-rename" — without the lock, the
+   loser's rename can clobber the winner's freshly-written set, dropping a
+   trace. That drop is already SOUND without any lock at all (LAW 37: the
+   survivor either duplicates the loser's trace — determinism — or the
+   loser's world simply re-misses and recomputes; never a wrong hit) — the
+   lock only turns "sound but occasionally wasteful" into "sound and the
+   waste doesn't happen in practice." [PP_TRACE_LOCK=0] disables the lock
+   (checked once, lazily) so tests/038's stress test can demonstrate the
+   drop-soundness fallback still holds with it off — an internal escape
+   hatch documented in that test, not in user-facing docs. *)
+let trace_lock_enabled =
+  lazy (match Sys.getenv_opt "PP_TRACE_LOCK" with Some "0" -> false | _ -> true)
+
+let locks_dir = Filename.concat store_root "locks"
+
+let with_trace_lock (key : string) (f : unit -> unit) : unit =
+  if not (Lazy.force trace_lock_enabled) then f ()
+  else begin
+    ensure_dir locks_dir;
+    let lock_path = Filename.concat locks_dir key in
+    match (try Some (Unix.openfile lock_path [Unix.O_CREAT; Unix.O_WRONLY] 0o644)
+           with _ -> None) with
+    | None -> f ()  (* can't lock (e.g. read-only FS) — best-effort, proceed unlocked *)
+    | Some fd ->
+        Fun.protect ~finally:(fun () -> (try Unix.close fd with _ -> ())) (fun () ->
+          (try Unix.lockf fd Unix.F_LOCK 0 with _ -> ());
+          Fun.protect ~finally:(fun () -> (try Unix.lockf fd Unix.F_ULOCK 0 with _ -> ())) f)
+  end
+
 let store_trace ~key ~outcome ~result_hash ~reads =
   ensure_dirs ();
-  let tr = { tr_outcome = outcome; tr_result_hash = result_hash;
-             tr_reads = reads } in
-  let existing = load_traces ~key in
-  if not (List.mem tr existing) then (
-    let set = existing @ [tr] in
-    let content = String.concat "" (List.map (fun t -> trace_to_line t ^ "\n") set) in
-    atomic_write (trace_path key) content
-  )
+  with_trace_lock key (fun () ->
+    let tr = { tr_outcome = outcome; tr_result_hash = result_hash;
+               tr_reads = reads } in
+    let existing = load_traces ~key in
+    if not (List.mem tr existing) then (
+      let set = existing @ [tr] in
+      let content = String.concat "" (List.map (fun t -> trace_to_line t ^ "\n") set) in
+      atomic_write (trace_path key) content
+    ))
 
 (* ---- Cell observation and trace verification ----
    A cell-id is "file:<canonical-path>". Its observed hash is the hash of the

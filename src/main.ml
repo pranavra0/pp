@@ -28,6 +28,23 @@ let main () =
         Runtime.island_fetch_enabled := true;
         parse rest
     | "--fetch-islands" :: rest -> Runtime.island_fetch_enabled := true; parse rest
+    | "--schedule" :: spec :: rest ->
+        (* Ambient — read only by the miss arms and Scheduler.dispatch_batch;
+           NEVER by node_key_of/vm_node_key, never in a trace (LAW 26/34). *)
+        (match spec with
+         | "serial" -> Scheduler.policy := Scheduler.Serial
+         | _ ->
+             (match String.split_on_char ':' spec with
+              | ["parallel"; n] ->
+                  (match int_of_string_opt n with
+                   | Some n when n > 0 -> Scheduler.policy := Scheduler.Parallel n
+                   | _ -> failwith ("invalid --schedule parallel width: " ^ n))
+              | ["race"; n] ->
+                  (match int_of_string_opt n with
+                   | Some n when n > 0 -> Scheduler.policy := Scheduler.Race n
+                   | _ -> failwith ("invalid --schedule race width: " ^ n))
+              | _ -> failwith ("invalid --schedule spec: " ^ spec)));
+        parse rest
     | "island-pins" :: f :: rest -> island_pins_file := Some f; parse rest
     | "--grant" :: grant :: rest -> grants := grant :: !grants; parse rest
     | "--reconcile" :: root :: rest -> reconcile_root := Some root; parse rest
@@ -60,6 +77,7 @@ let main () =
         Printf.printf "  pp why <file.pp>         Explain node cache hits/misses (capability-filtered)\n";
         Printf.printf "  pp --no-cache <file.pp>  Skip cache reads (recompute); results still stored\n";
         Printf.printf "  pp --check <file.pp>     Determinism audit: run each node twice, flag volatile\n";
+        Printf.printf "  pp --schedule serial|parallel:N|race:N  Node-miss dispatch policy (default: serial)\n";
         Printf.printf "  pp --once <file.pp>        Run once and exit (explicit; default behavior)\n";
         Printf.printf "  pp --watch <file.pp>       Run, then watch cell changes and re-evaluate\n";
         Printf.printf "  pp --watch --stabilize <file>  Watch with push stabilize (dirty-propagation)\n";
@@ -297,7 +315,49 @@ let main () =
            | Some v -> Supervisor.reconcile v
            | None -> failwith "supervise: the program produced no value");
         if !reconcile_root <> None || !supervise then
-          Fenced.drain ()
+          Fenced.drain ();
+        (* Phase 3 schedule-transparency audit (D17 class 1 / LAW 26/34's
+           promised --check): a result-transparent handler must never change
+           WHAT a program computes, only where/when it runs. Under --check
+           with a non-serial policy, re-run the SAME program forced Serial
+           against the SAME on-disk store and compare the desired-state
+           value's hash; any mismatch is exactly as unsound as the existing
+           per-node volatility failure and is reported/gated the same way
+           (Store.volatile_count). This is a WHOLE-PROGRAM check distinct
+           from run_node_body's per-node double-run — the re-run's own
+           reconcile/supervise/fenced side effects are deliberately skipped
+           (only the value is compared) so a --check run never applies
+           convergent state or fenced actions twice. *)
+        if !Store.check_mode && !Scheduler.policy <> Scheduler.Serial then
+          (match last with
+           | None -> ()
+           | Some v ->
+               let h_scheduled = Types.hash_value v in
+               let saved_policy = !Scheduler.policy in
+               let policy_name = function
+                 | Scheduler.Serial -> "serial"
+                 | Scheduler.Parallel n -> Printf.sprintf "parallel:%d" n
+                 | Scheduler.Race n -> Printf.sprintf "race:%d" n
+               in
+               Scheduler.policy := Scheduler.Serial;
+               Hashtbl.clear Store.run_pins;
+               Runtime.current_capabilities := !Runtime.initial_capabilities;
+               let last_serial =
+                 List.fold_left (fun _ f ->
+                   Runtime.fenced_actions := [];
+                   match List.rev (Repl.execute_file_bytecode !bytecode f) with
+                   | v :: _ -> Some v | [] -> None) None files
+               in
+               Scheduler.policy := saved_policy;
+               (match last_serial with
+                | None -> ()
+                | Some v2 ->
+                    if Types.hash_value v2 <> h_scheduled then begin
+                      incr Store.volatile_count;
+                      Printf.eprintf
+                        "[check] schedule non-transparent: %s and serial re-runs produced different desired-state hashes\n%!"
+                        (policy_name saved_policy)
+                    end))
       end);
 
   (* --check verdict: any volatile node fails the audit (LAW 38). *)

@@ -127,7 +127,26 @@ two shell suites:
     gates hits; the VM shares the compile cache. Skips cleanly without cc.
     The fixture generator and drift mutations are pp programs
     (`tests/gen-cproject.pp`, `tests/mutate-cproject.pp` — the ROADMAP §2
-    milestone); the pass/fail oracle stays shell.
+    milestone); the pass/fail oracle stays shell. `build.pp` is written the
+    pairing-trap-safe way — `(map compile names)` (the non-forcing `map`
+    builtin) force-deep'd as a batch, THEN paired back up with `names` —
+    per Phase 3's `p3-*` assertions (M1): the same cold build under
+    `--schedule parallel:$(nproc)` produces the identical desired-state
+    hash and byte-identical materialized tree to the serial build, the
+    same exec count, a null rebuild with zero new execs under parallel too,
+    and is measurably faster (asserted `<` the serial wall-clock).
+  - **038** — Phase 3 parallel-scheduler stress (M1, exit criteria 2/3):
+    `race:3` on a deliberately slow node — identical result, exactly one
+    surviving trace line, wall-clock ≈ one run rather than 3x; 64
+    independent nodes under `parallel:16` on one store repeated cold —
+    every run's objects/traces round-trip, a serial re-run against the
+    warm store is hash-identical, and one cold run's journal has exactly
+    64 parseable `exec` lines (`Journal.append`'s one-`write_substring`
+    hardening); `race:8` hammering a single key with the trace-lock
+    disabled (`PP_TRACE_LOCK=0`, an internal test-only escape hatch) still
+    yields a parseable trace and a correct subsequent hit; `(fenced ...)`
+    inside a node body still raises under `parallel:4` and `race:3` (LAW
+    31's negative half holds under every placement).
   - **036** — cell-id canonicalization (SPEC LAW 23, M2): a source tree
     reached via a symlink loads and hits identically to the real path, both
     directions; a `tree:`/`tool:` node cache hits when the SAME content is

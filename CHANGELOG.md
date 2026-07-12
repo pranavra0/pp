@@ -39,3 +39,28 @@ v0.2.0 predate this file and are reconstructed from history for context.
   (`.github/workflows/ci.yml`); `pp --version`/REPL banner now report a
   real version via `dune-build-info` instead of a hardcoded string; see
   [docs/RELEASING.md](docs/RELEASING.md).
+- **Phase 3 (M1) closed — process-pool parallelism**: `--schedule
+  serial|parallel:N|race:N` (new `src/scheduler.ml`) forks worker processes
+  at the dispatch point for persistent-node misses. A new non-forcing `map`
+  builtin closes Wall A (the missing batch fan-out point — `EApply` forces
+  every argument, so no compound value could hold several unforced node
+  thunks at once); `force-deep` collects a batch of unevaluated nodes and
+  dispatches them before its ordinary recursive walk. A worker runs
+  `Evaluator.run_node_body` — the exact function the serial miss arm
+  calls, no second force path — and the parent only ever re-enters
+  `Store.hit`, so a dead worker degrades to an ordinary serial recompute,
+  never a wrong answer. `--check` under a non-serial policy re-runs the
+  program forced serial against the same store and fails on any
+  desired-state hash mismatch (the schedule-transparency audit). Landed as
+  fork-at-dispatch rather than the `Runtime` global-state refactor
+  MASTERPLAN M1 originally called for — `fork()` inherits ambient state
+  byte-identically via copy-on-write, so the refactor isn't on this
+  critical path (documented as an M5 design item instead — see
+  [docs/DESIGN.md](docs/DESIGN.md) Q9/Q11-bis,
+  [docs/MASTERPLAN.md](docs/MASTERPLAN.md) M1). Store hardening: a per-key
+  `lockf` around `store_trace`'s read-modify-write, and `Journal.append` as
+  one `Unix.write_substring` on an O_APPEND fd, so N concurrent writers
+  can't drop or tear each other's lines. The Phase-1 101-TU build is 4-5x
+  faster under `parallel:N` from cold with a byte-identical result to
+  serial. See [docs/STATUS.md](docs/STATUS.md), `tests/024`'s `p3-*`
+  assertions, `tests/038`.

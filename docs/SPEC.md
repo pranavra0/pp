@@ -1027,12 +1027,27 @@ location is syntax, every caller hard-codes topology and you have rebuilt the
 deployment-boundary blunt instrument inside the language.
 
 **Status: holds** for the negative half (no location surface exists in the
-reader — verified absence), **unimplemented** for the positive half (there is
-no scheduler at all; everything runs in-process, serially).
+reader — verified absence). **The positive half now lands for local
+process-pool parallelism (M1 / Phase 3):** `--schedule
+serial|parallel:N|race:N` selects a result-transparent handler
+(`src/scheduler.ml`) that forks worker processes at the dispatch point — a
+worker runs the exact `run_node_body` the serial miss arm calls (no second
+force path) and communicates only through the store; a dead worker degrades
+to an ordinary in-process recompute, never a wrong answer. `--schedule` is
+read only by the miss arms and the scheduler — never by `node_key_of` /
+`vm_node_key`, and it never enters a trace, so "a program is byte-identical
+whether it runs on one core [or] eight" holds by construction, not merely by
+intent. Cluster/remote placement remains unimplemented (Phase 4, gated on a
+threat-model doc — Q11 narrows under N workers in the meantime; see Q11-bis,
+DESIGN.md).
 
-**Test:** the reader rejects any placement form; Phase 3's exit — the same
-program under the `parallel` handler produces byte-identical outputs to the
-serial run.
+**Test:** the reader rejects any placement form (unchanged). Phase 3's exit:
+the same 101-TU build under `--schedule parallel:N` produces a
+byte-identical desired-state hash and materialized tree to the serial run,
+with measured speedup (`tests/024`'s `p3-*` assertions); `--check` under a
+non-serial policy re-runs forced-serial against the same store and fails on
+any hash mismatch (schedule-transparency audit, same file). `tests/038`
+stress-tests N concurrent workers against one store and a `race:N` fan-out.
 
 ### [LAW 35] "Run on N, take the first" is a handler, not a feature
 
@@ -1045,11 +1060,20 @@ different fan-out.
 acceptance test. If shipping it requires new syntax, LAW 34 has been
 violated somewhere.
 
-**Status: unimplemented** (Q9: process-pool parallelism is Phase 3; cluster
-forcing is Phase 4, gated on a threat model).
+**Status: holds** for local process-pool fan-out (Q9, M1 / Phase 3):
+`race:N` forks N redundant workers for one singleton node miss (homogeneous
+redundancy only — LAW 37 nodes are deterministic, so racing identical
+`(key, run)` jobs is sound; heterogeneous racing of different computations
+stays out of scope until M4's declared-nondeterminism cells exist), the
+first success wins, losers are killed (SIGTERM→SIGKILL), and the parent
+re-enters `Store.hit` exactly as the batch path does. Cluster/distributed
+racing is Phase 4, gated on a threat model.
 
-**Test:** ROADMAP Phase 3 exit: swap serial → `parallel` handler: identical
-result hashes, measured speedup, no program text change.
+**Test:** ROADMAP Phase 3 exit, `tests/038`'s race:3 case: swap
+`serial` → `--schedule race:3`, byte-identical program text (only the CLI
+flag differs): identical result hash, exactly one surviving trace line
+(the store's own content dedup, not merely fork timing), wall-clock roughly
+one run rather than N.
 
 ---
 
@@ -1170,8 +1194,8 @@ signatures, not line numbers — the source is under active migration.)
 | LAW 31 | fenced effects, intent journal | holds | scripting-tier `(fenced KIND SPEC)`, `--fenced-policy retry|abort|ask`, intent/done journal, recovery without silent retry; `tests/034` |
 | LAW 32 | gradual types, strictest oracle | holds | D3 fixed; both backends enforce; tests 004/005 restored; `tests/007-phase0-laws.pp` |
 | LAW 33 | config: computed keys, tail-safe scoping | holds | D15 fixed; computed keys and tail-safe scoping in both backends; config reads inside nodes are `config:<key>` trace cells, ambient config out of the node key (`tests/015`) |
-| LAW 34 | no location surface / scheduler exists | partial | negative half holds; no scheduler at all |
-| LAW 35 | run-on-N-take-first as handler | unimplemented | Q9 (Phase 3 process pool; Phase 4 cluster, threat-model-gated) |
+| LAW 34 | no location surface / scheduler exists | partial | negative half holds; scheduler half lands for local process-pool parallelism (M1, `tests/024`/`038`); cluster/remote placement still gated on Phase 4 |
+| LAW 35 | run-on-N-take-first as handler | holds (local) | `race:N` process-pool fan-out lands (M1, `tests/038`); cluster racing is Phase 4, threat-model-gated |
 | LAW 36 | backend parity | partial | catalogued divergences closed; `core` and sampled `full` green; deep non-tail recursion and negative-literal lexing remain same-side issues |
 | LAW 37 | declared nondeterminism | partial | `random` builtin effect removed; no declared-nondeterminism mechanism yet |
 | LAW 38 | volatile-node containment | partial | `--check` double-run audit flags volatile nodes and fails the run, both backends (`tests/019`); per-pass cell containment absent |
@@ -1181,6 +1205,7 @@ LAW 5 (`let*` as sequential sugar), LAW 9 (branch pruning), LAW 10 (TCO),
 LAW 12 (total quotation/quasiquote), LAW 13 (effect order in `do`),
 LAW 14 (undemanded values fire no effects), LAW 22 (unforgeable caps),
 LAW 25 (no unenforced authority), LAW 27 (exception/tail-safe dynamic
-extent), LAW 32 (gradual types), LAW 33 (config) — each exercised by
-`tests/*.pp` under `--diff` and/or the fuzzer, and each must stay green
-through the Phase 1 build-engine work.
+extent), LAW 32 (gradual types), LAW 33 (config), LAW 35 (run-on-N-take-first
+as a handler, local process pool) — each exercised by `tests/*.pp` under
+`--diff` and/or the fuzzer, and each must stay green through the Phase 1
+build-engine work.

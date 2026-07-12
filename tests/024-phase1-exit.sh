@@ -46,18 +46,31 @@ fi
 TU=$((N + 1))
 
 # ---- build.pp — the real thing: manifest-driven, nodes all the way ----
+#
+# Phase 3 (docs/PLAN-phase3-parallel.md): `compile` builds but does NOT
+# force its node — the pairing-trap-safe pattern is `(map compile names)`
+# (map applies compile to each name via the apply hook WITHOUT forcing the
+# result, per Wall A), `force-deep` THAT batch (the scheduler's fork
+# fan-out point sees every sibling node before any of them runs), and only
+# THEN pair names back up with the now-hit results via `zip2`. Do NOT
+# rewrite this as `(map2 (fn (n) (cons n (compile n))) names)` — pairing
+# `(compile n)` into `cons` there is an argument position, so EApply would
+# force each node eagerly and in order right there, silently serializing
+# the whole build back to one-at-a-time (the pairing trap the design
+# review caught).
 cat > "$TMP/build.pp" <<EOF
-(def (map2 f lst) (if (nil? lst) nil (cons (f (car lst)) (map2 f (cdr lst)))))
 (def (each f lst) (if (nil? lst) nil (do (f (car lst)) (each f (cdr lst)))))
 (def (foldl2 f acc lst) (if (nil? lst) acc (foldl2 f (f acc (car lst)) (cdr lst))))
+(def (zip2 lst1 lst2)
+  (if (nil? lst1) nil (cons (cons (car lst1) (car lst2)) (zip2 (cdr lst1) (cdr lst2)))))
 
 (def (compile name)
-  (force (node
+  (node
     (do (perform run-dep (string-append name ".d")
           "cc" "-MD" "-MF" (string-append name ".d") "-O0" "-c"
           (string-append "$SRC/" (string-append name ".c"))
           "-o" (string-append name ".o"))
-        (blob (slurp (string-append name ".o")))))))
+        (blob (slurp (string-append name ".o"))))))
 
 (def (link objs)
   (force (node
@@ -71,11 +84,12 @@ cat > "$TMP/build.pp" <<EOF
                 (blob (slurp "prog"))))))))
 
 (let [names (string-split (slurp "$SRC/sources.txt") "\n")]
-  (let [objs (force-deep (map2 (fn (n) (cons n (compile n))) names))]
-    (let [prog (link objs)]
-      (foldl2 (fn (m o) (map-insert m (string-append (car o) ".o") (cdr o)))
-              (map-insert (hash-map) "prog" (string-append prog ":x"))
-              objs))))
+  (let [results (force-deep (map compile names))]
+    (let [objs (zip2 names results)]
+      (let [prog (link objs)]
+        (foldl2 (fn (m o) (map-insert m (string-append (car o) ".o") (cdr o)))
+                (map-insert (hash-map) "prog" (string-append prog ":x"))
+                objs)))))
 EOF
 
 G=(--grant "fs:$SRC:ro" --grant "fs:$BUILD:wo" --grant process)
@@ -167,6 +181,74 @@ run --bytecode "${G[@]}" --reconcile "$BUILD" "$TMP/build.pp"
 ev2=$(execs)
 if [ "$ev2" -eq "$ev" ]; then ok "vm-null-zero-processes"
 else bad "vm-null-zero-processes: $((ev2 - ev)) new execs"; fi
+
+# ---- Phase 3 exit criterion 1 (docs/PLAN-phase3-parallel.md): the same
+# 101-TU build, cold, under --schedule parallel:N vs serial (the DEFAULT —
+# byte-identical program text, only the CLI flag differs): same desired-
+# state hash, same materialized tree bytes, same cold exec count, measured
+# speedup. Uses fresh store + build dirs so it doesn't disturb the
+# criteria above; SRC is whatever this file's earlier mutations left it
+# (still 101 TUs — the counts below don't depend on file CONTENTS). ----
+NPROC=$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+BUILD_S="$TMP/build-serial"
+BUILD_P="$TMP/build-parallel"
+GS=(--grant "fs:$SRC:ro" --grant "fs:$BUILD_S:wo" --grant process)
+GP=(--grant "fs:$SRC:ro" --grant "fs:$BUILD_P:wo" --grant process)
+
+rm -rf "$TMP/.pp" "$BUILD_S"
+t0=$(now_ms)
+run "${GS[@]}" --reconcile "$BUILD_S" "$TMP/build.pp"
+t1=$(now_ms)
+serial_ms=$((t1 - t0))
+es=$(execs)
+if [ "$es" -eq $((TU + 1)) ]; then ok "p3-serial-cold-exec-count ($es)"
+else bad "p3-serial-cold-exec-count: expected $((TU + 1)), got $es" "$(tail -5 "$TMP/out")"; fi
+
+rm -rf "$TMP/.pp" "$BUILD_P"
+t0=$(now_ms)
+run "${GP[@]}" --schedule "parallel:$NPROC" --reconcile "$BUILD_P" "$TMP/build.pp"
+t1=$(now_ms)
+parallel_ms=$((t1 - t0))
+ep=$(execs)
+if [ "$ep" -eq $((TU + 1)) ]; then ok "p3-parallel-cold-exec-count ($ep)"
+else bad "p3-parallel-cold-exec-count: expected $((TU + 1)), got $ep" "$(tail -5 "$TMP/out")"; fi
+
+if [ -x "$BUILD_P/prog" ] && "$BUILD_P/prog"; then ok "p3-parallel-binary-runs"
+else bad "p3-parallel-binary-runs"; fi
+
+if diff -rq "$BUILD_S" "$BUILD_P" > /tmp/p3-tree-diff.out 2>&1; then
+  ok "p3-same-tree-bytes (recursive cmp, parallel:$NPROC workers)"
+else
+  bad "p3-same-tree-bytes" "$(cat /tmp/p3-tree-diff.out)"
+fi
+
+echo "     [timing] serial=${serial_ms}ms parallel:$NPROC=${parallel_ms}ms"
+if [ "$parallel_ms" -lt "$serial_ms" ]; then
+  ok "p3-parallel-faster-than-serial (${parallel_ms}ms < ${serial_ms}ms)"
+else
+  bad "p3-parallel-faster-than-serial: ${parallel_ms}ms not < ${serial_ms}ms (single-core CI runner?)"
+fi
+
+# Null rebuild under parallel: zero new execs.
+run "${GP[@]}" --schedule "parallel:$NPROC" --reconcile "$BUILD_P" "$TMP/build.pp"
+ep_null=$(execs)
+if [ "$ep_null" -eq "$ep" ]; then ok "p3-parallel-null-zero-execs"
+else bad "p3-parallel-null-zero-execs: $((ep_null - ep)) new execs"; fi
+
+# Same desired-state hash: the store is now fully warm (the null rebuild
+# above just replayed hits), so --check's schedule-transparency audit
+# (main.ml) re-runs the program forced Serial against this SAME store and
+# compares Types.hash_value of the desired-state value — all hits, so this
+# adds no execs and exercises exactly LAW 34/35's "schedule is result-
+# transparent" promise, not the (unrelated) LAW 38 per-node volatility
+# double-run (which only triggers on a Miss).
+run "${GP[@]}" --schedule "parallel:$NPROC" --check --reconcile "$BUILD_P" "$TMP/build.pp"
+ep_check=$(execs)
+if [ "$ep_check" -eq "$ep" ] && ! grep -q "schedule non-transparent" "$TMP/out"; then
+  ok "p3-same-desired-state-hash (schedule-transparency audit passed, 0 new execs)"
+else
+  bad "p3-same-desired-state-hash" "$(tail -5 "$TMP/out")"
+fi
 
 rm -rf "$TMP"
 if [ "$fail" -eq 0 ]; then echo "=== PHASE-1 EXIT CRITERIA TEST PASSED ==="; fi
