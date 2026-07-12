@@ -240,13 +240,27 @@ let hash_string (s : string) : string =
 let hash_concat (parts : string list) : string =
   hash_string (String.concat ":" parts)
 
+(* THE canonical float spelling — bit-exact via %h (so two doubles that differ
+   anywhere in their bits hash and encode differently; string_of_float's ~12
+   significant digits could collide two distinct doubles into one LAW-20 key
+   and serve a wrong cached result), with nan/inf/-inf as fixed tokens (NaN
+   payloads deliberately merge). Shared by hash_value below and the store
+   codec (Codec.encode_float) so content identity and on-disk bytes can never
+   disagree about whether two floats are the same value. *)
+let canonical_float_string (f : float) : string =
+  if f <> f then "nan"
+  else if f = Float.infinity then "inf"
+  else if f = Float.neg_infinity then "-inf"
+  else Printf.sprintf "%h" f
+
 (* Dummy bytecode for tree-walker closures — also the sentinel hash_value uses
    (by physical equality) to tell a tree-walker closure from a VM one. *)
 let dummy_bytecode = { consts = [||]; code = [||]; nparams_of = Hashtbl.create 0; param_names_of = Hashtbl.create 0; closure_names_of = Hashtbl.create 0 }
 
 (* Content identity of a compiled bytecode unit: the marshalled consts+code
-   arrays. Same-version, same-architecture determinism — the same caveat the
-   persistent store's Marshal serialization already carries. *)
+   arrays. In-memory identity only — these bytes are never persisted (the
+   store is Marshal-free since M2.2), so Marshal's same-version/same-arch
+   caveat is confined to this process. *)
 let hash_bytecode (bc : bytecode) : string =
   try hash_string (Marshal.to_string (bc.consts, bc.code) [Marshal.Closures])
   with _ -> hash_string "bytecode:unmarshalable"
@@ -347,7 +361,7 @@ and hash_value (v : value) : string =
     | VBool true -> hash_string "bool:true"
     | VBool false -> hash_string "bool:false"
     | VInt n -> hash_concat ["int"; string_of_int n]
-    | VFloat f -> hash_concat ["float"; string_of_float f]
+    | VFloat f -> hash_concat ["float"; canonical_float_string f]
     | VString s -> hash_concat ["string"; s]
     | VKeyword k -> hash_concat ["keyword"; k]
     | VSymbol s -> hash_concat ["symbol"; s]

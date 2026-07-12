@@ -2,23 +2,44 @@
 
    Layout:
      ~/.pp/store/
-       objects/<result-hash>   — immutable value blobs (OCaml Marshal),
-                                 content-addressed by the hash of the value
+       VERSION                 — "pp-store 1\n"; stamps the format below (M2.2)
+       objects/<result-hash>   — immutable value blobs, canonical s-expr TEXT
+                                 (Codec.encode_value), content-addressed by
+                                 the hash of the value. DATA only — see LAW
+                                 below.
        blobs/<sha256>          — raw file bytes, content-addressed by the same
                                  hash a file cell observes (Q11 ingest; also
-                                 the reconciler's blob-ref source)
-       traces/<node-key>       — a SET of verifying traces (OCaml Marshal),
-                                 each recording outcome, result-hash, and the
-                                 (cell-id, observed-hash) world-reads the node
-                                 made. A cached result is *valid* iff some
-                                 stored trace still verifies against the world
-                                 (SPEC LAW 21) — identity (the node key) and
+                                 the reconciler's blob-ref source). Format-
+                                 independent: survives a VERSION wipe.
+       traces/<node-key>       — a SET of verifying traces, canonical s-expr
+                                 TEXT (one trace per line), each recording
+                                 outcome, result-hash, and the (cell-id,
+                                 observed-hash) world-reads the node made. A
+                                 cached result is *valid* iff some stored
+                                 trace still verifies against the world (SPEC
+                                 LAW 21) — identity (the node key) and
                                  validity (the trace) are deliberately separate.
-       journal/                — reconciler + exec journal (Q4)
+       fenced-specs/<hash>     — canonical s-expr TEXT (Codec.encode_value);
+                                 DATA only, enforced at registration (fenced.ml).
+       procs/<svc-hash>        — supervisor proc state, canonical s-expr TEXT.
+       journal/                — reconciler + exec journal (Q4): append-only
+                                 line text, untouched by this module, survives
+                                 a VERSION wipe (it's an audit log, not a cache).
 
    Concurrency: temp file + atomic rename; immutable objects ⇒ benign races.
-   Serialization: OCaml Marshal (same-version, same-architecture — local cache).
-*)
+
+   Serialization: a canonical, versioned TEXT codec (Codec, src/codec.ml) —
+   byte-stable across OS/arch/compiler, replacing OCaml Marshal (ROADMAP §3,
+   M2.2). THE NON-DATA LAW: the persistent store holds DATA; code values
+   (closures, thunks, environments) are process-local. [Codec.encode_value]
+   returns [None] for anything containing code, and [store_object] silently
+   declines to write in that case — the in-memory memoization already served
+   the value within this process, and a cross-process consumer that needs it
+   finds the trace verified but the object absent, which is the EXISTING
+   "object gone → recompute" path below (unrelated to this codec — it always
+   existed for a merely-evicted object). A store-format version mismatch (or
+   a missing VERSION on a non-empty store) wipes objects/, traces/, fenced-
+   specs/, and procs/ — see [init] — but never blobs/ or journal/. *)
 
 open Types
 
@@ -30,6 +51,13 @@ let store_root =
 
 let objects_dir = Filename.concat store_root "objects"
 let traces_dir = Filename.concat store_root "traces"
+let version_path = Filename.concat store_root "VERSION"
+(* BUMP THIS whenever anything about the on-disk format changes — the codec
+   grammar (codec.ml), the trace line shape, Types.canonical_float_string, or
+   which dirs are versioned. tests/037's golden fixtures are the tripwire: a
+   format change without a bump (and a regenerated store-vN fixture set)
+   fails byte-comparison there. *)
+let current_version_line = "pp-store 1\n"
 
 let rec ensure_dir dir =
   if not (Sys.file_exists dir) then (
@@ -60,13 +88,17 @@ let atomic_write path content =
 
 (* ---- Object storage ---- *)
 
+(* THE NON-DATA LAW (see header): a value containing code/env/handles encodes
+   to [None] and is simply never written. The in-memory memo already served
+   it in this process; a later process's trace-verified hit finds no object
+   here and recomputes via [hit]'s existing "object gone → recompute" arm. *)
 let store_object ~key ~value =
   ensure_dirs ();
   let path = obj_path key in
   if not (Sys.file_exists path) then (
-    let bytes = Marshal.to_bytes value [Marshal.Closures] in
-    let content = Bytes.to_string bytes in
-    atomic_write path content
+    match Codec.encode_value value with
+    | Some content -> atomic_write path content
+    | None -> ()
   )
 
 let load_object ~key =
@@ -77,9 +109,8 @@ let load_object ~key =
       let len = in_channel_length ic in
       let content = really_input_string ic len in
       close_in ic;
-      let value = Marshal.from_bytes (Bytes.of_string content) 0 in
-      Some value
-    with _ -> None  (* corrupted or version-mismatched → treat as miss *)
+      Codec.decode_value content
+    with _ -> None  (* corrupted → treat as miss *)
   ) else
     None
 
@@ -88,8 +119,15 @@ let load_object ~key =
    the stored result is still valid without re-running. One node key maps to a
    SET of traces (R9): the same code can have been validly built under different
    observed worlds (toolchains, platforms, file contents), and a hit succeeds if
-   *any* stored trace still verifies. Serialized with Marshal so cell-ids and
-   hashes need no delimiter escaping. *)
+   *any* stored trace still verifies.
+
+   Serialized as one canonical s-expr line per trace (file = concatenation):
+     (trace ok|failed "RESULT-HASH" (("CELL-ID" . "HASH") ...))
+   Cell-ids and hashes are arbitrary strings (a cell-id embeds a filesystem
+   path, which may contain spaces or parens) so both are quoted with
+   [Codec.quote_string] — the same escaping the value codec uses, reused here
+   rather than duplicated, even though this line shape (with its "." pairs)
+   is bespoke and not itself a Types.value. *)
 
 type trace_outcome = Ok | Failed
 
@@ -99,15 +137,73 @@ type trace = {
   tr_reads : (string * string) list;  (* (cell-id, observed-hash) *)
 }
 
+let trace_to_line (tr : trace) : string =
+  let outcome_s = match tr.tr_outcome with Ok -> "ok" | Failed -> "failed" in
+  let read_s (c, h) =
+    Printf.sprintf "(%s . %s)" (Codec.quote_string c) (Codec.quote_string h)
+  in
+  Printf.sprintf "(trace %s %s (%s))"
+    outcome_s (Codec.quote_string tr.tr_result_hash)
+    (String.concat " " (List.map read_s tr.tr_reads))
+
+(* Hand-rolled parser matching [trace_to_line] exactly; [None] on anything
+   that doesn't (a corrupted or old-format line → the caller drops it).
+   Written with a local Option-bind operator — a plain chain of "parse one
+   piece, thread the index forward" steps, rather than accumulating match
+   nesting one paren per step. *)
+let line_to_trace (line : string) : trace option =
+  let len = String.length line in
+  let expect_char i c = if i < len && line.[i] = c then Some (i + 1) else None in
+  let expect_lit i lit =
+    let l = String.length lit in
+    if i + l <= len && String.sub line i l = lit then Some (i + l) else None
+  in
+  let ( >>= ) o f = match o with None -> None | Some x -> f x in
+  let parse_outcome i =
+    match expect_lit i "ok " with
+    | Some j -> Some (Ok, j)
+    | None ->
+        (match expect_lit i "failed " with
+         | Some j -> Some (Failed, j)
+         | None -> None)
+  in
+  (* One "(CELL . HASH)" entry. *)
+  let parse_read i =
+    expect_char i '(' >>= fun i ->
+    Codec.parse_quoted_string line i >>= fun (cell, i) ->
+    expect_lit i " . " >>= fun i ->
+    Codec.parse_quoted_string line i >>= fun (hash, i) ->
+    expect_char i ')' >>= fun i ->
+    Some ((cell, hash), i)
+  in
+  let rec parse_reads i acc =
+    if i < len && line.[i] = ')' then Some (List.rev acc, i + 1)
+    else
+      parse_read i >>= fun (r, i) ->
+      let i = match expect_char i ' ' with Some i -> i | None -> i in
+      parse_reads i (r :: acc)
+  in
+  expect_lit 0 "(trace " >>= fun i ->
+  parse_outcome i >>= fun (outcome, i) ->
+  Codec.parse_quoted_string line i >>= fun (result_hash, i) ->
+  expect_char i ' ' >>= fun i ->
+  expect_char i '(' >>= fun i ->
+  parse_reads i [] >>= fun (reads, i) ->
+  expect_char i ')' >>= fun i ->
+  if i = len then Some { tr_outcome = outcome; tr_result_hash = result_hash; tr_reads = reads }
+  else None
+
 let load_traces ~key : trace list =
   let path = trace_path key in
   if Sys.file_exists path then (
     try
-      let ic = open_in_bin path in
-      let len = in_channel_length ic in
-      let content = really_input_string ic len in
+      let ic = open_in path in
+      let lines = ref [] in
+      (try
+         while true do lines := input_line ic :: !lines done
+       with End_of_file -> ());
       close_in ic;
-      (Marshal.from_bytes (Bytes.of_string content) 0 : trace list)
+      List.filter_map line_to_trace (List.rev !lines)
     with _ -> []  (* corrupted or old-format → treat as no traces *)
   ) else
     []
@@ -119,8 +215,8 @@ let store_trace ~key ~outcome ~result_hash ~reads =
   let existing = load_traces ~key in
   if not (List.mem tr existing) then (
     let set = existing @ [tr] in
-    let bytes = Marshal.to_bytes set [] in
-    atomic_write (trace_path key) (Bytes.to_string bytes)
+    let content = String.concat "" (List.map (fun t -> trace_to_line t ^ "\n") set) in
+    atomic_write (trace_path key) content
   )
 
 (* ---- Cell observation and trace verification ----
@@ -430,16 +526,21 @@ let hit ~key ~authorized : hit_result =
    unknown-status action with the same spec that produced the intent. *)
 let fenced_specs_dir = Filename.concat store_root "fenced-specs"
 
+(* A fenced spec that is not DATA is rejected at registration (fenced.ml's
+   [register]), never here: by the time a spec reaches this call it is
+   already known to encode. *)
 let store_fenced_spec ~(hash : string) (value : Types.value) : unit =
   ensure_dir fenced_specs_dir;
   let path = Filename.concat fenced_specs_dir hash in
   if not (Sys.file_exists path) then
-    atomic_write path (Marshal.to_string value [])
+    match Codec.encode_value value with
+    | Some content -> atomic_write path content
+    | None -> ()
 
 let load_fenced_spec (hash : string) : Types.value option =
   let path = Filename.concat fenced_specs_dir hash in
   if Sys.file_exists path then
-    try Some (Marshal.from_string (read_raw path) 0) with _ -> None
+    try Codec.decode_value (read_raw path) with _ -> None
   else None
 
 
@@ -513,7 +614,73 @@ let print_graph ?(verbose = false) () =
       (Hashtbl.length key_to_cells) (Hashtbl.length cell_to_keys)
   end
   
+(* ---- Version stamp (M2.2) ----
+   ~/.pp/store/VERSION pins the codec above. [procs_dir] is defined here (not
+   in supervisor.ml, which reads it as [Store.procs_dir]) so this module can
+   name every format-versioned directory in one place. *)
+
+let procs_dir = Filename.concat store_root "procs"
+
+(* The dirs whose ON-DISK FORMAT is governed by VERSION. blobs/ (raw bytes)
+   and journal/ (append-only audit text) are format-independent and are
+   never touched by a version wipe. *)
+let versioned_dirs = [objects_dir; traces_dir; fenced_specs_dir; procs_dir]
+
+let dir_nonempty dir =
+  Sys.file_exists dir && (try Array.length (Sys.readdir dir) > 0 with _ -> false)
+
+let store_has_content () = List.exists dir_nonempty versioned_dirs
+
+let read_version () : string option =
+  if Sys.file_exists version_path then
+    try
+      let ic = open_in_bin version_path in
+      let len = in_channel_length ic in
+      let s = really_input_string ic len in
+      close_in ic; Some s
+    with _ -> None
+  else None
+
+(* Best-effort: remove every entry under [dir] (not [dir] itself). A
+   version bump must never crash regardless of what an old/foreign-format
+   store contains, so every step is wrapped and failures are swallowed. *)
+let wipe_dir_contents dir =
+  if Sys.file_exists dir then
+    (try
+       Array.iter (fun name ->
+         let p = Filename.concat dir name in
+         try
+           if Sys.is_directory p then begin
+             Array.iter (fun n -> try Sys.remove (Filename.concat p n) with _ -> ())
+               (Sys.readdir p);
+             (try Unix.rmdir p with _ -> ())
+           end else Sys.remove p
+         with _ -> ())
+         (Sys.readdir dir)
+     with _ -> ())
+
+(* Wipe order: every versioned dir's CONTENTS first, VERSION written LAST.
+   A crash mid-wipe can then never leave stale-format files readable as
+   current-version — either VERSION is still old/absent (next run wipes
+   again, idempotent) or the wipe fully completed before VERSION flipped. *)
+let wipe_versioned_dirs () = List.iter wipe_dir_contents versioned_dirs
+
 (* ---- Init called at startup ---- *)
 
 let init () =
-  ensure_dirs ()
+  ensure_dirs ();
+  match read_version () with
+  | Some v when v = current_version_line -> ()
+  | Some _ | None ->
+      (* Missing VERSION + empty store: nothing to wipe, just stamp it.
+         Missing/mismatched VERSION + non-empty store: wipe the versioned
+         dirs (never blobs/ or journal/), then stamp current. Corrupted
+         old-store content is never read as current-version — it's gone. *)
+      if store_has_content () then begin
+        prerr_endline
+          ("pp: store format changed — clearing cached objects/traces under "
+           ^ store_root ^ " (blobs and journal kept); everything recomputes \
+              on first use");
+        wipe_versioned_dirs ()
+      end;
+      atomic_write version_path current_version_line

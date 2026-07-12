@@ -113,12 +113,46 @@ let run_command (spec : value) : value =
 
 let result_hash (v : value) : string = Hasher.hash_value v
 
+(* Fully force a value (unlike [force_spec_map], which forces only the
+   outer WHNF) so [Codec.encode_value] sees the actual leaves rather than
+   unevaluated thunks — map values and vector/set elements are lazy
+   (primitives.ml: "keys forced, values lazy"), so a data-only spec would
+   otherwise misreport as non-data purely because its fields hadn't run
+   yet. *)
+let rec force_deep (v : value) : value =
+  match !Runtime.force_hook v with
+  | VPair (a, d) -> VPair (force_deep a, force_deep d)
+  | VVector vs -> VVector (Array.map force_deep vs)
+  | VMap kvs -> VMap (List.map (fun (k, v) -> (force_deep k, force_deep v)) kvs)
+  | VSet vs -> VSet (List.map force_deep vs)
+  | other -> other
+
 (* Register a fenced action from user code.  This only stores it for later
-   execution by the reconciler; it does not run anything or touch the journal. *)
+   execution by the reconciler; it does not run anything or touch the journal.
+
+   A fenced spec is a serialized intent for crash recovery (Store.
+   load_fenced_spec re-executes it from disk after an unknown-status
+   action) — a spec that carries code (a closure, thunk, or other non-DATA
+   value, per Codec's non-data law) cannot be recovered, so a spec that
+   fails to encode is a hard error HERE, at registration, rather than a
+   silently-dropped store write later. *)
 let register (kind : string) (spec : value) : unit =
   if !Runtime.trace_stack <> [] then
     failwith "fenced: fenced effects may not appear inside node bodies (LAW 31)";
-  Runtime.fenced_actions := (kind, spec) :: !Runtime.fenced_actions
+  let forced = force_deep spec in
+  (match Codec.encode_value forced with
+   | Some _ -> ()
+   | None ->
+       failwith ("fenced: spec for kind '" ^ kind ^
+                 "' is not serializable data (contains a closure, thunk, or " ^
+                 "other code/handle value) — a fenced action's spec must be " ^
+                 "plain data to be recoverable after a crash"));
+  (* Store the already-forced spec: hash_spec/run_command/store_fenced_spec
+     downstream (execute_current) must see the same data this check saw, or
+     store_fenced_spec's own encode could see unforced thunks again and
+     silently drop the write. force_hook is idempotent on non-thunk values,
+     so re-forcing [forced] later is a no-op. *)
+  Runtime.fenced_actions := (kind, forced) :: !Runtime.fenced_actions
 
 (* Execute one current-pass fenced action: compute a fresh key from the current
    epoch, journal intent, run, journal done. *)

@@ -55,8 +55,12 @@ The scaffolding is good: the O(1) env-hash design, the CPS tail-call
 optimization, and the dual backend with `--diff` are real assets.
 
 What the engine proof does NOT mean: pp is usable by strangers. Language
-ergonomics, a real stdlib, portability (Marshal same-arch store, macOS-only
-verification), and release mechanics are
+ergonomics, a real stdlib, portability (macOS-only
+verification — the store format itself is now portable: nothing in
+`~/.pp/store` is Marshal, everything is canonical s-expr text or raw bytes
+under a `VERSION` stamp, M2.2/`tests/037`; the one remaining Marshal use,
+`types.ml` bytecode hashing, is in-memory identity only and never
+persisted), and release mechanics are
 tracked as the **maturity track** in [ROADMAP.md](ROADMAP.md) — written down
 precisely because each item there was hit in practice during Phase 1. (The
 worst ergonomic item, the `(def x v)` nullary-closure footgun, is FIXED:
@@ -100,6 +104,16 @@ non-list `def` is a value binding — `tests/025`.)
   `log`/stdout). The VM's node key is byte-identical to the tree-walker's for
   data-valued free variables, so the two backends share store entries
   (`tests/014`).
+- **Portable store format (M2.2).** Objects, traces, fenced specs, and
+  supervisor proc state serialize with a canonical, byte-stable s-expr text
+  codec (`src/codec.ml`) — no Marshal anywhere in `~/.pp/store` — under a
+  `~/.pp/store/VERSION` stamp (`pp-store 1`) that invalidates old/foreign
+  stores by wiping `objects/`, `traces/`, `fenced-specs/`, `procs/` (never
+  `blobs/` or `journal/`) and re-stamping, never crashing. The store holds
+  DATA only: a code-valued node result (closure/thunk) is process-local —
+  its trace persists but no object is written, so a cross-process consumer
+  recomputes via the object-gone path. Golden byte fixtures pin the
+  encoding (`tests/fixtures/store-v1/`, `tests/037`).
 - **LAW-20 node keying.** A node's persistent key is
   `H(code-structure ‖ free-var value-hashes)` (`node_key_of`, `free_vars`): the
   free variables the node references are resolved (forced, call-by-value) to

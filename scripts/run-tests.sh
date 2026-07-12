@@ -213,4 +213,11 @@ else
   echo "FAIL 036-canonical-cells"; fail=1
 fi
 
+echo "--- Portable store format (M2.2) suite ---"
+if PP="$PP" bash tests/037-portable-store.sh; then
+  echo "ok   037-portable-store"
+else
+  echo "FAIL 037-portable-store"; fail=1
+fi
+
 exit $fail

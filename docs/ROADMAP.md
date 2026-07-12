@@ -244,10 +244,14 @@ stays shell (writing content would defeat it).
 
 ### 3. Portability
 
-- The store serializes with OCaml `Marshal`: same-compiler-version,
-  same-architecture only. Fine for a local cache, wrong for shared or
-  long-lived stores — needs a versioned, portable object format (or at
-  minimum a store-format version stamp that invalidates cleanly).
+- ~~The store serializes with OCaml `Marshal`: same-compiler-version,
+  same-architecture only~~ **Done (M2.2):** the store serializes with a
+  canonical, byte-stable s-expr text codec (`src/codec.ml`) — objects,
+  traces, fenced specs, and supervisor proc state — stamped by
+  `~/.pp/store/VERSION` (`pp-store 1`), which invalidates old/foreign
+  stores cleanly (wipe + re-stamp, never a crash; `blobs/` and `journal/`
+  survive). The store holds DATA only; code values (closures/thunks) are
+  process-local and recompute cross-process (`tests/037`).
 - ~~Grants, cells, and loader bounds compare lexical paths; no realpath
   canonicalization~~ **Done (M2, LAW 23):** `Runtime.canonical_path`
   (absolute realpath, no trailing slash) is applied uniformly at every

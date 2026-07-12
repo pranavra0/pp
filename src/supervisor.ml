@@ -15,7 +15,10 @@
 
 open Types
 
-let procs_dir = Filename.concat Store.store_root "procs"
+(* procs/ is a format-versioned dir (M2.2): its layout lives with the rest of
+   the store's version stamp in store.ml, hence [Store.procs_dir] rather
+   than a local definition — a version bump wipes it there, not here. *)
+let procs_dir = Store.procs_dir
 
 let ensure_procs_dir () = Store.ensure_dir procs_dir
 
@@ -151,18 +154,37 @@ let parse_desired desired_val =
 
 let spec_hash spec = Hasher.hash_value spec.raw
 
-(* ---- State file I/O ---- *)
+(* ---- State file I/O ----
+   proc_state is DATA (string/int/string/float) so it round-trips through
+   the store's value codec directly (M2.2) rather than a bespoke format. *)
+
+let proc_state_to_value (st : proc_state) : value =
+  VMap [ (VString "name", VString st.name);
+         (VString "pid", VInt st.pid);
+         (VString "spec_hash", VString st.spec_hash);
+         (VString "start_time", VFloat st.start_time) ]
+
+let proc_state_of_value (v : value) : proc_state option =
+  match v with
+  | VMap kvs ->
+      let find k = List.assoc_opt (VString k) kvs in
+      (match find "name", find "pid", find "spec_hash", find "start_time" with
+       | Some (VString name), Some (VInt pid), Some (VString spec_hash),
+         Some (VFloat start_time) ->
+           Some { name; pid; spec_hash; start_time }
+       | _ -> None)
+  | _ -> None
 
 let load_state name : proc_state option =
   let path = state_file name in
   if Sys.file_exists path then
     try
-      let ic = open_in_bin path in
-      let len = in_channel_length ic in
-      let s = really_input_string ic len in
+      let ic = open_in path in
+      let s = really_input_string ic (in_channel_length ic) in
       close_in ic;
-      let v = Marshal.from_bytes (Bytes.of_string s) 0 in
-      Some v
+      match Codec.decode_value s with
+      | Some v -> proc_state_of_value v
+      | None -> None
     with _ -> None
   else
     None
@@ -170,8 +192,9 @@ let load_state name : proc_state option =
 let save_state st =
   ensure_procs_dir ();
   let path = state_file st.name in
-  let bytes = Marshal.to_bytes st [] in
-  Store.atomic_write path (Bytes.to_string bytes)
+  match Codec.encode_value (proc_state_to_value st) with
+  | Some content -> Store.atomic_write path content
+  | None -> ()  (* unreachable: proc_state is always DATA *)
 
 let remove_state name =
   let path = state_file name in
@@ -278,12 +301,12 @@ let recorded_services () : proc_state list =
       if String.starts_with ~prefix:"svc-" fname && not (String.contains fname '.') then
         let path = Filename.concat procs_dir fname in
         try
-          let ic = open_in_bin path in
-          let len = in_channel_length ic in
-          let s = really_input_string ic len in
+          let ic = open_in path in
+          let s = really_input_string ic (in_channel_length ic) in
           close_in ic;
-          let state : proc_state = Marshal.from_bytes (Bytes.of_string s) 0 in
-          state :: acc
+          match Option.bind (Codec.decode_value s) proc_state_of_value with
+          | Some state -> state :: acc
+          | None -> acc
         with _ -> acc
       else acc)
       [] (Sys.readdir procs_dir)

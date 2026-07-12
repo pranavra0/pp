@@ -2,10 +2,11 @@
 
    A cell is one observable unit of the world a node can read; a trace records
    (cell, observed-hash) pairs and a hit re-observes them (SPEC LAW 21). Cells
-   are persisted inside Marshal'd traces as strings, so [to_string]/[of_string]
-   round-trip EXACTLY — the on-disk format is frozen; this module only replaces
-   scattered "file:" ^ path concatenations and prefix-sniffing cascades with
-   one constructor/parser pair.
+   are persisted as quoted strings inside trace lines (store.ml's canonical
+   text format, M2.2), so [to_string]/[of_string] round-trip EXACTLY — the
+   on-disk format is frozen; this module only replaces scattered
+   "file:" ^ path concatenations and prefix-sniffing cascades with one
+   constructor/parser pair.
 
    Who re-observes and who may read each kind is decided elsewhere
    (Store.observe_cell / Evaluator.cell_authorized); this module owns only the

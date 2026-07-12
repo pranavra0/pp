@@ -136,6 +136,19 @@ two shell suites:
     already has — skips cleanly if none); a trailing-slash grant equals one
     without; a write-target's `stat:` cell-id (via `pp graph`) is
     byte-identical before and after the file exists. VM included.
+  - **037** — portable store format (M2.2, ROADMAP maturity §3): the store's
+    canonical s-expr text codec replaces Marshal. Golden bytes — a fixed
+    program's object and trace files are byte-identical to fixtures in
+    `tests/fixtures/store-v1/` (names and content, both backends); a codec
+    round-trip battery (negative ints, `-0.0`, `1e308`, `nan`/`inf`,
+    control-byte/UTF-8 strings, keywords, symbols, nested vectors,
+    mixed-key maps, sets, improper pairs) stores in one process and HITS
+    in a second, printing byte-identically, in all four backend
+    directions; a VERSION bump ("pp-store 0") recomputes cold without
+    crashing, re-stamps, and preserves journal/ + blobs/; a closure-valued
+    node stores NO object (the non-data law) yet recomputes cleanly while
+    a data node beside it still hits; a legacy Marshal-era store (garbage
+    bytes, no VERSION) is wiped and rebuilt, exit 0.
 
 Two proofs run OUTSIDE `dune runtest` (they invoke dune / the network):
 

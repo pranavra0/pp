@@ -101,8 +101,12 @@ hosts while it is OCaml `Marshal`.
   trailing slash, done once in `Runtime`. The grammar is
   **host/namespace-qualified from day one** (`file:<host>:<canonical-path>`
   reserved) so M5's domain distribution does not re-break it.
-- **Versioned portable store format** replacing `Marshal`, scoped explicitly:
-  `objects/`, `traces/`, `journal/`, `procs/`, `fenced-specs/`, islands.
+- ✅ **Versioned portable store format** replacing `Marshal`, scoped
+  explicitly: `objects/`, `traces/`, `procs/`, `fenced-specs/` now use the
+  canonical byte-stable s-expr codec (`src/codec.ml`) under a
+  `~/.pp/store/VERSION` stamp; `journal/` was already line text and islands
+  already source trees. Golden byte fixtures + round-trip battery + version
+  bump + non-data (closure) law + legacy-store wipe: `tests/037`.
 - **Linux CI** running `dune runtest` + the fuzzer + `scripts/build-lua.sh`
   on every commit; first **tagged release** buildable from the tarball alone
   on a clean opam switch (ROADMAP maturity §4).
