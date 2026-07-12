@@ -128,21 +128,21 @@ let store_trace ~key ~outcome ~result_hash ~reads =
    file's current contents; a missing/unreadable cell observes as None, which
    never matches a recorded hash (so it forces a miss). *)
 
-(* A file cell-id is "file:<path>" using the path exactly as the program passed
-   it — the same string the perform-time capability check and `observe_cell` use,
-   so the hit-time authority check (LAW 23b) and the staleness check agree.
-   Uniform realpath canonicalization (of grants, cells, and perform-time checks
-   together) is future work; canonicalizing only the cell would desync it from
-   the raw-path grant check (e.g. /var vs /private/var on macOS). *)
+(* A file cell-id is "file:<canonical-path>" (SPEC LAW 23 / DESIGN §2.1):
+   the path is canonicalized once, here, via Runtime.canonical_path, so the
+   hit-time authority check (which canonicalizes independently in
+   Capabilities.path_grants) and the staleness check agree regardless of
+   which spelling (symlink, /var vs /private/var, trailing slash) the
+   program used. *)
 let file_cell_id (path : string) : string =
-  Cell.(to_string (File path))
+  Cell.(to_string (File (Runtime.canonical_path path)))
 
-(* A stat cell — "stat:<path>" — records what a file *predicate* observed:
-   presence and kind, never contents. Precise for file-exists?/dir?: creating
-   or deleting the path invalidates, content edits do not; a trace that
-   observed absence re-verifies while the path stays absent. *)
+(* A stat cell — "stat:<canonical-path>" — records what a file *predicate*
+   observed: presence and kind, never contents. Precise for file-exists?/
+   dir?: creating or deleting the path invalidates, content edits do not; a
+   trace that observed absence re-verifies while the path stays absent. *)
 let stat_cell_id (path : string) : string =
-  Cell.(to_string (Stat path))
+  Cell.(to_string (Stat (Runtime.canonical_path path)))
 
 let stat_kind (path : string) : string =
   match Unix.lstat path with

@@ -102,9 +102,10 @@ the `closure-cap-req` fast path is *unnecessary by measurement* (101-node
 null rebuild ~130ms, well under the 1s budget); the `toolchain:cc` closure
 cell is *superseded* by per-file depfile `tool:` cells (DESIGN Q2);
 node-captured caps are *vacuous* until in-language attenuation exists
-(DESIGN Q11); uniform realpath canonicalization (LAW 23), LAW 26's per-arg
-handler-cell refinement, LAW 38's containment half, and inline-nested cutoff
-+ the reverse-edge graph move to Phase 2.
+(DESIGN Q11); LAW 26's per-arg handler-cell refinement, LAW 38's containment
+half, and inline-nested cutoff + the reverse-edge graph move to Phase 2.
+Uniform realpath canonicalization (LAW 23) is DONE (M2, `tests/036`) — it no
+longer needs a phase, it was closed directly.
 
 ---
 
@@ -247,9 +248,12 @@ stays shell (writing content would defeat it).
   same-architecture only. Fine for a local cache, wrong for shared or
   long-lived stores — needs a versioned, portable object format (or at
   minimum a store-format version stamp that invalidates cleanly).
-- Grants, cells, and loader bounds compare lexical paths; no realpath
-  canonicalization (macOS `/var` vs `/private/var` already bites — LAW 23
-  residual). Symlinked source trees are undefined behavior today.
+- ~~Grants, cells, and loader bounds compare lexical paths; no realpath
+  canonicalization~~ **Done (M2, LAW 23):** `Runtime.canonical_path`
+  (absolute realpath, no trailing slash) is applied uniformly at every
+  cell/grant/loader-bound site; macOS `/var` vs `/private/var` and a
+  symlinked source tree are one cell (`tests/036`). NFC Unicode
+  normalization remains a residual (no new dependency added).
 - Linux CI. Everything to date is verified on macOS/arm64 only; `tree_hash`,
   sandbox dirs, `/usr/bin/cc` resolution, and the store all need a second OS
   proving them.

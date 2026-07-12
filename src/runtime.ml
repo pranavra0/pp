@@ -217,34 +217,73 @@ let record_handler_observation (name : string) : unit =
 
 let source_roots : string list ref = ref []
 
-(* Lexical normalization (cwd-anchor, ".."/"." collapse) — no realpath, per
-   the store's uniform-canonicalization caveat; the bound is a policy fence,
-   not a security boundary against symlinks (Phase 1). *)
-let normalize_path (p : string) : string =
-  let p = if Filename.is_relative p then Filename.concat (Sys.getcwd ()) p else p in
-  let rec go acc = function
-    | [] -> List.rev acc
-    | ("" | ".") :: rest -> go acc rest
-    | ".." :: rest -> (match acc with _ :: t -> go t rest | [] -> go [] rest)
-    | x :: rest -> go (x :: acc) rest
+(* SPEC LAW 23 / DESIGN §2.1: the ONE cell-id canonicalization function,
+   applied at every file:/tree:/stat:/tool:/runtime:file: construction site,
+   every --grant path, and the loader bound — so two syntactically different
+   paths naming the same inode collapse to one cell (the D8 path-prefix bug
+   class, now closed at the cell layer: macOS /var vs /private/var, a
+   symlinked source tree, and a trailing slash all name the same cell).
+
+   Existing paths: made absolute, then realpath (symlinks resolved). Paths
+   that do not (yet) exist — a write-target before its file is created —
+   realpath the longest EXISTING prefix and append the remaining components
+   lexically normalized ("." dropped, ".." pops the previous remaining
+   component); this is why a write-target's cell id is stable across the
+   file's creation (tests/036). No trailing slash (root "/" excepted).
+
+   NFC Unicode normalization is NOT implemented — a documented residual
+   (SPEC LAW 23, STATUS.md); it would need a new dependency (uunf, DESIGN
+   E6) and is orthogonal to the realpath fix this closes. *)
+let canonical_path (p : string) : string =
+  let abs = if Filename.is_relative p then Filename.concat (Sys.getcwd ()) p else p in
+  let strip_trailing s =
+    let n = String.length s in
+    if n > 1 && s.[n - 1] = '/' then String.sub s 0 (n - 1) else s
   in
-  "/" ^ String.concat "/" (go [] (String.split_on_char '/' p))
+  let abs = strip_trailing abs in
+  let parts = List.filter (fun s -> s <> "") (String.split_on_char '/' abs) in
+  let rec split_existing n =
+    if n = 0 then ("/", parts)
+    else
+      let prefix_parts = List.filteri (fun i _ -> i < n) parts in
+      let candidate = "/" ^ String.concat "/" prefix_parts in
+      if Sys.file_exists candidate then
+        (candidate, List.filteri (fun i _ -> i >= n) parts)
+      else split_existing (n - 1)
+  in
+  let (existing, remaining) = split_existing (List.length parts) in
+  let real_existing = try Unix.realpath existing with _ -> existing in
+  (* Lexically normalize the nonexistent tail only; the existing prefix was
+     already resolved by realpath above. *)
+  let normalized_tail =
+    List.rev
+      (List.fold_left (fun acc part ->
+         match part with
+         | "." -> acc
+         | ".." -> (match acc with _ :: t -> t | [] -> acc)
+         | x -> x :: acc)
+         [] remaining)
+  in
+  match normalized_tail with
+  | [] -> real_existing
+  | _ -> real_existing ^ "/" ^ String.concat "/" normalized_tail
 
 let loader_authorized (path : string) : bool =
-  let p = normalize_path path in
+  let p = canonical_path path in
   let home = try Sys.getenv "HOME" with Not_found -> "/tmp" in
-  let roots = Filename.concat home ".pp" :: !source_roots in
-  List.exists (fun r -> Paths.under ~root:(normalize_path r) p) roots
+  let roots = canonical_path (Filename.concat home ".pp") :: !source_roots in
+  List.exists (fun r -> Paths.under ~root:r p) roots
 
 let loader_read (path : string) : string =
+  let canon = canonical_path path in
   if not (loader_authorized path) then
     failwith ("load: " ^ path
               ^ " is outside the interpreter's source roots (loader authority \
                  is bounded — DESIGN Q6/D8c)");
-  let ic = open_in path in
+  let ic = open_in canon in
   let content = really_input_string ic (in_channel_length ic) in
   close_in ic;
-  record_read (Cell.(to_string (RuntimeFile path))) (hash_string content);
+  record_read (Cell.(to_string (RuntimeFile canon))) (hash_string content);
   content
 
 (* Initial capabilities from --grant (set by main.ml before init) *)

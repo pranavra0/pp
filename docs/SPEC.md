@@ -675,9 +675,21 @@ executions; authority must gate the channel, not just live `perform`s.
 DESIGN Q6/R3 derives the transitive requirement and its precomputed
 `closure-cap-req` fast path.
 
-**Status: partial** — (a) path checks are component-aware and full-path (`/tmp`
-does not grant `/tmpevil`). (b) **holds** in both backends: a hit is served only
-if the caller's capabilities cover every cell in the stored trace's read closure
+**Status: holds (NFC residual)** — (a) path checks are component-aware and
+full-path (`/tmp` does not grant `/tmpevil`), and the full path is now uniformly
+CANONICALIZED first: `Runtime.canonical_path` (absolute realpath, symlinks
+resolved, no trailing slash) runs at every `file:`/`tree:`/`stat:`/`tool:`/
+`runtime:file:` construction site, at `--grant` parse time, and at the loader
+bound (`Runtime.loader_authorized`) — and `Capabilities.path_grants` re-applies
+it to both sides of every scope check, so a grant spelled one way authorizes a
+cell observed another way (a symlinked source tree, macOS `/var` vs
+`/private/var`, a trailing slash — `tests/036`). A path that does not yet exist
+canonicalizes its longest existing prefix and appends the rest lexically, so a
+write-target's cell-id is stable before and after the file is created
+(`tests/036`). NFC Unicode normalization is **not** implemented — a documented
+residual; it needs a new dependency (`uunf`, DESIGN E6) and is orthogonal to
+the realpath fix. (b) **holds** in both backends: a hit is served only if the
+caller's capabilities cover every cell in the stored trace's read closure
 (`Store.hit ~authorized`), and because reads propagate to enclosing nodes the
 closure is transitive — a narrow caller cannot launder a broad read through a
 cached aggregator (`tests/013` tree-walker, `tests/014` VM). A capability denial
@@ -686,8 +698,7 @@ raises the distinct `Capability_error` and is deliberately **not** memoized
 still yields a hit. (c) `pp why` exists and is capability-filtered: it explains
 each node's hit/miss (first build, stale cell, unauthorized, verified trace) to
 stderr, and a cell the caller has no authority over is redacted rather than
-named (`tests/019`). Still open: uniform realpath canonicalization of grants
-and cells.
+named (`tests/019`).
 
 **Test:** grant `fs:/tmp:ro`: reading `/tmpevil/x` errors in both backends.
 A caller scoped to `src/` gets no hit on a node whose transitive closure
@@ -720,9 +731,9 @@ working directory, and `~/.pp` (loading anything else errors, grants or no —
 the D8c ambient hole is closed), and recorded as a `runtime:file:<path>`
 trace cell that participates in cache validity (editing a loaded module
 invalidates the nodes that loaded it) while being exempt from the hit-time
-authority requirement (`tests/020`). Residual: the bound is a lexical-path
-policy fence, not a symlink-proof boundary (uniform realpath canonicalization
-is still open, LAW 23).
+authority requirement (`tests/020`). The bound is now realpath-canonical
+(LAW 23, `tests/036`): a symlinked source tree is authorized identically to
+the real path.
 
 **Test:** a program granted nothing can `(load ...)` beside its own source
 and hit a node cache whose trace contains that load; loading a path outside
@@ -1148,8 +1159,8 @@ signatures, not line numbers — the source is under active migration.)
 | LAW 20 | key = code ‖ arg-values | partial | persistent `(node e)` key = code + free-var value hashes; caps, whole-env, config, and handlers all excluded (`tests/011`, `tests/015`); binding-order not canonicalized (LAW 3) |
 | LAW 21 | cutoff via traces | partial | validity-via-verifying-trace real (key→SET of traces, cells re-checked on hit; `tests/010`, `tests/015`); hash-equality cutoff proven at scale — comment-only header edit on a 101-TU C build and on Lua 5.4.7 recompiles dependents and cuts off the link (`tests/016`, `tests/024`, `scripts/build-lua.sh`); reverse-edge/dirty-propagation graph now used by push `stabilize` (`pp --watch --stabilize`, `tests/032`); inline-nested cutoff still absent |
 | LAW 22 | unforgeable root-minted caps | holds | D18 fixed; constructors removed; `tests/capability-adversarial.sh` |
-| LAW 23 | component/full-path + transitive hit check | partial | (a) component-aware paths; (b) hits gated on the caller's caps covering the trace's transitive read closure in both backends, cap denials not memoized (`tests/013`, `tests/014`); (c) capability-filtered `pp why` real (`tests/019`); uniform realpath canonicalization still open |
-| LAW 24 | loader = runtime authority | holds | loader bounded to source roots + ~/.pp, reads traced as authority-exempt `runtime:file:` cells (`tests/020`); realpath canonicalization still open |
+| LAW 23 | component/full-path + transitive hit check | holds (NFC residual) | (a) component-aware, canonicalized (realpath, no trailing slash) paths at every cell/grant/loader-bound site (`tests/036`); (b) hits gated on the caller's caps covering the trace's transitive read closure in both backends, cap denials not memoized (`tests/013`, `tests/014`); (c) capability-filtered `pp why` real (`tests/019`); NFC Unicode normalization not implemented |
+| LAW 24 | loader = runtime authority | holds | loader bounded to source roots + ~/.pp, reads traced as authority-exempt `runtime:file:` cells (`tests/020`); realpath-canonical (`tests/036`) |
 | LAW 25 | no unenforced authority surface | holds | `CapTime`/`CapMemory` removed from types and surface (D8d) |
 | LAW 26 | two handler classes, synthetic trace cells | partial | semantic half real at node granularity: `handler:<effect>` trace cells in both backends, mock/real coexist without cross-contamination (`tests/015`); cells coarser than the law's per-arg form; result-transparent class awaits schedulers (Phase 2/3) |
 | LAW 27 | exception/tail-safe dynamic extent | holds | D9/D16/D20 fixed; save-stack restore on every exit |

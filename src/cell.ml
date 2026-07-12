@@ -9,10 +9,20 @@
 
    Who re-observes and who may read each kind is decided elsewhere
    (Store.observe_cell / Evaluator.cell_authorized); this module owns only the
-   naming. *)
+   naming.
+
+   File-cell paths are canonicalized before they ever reach [to_string]
+   (Runtime.canonical_path — SPEC LAW 23 / DESIGN §2.1: absolute realpath,
+   no trailing slash), so a canonical path always starts with '/'. That
+   invariant RESERVES the grammar for a future host-qualified form,
+   "file:<host>:<canonical-path>" (M2/MASTERPLAN): the character right after
+   "file:" unambiguously distinguishes them — '/' means a local canonical
+   path, anything else is a host token — so parsing never has to special-case
+   today's local-only cells to make room for it. No host cell is implemented
+   here; this is the reservation only. *)
 
 type t =
-  | File of string         (* file contents, by path exactly as the program passed it *)
+  | File of string         (* file contents, by canonical path (LAW 23) *)
   | RuntimeFile of string  (* a loader read (Q6): interpreter authority, not the user's *)
   | Tool of string         (* the command binary a `run` resolved to (D13) *)
   | Tree of string         (* whole-tree content hash — Q2's coarse soundness floor *)

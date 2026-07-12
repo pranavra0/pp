@@ -104,6 +104,11 @@ let rec prune_empty_dirs ~root dir =
     | exception _ -> ()
 
 let reconcile ~(root : string) (desired_val : value) : unit =
+  (* SPEC LAW 23 / DESIGN §2.1: canonicalize once, up front, so the write
+     grant check, the stratification comparison against recorded file:/tree:
+     cells (themselves canonical), and every write path agree — a domain
+     root spelled via a symlink or not yet existing is one identity. *)
+  let root = Runtime.canonical_path root in
   let force = !Runtime.force_hook in
   (* Single writer needs the authority to write the whole domain. *)
   if not (List.exists (fun cap -> Capabilities.check_fs_write cap root)

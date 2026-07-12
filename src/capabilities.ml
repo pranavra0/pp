@@ -24,9 +24,13 @@ let cap_restrict cap scope =
 (* Path-component-aware scope check: [scope] grants [target] iff target
    equals scope or is inside the directory named by scope. "/tmp" grants
    "/tmp" and "/tmp/x" but NOT "/tmpevil" (Paths.under — the one shared
-   containment predicate). *)
+   containment predicate). Both sides are canonicalized (SPEC LAW 23 /
+   DESIGN §2.1) so a grant spelled one way (a symlink, /var vs /private/var,
+   a trailing slash) authorizes a cell observed another way — this is the
+   ONE place every authority check funnels through, so no call site has to
+   canonicalize its own path before checking. *)
 let path_grants ~(scope : string) (target : string) : bool =
-  Paths.under ~root:scope target
+  Paths.under ~root:(Runtime.canonical_path scope) (Runtime.canonical_path target)
 
 (* Check if a capability grants a specific permission *)
 let rec check_fs_read (cap : capability) (target_path : string) : bool =

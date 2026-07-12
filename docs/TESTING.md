@@ -128,6 +128,14 @@ two shell suites:
     The fixture generator and drift mutations are pp programs
     (`tests/gen-cproject.pp`, `tests/mutate-cproject.pp` — the ROADMAP §2
     milestone); the pass/fail oracle stays shell.
+  - **036** — cell-id canonicalization (SPEC LAW 23, M2): a source tree
+    reached via a symlink loads and hits identically to the real path, both
+    directions; a `tree:`/`tool:` node cache hits when the SAME content is
+    granted via a different spelling (a user symlink, and macOS `/var` vs
+    `/private/var` on whatever symlink layer the host's own tmp path
+    already has — skips cleanly if none); a trailing-slash grant equals one
+    without; a write-target's `stat:` cell-id (via `pp graph`) is
+    byte-identical before and after the file exists. VM included.
 
 Two proofs run OUTSIDE `dune runtest` (they invoke dune / the network):
 

@@ -91,7 +91,11 @@ let main () =
         let m = match mode with
           | "ro" -> Types.Read | "rw" -> Types.ReadWrite | "wo" -> Types.Write
           | _ -> failwith ("invalid fs mode in --grant: " ^ mode)
-        in Types.CapFilesystem { path; mode = m }
+        in
+        (* SPEC LAW 23 / DESIGN §2.1: canonicalize at the mint, so every
+           downstream comparison (authority checks, `tree:` cells built from
+           granted paths) already sees the same spelling a cell would. *)
+        Types.CapFilesystem { path = Runtime.canonical_path path; mode = m }
     | ["net"; protocol] ->
         Types.CapNetwork { protocol }
     | ["process"] ->
@@ -103,12 +107,8 @@ let main () =
   (* Loader authority bound (Q6/D8c): the interpreter may load source from
      the CLI-named programs' directories, the cwd, and ~/.pp — nothing else. *)
   Runtime.source_roots :=
-    Sys.getcwd ()
-    :: List.map (fun f ->
-         Filename.dirname
-           (if Filename.is_relative f then Filename.concat (Sys.getcwd ()) f
-            else f))
-         !files;
+    Runtime.canonical_path (Sys.getcwd ())
+    :: List.map (fun f -> Filename.dirname (Runtime.canonical_path f)) !files;
   Store.init ();
   Runtime.proc_observer := Supervisor.observe_proc;
   Runtime.fenced_policy := !fenced_policy;

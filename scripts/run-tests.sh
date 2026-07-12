@@ -206,4 +206,11 @@ else
   echo "FAIL 035-islands"; fail=1
 fi
 
+echo "--- Cell-id canonicalization (LAW 23) suite ---"
+if PP="$PP" bash tests/036-canonical-cells.sh; then
+  echo "ok   036-canonical-cells"
+else
+  echo "FAIL 036-canonical-cells"; fail=1
+fi
+
 exit $fail

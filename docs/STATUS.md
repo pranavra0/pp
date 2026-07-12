@@ -55,8 +55,8 @@ The scaffolding is good: the O(1) env-hash design, the CPS tail-call
 optimization, and the dual backend with `--diff` are real assets.
 
 What the engine proof does NOT mean: pp is usable by strangers. Language
-ergonomics, a real stdlib, portability (Marshal same-arch store, no realpath
-canonicalization, macOS-only verification), and release mechanics are
+ergonomics, a real stdlib, portability (Marshal same-arch store, macOS-only
+verification), and release mechanics are
 tracked as the **maturity track** in [ROADMAP.md](ROADMAP.md) — written down
 precisely because each item there was hit in practice during Phase 1. (The
 worst ergonomic item, the `(def x v)` nullary-closure footgun, is FIXED:
@@ -231,6 +231,21 @@ non-list `def` is a value binding — `tests/025`.)
   the CLI programs' directories, the cwd, and `~/.pp` (anything else errors,
   grants or no), and recorded as `runtime:file:` cells — validity-bearing,
   authority-exempt. Pinned by `tests/020-loader-authority.sh`.
+- **Cell-id canonicalization (LAW 23, DESIGN §2.1).** `Runtime.canonical_path`
+  is the ONE canonicalization function: absolute realpath (symlinks
+  resolved), no trailing slash; a path that does not yet exist canonicalizes
+  its longest existing prefix and appends the rest lexically, so a
+  write-target's cell-id is stable across the file's creation. Applied at
+  every `file:`/`tree:`/`stat:`/`tool:`/`runtime:file:` construction site,
+  at `--grant fs:...` parse time, and at the loader bound; every authority
+  check (`Capabilities.path_grants`) canonicalizes both the grant scope and
+  the target, so a grant spelled one way authorizes a cell observed another
+  way. Closes the D8 path-prefix bug class at the cell layer for real:
+  a symlinked source tree, macOS `/var` vs `/private/var`, and a
+  trailing-slash grant are all one cell (M2 exit criterion 3 — "symlinked
+  trees are undefined behavior" ends here). NFC Unicode normalization is
+  **not** implemented — a documented residual, deferred rather than
+  half-done. Both backends. Pinned by `tests/036-canonical-cells.sh`.
 - **Snapshot-as-CAS-ingest (Q11).** The first observation of a file cell
   ingests its bytes into `~/.pp/store/blobs/<sha256>` and pins
   `(cell → hash)` for the rest of the run; every later read — any tier —
