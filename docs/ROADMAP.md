@@ -3,7 +3,11 @@
 Where pp is going, as falsifiable phases. For what works *today* see
 [STATUS.md](STATUS.md); for *why* the design is shaped this way (principles,
 the resolved open questions Q1–Q12, prior art, a worked example) see
-[DESIGN.md](DESIGN.md).
+[DESIGN.md](DESIGN.md). The remaining phases (3–4) and the maturity track are
+elaborated as milestones M1–M6 — with dependencies, the devops-complete
+end-state claim, and the diagonal oracle — in
+[MASTERPLAN.md](MASTERPLAN.md); this file stays the phase ledger where
+exit-criteria bookkeeping lives.
 
 The thesis: build systems, package managers, provisioners, and orchestrators
 all manage one substrate — a dependency graph with caching and effects. pp

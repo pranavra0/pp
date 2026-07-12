@@ -40,6 +40,7 @@ the world.
 | [docs/SPEC.md](docs/SPEC.md) | The normative semantic laws, each with a status marker. |
 | [docs/STATUS.md](docs/STATUS.md) | What works today + the D1–D21 discrepancy ledger. |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | The phased plan with falsifiable exit criteria, plus the maturity track (ergonomics, stdlib, portability, releases). |
+| [docs/MASTERPLAN.md](docs/MASTERPLAN.md) | The strategic layer: milestones M1–M6 from "engine proven" to devops solved in-language, with the end-state claim and the diagonal oracle. |
 | [docs/DESIGN.md](docs/DESIGN.md) | Why it's shaped this way: principles, the Q1–Q12 decisions, prior art. |
 | [docs/TESTING.md](docs/TESTING.md) | The differential test suite and fuzzer. |
 | [AGENTS.md](AGENTS.md) | Orientation for AI coding agents. |
