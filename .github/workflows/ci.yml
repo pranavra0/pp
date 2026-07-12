@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5.4.1"
+
+      - name: Install OCaml dependencies
+        run: opam install . --deps-only --with-test
+
+      - name: Build
+        run: opam exec -- dune build
+
+      - name: Test suite (dune runtest)
+        run: opam exec -- dune runtest --force
+
+      - name: Fuzzer (core grammar — gating, per docs/TESTING.md)
+        run: opam exec -- dune exec ./tools/fuzz.exe -- --grammar core --count 2000
+
+      - name: Fuzzer (full grammar — gating, green today per docs/TESTING.md)
+        run: opam exec -- dune exec ./tools/fuzz.exe -- --grammar full --count 500
+
+      - name: Cache Lua tarball
+        uses: actions/cache@v4
+        with:
+          path: scripts/.cache
+          key: lua-5.4.7-tarball
+
+      - name: Real-world build (Lua 5.4.7, scripts/build-lua.sh)
+        run: opam exec -- bash scripts/build-lua.sh

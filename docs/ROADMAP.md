@@ -258,17 +258,32 @@ stays shell (writing content would defeat it).
   cell/grant/loader-bound site; macOS `/var` vs `/private/var` and a
   symlinked source tree are one cell (`tests/036`). NFC Unicode
   normalization remains a residual (no new dependency added).
-- Linux CI. Everything to date is verified on macOS/arm64 only; `tree_hash`,
-  sandbox dirs, `/usr/bin/cc` resolution, and the store all need a second OS
-  proving them.
+- **Linux CI (M2.3): authored, awaiting first green run.**
+  `.github/workflows/ci.yml` runs on ubuntu-latest + macos-latest (push +
+  PR to `master`): `dune build`, `dune runtest --force`, the fuzzer
+  (`--grammar core --count 2000` and `--grammar full --count 500`, both
+  gating), and `scripts/build-lua.sh` on both OSes, with the Lua tarball
+  cached. Everything has been verified locally on macOS/arm64 to date;
+  the workflow has not yet run on GitHub — `tree_hash`, sandbox dirs,
+  `/usr/bin/cc` resolution (Linux uses gcc, not clang), and the store all
+  still need a real Linux run to prove them. Do not treat Linux as proven
+  until that first run is green.
 
 ### 4. Releases
 
-Versioning (the binary says `v0.1.0` unconditionally), a changelog, tagged
-releases with tarballs, reproducible build instructions from a clean opam
-switch, and CI that runs `dune runtest` + the fuzzer + `scripts/build-lua.sh`
-on every commit. "Mature project website" mostly advertises that this
-mundane layer exists and holds.
+**Authored, not yet exercised end-to-end via a tag.** Versioning no longer
+hardcodes `v0.1.0`: `pp --version` and the REPL banner read
+`Build_info.V1.version ()` (via `dune-build-info`), sourced from
+`dune-project`'s `(version ...)` field (currently `0.2.0-dev`) — this was
+verified to work identically from a git checkout and from a `git archive`
+tarball with no `.git` present (`dune build` + `dune runtest --force`, 519
+ok, both ways). [CHANGELOG.md](../CHANGELOG.md) exists with an Unreleased
+v0.2.0 section; [docs/RELEASING.md](RELEASING.md) documents the tag/tarball
+procedure and the from-tarball smoke test. What remains: the CI above
+turning green on GitHub, and cutting the actual `v0.2.0` tag per
+RELEASING.md (MASTERPLAN M2 exit criterion 4 stays unchecked until CI is
+green on both OSes and a tag exists that a stranger can build from the
+tarball alone).
 
 ### 5. Documentation site
 

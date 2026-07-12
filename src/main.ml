@@ -44,7 +44,7 @@ let main () =
     | "--check" :: rest -> Store.check_mode := true; parse rest
     | "-e" :: e :: rest -> eval_str := Some e; parse rest
     | "--version" :: _ | "-v" :: _ ->
-        Printf.printf "pp v0.1.0\n"; exit 0
+        Printf.printf "pp v%s\n" Version.string; exit 0
     | "--help" :: _ | "-h" :: _ ->
         Printf.printf "pp — lazy, pure-by-default, content-addressed Lisp\n";
         Printf.printf "Usage:\n";

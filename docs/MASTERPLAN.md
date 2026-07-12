@@ -107,9 +107,16 @@ hosts while it is OCaml `Marshal`.
   `~/.pp/store/VERSION` stamp; `journal/` was already line text and islands
   already source trees. Golden byte fixtures + round-trip battery + version
   bump + non-data (closure) law + legacy-store wipe: `tests/037`.
-- **Linux CI** running `dune runtest` + the fuzzer + `scripts/build-lua.sh`
-  on every commit; first **tagged release** buildable from the tarball alone
-  on a clean opam switch (ROADMAP maturity §4).
+- **Linux CI (M2.3): authored, awaiting first green run.**
+  `.github/workflows/ci.yml` runs `dune build` + `dune runtest --force` +
+  the fuzzer (`core`/`full`, both gating) + `scripts/build-lua.sh` on
+  ubuntu-latest and macos-latest, on every push/PR to `master` — it has
+  not yet run on GitHub, so Linux is not yet proven. Versioning is wired
+  (`pp --version`/REPL banner via `dune-build-info`, verified from both a
+  git checkout and a no-`.git` tarball) and [CHANGELOG.md](../CHANGELOG.md)
+  / [RELEASING.md](RELEASING.md) exist; the first **tagged release**
+  buildable from the tarball alone on a clean opam switch is still
+  outstanding (ROADMAP maturity §4).
 
 **Exit (runnable):**
 1. A store written on macOS/arm64 is read on Linux/x86_64 with pure

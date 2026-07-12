@@ -295,7 +295,8 @@ let repl_loop ~(use_vm : bool) =
   if use_vm then Vm.init ();
   let tty = (try Unix.isatty Unix.stdin with _ -> false) in
   if tty then begin
-    Printf.printf "pp v0.1.0%s — lazy, pure-by-default, content-addressed Lisp\n"
+    Printf.printf "pp v%s%s — lazy, pure-by-default, content-addressed Lisp\n"
+      Version.string
       (if use_vm then " [bytecode VM]" else "");
     Printf.printf "Type :help for commands, :quit or Ctrl-D to leave.\n\n%!";
     load_history ()

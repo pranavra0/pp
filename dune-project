@@ -1,2 +1,16 @@
 (lang dune 3.0)
 (name pp)
+(version 0.2.0-dev)
+(generate_opam_files true)
+
+(package
+ (name pp)
+ (synopsis "A content-addressed, capability-scoped Lisp")
+ (description
+  "pp is a content-addressed, capability-scoped Lisp with two back ends (a \
+   tree-walking interpreter and a bytecode VM) that must produce identical \
+   output. See AGENTS.md and docs/ for details.")
+ (depends
+  (ocaml (>= 4.14))
+  dune-build-info
+  cryptokit))

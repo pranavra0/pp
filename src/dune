@@ -1,7 +1,8 @@
 (executable
  (name main)
- (modules types hasher codec paths cell runtime store journal reader capabilities process
+ (public_name pp)
+ (modules version types hasher codec paths cell runtime store journal reader capabilities process
    reconciler supervisor fenced island primitives evaluator compiler stabilize vm
    repl main)
- (libraries cryptokit)
+ (libraries cryptokit dune-build-info)
  (flags -no-strict-sequence))

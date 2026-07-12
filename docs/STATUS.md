@@ -55,12 +55,20 @@ The scaffolding is good: the O(1) env-hash design, the CPS tail-call
 optimization, and the dual backend with `--diff` are real assets.
 
 What the engine proof does NOT mean: pp is usable by strangers. Language
-ergonomics, a real stdlib, portability (macOS-only
+ergonomics, a real stdlib, portability (macOS-only *runtime*
 verification — the store format itself is now portable: nothing in
 `~/.pp/store` is Marshal, everything is canonical s-expr text or raw bytes
 under a `VERSION` stamp, M2.2/`tests/037`; the one remaining Marshal use,
 `types.ml` bytecode hashing, is in-memory identity only and never
-persisted), and release mechanics are
+persisted; Linux CI is now **authored** — `.github/workflows/ci.yml` runs
+`dune build`/`dune runtest`/the fuzzer/`scripts/build-lua.sh` on
+ubuntu-latest + macos-latest — but has not yet run on GitHub, so Linux
+itself stays unproven until that first run is green), and release
+mechanics (M2.3: `pp --version`/the REPL banner now report a real version
+via `dune-build-info`, sourced from `dune-project`, verified to work from
+both a git checkout and a `git archive` tarball with no `.git`;
+[CHANGELOG.md](../CHANGELOG.md) and [docs/RELEASING.md](RELEASING.md)
+exist; no `v0.2.0` tag has been cut yet) are
 tracked as the **maturity track** in [ROADMAP.md](ROADMAP.md) — written down
 precisely because each item there was hit in practice during Phase 1. (The
 worst ergonomic item, the `(def x v)` nullary-closure footgun, is FIXED:
