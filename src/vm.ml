@@ -9,11 +9,13 @@ let operand_stack : value array ref = ref (Array.make 1024 VNil)
 let sp = ref 0
 
 (* handler_stack, current_capabilities, config_stack, thunk_store are in Runtime. *)
-(* Save-stacks so ENTER_EFFECT/PUSH_HANDLER can restore the EXACT prior scope
-   on EXIT_EFFECT/POP_HANDLER regardless of how many caps/handlers were pushed
-   (D9: ENTER pushed N but EXIT popped 1; PUSH_HANDLER pushed n but one
-   POP_HANDLER popped 1). Mirrors the tree-walker's saved/restore pattern. *)
-let caps_save_stack : capability list list ref = ref []
+(* Save-stack so PUSH_HANDLER can restore the EXACT prior scope on
+   POP_HANDLER regardless of how many handlers were pushed (D9: PUSH_HANDLER
+   pushed n but one POP_HANDLER popped 1). Mirrors the tree-walker's
+   saved/restore pattern. (with-caps' WITH_CAPS opcode below needs no
+   analogous save-stack: it restores current_capabilities via an ordinary
+   OCaml local + try/with around its nested run_isolated call, which is also
+   what makes it exception-safe — see WITH_CAPS.) *)
 let handler_save_stack : (string * (value list -> value) * string) list list ref = ref []
 let globals : (string, value) Hashtbl.t = Hashtbl.create 128
 
@@ -45,9 +47,9 @@ let pop_n n =
   done;
   Array.to_list result
 
-(* Effect dispatch, capability extraction, and type checking are shared with
-   the tree-walker: Evaluator.perform_effect / extract_capabilities /
-   check_type. One implementation, so the backends cannot drift. *)
+(* Effect dispatch and type checking are shared with the tree-walker:
+   Evaluator.perform_effect / check_type. One implementation, so the
+   backends cannot drift. *)
 
 (* ---- Force via VM (for evaluator.force to dispatch into) ---- *)
 
@@ -213,7 +215,10 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
         (match t with
          | VThunk th ->
              th.thunk_persist <- true;
-             th.node_fv <- fv_descs
+             th.node_fv <- fv_descs;
+             (* Node capture (Q11): the ambient at THIS creation, unconditionally
+                — never left at the [] default (see Types.thunk.node_caps). *)
+             th.node_caps <- !current_capabilities
          | _ -> ());
         push t;
         incr pc;
@@ -308,25 +313,29 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
     | HALT ->
         result := (if !sp > 0 then pop () else VNil)
 
-    | ENTER_EFFECT ->
-        let caps_val = pop () in
-        let caps =
-          match caps_val with
-          | VNil -> []
-          | _ -> Evaluator.extract_capabilities caps_val
+    | WITH_CAPS body_start ->
+        let cap_val = pop () in
+        let requested =
+          match cap_val with
+          | VCapability c -> c
+          | _ -> failwith "with-caps expects a capability value"
         in
-        caps_save_stack := !current_capabilities :: !caps_save_stack;
-        current_capabilities := caps @ !current_capabilities;
-        incr pc;
-        loop ()
-
-    | EXIT_EFFECT ->
-        (* Restore the pre-ENTER scope exactly, not pop-one (D9). *)
-        (match !caps_save_stack with
-         | [] -> ()
-         | saved :: rest ->
-             current_capabilities := saved;
-             caps_save_stack := rest);
+        if not (Capabilities.cap_subseteq requested !current_capabilities) then
+          raise (Capability_error Capabilities.err_with_caps_widen);
+        let saved = !current_capabilities in
+        current_capabilities := [requested];
+        (* Nested run_isolated call (not a flat opcode pair): the try/with
+           here restores current_capabilities on EVERY exit — normal return
+           AND a raised exception — which the flat ENTER/EXIT-opcode shape
+           used by PUSH_HANDLER/PUSH_CONFIG cannot do (an OCaml exception
+           thrown mid-body there unwinds straight past the EXIT opcode,
+           since nothing in this VM's dispatch loop catches it). LAW 27. *)
+        let result =
+          try run_isolated !bc_ref body_start !local_frames
+          with e -> current_capabilities := saved; raise e
+        in
+        current_capabilities := saved;
+        push result;
         incr pc;
         loop ()
 
@@ -609,7 +618,17 @@ and vm_force (v : value) : value =
    and hashed. The key format is byte-identical to the tree-walker's
    `node_key_of`, so a node whose free vars are data (strings, ints, …) produces
    the SAME key in both backends and shares the store entry; closures hash per
-   backend, so those key separately but each remains sound. *)
+   backend, so those key separately but each remains sound.
+
+   M3 free-var ban (LAW 20 node-boundary, import side): if a free variable's
+   forced value contains a VCapability (Hasher.contains_capability — never
+   forces an already-Unevaluated thunk, so this can't force the same value
+   twice or invalidate the "each is forced" note above; it just inspects
+   whatever [vm_force] already produced), the key can never be computed —
+   raise Capability_error instead, naming the variable. If forcing itself
+   raises Capability_error (e.g. the free var's value is itself a node whose
+   force hit this same ban, or a use-time gate), propagate that as-is rather
+   than falling back to hashing the unforced thunk. *)
 and vm_node_key (t : thunk) : string =
   let frames = match t.vm_code with Some (_, _, fr) -> fr | None -> [] in
   let fv_parts =
@@ -620,7 +639,19 @@ and vm_node_key (t : thunk) : string =
         else
           (try frame_get (List.nth frames depth) slot with _ -> VNil)
       in
-      let hv = (try hash_value (vm_force v) with _ -> hash_value v) in
+      let hv =
+        match vm_force v with
+        | fv ->
+            if Hasher.contains_capability fv then
+              raise (Capability_error
+                (Printf.sprintf
+                   "node: free variable '%s' may not be or contain a capability" name));
+            hash_value fv
+        | exception e ->
+            (match e with
+             | Capability_error _ -> raise e
+             | _ -> hash_value v)
+      in
       hash_concat ["fv"; name; hv])
       t.node_fv
   in
@@ -671,7 +702,6 @@ let rec init () =
   Primitives.current_env_ref := Types.env_of_bindings global_bindings;
   handler_stack := [];
   config_stack := [];
-  caps_save_stack := [];
   handler_save_stack := [];
   if not !Runtime.keep_thunks then Hashtbl.clear thunk_store;
   Primitives.set_force vm_force;

@@ -227,4 +227,11 @@ else
   echo "FAIL 038-parallel-stress"; fail=1
 fi
 
+echo "--- M3 capability attenuation suite ---"
+if PP="$PP" bash tests/040-caps-attenuation.sh; then
+  echo "ok   040-caps-attenuation"
+else
+  echo "FAIL 040-caps-attenuation"; fail=1
+fi
+
 exit $fail

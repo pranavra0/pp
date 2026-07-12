@@ -165,16 +165,30 @@ hosts while it is OCaml `Marshal`.
 
 The pieces a userland devops library stands on.
 
-- **In-language capability attenuation/threading.** The enabling dependency
-  for M4d: a userland domain's `apply` needs a write capability threaded to
-  exactly that function and ungrantable to node code (Q11 race 3,
-  principle 5). Lands *together with* node-captured-cap capture and the test
-  distinguishing capture-at-creation from ambient-at-force — per DESIGN Q11,
-  capture without attenuation is dead, unfalsifiable code, and attenuation
-  makes it testable. **Anti-mint constraint (principle 3, D18):**
-  narrowing/threading only; domain write caps are minted solely at the root
-  powerbox (`--grant domain:…`). The D18 adversarial suite extends to prove
-  user code still cannot construct authority.
+- ✅ **In-language capability attenuation/threading**
+  (docs/PLAN-m3-attenuation.md). The enabling dependency for M4d: a userland
+  domain's `apply` needs a write capability threaded to exactly that function
+  and ungrantable to node code (Q11 race 3, principle 5). Landed *together
+  with* node-captured-cap capture and the differential test distinguishing
+  capture-at-creation from ambient-at-force — per DESIGN Q11, capture without
+  attenuation was dead, unfalsifiable code, and attenuation makes it testable.
+  `(current-capabilities)` reifies the ambient (never a mint); `cap-restrict`
+  gained an optional mode argument that only narrows (a wider request is
+  `Capability_error`); `(with-caps cap-expr body)` replaces the ambient for
+  `body`'s extent, ⊆-gated against the CURRENT ambient, exception- and
+  tail-safe in both backends. The `effect` capability-union form (the
+  widening-backdoor rule `caps @ ambient`) is REMOVED — vacuous and untested
+  before this landed, unsound the instant capability values exist. The node
+  boundary is enforced symmetrically: a node's free variable that is/contains
+  a capability is `Capability_error` at the key (structural,
+  closure-env-aware); a node's RESULT containing one is rejected before
+  storage. **Anti-mint constraint (principle 3, D18) holds**:
+  `cap-restrict`/`cap-compose`/`with-caps` only narrow/union/replace-within
+  what is already held; domain write caps remain root-powerbox-only
+  (`--grant domain:…` is M4d surface, not implemented here). The D18
+  adversarial suite extends (`tests/capability-adversarial.sh`) to prove
+  composing narrowed views never resurrects the root's authority and a
+  printed capability is inert text.
 - ✅ **Fix D22** (the two VM global-scope holes). Module/global correctness
   stops being a curiosity the moment libraries are real. `EDo` now binds its
   defs as local slots unconditionally (never VM globals, even at
@@ -197,8 +211,9 @@ The pieces a userland devops library stands on.
 1. ✅ The two deliberate D22 fuzzer generator exclusions
    ([TESTING.md](TESTING.md)) are **deleted** and the fuzzer stays green on
    `full`.
-2. Attenuation adversarial suite green, including capture-vs-ambient and
-   anti-mint cases.
+2. ✅ Attenuation adversarial suite green, including capture-vs-ambient
+   (`tests/040-caps-attenuation.sh`'s two-direction differential) and
+   anti-mint cases (`tests/capability-adversarial.sh`).
 3. `defmacro` has a fuzzer grammar arm and a differential test proving a
    macro-definition edit re-keys dependent nodes.
 

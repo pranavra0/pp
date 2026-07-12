@@ -9,8 +9,8 @@
    constructor/parser pair.
 
    Who re-observes and who may read each kind is decided elsewhere
-   (Store.observe_cell / Evaluator.cell_authorized); this module owns only the
-   naming.
+   (Store.observe_cell / Evaluator.cell_authorized_for); this module owns only
+   the naming.
 
    File-cell paths are canonicalized before they ever reach [to_string]
    (Runtime.canonical_path — SPEC LAW 23 / DESIGN §2.1: absolute realpath,

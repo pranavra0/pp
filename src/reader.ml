@@ -324,7 +324,7 @@ and parse_special_form ps car_sym =
   | "node" -> parse_node ps
   | "defnode" -> parse_defnode ps
   | "do" -> parse_do ps
-  | "effect" -> parse_effect ps
+  | "with-caps" -> parse_with_caps ps
   | "perform" -> parse_perform ps
   | "with-handler" -> parse_with_handler ps
   | "module" -> parse_module ps
@@ -662,21 +662,16 @@ and parse_let_star ps =
   let body = block_body ps (parse_rest ps) in
   ELetStar (bindings, body)
 
-(* (effect :capabilities [cap-exprs...] body...) or (effect body...) *)
-and parse_effect ps =
-  let caps_expr =
-    match peek ps with
-    | TokKeyword "capabilities" ->
-        advance ps;
-        (match peek ps with
-         | TokLBracket ->
-             let exprs = parse_vector_exprs ps in
-             EApply (ESymbol "list", exprs)  (* wrap as list *)
-         | _ -> parse_expr ps)
-    | _ -> ELiteral VNil  (* no capabilities *)
-  in
+(* (with-caps cap-expr body...) — replace the ambient capability set with
+   exactly the (already-held, ⊆-checked) requested value for body's extent.
+   Single capability expression (current-capabilities/cap-restrict/
+   cap-compose/cap-none — never a list): the removed `effect` form's
+   `caps @ ambient` union rule was the widening backdoor this form must not
+   reopen (PLAN-m3-attenuation.md). *)
+and parse_with_caps ps =
+  let cap_expr = parse_expr ps in
   let body = block_body ps (parse_rest ps) in
-  EEffect (caps_expr, body)
+  EWithCaps (cap_expr, body)
 
 (* (perform effect-name args...) *)
 and parse_perform ps =

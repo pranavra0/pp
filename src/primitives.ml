@@ -448,11 +448,27 @@ let () =
     let caps = List.map (fun v -> match force_val v with VCapability c -> c | _ -> failwith "cap-compose expects capabilities") args in
     VCapability (CapCompose caps));
 
+  (* (current-capabilities) — reifies the ambient set AS OF THE CALL as a
+     VCapability. Never a mint: it observes the ceiling the code already
+     exercises on every perform (SPEC LAW 22). Callable anywhere, ambient-
+     gated like every other perform path — no explicit-cap argument. *)
+  register "current-capabilities" (fun args ->
+    match args with
+    | [] -> VCapability (CapCompose !Runtime.current_capabilities)
+    | _ -> failwith "current-capabilities takes no arguments");
+
   register "cap-restrict" (fun args ->
     let args = force_args args in
     match args with
-    | [VCapability cap; VString scope] -> VCapability (CapRestrict { cap; scope })
-    | _ -> failwith "cap-restrict expects a capability and a scope string");
+    | [VCapability _ as cap; VString scope] ->
+        Capabilities.cap_restrict cap scope
+    | [VCapability _ as cap; VString scope; VKeyword m] ->
+        let mode = match m with
+          | "ro" -> Types.Read | "rw" -> Types.ReadWrite | "wo" -> Types.Write
+          | _ -> failwith ("cap-restrict: invalid mode :" ^ m ^ " (expected :ro, :rw, or :wo)")
+        in
+        Capabilities.cap_restrict ~mode cap scope
+    | _ -> failwith "cap-restrict expects a capability, a scope string, and an optional mode keyword (:ro/:rw/:wo)");
 
   register "cap-none" (fun args ->
     match args with [] -> VCapability CapNone | _ -> failwith "cap-none takes no arguments");

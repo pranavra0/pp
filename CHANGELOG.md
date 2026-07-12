@@ -6,6 +6,47 @@ v0.2.0 predate this file and are reconstructed from history for context.
 
 ## [Unreleased] — v0.2.0
 
+- **M3: in-language capability attenuation** (docs/PLAN-m3-attenuation.md).
+  `(current-capabilities)` reifies the ambient set as of the call (never a
+  mint); `cap-restrict` gains an optional `fs_mode` argument
+  (`:ro`/`:rw`/`:wo`) that only ever narrows — requesting a mode wider than
+  what the underlying capability holds at that scope is `Capability_error`,
+  never a silent widen; the new `(with-caps cap-expr body)` special form
+  REPLACES the ambient capability set with a held, ⊆-checked value for
+  `body`'s dynamic extent (checked against the CURRENT ambient, so a
+  narrowing composes even when some other binding lexically retains a
+  broader value), exception- and tail-safe in both backends (the VM's new
+  `WITH_CAPS` opcode runs the body via a nested call under a real OCaml
+  exception handler, unlike the flat enter/exit opcode pairs the removed
+  `effect` used, which could not restore the ambient after a raised error).
+  The `effect` form (the prior capability-union block, rule `caps @
+  ambient`) is REMOVED — a widening backdoor the instant capability values
+  exist, and it was vacuous/untested before this landed (`with-handler`/
+  `perform` are unaffected). The node boundary (LAW 20) is now enforced
+  symmetrically: a node's free variable that is or structurally contains a
+  capability (including inside a captured closure's environment/frames) is
+  `Capability_error` at the key (`node_key_of`/`vm_node_key`); a node's
+  RESULT containing a capability is rejected before it can be stored
+  (`run_node_body`). Node capture (DESIGN Q11) is real for the first time:
+  `thunk.node_caps` captures the ambient at each `(node e)` occurrence's
+  creation, and `force_node`'s hit gate and miss recompute both use the
+  forcing thunk's `node_caps` rather than the live ambient — "the caller's
+  capabilities" (LAW 23b) is now capture-at-creation, collapsing to the
+  pre-M3 per-process `--grant` set exactly when `with-caps` goes unused
+  (`tests/011`/`013`/`017` hold byte-for-byte, unmodified). Fixed, along the
+  way: `Capabilities.list_fs_paths`'s `CapRestrict` arm previously
+  `Filename.concat`ed the scope onto each underlying path (a latent,
+  uncalled/untested bug producing a bogus synthesized path); it now computes
+  the actual scope/path containment intersection, becoming load-bearing via
+  the new `cap_subseteq`. New `tests/040-caps-attenuation.sh`: the
+  two-direction capture-vs-ambient differential (impossible to write before
+  `with-caps` existed) plus basic `with-caps` narrowing on `slurp`/`run`.
+  `tests/capability-adversarial.sh` extended: forged-from-print text is
+  unparseable, composing two narrowed views never resurrects the root,
+  mode/`with-caps` widen rejection, `with-caps` exception/tail safety, node
+  capture via a direct free var and via a closure, node result rejection,
+  `effect` gone. See [docs/SPEC.md](docs/SPEC.md) (LAW 20, LAW 22b, LAW 23),
+  [docs/DESIGN.md](docs/DESIGN.md) (Q6, Q11), [docs/STATUS.md](docs/STATUS.md).
 - **M3: D22 VM global-scope holes fixed, LAW 29 `load` residual closed**:
   (a) a bare top-level `(do (def x ...) ...)` no longer leaks its defs into
   the VM's globals table — `EDo` now always binds its defs as local slots

@@ -86,7 +86,9 @@ non-list `def` is a value binding — `tests/025`.)
   `referenced before its definition` error, sequential at top level;
   duplicate defs in one block are read errors; `(defnode x e)` binds the
   node thunk of `e` — SPEC LAW 4, `tests/025`),
-  `effect`/`perform`/`with-handler`, `module`/`import`/`load`/`load-module`,
+  `with-caps`/`perform`/`with-handler` (the `effect` capability-union form is
+  REMOVED — M3, a widening backdoor the instant capability values exist),
+  `module`/`import`/`load`/`load-module`,
   `island`, `with-config`/`config`, `quote`/`quasiquote`, type annotations
   (checked at force time — per-parameter annotations desugar into located
   checks ahead of the body, LAW 32, `tests/026`). Source locations are
@@ -177,6 +179,42 @@ non-list `def` is a value binding — `tests/025`.)
   aggregator. A capability denial raises the distinct `Capability_error` and is
   **not** cached (authority is not identity — LAW 15), so a later authorized run
   still hits. Pinned by `tests/013-node-hit-capability.sh`.
+- **In-language capability attenuation (M3, docs/PLAN-m3-attenuation.md).**
+  `(current-capabilities)` reifies the ambient set (never a mint);
+  `cap-restrict` gained an optional `fs_mode` argument (`:ro`/`:rw`/`:wo`,
+  matching `--grant`'s names) that only ever narrows — requesting a mode wider
+  than the underlying capability holds at that scope is `Capability_error`;
+  `(with-caps cap-expr body)` REPLACES the ambient with exactly the (⊆-checked,
+  against the CURRENT ambient) requested value for `body`'s dynamic extent, in
+  both backends, exception- and tail-safe (the VM's `WITH_CAPS` opcode runs the
+  body via a nested call under a real OCaml exception handler, unlike the flat
+  enter/exit opcode pairs `with-config`/the removed `effect` used — the only
+  way to make an exception genuinely restore the ambient rather than just a
+  normal return or tail call). The node boundary is now enforced in BOTH
+  directions: a node's free variable that is or contains a capability
+  (structurally, closure-env/frame-aware) is `Capability_error` at the key
+  computation (`node_key_of`/`vm_node_key`); a node's RESULT containing a
+  capability is rejected before it can be stored (`run_node_body`). **Node
+  capture is now real**, not vacuous: `thunk.node_caps` is populated from the
+  ambient at EACH `(node e)` occurrence's creation (ENode eval / VM
+  `MAKE_NODE`), and `force_node`'s hit gate plus the miss recompute's ambient
+  both use the forcing thunk's `node_caps` — "the caller's capabilities"
+  (LAW 23b) is now defined as capture-at-creation, collapsing to the old
+  per-process `--grant` set exactly when `with-caps` goes unused (so
+  `tests/011`/`013`/`017` are unaffected byte-for-byte). The differential this
+  makes possible for the first time: a node created under a narrowed ambient
+  is denied even when later forced under the full grant, and a node created
+  under the full ambient still succeeds when forced inside a narrower
+  `with-caps` — both directions, both backends, `tests/040-caps-attenuation.sh`.
+  Adversarial coverage (forged-from-print text is unparseable, composing two
+  narrowed views doesn't resurrect the root, mode/with-caps widen rejection,
+  with-caps exception/tail safety, node capture via a direct free var and via
+  a closure, node result rejection, `effect` gone) extends
+  `tests/capability-adversarial.sh`. Documented residual: a capability hidden
+  behind an UNFORCED thunk is invisible to the free-var ban (forcing it just
+  to check would violate LAW 14) — the use-time ⊆ gates (`with-caps`, the
+  hit-gate) are the actual security floor for that case, not this hygiene
+  check.
 - **`run` process effect + per-node sandbox (D13).** `(perform run cmd args…)`
   in both backends: requires `--grant process` (denial raises
   `Capability_error`, never cached), returns `{"exit" int, "out" str,
@@ -355,7 +393,7 @@ non-list `def` is a value binding — `tests/025`.)
   `cache.ml` deleted; the value/trace store (`store.ml`) supersedes it and is
   now live in the tree-walker.
 
-## Discrepancy ledger (D1–D23)
+## Discrepancy ledger (D1–D24)
 
 The punch list. "Fixed" means fixed and covered by a test; open items link to
 their phase in [ROADMAP.md](ROADMAP.md).
@@ -386,3 +424,4 @@ their phase in [ROADMAP.md](ROADMAP.md).
 | D22 | VM global-scope holes (verified while fixing the `(def x v)` footgun) | **Fixed.** Two tree-walker/VM divergences, both from the VM resolving names it cannot place in a frame via the globals table: (a) a bare top-level `(do (def …) …)` stored its defs as VM globals, leaking them past the block; fix: `EDo` always binds its defs as LOCAL slots (`extend_cenv`/`STORE_LOCAL`), never globals, regardless of `st.cenv = []` — the tree-walker's block-local `env_ref` was already the oracle, and top-level def-visibility-across-forms is a property of the top-level driver (`EDef`/`EDefValue`), not of `do`. (b) module-body expressions (including value defs) resolved *sibling* module defs globally instead of seeing earlier siblings letrec*-style; fix: `EModule` compiles its whole body as a fresh 0-param closure (immediately `CALL`ed) so sibling defs/value-defs get LOCAL slots in a brand-new runtime frame — isolated from both the enclosing scope's slots (no collision) and the enclosing scope's names (matches the tree-walker's fresh `base_env`). Pinned by `tests/039-vm-global-scope.pp` (differential) and by two new fuzzer generators (`stmt_do_scoped_def`, `stmt_module_sibling`, `tools/fuzz.ml`) exercised in `--grammar full`; the two generator exclusions in `docs/TESTING.md` are gone. |
 
 | D23 | Module scope × top-level `let` (found while fixing D22) | **Open.** A module body can see a name bound by a top-level `let` in the VM (top-level `let` is special-cased to bind as a VM global) but not in the tree-walker (a module evaluates in a fresh `base_env`). Pre-existing, unrelated to D22 — confirmed present before and after the D22 fix. The tree-walker is the oracle: a module should NOT see enclosing `let` bindings. Not fuzzer-generated; avoid relying on it until fixed. |
+| D24 | VM dynamic-extent scoping under OCaml exceptions (found during M3 attenuation) | **Open.** The VM's flat enter/exit-opcode pattern for `with-handler`/`with-config` is not exception-safe: an OCaml exception raised mid-body unwinds past the exit opcode, leaking the installed handler/config past the error (confirmed by direct test). The tree-walker's `with_ref` restores correctly, so the backends diverge on error paths that install then observe dynamic extent — narrower than D9's claim (D9 fixed normal-return and tail-call restore, not exception unwind). `with-caps` deliberately does NOT use the flat pattern (its VM body runs via nested `run_isolated` under a real try/with) and is immune. Fix: give with-handler/with-config the same nested-run shape or an unwind-protect discipline. |

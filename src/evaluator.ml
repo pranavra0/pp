@@ -18,7 +18,7 @@ let make_thunk_ca (expr : expr) (env : env) : value =
   match Hashtbl.find_opt thunk_store h with
   | Some existing -> VThunk existing
   | None ->
-      let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env; vm_code = None; type_ann = None; thunk_loc = None; config_hash = cfg_hash; thunk_persist = false; node_fv = [] } in
+      let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env; vm_code = None; type_ann = None; thunk_loc = None; config_hash = cfg_hash; thunk_persist = false; node_fv = []; node_caps = [] } in
       Hashtbl.add thunk_store h t;
       VThunk t
 
@@ -33,7 +33,7 @@ let make_thunk_ca_typed (expr : expr) (ty : expr) (loc : (string * int) option) 
   match Hashtbl.find_opt thunk_store h with
   | Some existing -> VThunk existing
   | None ->
-      let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env; vm_code = None; type_ann = Some ty; thunk_loc = loc; config_hash = cfg_hash; thunk_persist = false; node_fv = [] } in
+      let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env; vm_code = None; type_ann = Some ty; thunk_loc = loc; config_hash = cfg_hash; thunk_persist = false; node_fv = []; node_caps = [] } in
       Hashtbl.add thunk_store h t;
       VThunk t
 
@@ -61,13 +61,18 @@ let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
     failwith (Printf.sprintf "type mismatch: expected %s, got %s%s"
                 type_name (string_of_value v) loc_str)
 
-(* LAW 23b: whether the caller's current capabilities permit reading a trace
-   cell. Used to gate cache hits on the transitive read closure. The match is
+(* LAW 23b: whether a set of capabilities permits reading a trace cell. Used
+   to gate cache hits on the transitive read closure. The match is
    exhaustive over Cell.t so adding a cell kind forces an authority decision
-   here. *)
-let cell_authorized (cell_id : string) : bool =
+   here. Parameterized on the capability set (rather than reading
+   !current_capabilities directly) because "the caller's capabilities" for a
+   node hit-gate is, per M3's redefinition of LAW 23b, the forcing thunk's
+   node_caps — its ambient AT CREATION — not necessarily whatever is live in
+   current_capabilities at force time (with-caps can have narrowed the
+   dynamic ambient in between). *)
+let cell_authorized_for (caps : capability list) (cell_id : string) : bool =
   let has_fs_read path =
-    List.exists (fun cap -> Capabilities.check_fs_read cap path) !current_capabilities
+    List.exists (fun cap -> Capabilities.check_fs_read cap path) caps
   in
   match Cell.of_string cell_id with
   | Cell.File path -> has_fs_read path
@@ -77,7 +82,7 @@ let cell_authorized (cell_id : string) : bool =
   (* A tool observation came from a `run`; serving a result that embeds
      one requires process authority, not an fs grant over the binary. *)
   | Cell.Tool _ ->
-      List.exists (function CapProcess -> true | _ -> false) !current_capabilities
+      List.exists (function CapProcess -> true | _ -> false) caps
   (* A file-predicate observation (file-exists?/dir?) discloses presence,
      so serving it requires the same fs-read authority as recording it. *)
   | Cell.Stat path -> has_fs_read path
@@ -105,6 +110,13 @@ let replay_node_reads (t : thunk) (key_of : thunk -> string) : unit =
    however it is demanded. [run] executes the body; the caller owns any
    backend-specific bookkeeping (force_depth, operand-stack isolation). *)
 let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
+  (* Node capture (Q11): the miss recompute — and everything it forces —
+     runs under the FORCING THUNK's captured ambient, not whatever is live
+     in current_capabilities right now (with-caps may have narrowed the
+     dynamic ambient between this node's creation and this force). with_ref
+     restores current_capabilities on every exit, exception included, so
+     this composes cleanly with the try/with below. *)
+  with_ref current_capabilities t.node_caps (fun () ->
   t.thunk_status <- Evaluating;
   (* The trace frame captures the world-reads (slurp, read-file, …) this node
      makes as (cell-id, observed-hash) pairs. Popped on every exit — normal or
@@ -136,6 +148,19 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
         t.thunk_status <- Unevaluated;
         raise e
   in
+  (* Result ban (LAW 20 node-boundary, export side — adversarial-review
+     amendment): a node may not RETURN a capability. Checked before any store
+     write, so a would-be-cached VCapability never reaches the store; not
+     memoized as a failure either (mirrors Capability_error's own
+     not-memoized discipline — an authority-shaped outcome is not cache
+     material). Otherwise `(node (current-capabilities))` would be an
+     ambient-dependent result invisible to both the key and the trace (a
+     determinism hole), and a broad cap could ride a result out to a
+     narrower caller — the node boundary must be symmetric. *)
+  if Hasher.contains_capability result then begin
+    t.thunk_status <- Unevaluated;
+    raise (Capability_error "a node may not return a capability")
+  end;
   (match t.type_ann with
    | Some ty -> check_type result ty t.thunk_loc
    | None -> ());
@@ -163,7 +188,7 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
         (Store.short_key key)
     end
   end;
-  result
+  result)
 
 (* Serve a resolved Store.hit_result the same way in every miss-arm variant
    below: a verified hit (gated on LAW 23b authority), a re-served memoized
@@ -197,7 +222,15 @@ let serve_hit ~(t : thunk) (h : Store.hit_result) : value option =
    reaches this function as a Miss. *)
 let force_node ~(key : string) ~(run : unit -> value) (t : thunk) : value =
   Stabilize.register_node_key ~key ~thunk:t;
-  match serve_hit ~t (Store.hit ~key ~authorized:cell_authorized) with
+  (* LAW 23b (M3 redefinition): "the caller's capabilities" for the hit gate
+     is THIS thunk's node_caps — captured at this process's creation of this
+     `(node e)` occurrence — not necessarily current_capabilities right now.
+     Absent with-caps the two are always equal (node_caps is populated from
+     current_capabilities at creation and current_capabilities never changes
+     without with-caps), so this is byte-for-byte the pre-M3 behavior for
+     tests/011/013/017. *)
+  let authorized = cell_authorized_for t.node_caps in
+  match serve_hit ~t (Store.hit ~key ~authorized) with
   | Some v -> v
   | None ->
       (match !Scheduler.policy with
@@ -206,7 +239,7 @@ let force_node ~(key : string) ~(run : unit -> value) (t : thunk) : value =
                        j_run = (fun () -> run_node_body ~key ~run t);
                        j_width = n } in
            Scheduler.dispatch_batch [job];
-           (match serve_hit ~t (Store.hit ~key ~authorized:cell_authorized) with
+           (match serve_hit ~t (Store.hit ~key ~authorized) with
             | Some v -> v
             | None ->
                 (* Every racing worker died: degrade to the ordinary serial
@@ -337,8 +370,28 @@ and node_key_of (t : thunk) : string =
     |> List.map (fun name ->
          match lookup_env t.thunk_env name with
          | Some v ->
-             let hv = (try Hasher.hash_value (force v)
-                       with _ -> Hasher.hash_value v) in
+             (* M3 free-var ban (LAW 20 node-boundary, import side): if the
+                forced value contains a VCapability (Hasher.contains_capability
+                — never forces an already-Unevaluated thunk, LAW 14), the key
+                can never be computed — raise Capability_error naming the
+                variable, rather than silently keying on (and thereby
+                smuggling identity information about) a capability. If
+                forcing itself raises Capability_error, propagate it as-is;
+                any OTHER exception falls back to hashing the unforced value
+                (pre-existing behavior, unrelated to this ban). *)
+             let hv =
+               match force v with
+               | fv ->
+                   if Hasher.contains_capability fv then
+                     raise (Capability_error
+                       (Printf.sprintf
+                          "node: free variable '%s' may not be or contain a capability" name));
+                   Hasher.hash_value fv
+               | exception e ->
+                   (match e with
+                    | Capability_error _ -> raise e
+                    | _ -> Hasher.hash_value v)
+             in
              hash_concat ["fv"; name; hv]
          | None -> hash_concat ["fv-unbound"; name])
   in
@@ -416,7 +469,17 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
 
   | ENode e ->
       let thunk_val = make_thunk_ca e env in
-      (match thunk_val with VThunk t -> t.thunk_persist <- true | _ -> ());
+      (match thunk_val with
+       | VThunk t ->
+           t.thunk_persist <- true;
+           (* Node capture (Q11): the ambient at THIS creation, unconditionally
+              — never left at the [] default (see Types.thunk.node_caps). Safe
+              to re-assign even when make_thunk_ca returned an ALREADY-cached
+              physical thunk (its content hash folds in caps_hash, so a hit
+              here only happens when the ambient at that prior creation
+              hashed the same). *)
+           t.node_caps <- !current_capabilities
+       | _ -> ());
       k thunk_val
 
   | EDefNode (name, params, body) ->
@@ -489,14 +552,23 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       in
       go exprs
 
-  | EEffect (caps_expr, body) ->
-      let caps_val = force (eval caps_expr env) in
-      let caps =
-        match caps_val with
-        | VNil -> []
-        | _ -> extract_capabilities caps_val
+  | EWithCaps (cap_expr, body) ->
+      (* REPLACES the dynamic ambient with exactly the requested cap for the
+         body's extent (never a union — that was `effect`'s widening
+         backdoor, removed in M3), gated by cap_subseteq against the CURRENT
+         ambient (not the root grant), so narrowing composes even when code
+         lexically retains a broader value (PLAN-m3-attenuation.md). with_ref
+         restores current_capabilities on every exit, exception included
+         (LAW 27). *)
+      let cap_val = force (eval cap_expr env) in
+      let requested =
+        match cap_val with
+        | VCapability c -> c
+        | _ -> failwith "with-caps expects a capability value"
       in
-      with_ref current_capabilities (caps @ !current_capabilities)
+      if not (Capabilities.cap_subseteq requested !current_capabilities) then
+        raise (Capability_error Capabilities.err_with_caps_widen);
+      with_ref current_capabilities [requested]
         (fun () -> eval_tail body env k)
 
   | EPerform (name, arg_exprs) ->
@@ -794,27 +866,6 @@ and has_fs_read (path : string) : bool =
 and has_fs_write (path : string) : bool =
   List.exists (fun cap -> Capabilities.check_fs_write cap path) !current_capabilities
 
-and extract_capabilities (v : value) : capability list =
-  (* Forces via the registered force (Primitives.force_val) so the active
-     backend forces its own thunks — this function is shared with the VM's
-     ENTER_EFFECT. *)
-  match v with
-  | VCapability c -> [c]
-  | VVector vs -> Array.to_list (Array.map (fun v ->
-      match Primitives.force_val v with VCapability c -> c | _ -> failwith "capability vector must contain capabilities"
-    ) vs)
-  | VPair _ ->
-      let rec collect acc = function
-        | VNil -> List.rev acc
-        | VPair (v, rest) ->
-            (match Primitives.force_val v with
-             | VCapability c -> collect (c :: acc) rest
-             | other -> failwith ("not a capability: " ^ string_of_value other))
-        | _ -> failwith "capability list must be a proper list"
-      in
-      collect [] v
-  | _ -> failwith ("expected capability, got: " ^ string_of_value v)
-
 
 (* (load-module "file.pp"): evaluate the file against a fresh initial env and
    package the bindings it added as a module value. Shared by the tail
@@ -908,7 +959,9 @@ let init () =
   Primitives.node_key_of_ref := node_key_of;
   Primitives.run_node_body_ref := (fun ~key ~run t -> run_node_body ~key ~run t);
   Primitives.resolve_if_hit_ref := (fun t key ->
-    match Store.hit ~key ~authorized:cell_authorized with
+    (* Same node_caps-gated authority as force_node (M3 LAW 23b) — this is
+       the force-deep collect pass's own pre-check of the same key. *)
+    match Store.hit ~key ~authorized:(cell_authorized_for t.node_caps) with
     | Store.HitOk v -> t.thunk_status <- Evaluated v; true
     | Store.HitFailed _ -> true (* known outcome; the ordinary force path re-raises it *)
     | Store.Miss -> false);

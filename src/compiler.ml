@@ -322,17 +322,30 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       compile_subs exprs;
       restore ()
 
-  | EEffect (caps_expr, body) ->
-      compile_expr st caps_expr false;
+  | EWithCaps (cap_expr, body) ->
+      (* Unlike EWithConfig/PUSH_HANDLER's flat ENTER/EXIT opcode pairs (which
+         restore on normal return and tail call but NOT on a raised
+         exception — the OCaml exception just unwinds past the EXIT opcode),
+         with-caps compiles its body as a SEPARATE region invoked by the
+         single WITH_CAPS opcode via a nested run_isolated call, exactly like
+         emit_thunk_region/emit_node_region: the body shares the surrounding
+         cenv/frames (no new frame), but is reached by JUMPing over it here
+         and CALLing into it from the opcode handler. That nested-call shape
+         is what lets vm.ml wrap it in a real OCaml try/with and restore
+         current_capabilities on EVERY exit, including an exception — LAW 27,
+         verified by tests/capability-adversarial.sh's with-caps-exception-
+         safe case. The body is compiled tail-within-its-own-region (a tail
+         call in it just returns to WITH_CAPS, which still runs the
+         restore), so this is not a TCO loss either. *)
+      compile_expr st cap_expr false;
       emit st FORCE;
-      emit st ENTER_EFFECT;
-      (* Body compiled NON-tail (was [tail]) so control returns to run
-         EXIT_EFFECT; a tail call in the body would frame-swap past EXIT and
-         leak the capability scope (D9). The tree-walker holds its frame open
-         across the body to restore [current_capabilities] (evaluator.ml
-         EEffect), so this is the matching dynamic extent, not a TCO loss. *)
-      compile_expr st body false;
-      emit st EXIT_EFFECT
+      let jmp_idx = current_offset st in
+      emit st (JUMP 0);
+      let body_start = current_offset st in
+      compile_expr st body true;
+      emit st RETURN;
+      backpatch_jump st jmp_idx;
+      emit st (WITH_CAPS body_start)
 
   | EDef (name, params, body) | EDefNode (name, params, body) ->
       ignore (emit_closure_region ~name:(Some name) st params body);

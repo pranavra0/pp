@@ -605,11 +605,6 @@ let stmt_handler_leak env d =
       S [A f; gen_int_lit ()]];
    S [A "print"; S [A "perform"; A "log"; gen_str_lit ()]]]
 
-let stmt_effect env d =
-  [S [A "effect"; A ":capabilities"; V [];
-      S [A "do"; S [A "perform"; A "log"; gen_string env (d - 1)];
-         S [A "print"; gen_int env (d - 1)]]]]
-
 let stmt_deep_rec env _d =
   (* deep recursion — D4 stack-safety; tail and non-tail variants *)
   let f = fresh "f" in
@@ -697,7 +692,6 @@ let gen_program (gram : string) (iter : int) : string =
     2, (fun () -> stmt_perform env d);
     2, (fun () -> stmt_with_handler env d);
     1, (fun () -> stmt_handler_leak env d);
-    2, (fun () -> stmt_effect env d);
     1, (fun () -> stmt_deep_rec env d);
     1, (fun () -> stmt_big_map env d);
     1, (fun () -> stmt_eq_list env d);
@@ -710,7 +704,7 @@ let gen_program (gram : string) (iter : int) : string =
   (* guarantee at least one observable print *)
   if not (List.exists (function
       | S (A "print" :: _) -> true
-      | S (A ("let" | "let*" | "with-config" | "with-handler" | "effect") :: _) -> true
+      | S (A ("let" | "let*" | "with-config" | "with-handler") :: _) -> true
       | S (A "do" :: _) -> true
       | _ -> false) !forms)
   then emit (stmt_print env d);

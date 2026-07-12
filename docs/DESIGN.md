@@ -266,6 +266,22 @@ the sole mint. **User code cannot construct capabilities**:
 remains is `cap-restrict`/`cap-compose`, which only narrow or union what the
 code already holds. Capability values are sealed, unforgeable tokens.
 
+*In-language attenuation (M3, docs/PLAN-m3-attenuation.md).*
+`(current-capabilities)` observes the ambient ceiling as of the call (never a
+mint — it reifies exactly what every `perform` already checks against);
+`cap-restrict` gained an optional mode argument that only ever narrows
+(requesting a mode wider than the underlying capability holds at that scope is
+`Capability_error`); `(with-caps cap-expr body)` REPLACES the ambient with a
+held, ⊆-checked value for `body`'s extent — checked against the CURRENT
+ambient, so a narrowing composes even when some other binding lexically
+retains a broader value. The prior `effect` capability-union form (rule `caps
+@ ambient`) is REMOVED: the instant capability values exist, unioning with
+ambient is a widening backdoor, so it could not be kept alongside `with-caps`.
+This is the enabling dependency M4d needs (a domain's write capability must be
+narrowable to exactly one function and ungrantable to node code) and is what
+makes node-captured capabilities (Q11, below) a real, testable mechanism
+instead of vacuously-true prose.
+
 *Interpreter-level loads are runtime authority.* `load`/`import`/`island`/module
 resolution run with the interpreter's own authority (bounded to source roots +
 store), **outside** user capability accounting. They are the loader, not user
@@ -405,12 +421,30 @@ converge-next-pass; single ownership. *Implemented* (`tests/018`).
 (3) **hidden writes in user handlers** —
 domain write caps are ungrantable to node code. (4) **laziness escape** — killed
 by Q1 strictness plus capturing the capability set at node creation.
-*Capture is currently vacuous, resolved as such:* authority enters only via
-`--grant` and the in-language surface (`cap-none`, `cap-restrict` of a value
-user code cannot obtain) cannot change the ambient set mid-run, so
-"captured at creation" and "ambient at force" are indistinguishable in a
-process. The capture becomes implementable — and testable — when in-language
-attenuation lands; adding it now would be dead, unfalsifiable code.
+*Capture is now real (M3, docs/PLAN-m3-attenuation.md), not vacuous:* with
+`(with-caps cap-expr body)` landed, the ambient CAN change mid-process, so
+"captured at creation" and "ambient at force" are now genuinely distinct and
+testable. `thunk.node_caps` is populated from `current_capabilities` at each
+`(node e)` occurrence's creation (both backends' construction sites); `force_node`
+uses the forcing thunk's `node_caps` — not live `current_capabilities` — for
+both the hit gate and the miss recompute's ambient. The differential test this
+makes possible for the first time: a node created under a narrowed `with-caps`
+extent is still denied when forced later under the full grant, and a node
+created under the full ambient still succeeds when forced inside a narrower
+`with-caps` — capture wins in both directions, exactly mirroring how every
+other value kind is captured by a closure at definition time, not read fresh
+at call time (`tests/040-caps-attenuation.sh`). Absent `with-caps`, capture
+still collapses to the pre-M3 per-process `--grant` set (nothing else can move
+the ambient), so `tests/011`/`013`/`017` hold byte-for-byte. The node
+boundary is symmetric (LAW 20): a node's free variable containing a
+capability is banned at the key (`Hasher.contains_capability`, structural,
+closure-env/frame-aware, never forcing an unforced thunk), and a node's
+RESULT containing one is banned before it can be stored — both layers are
+independent of the capture mechanism above them (they hold even where
+`with-caps` is never used) and are the hygiene atop it; the use-time ⊆ checks
+(`with-caps`'s gate, the hit gate) remain the actual security floor for the
+one documented gap — a capability hidden behind an unforced thunk, invisible
+to the free-var ban without violating LAW 14.
 
 **Q11-bis (Phase 3 / M1 narrowing — Wall C, docs/PLAN-phase3-parallel.md).**
 `Store.run_pins` is in-memory, per-process. A forked worker inherits the
@@ -510,14 +544,15 @@ stop assuming).
 `a.c`, `b.c`, both `#include "shared.h"`. Build, then rebuild after editing
 `shared.h`, then after editing only `a.c`.
 
-### Program (Phase-1 surface sketch)
+### Program (Phase-1 surface sketch, M3 attenuation notation)
 ```clojure
 (defnode (compile src)                    ; key = H(compile-code, hash "src/a.c")
-  (effect [(restrict fs-root "src" :ro) (restrict toolchain "cc")]
+  (with-caps (cap-compose (cap-restrict (current-capabilities) "src" :ro)
+                          (cap-restrict (current-capabilities) "toolchain" :ro))
     (perform run "cc" ["-c" src "-o" (scratch ".o")] :inputs [src])))
                                           ; sandbox + depfile refine the trace
 (defnode (link objs)                      ; key = H(link-code, [child result hashes])
-  (effect [(restrict toolchain "cc")]
+  (with-caps (cap-restrict (current-capabilities) "toolchain" :ro)
     (perform run "cc" (concat ["-o" (scratch "app")] objs) :inputs objs)))
 (defnode (app)
   (let [srcs (perform list-dir "src" "*.c")]   ; observes glob:src/*.c
@@ -526,9 +561,15 @@ stop assuming).
  "build/b.o" (compile "src/b.c")
  "build/app" (app)}                       ; desired-state root: {path → blob-hash}
 ```
-`fs-root`/`toolchain` are handed to `main` by `--grant`; user code only
-`restrict`s them (Q6). Children are forced before `link`'s key exists —
-call-by-value (Q1).
+The fs and toolchain grants arrive via `--grant` into the ambient set; user
+code only OBSERVES it (`current-capabilities`) and NARROWS it
+(`cap-restrict`/`with-caps`, M3) — it never constructs authority (Q6). Each
+`with-caps` here replaces the ambient for exactly the node body's extent, so
+`compile`'s narrowing to `src`+`toolchain` is what the node body actually runs
+under — not just a comment — and (per node capture, Q11) is fixed at THIS
+`(node e)` occurrence's creation, not re-derived from whatever is ambient
+wherever the node is later forced. Children are forced before `link`'s key
+exists — call-by-value (Q1).
 
 ### Cells & first (cold) build
 Input cells: `file:.../src/a.c`=h_a, `file:.../src/b.c`=h_b,

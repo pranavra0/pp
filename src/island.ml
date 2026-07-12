@@ -302,7 +302,7 @@ let rec islands_in (e : expr) : (string * string option) list =
   | EForce e | EDelay e | ENode e | EDefValue (_, e) | EImport e
   | ELocated (_, e) -> islands_in e
   | EDo es | EModule es -> List.concat_map islands_in es
-  | EEffect (a, b) | EWithConfig (a, b) | ETyped (a, b) ->
+  | EWithCaps (a, b) | EWithConfig (a, b) | ETyped (a, b) ->
       islands_in a @ islands_in b
   | EPerform (_, args) -> List.concat_map islands_in args
   | EWithHandler (hs, b) ->

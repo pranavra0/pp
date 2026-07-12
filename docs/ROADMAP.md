@@ -99,13 +99,17 @@ values (`tests/023`).
 
 **Residuals carried forward** (documented, none gating the exit):
 the `closure-cap-req` fast path is *unnecessary by measurement* (101-node
-null rebuild ~130ms, well under the 1s budget); the `toolchain:cc` closure
-cell is *superseded* by per-file depfile `tool:` cells (DESIGN Q2);
-node-captured caps are *vacuous* until in-language attenuation exists
-(DESIGN Q11); LAW 26's per-arg handler-cell refinement, LAW 38's containment
-half, and inline-nested cutoff + the reverse-edge graph move to Phase 2.
-Uniform realpath canonicalization (LAW 23) is DONE (M2, `tests/036`) — it no
-longer needs a phase, it was closed directly.
+null rebuild ~130-140ms, well under the 1s budget — re-measured after M3's
+node-boundary capability scan landed, no regression); the `toolchain:cc`
+closure cell is *superseded* by per-file depfile `tool:` cells (DESIGN Q2);
+node-captured caps were *vacuous* until in-language attenuation existed —
+**M3 closed this** (docs/PLAN-m3-attenuation.md): `thunk.node_caps` is now a
+real per-occurrence capture, `with-caps` can move the ambient mid-process, and
+`tests/040-caps-attenuation.sh`'s two-direction differential is the test that
+was impossible to write before; LAW 26's per-arg handler-cell refinement, LAW
+38's containment half, and inline-nested cutoff + the reverse-edge graph move
+to Phase 2. Uniform realpath canonicalization (LAW 23) is DONE (M2,
+`tests/036`) — it no longer needs a phase, it was closed directly.
 
 ---
 

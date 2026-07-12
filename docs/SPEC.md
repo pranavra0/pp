@@ -597,9 +597,33 @@ applied `defnode` is a named closure (LAW 6); and closure-valued free vars key
 per-backend (VM closures hash bytecode + captured frames, tree-walker closures
 hash AST + env), so those do not share across backends.
 
+**M3 — the node boundary is symmetric: authority may not cross it in EITHER
+direction.** Once capability *values* exist (M3's `current-capabilities` and
+friends), a node's free variables and its result are both potential smuggling
+routes, so both are hard-banned, independently of each other:
+- **Import side (free-var ban):** if a node's free variable's forced value
+  contains a `VCapability` anywhere in its structure — including inside a
+  captured closure's environment/frames — `node_key_of`/`vm_node_key` raise
+  `Capability_error` naming the variable, rather than silently keying on (and
+  thereby encoding, in the store's key namespace) a piece of authority. A
+  capability hidden behind an UNFORCED thunk is a documented gap (LAW 14
+  forbids forcing it just to check); the use-time gates (LAW 22b, LAW 23b) are
+  the actual floor for that residual case, not this hygiene check.
+- **Export side (result ban):** if a node's result contains a `VCapability`,
+  `run_node_body` raises `Capability_error ("a node may not return a
+  capability")` before anything is stored. Without this, `(node
+  (current-capabilities))` would be an ambient-dependent result invisible to
+  both the key and the trace — a determinism hole — and a broad capability
+  could ride a cached result out to a caller narrower than the node's own
+  creator.
+
 **Test:** rebinding an unreferenced global does not change the node key; widening
 the root grant does not invalidate a cached result; changing a *referenced* free
-variable does (`tests/011`).
+variable does (`tests/011`). A node whose free variable is (or a captured
+closure contains) a capability is `Capability_error`, directly and through a
+closure, both backends; a node whose body returns (bare or embedded in a
+compound value) a capability is rejected before it can be stored, both backends
+(`tests/capability-adversarial.sh`).
 
 ### [LAW 21] Cutoff is hash equality; validity is the trace, not the key
 
@@ -664,6 +688,45 @@ only `--grant` at process startup mints capabilities. `cap-restrict` and
 program, through any user-code surface, reads or writes a path it was not
 granted; evaluating `(filesystem "/" :rw)` is an unbound-symbol error in both
 backends.
+
+### [LAW 22b] `with-caps` narrows to a held value, never widens (M3)
+
+`(current-capabilities)` reifies the ambient set as of the call — an
+observation of the ceiling the code already exercises on every `perform`, never
+a mint. `(with-caps cap-expr body)` REPLACES the dynamic ambient with exactly
+`cap-expr`'s value for `body`'s extent, gated by `cap_subseteq cap-expr
+(current ambient)` — checked against the ambient live AT THE `with-caps` FORM,
+not the process's root grant, so a narrowing composes even when some other
+in-scope binding lexically retains a broader capability value.
+`cap-restrict`'s optional mode argument is symmetric: requesting a mode WIDER
+than what the underlying capability already grants at that scope is
+`Capability_error`, never a silent widen. The `effect` form (the prior
+capability-union block, rule `caps @ ambient`) is REMOVED — the instant
+capability values exist, a union-with-ambient rule is a widening backdoor, so
+it could not be kept alongside `with-caps`.
+
+**Status: holds** — `current-capabilities`, `with-caps`, and `cap-restrict`'s
+mode argument are implemented in both backends; `cap_subseteq` is evaluated
+per-kind (SPEC LAW 25's per-kind check functions), with `CapRestrict`'s
+authority computed as its effective `(path, mode)` grants (the scope/mode
+intersection with the underlying capability, not a mint). `with-caps`
+establishes dynamic extent restored on every exit — normal return, tail call,
+and a raised exception alike (LAW 27; the VM's `WITH_CAPS` opcode runs the body
+via a nested call wrapped in a real exception handler, rather than the flat
+enter/exit opcode pair `with-config`/the removed `effect` used, specifically
+so a raised error still restores the ambient).
+
+**Test:** composing two capabilities each narrowed from the same broad root
+grants only their union, never the root's full authority
+(`compose-does-not-resurrect`); a capability value held from before a
+`with-caps` narrowing fails the ⊆ check when reused INSIDE the narrowed extent
+even though it is still lexically in scope (`with-caps-widen-rejected`);
+requesting a wider `cap-restrict` mode than the underlying capability holds is
+rejected (`cap-restrict-mode-widen-rejected`); a `with-caps` body that raises,
+or ends in a tail call, still restores the prior ambient afterward
+(`with-caps-exception-safe`, `with-caps-tail-safe`); `(effect ...)` is an
+unbound-symbol error (`effect-removed`) — all in `tests/capability-adversarial.sh`,
+both backends.
 
 ### [LAW 23] Authority checks are component-wise, full-path, and transitive at hit time
 
@@ -1199,10 +1262,11 @@ signatures, not line numbers — the source is under active migration.)
 | LAW 17 | hit ≠ effect replay | holds (node tier) | a `(node e)` hit does not replay in-node `log`/stdout, both backends (`tests/010`, `tests/014`) |
 | LAW 18 | sandbox-scratch writes | partial | per-node scratch sandbox real: relative node writes/reads are scratch-local, absolute node writes error, `run` cwd = scratch (`tests/017`); reconciled domains absent (Q4) |
 | LAW 19 | sound content hashing | partial | SHA-256 (D5 fixed); closure-env + handler holes closed → in-memory dedup sound (D6/D17 fixed); store objects content-addressed by result hash, shared by both backends (D1, D7); tree-walker's in-memory dedup table not mirrored in the VM |
-| LAW 20 | key = code ‖ arg-values | partial | persistent `(node e)` key = code + free-var value hashes; caps, whole-env, config, and handlers all excluded (`tests/011`, `tests/015`); binding-order not canonicalized (LAW 3) |
+| LAW 20 | key = code ‖ arg-values | partial | persistent `(node e)` key = code + free-var value hashes; caps, whole-env, config, and handlers all excluded (`tests/011`, `tests/015`); binding-order not canonicalized (LAW 3); node boundary now symmetric (M3): a capability-containing free var is `Capability_error` at the key, a capability-containing result is rejected before storage, both backends (`tests/capability-adversarial.sh`) |
 | LAW 21 | cutoff via traces | partial | validity-via-verifying-trace real (key→SET of traces, cells re-checked on hit; `tests/010`, `tests/015`); hash-equality cutoff proven at scale — comment-only header edit on a 101-TU C build and on Lua 5.4.7 recompiles dependents and cuts off the link (`tests/016`, `tests/024`, `scripts/build-lua.sh`); reverse-edge/dirty-propagation graph now used by push `stabilize` (`pp --watch --stabilize`, `tests/032`); inline-nested cutoff still absent |
 | LAW 22 | unforgeable root-minted caps | holds | D18 fixed; constructors removed; `tests/capability-adversarial.sh` |
-| LAW 23 | component/full-path + transitive hit check | holds (NFC residual) | (a) component-aware, canonicalized (realpath, no trailing slash) paths at every cell/grant/loader-bound site (`tests/036`); (b) hits gated on the caller's caps covering the trace's transitive read closure in both backends, cap denials not memoized (`tests/013`, `tests/014`); (c) capability-filtered `pp why` real (`tests/019`); NFC Unicode normalization not implemented |
+| LAW 22b | `with-caps` narrows a held value, never widens | holds | `current-capabilities`/`with-caps`/`cap-restrict`'s mode argument (M3, docs/PLAN-m3-attenuation.md); `cap_subseteq` checked against the CURRENT ambient; `effect` removed; both backends, exception/tail-safe; `tests/capability-adversarial.sh` |
+| LAW 23 | component/full-path + transitive hit check | holds (NFC residual) | (a) component-aware, canonicalized (realpath, no trailing slash) paths at every cell/grant/loader-bound site (`tests/036`); (b) hits gated on the caller's caps covering the trace's transitive read closure in both backends, cap denials not memoized (`tests/013`, `tests/014`) — "the caller's caps" is now the forcing thunk's captured `node_caps` (M3 node capture), collapsing to the pre-M3 per-process grant when `with-caps` is unused; (c) capability-filtered `pp why` real (`tests/019`); NFC Unicode normalization not implemented |
 | LAW 24 | loader = runtime authority | holds | loader bounded to source roots + ~/.pp, reads traced as authority-exempt `runtime:file:` cells (`tests/020`); realpath-canonical (`tests/036`) |
 | LAW 25 | no unenforced authority surface | holds | `CapTime`/`CapMemory` removed from types and surface (D8d) |
 | LAW 26 | two handler classes, synthetic trace cells | partial | semantic half real at node granularity: `handler:<effect>` trace cells in both backends, mock/real coexist without cross-contamination (`tests/015`); cells coarser than the law's per-arg form; result-transparent class awaits schedulers (Phase 2/3) |

@@ -38,7 +38,8 @@ and expr =
   | EApply of expr * expr list  (* function application *)
   | EQuote of expr          (* quotation: 'x *)
   | EForce of expr          (* explicit force *)
-  | EEffect of expr * expr  (* (effect caps-expr body) — effectful block *)
+  | EWithCaps of expr * expr  (* (with-caps cap-expr body) — replace the
+                                 ambient capability set for body's extent *)
   | EPerform of string * expr list  (* (perform effect-name args...) *)
   | EWithHandler of (string * expr) list * expr  (* effect handler installation *)
   | EDelay of expr          (* explicit delay *)
@@ -109,6 +110,18 @@ and thunk = {
        — code + free-var value hashes — from captured frames, since a VM thunk
        carries bytecode+frames rather than an AST+env. Empty for every other
        thunk. *)
+  mutable node_caps : capability list;
+    (* Node capture (DESIGN Q11's promise): the ambient capability set at THIS
+       process's creation of this `(node e)` occurrence, populated
+       unconditionally at both construction sites (ENode eval, VM MAKE_NODE) —
+       never left as the default [] for a persist thunk (empty ambient is a
+       legitimate captured value, distinct from "not yet captured"). Used by
+       force_node as "the caller's capabilities" (LAW 23b): the hit gate and
+       the miss recompute's ambient are THIS, not whatever is live in
+       current_capabilities at force time. Collapses to the process's
+       --grant set when with-caps is unused (current_capabilities never
+       changes without it), so tests/011/013/017 are byte-for-byte
+       unaffected. Meaningless (unused) on non-persist thunks. *)
 }
 
 and thunk_status =
@@ -122,7 +135,13 @@ and capability =
   | CapNetwork of { protocol : string }
   | CapProcess
   | CapCompose of capability list
-  | CapRestrict of { cap : capability; scope : string }
+  | CapRestrict of { cap : capability; scope : string; mode : fs_mode option }
+    (* mode: an optional further fs_mode restriction (in addition to scope).
+       None means "inherit whatever the underlying cap grants" (the
+       pre-M3 behavior). Constructing one with a mode WIDER than the
+       underlying cap holds at scope is rejected (Capabilities.cap_restrict);
+       a CapRestrict value on disk/in memory therefore never itself
+       represents a widen. *)
   | CapNone
 
 and fs_mode = Read | Write | ReadWrite
@@ -146,7 +165,12 @@ and opcode =
                                   Global = -1,-1), type annotation, source location *)
   | MAKE_CLOSURE of int * int(* code offset, nparams *)
   | CALL of int | TAIL_CALL of int | RETURN | HALT
-  | ENTER_EFFECT | EXIT_EFFECT
+  | WITH_CAPS of int         (* body code offset: with-caps' ⊆-gated, replace-
+                                 ambient region — a nested run_isolated call
+                                 (not a flat ENTER/EXIT pair), so an OCaml
+                                 try/with around it restores the ambient on
+                                 EVERY exit, including a raised exception
+                                 (LAW 27), not just normal return/tail-call *)
   | PERFORM of int * int     (* cp idx of effect name, nargs *)
   | PUSH_HANDLER of int      (* n (name,closure) pairs already on stack *)
   | POP_HANDLER
@@ -282,8 +306,8 @@ let rec hash_expr (e : expr) : string =
       hash_concat ("apply" :: hash_expr fn :: arg_hashes)
   | EQuote e -> hash_concat ["quote"; hash_expr e]
   | EForce e -> hash_concat ["force"; hash_expr e]
-  | EEffect (caps, body) ->
-      hash_concat ["effect"; hash_expr caps; hash_expr body]
+  | EWithCaps (caps, body) ->
+      hash_concat ["with_caps"; hash_expr caps; hash_expr body]
   | EPerform (name, args) ->
       let arg_hashes = List.map hash_expr args in
       hash_concat ("perform" :: name :: arg_hashes)
@@ -436,9 +460,77 @@ and hash_capability (c : capability) : string =
   | CapProcess -> hash_string "cap_process"
   | CapCompose caps ->
       hash_concat ("cap_compose" :: List.map hash_capability caps)
-  | CapRestrict { cap; scope } ->
-      hash_concat ["cap_restrict"; hash_capability cap; scope]
+  | CapRestrict { cap; scope; mode } ->
+      let m = match mode with
+        | None -> "any" | Some Read -> "r" | Some Write -> "w" | Some ReadWrite -> "rw" in
+      hash_concat ["cap_restrict"; hash_capability cap; scope; m]
   | CapNone -> hash_string "cap_none"
+
+(* ---- Node-boundary capability ban (SPEC LAW 20, M3) ----
+
+   Structural scan for an embedded VCapability, used by BOTH halves of the
+   node boundary: the free-var ban (node_key_of / vm_node_key, import side)
+   and the result ban (run_node_body, export side). Closure-env-aware — a
+   capability could be bound in a closure's captured environment/frames, not
+   just sitting directly in the scanned value — but it must NEVER force an
+   Unevaluated thunk (LAW 14): a capability hidden behind an unforced thunk
+   is invisible to this check, a documented residual (the layer-1 gap;
+   layers 2/3 — the result ban and the use-time ⊆ gates — are the actual
+   security floor, PLAN-m3-attenuation.md).
+
+   BOTH closure representations need a cycle guard, not just the VM's:
+   - VM closures carry their capture as `vm_frames`, a mutable frame graph a
+     recursive closure can make self-referential; guarded with the SAME
+     physical-identity visited-list `hash_value`'s `hash_frame` uses above.
+   - Tree-walker closures carry their capture as `env.bindings` — and,
+     surprisingly, THIS CAN CYCLE TOO: a top-level `(def f ...)` passes
+     `make_closure` the very `env ref` cell that `eval_expressions` is about
+     to mutate to `extend_env`-cons `f`'s own binding onto (the letrec/mutual-
+     recursion trick both backends' top-level driver relies on), so
+     `f`'s captured env ends up containing `f` itself as its head binding —
+     walking it without a guard recurses forever (found by tests/024's
+     101-TU build going through this scan for every node's closure-valued
+     free vars: an immediate Stack overflow before this guard was added).
+     Guarded by `env_id` (unique per env node, `Types.fresh_env_id`) in a
+     hashtable — no physical/structural sharing needed, an id is already an
+     equality-comparable proxy for "the exact same env value". *)
+let contains_capability (v : value) : bool =
+  let visited_frames : frame list ref = ref [] in
+  let visited_envs : (int, unit) Hashtbl.t = Hashtbl.create 16 in
+  let rec go (v : value) : bool =
+    match v with
+    | VCapability _ -> true
+    | VThunk t ->
+        (match t.thunk_status with
+         | Evaluated result -> go result
+         | Unevaluated | Evaluating -> false)
+    | VPair (a, b) -> go a || go b
+    | VVector vs -> Array.exists go vs
+    | VMap kvs -> List.exists (fun (k, v) -> go k || go v) kvs
+    | VSet vs -> List.exists go vs
+    | VClosure { env; vm_bc; vm_frames; _ } ->
+        if vm_bc == dummy_bytecode then
+          go_env !env
+        else
+          List.exists go_frame vm_frames
+    | VEnvMap bindings -> List.exists (fun (_, v) -> go v) bindings
+    | VNil | VBool _ | VInt _ | VFloat _ | VString _ | VKeyword _
+    | VSymbol _ | VBuiltin _ | VBytecode _ -> false
+  and go_env (e : env) : bool =
+    if Hashtbl.mem visited_envs e.env_id then false
+    else begin
+      Hashtbl.add visited_envs e.env_id ();
+      List.exists (fun (_, v) -> go v) e.bindings
+    end
+  and go_frame (fr : frame) : bool =
+    if List.memq fr !visited_frames then false
+    else begin
+      visited_frames := fr :: !visited_frames;
+      let live = Array.sub fr.slots 0 fr.len in
+      Array.exists go live
+    end
+  in
+  go v
 
 (* ---- Free-variable analysis (for the LAW 20 node key) ----
    The set of symbols a node's code references but does not itself bind. The
@@ -471,7 +563,7 @@ let free_vars (e : expr) : SS.t =
     | EApply (f, args) ->
         List.fold_left (fun a e -> SS.union a (fv bound e)) (fv bound f) args
     | EForce e | EDelay e | ENode e -> fv bound e
-    | EEffect (caps, body) -> SS.union (fv bound caps) (fv bound body)
+    | EWithCaps (caps, body) -> SS.union (fv bound caps) (fv bound body)
     | EPerform (_, args) ->
         List.fold_left (fun a e -> SS.union a (fv bound e)) SS.empty args
     | EWithHandler (handlers, body) ->
@@ -555,7 +647,7 @@ let make_closure ?(name=None) params body env_ref =
   VClosure { fn_name = name; params; body; env = env_ref; vm_bc = dummy_bytecode; vm_offset = 0; vm_frames = [] }
 
 let make_thunk ?vm_code:(vc=None) ?type_ann:(ta=None) ?thunk_loc:(tl=None) ?config_hash:(ch="") expr env =
-  VThunk { thunk_status = Unevaluated; thunk_hash = None; thunk_expr = expr; thunk_env = env; vm_code = vc; type_ann = ta; thunk_loc = tl; config_hash = ch; thunk_persist = false; node_fv = [] }
+  VThunk { thunk_status = Unevaluated; thunk_hash = None; thunk_expr = expr; thunk_env = env; vm_code = vc; type_ann = ta; thunk_loc = tl; config_hash = ch; thunk_persist = false; node_fv = []; node_caps = [] }
 
 (* ---- Frame helpers ---- *)
 
@@ -626,8 +718,8 @@ let rec quote_to_value (e : expr) : value =
         VPair (List.fold_right (fun (n, e) acc ->
           VPair (VPair (VSymbol n, VPair (quote_to_value e, VNil)), acc)) bindings VNil,
           VPair (quote_to_value body, VNil)))
-  | EEffect (caps, body) ->
-      VPair (VSymbol "effect", VPair (quote_to_value caps, VPair (quote_to_value body, VNil)))
+  | EWithCaps (caps, body) ->
+      VPair (VSymbol "with-caps", VPair (quote_to_value caps, VPair (quote_to_value body, VNil)))
   | EPerform (name, args) ->
       let qargs = List.map quote_to_value args in
       VPair (VSymbol "perform",
@@ -715,5 +807,8 @@ and string_of_capability (c : capability) : string =
   | CapNetwork { protocol } -> "#<cap net " ^ protocol ^ ">"
   | CapProcess -> "#<cap process>"
   | CapCompose caps -> "#<cap compose " ^ string_of_int (List.length caps) ^ ">"
-  | CapRestrict { scope; _ } -> "#<cap restrict " ^ scope ^ ">"
+  | CapRestrict { scope; mode; _ } ->
+      let m = match mode with
+        | None -> "" | Some Read -> " :ro" | Some Write -> " :wo" | Some ReadWrite -> " :rw" in
+      "#<cap restrict " ^ scope ^ m ^ ">"
   | CapNone -> "#<cap none>"
