@@ -283,6 +283,36 @@ two shell suites:
     `tests/033-process-reconciler.sh` (unchanged, byte-for-byte, across
     the whole Q13 migration — the exit criterion itself) are this test's
     real companions, not duplicated here.
+  - **047** — M5 stage A: cluster transport, signed tokens, by-hash sync
+    (docs/PLAN-m5-distribution.md; docs/THREAT-MODEL-cluster.md is the
+    gate). Two (or three) `pp` PROCESS invocations differing only in
+    `$HOME` stand in for distinct cluster members, sharing a WORK dir the
+    way tests/019 does. `pp cluster-init` mints `~/.pp/cluster/{secret,id}`
+    (mode 0600, refuses to overwrite); the secret/id are copied to the
+    other simulated members (out-of-band distribution). T1: `--transport-
+    push` then a flipped byte (object, blob) or truncation (trace) in the
+    shared root, then `--transport-pull` exits nonzero naming the tampered
+    artifact for all three kinds. T2: `--serve-hit` with a flipped-MAC-byte
+    token, and with a negative-TTL (already-expired) token, both reply
+    `deny`, and neither creates the shared root (nothing crosses on
+    denial). T3: the SAME node key gets `miss` from a token whose grant
+    doesn't cover the node's read closure and `hit` from one that does —
+    LAW 23b across the wire, proven by holding the key fixed and varying
+    only the token. `--recv-hit` pulls the hit's object+trace, re-hash-
+    verifying, and the receiving member then hits LOCALLY with no
+    recompute. T4: `pp why` under a narrow grant, run once on the builder
+    and once (post-sync) on the receiver, produces byte-identical
+    redaction (`<redacted unauthorized cell>`, never the real path in a
+    `[why]`-tagged line) — scoped to `[why]` lines specifically, since the
+    program's own subsequent capability-denied read legitimately names the
+    path in an ordinary error line (the tests/019 pattern). T5: a node
+    touching a secret is refused at the existing M4 node boundary before
+    ever being stored, and a whole-tree grep after the attempt finds the
+    secret's bytes nowhere outside their source file. T6 (partial): a
+    third, never-synced, independent build of the same program computes
+    the identical node-key filename and a byte-identical result object,
+    and the receiver's serve-hit-synced object is also byte-identical to
+    the builder's own.
 
 Two proofs run OUTSIDE `dune runtest` (they invoke dune / the network):
 
@@ -460,3 +490,14 @@ value def, and a bare statement all reference EARLIER siblings.)
   future work but requires teaching the generator to emit `--grant` specs
   first, which does not exist today for ANY capability kind (`fs:`/`process`
   included).
+
+- **M5 stage A (tokens/transport) has no pp-language surface at all, so
+  there is nothing for the fuzzer to generate.** `cluster-init`/
+  `--mint-token`/`--serve-hit`/`--recv-hit`/`--transport-push`/
+  `--transport-pull` are CLI-only administrative/test entries (src/token.ml,
+  src/transport.ml); no reader syntax, builtin, or expression form exists
+  for a token or a transport op, by design (PLAN-m5-distribution.md: "never
+  a pp value... no path into the value world"). `dune exec ./tools/fuzz.exe
+  -- --grammar core|full --count 2000` were re-run after this change and
+  came back clean (0 mismatch/crash), confirming the addition is additive
+  and doesn't touch the fuzzed surface.

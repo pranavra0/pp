@@ -15,6 +15,13 @@ let main () =
   let supervise = ref false in
   let fenced_policy = ref Runtime.Abort in
   let island_pins_file = ref None in
+  (* M5 stage A: cluster transport/token CLI seam (docs/PLAN-m5-distribution.md). *)
+  let cluster_init_mode = ref false in
+  let mint_token_args = ref None in    (* (out-file, ttl-seconds) *)
+  let transport_push_args = ref None in (* (kind, hash-or-key, root) *)
+  let transport_pull_args = ref None in (* (kind, hash-or-key, root) *)
+  let serve_hit_args = ref None in     (* (key, token-file, shared-root, reply-file) *)
+  let recv_hit_args = ref None in      (* (reply-file, shared-root) *)
 
   let rec parse = function
     | "--" :: rest ->
@@ -47,6 +54,25 @@ let main () =
         parse rest
     | "island-pins" :: f :: rest -> island_pins_file := Some f; parse rest
     | "--grant" :: grant :: rest -> grants := grant :: !grants; parse rest
+    (* ---- M5 stage A: cluster transport/token CLI seam ----
+       `cluster-init` mints ~/.pp/cluster/{secret,id}; the rest are
+       internal test entries the exit tests drive directly (a real ssh
+       transport, stage B, will get an ambient membership-driven CLI —
+       these flags are deliberately low-level and explicit). *)
+    | "cluster-init" :: rest -> cluster_init_mode := true; parse rest
+    | "--mint-token" :: out :: ttl :: rest ->
+        (match int_of_string_opt ttl with
+         | Some t -> mint_token_args := Some (out, t)
+         | None -> failwith ("invalid --mint-token ttl-seconds: " ^ ttl));
+        parse rest
+    | "--transport-push" :: kind :: id :: root :: rest ->
+        transport_push_args := Some (kind, id, root); parse rest
+    | "--transport-pull" :: kind :: id :: root :: rest ->
+        transport_pull_args := Some (kind, id, root); parse rest
+    | "--serve-hit" :: key :: token_file :: shared_root :: reply_file :: rest ->
+        serve_hit_args := Some (key, token_file, shared_root, reply_file); parse rest
+    | "--recv-hit" :: reply_file :: shared_root :: rest ->
+        recv_hit_args := Some (reply_file, shared_root); parse rest
     | "--reconcile" :: root :: rest -> reconcile_root := Some root; parse rest
     | "--supervise" :: rest -> supervise := true; parse rest
     | "--fenced-policy" :: policy :: rest ->
@@ -89,6 +115,11 @@ let main () =
         Printf.printf "  pp run <file>            Run a pp source file\n";
         Printf.printf "  pp --version             Print version\n";
         Printf.printf "  pp --help                Print this help\n";
+        Printf.printf "  pp cluster-init          Mint ~/.pp/cluster/{secret,id} (M5 cluster trust anchor)\n";
+        Printf.printf "  pp --mint-token <out> <ttl-secs> [--grant ...]  Mint a signed cluster token\n";
+        Printf.printf "  pp --transport-push/--transport-pull object|blob|trace <id> <root>  Local-dir sync (internal)\n";
+        Printf.printf "  pp --serve-hit <key> <token-file> <shared-root> <reply-file>  Capability-gated hit (internal)\n";
+        Printf.printf "  pp --recv-hit <reply-file> <shared-root>  Ingest a serve-hit reply (internal)\n";
         exit 0
     | "--once" :: rest -> parse rest  (* no-op: explicit one-shot *)
     | "--watch" :: rest -> watch := true; parse rest
@@ -102,34 +133,10 @@ let main () =
   in
   parse args;
 
-  (* Parse --grant specs into capabilities *)
-  let parse_grant spec =
-    match String.split_on_char ':' spec with
-    | ["fs"; path; mode] ->
-        let m = match mode with
-          | "ro" -> Types.Read | "rw" -> Types.ReadWrite | "wo" -> Types.Write
-          | _ -> failwith ("invalid fs mode in --grant: " ^ mode)
-        in
-        (* SPEC LAW 23 / DESIGN §2.1: canonicalize at the mint, so every
-           downstream comparison (authority checks, `tree:` cells built from
-           granted paths) already sees the same spelling a cell would. *)
-        Types.CapFilesystem { path = Runtime.canonical_path path; mode = m }
-    | ["net"; host] ->
-        Types.CapNetwork { host; port = None }
-    | ["net"; host; port] ->
-        (match int_of_string_opt port with
-         | Some p -> Types.CapNetwork { host; port = Some p }
-         | None -> failwith ("invalid port in --grant net spec: " ^ spec))
-    | ["secret"; path] ->
-        (* SPEC LAW 23 / DESIGN §2.1: canonicalize at the mint, exactly like
-           fs grants — so a secret grant spelled differently from a later
-           read (symlink, trailing slash) still authorizes it. *)
-        Types.CapSecret { path = Runtime.canonical_path path }
-    | ["process"] ->
-        Types.CapProcess
-    | _ -> failwith ("invalid --grant spec: " ^ spec)
-  in
-  let initial_caps = List.map parse_grant (List.rev !grants) in
+  (* Parse --grant specs into capabilities (Capabilities.parse_grant — M5
+     moved this out of a local closure here so the signed-token verifier
+     can reuse the exact same parser; see capabilities.ml). *)
+  let initial_caps = List.map Capabilities.parse_grant (List.rev !grants) in
   Runtime.initial_capabilities := initial_caps;
   (* Loader authority bound (Q6/D8c): the interpreter may load source from
      the CLI-named programs' directories, the cwd, and ~/.pp — nothing else.
@@ -386,6 +393,56 @@ let main () =
   in
   (* pp graph: just scan and print, no file needed. *)
   if !graph_mode then (print_graph (); exit 0);
+  (* ---- M5 stage A: cluster transport/token CLI seam ----
+     Administrative/test entries: each does its one thing and exits.
+     Errors (bad token, corrupt/tampered artifact, missing secret) propagate
+     as Failure/Transport.Transport_integrity_error to the top-level handler
+     below, printed uniformly as "pp: error: ...". *)
+  if !cluster_init_mode then (Token.init (); exit 0);
+  (match !mint_token_args with
+   | Some (out, ttl) ->
+       let secret = Token.load_secret () in
+       let cluster_id = Token.load_cluster_id () in
+       let token = Token.mint ~secret ~cluster_id ~specs:(List.rev !grants) ~ttl_seconds:ttl in
+       Store.atomic_write out token;
+       exit 0
+   | None -> ());
+  (match !transport_push_args with
+   | Some (kind, id, root) ->
+       (match kind with
+        | "object" -> Transport.LocalDir.push_object root ~hash:id
+        | "blob" -> Transport.LocalDir.push_blob root ~hash:id
+        | "trace" -> Transport.LocalDir.push_trace root ~key:id
+        | _ -> failwith ("pp --transport-push: unknown artifact kind " ^ kind));
+       exit 0
+   | None -> ());
+  (match !transport_pull_args with
+   | Some (kind, id, root) ->
+       (match kind with
+        | "object" -> Transport.LocalDir.pull_object root ~hash:id
+        | "blob" -> Transport.LocalDir.pull_blob root ~hash:id
+        | "trace" -> Transport.LocalDir.pull_trace root ~key:id
+        | _ -> failwith ("pp --transport-pull: unknown artifact kind " ^ kind));
+       exit 0
+   | None -> ());
+  (match !serve_hit_args with
+   | Some (key, token_file, shared_root, reply_file) ->
+       let token_text = read_file_content token_file in
+       let reply = Transport.serve_hit ~key ~token_text ~shared_root in
+       Store.atomic_write reply_file reply;
+       exit 0
+   | None -> ());
+  (match !recv_hit_args with
+   | Some (reply_file, shared_root) ->
+       let reply_text = read_file_content reply_file in
+       (match Transport.recv_hit ~reply_text ~shared_root with
+        | Transport.RHit { key; result_hash; _ } ->
+            Printf.printf "recv-hit: hit key=%s result=%s\n" key result_hash
+        | Transport.RMiss key -> Printf.printf "recv-hit: miss key=%s\n" key
+        | Transport.RDeny (key, reason) ->
+            Printf.printf "recv-hit: deny key=%s reason=%s\n" key reason);
+       exit 0
+   | None -> ());
   (* pp island-pins <file>: list island forms with pin + cache status. *)
   (match !island_pins_file with
    | Some f -> Island.print_pins f; exit 0
@@ -488,6 +545,7 @@ let main () =
 let () =
   try main () with
   | Types.Pp_exit n -> exit n
-  | Failure msg | Types.Capability_error msg | Sys_error msg ->
+  | Failure msg | Types.Capability_error msg | Sys_error msg
+  | Transport.Transport_integrity_error msg ->
       Printf.eprintf "pp: error: %s\n%!" msg;
       exit 1

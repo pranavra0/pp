@@ -326,13 +326,26 @@ partial.
 stores and E7's hash-guessing exfiltration as out of scope: M6 is ≥2 machines
 under one owner; multi-tenancy is cache-service product work, not language
 completeness. Sealed cells (M4b) already cover the one tenant-adjacent risk
-M6 actually has.
+M6 actually has. ✅ **Gate cleared** — docs/THREAT-MODEL-cluster.md, naming
+both exactly.
 
-- **Signed capability tokens** with remote enforcement.
-- **By-hash object sync plus trace-set merge semantics** — R9's key→SET is
-  the merge mechanism — with capability-filtered `pp why` / LAW 23c redaction
-  surviving sync: a synced trace naming cells the local caller cannot read
-  stays redacted.
+**Stage A** (docs/PLAN-m5-distribution.md; transport + tokens + sync — DONE):
+
+- ✅ **Signed capability tokens.** Minted by `pp cluster-init` +
+  `--mint-token`; verified (MAC -> cluster id -> expiry -> caps) at the
+  serving member. Remote *enforcement* (this stage) means the wire path
+  feeds the unchanged `Store.hit`/`cell_authorized_for` gate via
+  `serve-hit`; remote *evaluation* (running a node ON a remote member) is
+  stage B, not this.
+- ✅ **By-hash object sync plus trace-set merge semantics** — R9's key→SET
+  is the merge mechanism — with capability-filtered `pp why` / LAW 23c
+  redaction surviving sync: a synced trace naming cells the local caller
+  cannot read stays redacted (proven byte-identical to a local run).
+  `src/transport.ml`'s local-dir implementation; ssh stubbed (a clear
+  "not yet", drops in behind the same signature later).
+
+**Stages B/C (later, NOT this work):**
+
 - **Remote placement**: the M1 handler over a remote transport; cluster
   membership is ambient config/capability (LAW 34's negative half preserved —
   still no location surface).
@@ -352,13 +365,17 @@ M6 actually has.
 
 **Exit (runnable):**
 1. The Phase-1 101-TU build across 2 machines, byte-identical outputs
-   (extending the M1 diagonal to distributed placement).
-2. A node built on machine A hits on machine B; `pp why` on B explains the
-   hit with correct redaction.
-3. A tampered capability token is rejected (adversarial-suite lineage), and
+   (extending the M1 diagonal to distributed placement). *Stage B.*
+2. ✅ A node built on machine A hits on machine B; `pp why` on B explains the
+   hit with correct redaction. (`tests/047-cluster-sync.sh`, two `pp`
+   process invocations differing only in `$HOME` standing in for two
+   machines — see transport.ml's header for why.)
+3. ✅ A tampered capability token is rejected (adversarial-suite lineage), and
    LAW 23b holds across the wire: B without authority over a cell in the
-   transitive closure is not served the hit.
+   transitive closure is not served the hit. (`tests/047-cluster-sync.sh`
+   T2/T3.)
 4. Store size stays bounded across N `--watch` iterations under GC.
+   *Stage C — not started.*
 
 ### M6 — The devops-complete demonstration
 

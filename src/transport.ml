@@ -1,0 +1,447 @@
+(* pp transport — cross-machine sync of hash-named store artifacts, plus
+   the capability-gated single-hit control path (M5 stage A:
+   docs/PLAN-m5-distribution.md "Transport" / "Signed capability tokens";
+   docs/THREAT-MODEL-cluster.md is the gate this implements against).
+
+   THE LOAD-BEARING INVARIANT: the receiving side re-hashes EVERY artifact
+   against its claimed name before it is ever written into THIS node's own
+   store. The transport is untrusted for integrity (a MITM or a compromised
+   peer can corrupt bytes in flight); a mismatch is a hard error naming the
+   artifact, never a silent accept — the islands invariant
+   (docs/THREAT-MODEL-islands.md), generalized to a second wire.
+
+   This is made structural, not merely conventional: [ingest_object],
+   [ingest_blob], and [ingest_trace_lines] below are the ONLY functions in
+   this module that write a remote-sourced artifact into the local store,
+   and every one of them verifies before it stores — there is no sibling
+   "trust it" entry point for a pull or a serve-hit reply to call instead.
+   Every receive path (LocalDir.pull_*, [recv_hit]) funnels through them. *)
+
+open Types
+
+exception Transport_integrity_error of string
+
+(* ---- The abstract shape: local-dir today, ssh later ----
+
+   Per PLAN-m5-distribution.md "Transport": push/pull of hash-named
+   artifacts (objects|blobs|traces) + a control request/reply channel in
+   the store's canonical text (a captured message is inspectable like a
+   trace — no new wire format). [t] is "the other side" — a second
+   store-shaped root directory for local-dir, a host spec for ssh. *)
+module type TRANSPORT = sig
+  type t
+
+  val push_object : t -> hash:string -> unit
+  val push_blob : t -> hash:string -> unit
+  val push_trace : t -> key:string -> unit
+  val pull_object : t -> hash:string -> unit
+  val pull_blob : t -> hash:string -> unit
+  val pull_trace : t -> key:string -> unit
+
+  val control : t -> request:string -> string
+end
+
+(* ---- The unbypassable re-hash-on-receive choke point ----
+
+   Every artifact that ever enters THIS node's own store from a remote
+   source passes through exactly one of these three functions, and every
+   one of them verifies BEFORE writing. There is no raw "just copy the
+   bytes in" helper anywhere else in this module for a pull or a
+   serve-hit reply to call instead — structurally, not just by
+   convention, so a mismatch cannot be silently accepted (T1). *)
+
+(* [text] is the canonical object encoding claimed to hash to
+   [claimed_hash] — a VALUE's content hash (Types.hash_value), NOT a hash
+   of [text] itself (store.ml's header: objects are addressed by the hash
+   of the value, not of its encoding). *)
+let ingest_object ~(claimed_hash : string) (text : string) : unit =
+  match Codec.decode_value text with
+  | None ->
+      raise (Transport_integrity_error
+        (Printf.sprintf
+           "object %s: received bytes do not decode as a pp value \
+            (corrupt or tampered in transit) — refusing to accept"
+           claimed_hash))
+  | Some v ->
+      let actual = hash_value v in
+      if actual <> claimed_hash then
+        raise (Transport_integrity_error
+          (Printf.sprintf
+             "object %s: content hashes to %s, not its claimed name — \
+              refusing to accept (corrupt or tampered in transit)"
+             claimed_hash actual))
+      else Store.store_object ~key:claimed_hash ~value:v
+
+let ingest_blob ~(claimed_hash : string) (content : string) : unit =
+  let actual = hash_string content in
+  if actual <> claimed_hash then
+    raise (Transport_integrity_error
+      (Printf.sprintf
+         "blob %s: content hashes to %s, not its claimed name — refusing \
+          to accept (corrupt or tampered in transit)" claimed_hash actual))
+  else ignore (Store.store_blob content)
+
+(* Traces have no self-describing content hash: their filename is a NODE
+   KEY (H(code, free-var value hashes) — see store.ml/types.ml), not
+   derivable from the trace text itself, so there is no "does this hash to
+   its name" check to run here. The receive-time analog of "re-hash
+   against the claimed name" for a trace SET is structural validity: every
+   line must parse under the EXACT grammar a local trace file is written
+   in (Store.line_to_trace) — a line that fails to parse is a HARD ERROR
+   here, unlike the local loader's silent drop (which exists for local
+   disk-corruption tolerance, not for a byte an untrusted wire just handed
+   us: never silently accept). Accepted lines are unioned into the local
+   SET via Store.store_trace, reused verbatim (R9 merge semantics, the same
+   de-dup rule a local writer already uses). *)
+let ingest_trace_lines ~(key : string) (raw : string) : unit =
+  let lines = String.split_on_char '\n' raw |> List.filter (fun l -> l <> "") in
+  if lines = [] then
+    raise (Transport_integrity_error
+      (Printf.sprintf "trace %s: empty (corrupt or tampered in transit)" key));
+  List.iter (fun line ->
+    match Store.line_to_trace line with
+    | None ->
+        raise (Transport_integrity_error
+          (Printf.sprintf
+             "trace %s: unparseable line — refusing to accept (corrupt or \
+              tampered in transit): %s" key line))
+    | Some tr ->
+        Store.store_trace ~key ~outcome:tr.Store.tr_outcome
+          ~result_hash:tr.Store.tr_result_hash ~reads:tr.Store.tr_reads)
+    lines
+
+(* ---- LocalDir: a second store-shaped root on one machine ----
+
+   The CI loopback (PLAN-m5-distribution.md): both "sides" of a sync are
+   ordinary directories on the SAME machine (typically each node's own
+   $HOME/.pp/store, or a throwaway shared drop directory), so every exit
+   test here runs with zero real network/ssh infra. Layout mirrors
+   store.ml's own (<root>/objects/<hash>, <root>/blobs/<hash>,
+   <root>/traces/<key>) but is managed by plain file I/O here rather than
+   through the Store module, because Store.store_root is a process-wide
+   singleton fixed at startup from $HOME — a single process can only ever
+   BE one store, never address a second one directly. Two distinct nodes
+   are therefore two distinct `pp` process invocations (differing only in
+   $HOME), exactly the pattern the rest of the test suite already uses for
+   isolation (tests/010, /019, /044, ...); this module's push/pull work
+   between "my own store" (read via Store.load_*, written via
+   Store.store_*/atomic_write — the process's own singleton) and an
+   arbitrary root path passed in as [t]. *)
+module LocalDir = struct
+  type t = string
+
+  let objects_dir (root : t) = Filename.concat root "objects"
+  let blobs_dir (root : t) = Filename.concat root "blobs"
+  let traces_dir (root : t) = Filename.concat root "traces"
+
+  (* ---- push: MY store (Store's singleton root) -> an arbitrary root ----
+     Push re-checks its OWN local content against the hash it is about to
+     advertise before writing — belt-and-suspenders; the load-bearing
+     check is on the receiving side (pull, below), since push is not what
+     an adversary controls in the MITM threat model. *)
+
+  let push_object (root : t) ~(hash : string) : unit =
+    match Store.load_object ~key:hash with
+    | None ->
+        failwith (Printf.sprintf
+          "transport: push-object %s: no such object in the local store" hash)
+    | Some v ->
+        (match Codec.encode_value v with
+         | None ->
+             (* T5 non-regression, made explicit rather than assumed:
+                Store.load_object only ever decodes via Codec.decode_value,
+                whose grammar contains no code/capability/sealed
+                constructor at all — this branch should be unreachable —
+                but push refuses to ship on any doubt, never "ship and
+                hope". *)
+             failwith (Printf.sprintf
+               "transport: push-object %s: refusing to ship a value that \
+                does not re-encode as data (sealed/non-data invariant \
+                violation — should be unreachable)" hash)
+         | Some content ->
+             if hash_value v <> hash then
+               failwith (Printf.sprintf
+                 "transport: push-object %s: local object does not hash \
+                  to its own claimed name (local store corruption) — \
+                  refusing to push" hash)
+             else begin
+               Store.ensure_dir (objects_dir root);
+               Store.atomic_write (Filename.concat (objects_dir root) hash) content
+             end)
+
+  let push_blob (root : t) ~(hash : string) : unit =
+    match Store.load_blob hash with
+    | None ->
+        failwith (Printf.sprintf
+          "transport: push-blob %s: no such blob in the local store" hash)
+    | Some content ->
+        if hash_string content <> hash then
+          failwith (Printf.sprintf
+            "transport: push-blob %s: local blob does not hash to its own \
+             claimed name (local store corruption) — refusing to push" hash)
+        else begin
+          Store.ensure_dir (blobs_dir root);
+          Store.atomic_write (Filename.concat (blobs_dir root) hash) content
+        end
+
+  let read_lines_if_exists (path : string) : Store.trace list =
+    if Sys.file_exists path then
+      String.split_on_char '\n' (Store.read_raw path)
+      |> List.filter (fun l -> l <> "")
+      |> List.filter_map Store.line_to_trace
+    else []
+
+  (* Push exactly [traces] (a caller-chosen subset — see [serve_hit]'s
+     authorization filtering below) into the remote root's trace SET for
+     [key], merged with whatever is already there (R9's key -> SET is the
+     merge mechanism, same de-dup rule Store.store_trace already uses
+     locally). *)
+  let push_trace_filtered (root : t) ~(key : string) ~(traces : Store.trace list) : unit =
+    if traces <> [] then begin
+      Store.ensure_dir (traces_dir root);
+      let path = Filename.concat (traces_dir root) key in
+      let existing = read_lines_if_exists path in
+      let merged =
+        List.fold_left (fun acc tr -> if List.mem tr acc then acc else acc @ [tr])
+          existing traces
+      in
+      let content = String.concat "" (List.map (fun t -> Store.trace_to_line t ^ "\n") merged) in
+      Store.atomic_write path content
+    end
+
+  let push_trace (root : t) ~(key : string) : unit =
+    let mine = Store.load_traces ~key in
+    if mine = [] then
+      failwith (Printf.sprintf
+        "transport: push-trace %s: no local traces for this node key" key)
+    else push_trace_filtered root ~key ~traces:mine
+
+  (* ---- pull: an arbitrary root -> MY store ----
+     Every byte read here goes straight into [ingest_object]/[ingest_blob]/
+     [ingest_trace_lines] above and nowhere else — the unbypassable
+     re-hash-on-receive path (T1). *)
+
+  let pull_object (root : t) ~(hash : string) : unit =
+    let path = Filename.concat (objects_dir root) hash in
+    if not (Sys.file_exists path) then
+      failwith (Printf.sprintf "transport: pull-object %s: not found at %s" hash root)
+    else ingest_object ~claimed_hash:hash (Store.read_raw path)
+
+  let pull_blob (root : t) ~(hash : string) : unit =
+    let path = Filename.concat (blobs_dir root) hash in
+    if not (Sys.file_exists path) then
+      failwith (Printf.sprintf "transport: pull-blob %s: not found at %s" hash root)
+    else ingest_blob ~claimed_hash:hash (Store.read_raw path)
+
+  let pull_trace (root : t) ~(key : string) : unit =
+    let path = Filename.concat (traces_dir root) key in
+    if not (Sys.file_exists path) then
+      failwith (Printf.sprintf "transport: pull-trace %s: not found at %s" key root)
+    else ingest_trace_lines ~key (Store.read_raw path)
+
+  (* Control has no generic realization for local-dir without a listening
+     peer process (there is no daemon in this stage); nothing in
+     tests/047 calls this — the request/reply-FILE convention actually
+     exercised is [serve_hit]/[recv_hit] below, driven by two `pp` CLI
+     invocations (one per simulated node). See the module header and the
+     report for why: Store.store_root's process-wide singleton means a
+     single process can only ever serve hits against ITS OWN store, so
+     "control" here is realized at the CLI layer rather than through this
+     function this stage. *)
+  let control (_ : t) ~(request : string) : string =
+    ignore request;
+    failwith "transport: LocalDir.control is not used this stage — see \
+              Transport.serve_hit / Transport.recv_hit"
+end
+
+(* Conformance check only (never instantiated): proves LocalDir's shape
+   satisfies TRANSPORT despite carrying an extra helper
+   ([push_trace_filtered]) the signature doesn't mention. *)
+module LocalDir_conforms : TRANSPORT = LocalDir
+
+(* ---- ssh: STUBBED this stage ----
+
+   scp/rsync for artifacts, `ssh <host> pp --worker-control` for control
+   (PLAN-m5-distribution.md "Transport" (b)) — drops in behind the exact
+   same TRANSPORT shape once stage B needs a real second machine. Every
+   operation is a clear "not yet" error naming itself, never a silent
+   no-op. *)
+module Ssh : TRANSPORT = struct
+  type t = string (* a host spec, e.g. "user@host" *)
+
+  let not_yet (op : string) (host : t) : 'a =
+    failwith (Printf.sprintf
+      "pp: transport ssh: %s not implemented yet (host %s) — stage A ships \
+       local-dir only; ssh drops in later behind the identical TRANSPORT \
+       shape (PLAN-m5-distribution.md \"Transport\")" op host)
+
+  let push_object host ~hash:_ = not_yet "push_object" host
+  let push_blob host ~hash:_ = not_yet "push_blob" host
+  let push_trace host ~key:_ = not_yet "push_trace" host
+  let pull_object host ~hash:_ = not_yet "pull_object" host
+  let pull_blob host ~hash:_ = not_yet "pull_blob" host
+  let pull_trace host ~key:_ = not_yet "pull_trace" host
+  let control host ~request:_ = not_yet "control" host
+end
+
+(* ---- Serve-hit: the capability-gated single-hit control path ----
+
+   Given (node-key, token), the serving side verifies the token, then
+   calls the EXISTING, UNCHANGED Store.hit ~authorized:(cell_authorized_for
+   (token_to_caps token)) — zero new authority code, PLAN-m5-distribution.md
+   "Signed capability tokens". On a hit, exactly the trace(s) the token's
+   own capabilities cover are pushed (never an unauthorized trace, even
+   though Store.hit's own gate would ALSO refuse to serve it later — this
+   is defense in depth against leaking cell names/paths as metadata, LAW
+   23c's spirit applied at the sync boundary, not just at read time). *)
+
+type decision =
+  | DHit of { result_hash : string; traces : Store.trace list; blob_hashes : string list }
+  | DMiss
+  | DDeny of string
+
+let decide ~(key : string) ~(token_text : string) : decision =
+  match Token.token_to_caps token_text with
+  | Error reason -> DDeny reason
+  | Ok caps ->
+      let authorized = Evaluator.cell_authorized_for caps in
+      (match Store.hit ~key ~authorized with
+       | Store.Miss -> DMiss
+       | Store.HitOk v | Store.HitFailed v ->
+           (match Codec.encode_value v with
+            | None ->
+                (* T5 guard: Store.hit can only ever have produced [v] by
+                   decoding an on-disk object, whose grammar contains no
+                   code/capability/sealed constructor — unreachable in
+                   practice, but serve-hit refuses to ship on any doubt. *)
+                failwith (Printf.sprintf
+                  "serve-hit: refusing to serve node %s: its result does \
+                   not re-encode as data (sealed/non-data invariant \
+                   violation — should be unreachable)" key)
+            | Some _ ->
+                let result_hash = hash_value v in
+                let traces = Store.load_traces ~key in
+                (* Only the trace(s) whose ENTIRE closure this token's caps
+                   cover — never leak a cell name/path the token doesn't
+                   authorize, even when a DIFFERENT trace for the same key
+                   is what made this a hit. *)
+                let authorized_traces =
+                  List.filter (fun tr ->
+                    List.for_all (fun (c, _) -> authorized c) tr.Store.tr_reads)
+                    traces
+                in
+                let blob_hashes =
+                  List.sort_uniq compare
+                    (List.concat_map (fun tr ->
+                       List.filter_map (fun (c, h) ->
+                         match Cell.of_string c with
+                         | Cell.File _ -> Some h
+                         | _ -> None)
+                         tr.Store.tr_reads)
+                       authorized_traces)
+                in
+                DHit { result_hash; traces = authorized_traces; blob_hashes }))
+
+(* ---- Control wire format (canonical text) ----
+
+     (serve-hit-reply hit "KEY" "RESULT-HASH" ("BLOB-HASH" ...))
+     (serve-hit-reply miss "KEY")
+     (serve-hit-reply deny "KEY" "REASON")
+
+   Deliberately does NOT embed artifact bytes — the reply just names hashes
+   to push/pull; the artifacts themselves move (and are re-hash-verified)
+   through the ALREADY-TESTED push/pull path above, so there is exactly one
+   code path that ever writes a remote-sourced artifact into a store,
+   whether it arrived via a bulk sync or via serve-hit. *)
+
+let quote = Codec.quote_string
+
+let reply_of_decision (key : string) (d : decision) : string =
+  match d with
+  | DDeny reason -> Printf.sprintf "(serve-hit-reply deny %s %s)\n" (quote key) (quote reason)
+  | DMiss -> Printf.sprintf "(serve-hit-reply miss %s)\n" (quote key)
+  | DHit { result_hash; blob_hashes; _ } ->
+      Printf.sprintf "(serve-hit-reply hit %s %s (%s))\n"
+        (quote key) (quote result_hash)
+        (String.concat " " (List.map quote blob_hashes))
+
+(* The serving side: decide, then (only on a hit) push into [shared_root] —
+   nothing is EVER written to [shared_root] on a miss or a deny (T5's "no
+   bytes cross on denial" is structural: the push calls are inside the
+   DHit arm only, not a separate "push if authorized" flag a caller could
+   forget to check). Returns the reply text to hand back to the requester. *)
+let serve_hit ~(key : string) ~(token_text : string) ~(shared_root : string) : string =
+  let d = decide ~key ~token_text in
+  (match d with
+   | DHit { result_hash; traces; blob_hashes } ->
+       LocalDir.push_object shared_root ~hash:result_hash;
+       LocalDir.push_trace_filtered shared_root ~key ~traces;
+       List.iter (fun h -> LocalDir.push_blob shared_root ~hash:h) blob_hashes
+   | DMiss | DDeny _ -> ());
+  reply_of_decision key d
+
+(* ---- Reply parser (hand-rolled, same style as Token/store.ml) ---- *)
+
+type reply_decision =
+  | RHit of { key : string; result_hash : string; blob_hashes : string list }
+  | RMiss of string
+  | RDeny of string * string
+
+let ( >>= ) o f = match o with None -> None | Some x -> f x
+
+let expect_char (s : string) (i : int) (c : char) : int option =
+  if i < String.length s && s.[i] = c then Some (i + 1) else None
+
+let expect_lit (s : string) (i : int) (lit : string) : int option =
+  let l = String.length lit in
+  if i + l <= String.length s && String.sub s i l = lit then Some (i + l) else None
+
+let parse_reply_text (text : string) : reply_decision option =
+  let text = String.trim text in
+  let len = String.length text in
+  expect_lit text 0 "(serve-hit-reply " >>= fun i ->
+  match String.index_from_opt text i ' ' with
+  | None -> None
+  | Some sp ->
+      let kind = String.sub text i (sp - i) in
+      let i = sp + 1 in
+      Codec.parse_quoted_string text i >>= fun (key, i) ->
+      (match kind with
+       | "miss" -> expect_char text i ')' >>= fun _ -> Some (RMiss key)
+       | "deny" ->
+           expect_char text i ' ' >>= fun i ->
+           Codec.parse_quoted_string text i >>= fun (reason, i) ->
+           expect_char text i ')' >>= fun _ -> Some (RDeny (key, reason))
+       | "hit" ->
+           expect_char text i ' ' >>= fun i ->
+           Codec.parse_quoted_string text i >>= fun (result_hash, i) ->
+           expect_char text i ' ' >>= fun i ->
+           expect_char text i '(' >>= fun i ->
+           let rec loop i acc =
+             if i < len && text.[i] = ')' then Some (List.rev acc, i + 1)
+             else
+               Codec.parse_quoted_string text i >>= fun (h, i) ->
+               let i = if i < len && text.[i] = ' ' then i + 1 else i in
+               loop i (h :: acc)
+           in
+           loop i [] >>= fun (hashes, i) ->
+           expect_char text i ')' >>= fun _ ->
+           Some (RHit { key; result_hash; blob_hashes = hashes })
+       | _ -> None)
+
+(* The requesting side: parse the reply, then (only on a hit) pull each
+   named artifact from [shared_root] — every pull re-hash-verifies before
+   accepting (ingest_object/ingest_blob/ingest_trace_lines above), so a
+   tampered reply payload or a tampered shared-root artifact is rejected
+   here exactly as it would be for a bulk sync. *)
+let recv_hit ~(reply_text : string) ~(shared_root : string) : reply_decision =
+  match parse_reply_text reply_text with
+  | None ->
+      raise (Transport_integrity_error
+        ("serve-hit reply: unrecognized or malformed: " ^ String.trim reply_text))
+  | Some (RHit { key; result_hash; blob_hashes } as d) ->
+      LocalDir.pull_object shared_root ~hash:result_hash;
+      LocalDir.pull_trace shared_root ~key;
+      List.iter (fun h -> LocalDir.pull_blob shared_root ~hash:h) blob_hashes;
+      d
+  | Some d -> d

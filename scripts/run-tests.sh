@@ -269,4 +269,11 @@ else
   echo "FAIL 046-domains"; fail=1
 fi
 
+echo "--- M5 stage A cluster transport/token sync suite ---"
+if PP="$PP" bash tests/047-cluster-sync.sh; then
+  echo "ok   047-cluster-sync"
+else
+  echo "FAIL 047-cluster-sync"; fail=1
+fi
+
 exit $fail

@@ -539,6 +539,47 @@ non-list `def` is a value binding — `tests/025`.)
   exists), so the CapNetwork shape change needed no fuzzer update — noted
   rather than silently skipped. Pinned by `tests/045-network.sh` (skips
   cleanly without `curl`/`python3`).
+- **M5 stage A — cluster transport, signed tokens, by-hash sync**
+  (docs/PLAN-m5-distribution.md; gated on docs/THREAT-MODEL-cluster.md,
+  now written). `pp cluster-init` mints `~/.pp/cluster/{secret,id}` (a
+  32-byte Cryptokit-RNG secret, hex-encoded, mode 0600, `O_EXCL`-refuses to
+  overwrite); a signed cluster token (`src/token.ml`) is canonical TEXT —
+  `(cluster-token (SPECS...) "cluster-id" issued expires "mac")`, never a
+  pp value — minted from the SAME `--grant`-grammar spec strings and
+  parsed back with the SAME `Capabilities.parse_grant` `pp --grant` uses
+  (moved there from a local main.ml closure so both share it). `Token.verify`
+  checks MAC -> cluster id -> expiry -> caps, in that order, so a forged
+  token never reaches the capability parser. `src/transport.ml`'s
+  `TRANSPORT` module type (push/pull of hash-named objects/blobs/traces +
+  a control request/reply channel in canonical text) has a `LocalDir`
+  implementation (a second store-shaped root, plain file copy, the CI
+  loopback) and an `Ssh` stub (every operation a clear "not yet" error —
+  stage B's real remote member). The receiving side ALWAYS re-hashes
+  before accepting: `ingest_object`/`ingest_blob` decode-and-hash-compare,
+  `ingest_trace_lines` rejects any unparseable line, and these are the
+  ONLY functions in the module that write a remote-sourced artifact into
+  the local store — structurally, not just conventionally, unbypassable.
+  `Transport.serve_hit` — given (node-key, token) — verifies the token,
+  then calls the UNCHANGED `Store.hit ~authorized:(cell_authorized_for
+  (token_to_caps token))`: zero new authority code, the existing LAW 23b
+  gate fed a wire-verified capability list. A hit pushes only the trace(s)
+  the token's own caps cover (defense in depth on top of LAW 23c, which
+  already redacts at read time regardless); a miss or a denied token
+  pushes nothing at all. Two `pp` process invocations differing only in
+  `$HOME` stand in for two cluster members (Store.store_root is a
+  process-wide singleton fixed at startup — see transport.ml's header for
+  why this, not a true single-process dual-store, is the CI shape).
+  Sealed values remain unshippable by construction (M4's existing node
+  boundary; a defense-in-depth re-check in `decide`/`push_object` refuses
+  to ship anything that fails to re-encode as data, though this is
+  unreachable given `Codec`'s grammar). Remote placement, host-qualified
+  domain distribution, and store GC (M5's remaining stages) are NOT part
+  of this work. Pinned by `tests/047-cluster-sync.sh` (T1 corruption
+  rejected for objects/blobs/traces; T2 tampered-MAC and expired tokens
+  denied; T3 LAW 23b across the wire; T4 why-redaction survives sync,
+  byte-identical to a local run; T5 no secret bytes cross; T6-partial:
+  identical key/result hash whether built locally, independently, or via
+  serve-hit).
 
 ## Discrepancy ledger (D1–D24)
 

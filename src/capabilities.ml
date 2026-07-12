@@ -224,3 +224,36 @@ let rec cap_subseteq (requested : capability) (ambient : capability list) : bool
         | Write -> check_fs_write held path
         | ReadWrite -> check_fs_read held path && check_fs_write held path)
         (list_fs_paths r)
+
+(* ---- --grant spec parsing ----
+
+   "fs:/path:rw" | "net:host[:port]" | "secret:/path" | "process" -> a
+   capability. Moved here (M5, PLAN-m5-distribution.md "Signed capability
+   tokens") from what used to be a local closure in main.ml, so the
+   signed-token verifier (Token.verify) can parse a token's embedded caps
+   with the EXACT SAME function `pp --grant` uses at the CLI — "zero new
+   authority code": a wire-verified capability list is built by the
+   identical parser as a locally-minted one, so cap_subseteq/
+   cell_authorized_for cannot tell the difference between the two.
+   main.ml's --grant flag is now a thin caller of this. *)
+let parse_grant (spec : string) : capability =
+  match String.split_on_char ':' spec with
+  | ["fs"; path; mode] ->
+      let m = match mode with
+        | "ro" -> Read | "rw" -> ReadWrite | "wo" -> Write
+        | _ -> failwith ("invalid fs mode in --grant: " ^ mode)
+      in
+      (* SPEC LAW 23 / DESIGN §2.1: canonicalize at the mint, so every
+         downstream comparison (authority checks, `tree:` cells built from
+         granted paths) already sees the same spelling a cell would. *)
+      CapFilesystem { path = Runtime.canonical_path path; mode = m }
+  | ["net"; host] -> CapNetwork { host; port = None }
+  | ["net"; host; port] ->
+      (match int_of_string_opt port with
+       | Some p -> CapNetwork { host; port = Some p }
+       | None -> failwith ("invalid port in --grant net spec: " ^ spec))
+  | ["secret"; path] ->
+      (* Canonicalize at mint, exactly like fs grants (see above). *)
+      CapSecret { path = Runtime.canonical_path path }
+  | ["process"] -> CapProcess
+  | _ -> failwith ("invalid --grant spec: " ^ spec)

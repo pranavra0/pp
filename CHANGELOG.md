@@ -6,6 +6,59 @@ v0.2.0 predate this file and are reconstructed from history for context.
 
 ## [Unreleased] — v0.2.0
 
+- **M5 stage A: cluster transport, signed tokens, by-hash sync**
+  (docs/PLAN-m5-distribution.md; gated on docs/THREAT-MODEL-cluster.md).
+  Remote placement, host-qualified domain distribution, and store GC are
+  later stages of M5 and are NOT part of this change.
+  - **Threat model** (docs/THREAT-MODEL-cluster.md): scope, assets,
+    adversaries considered/not-considered, trust anchors, and seven
+    falsifiable claims (T1–T7), in `docs/THREAT-MODEL-islands.md`'s house
+    style.
+  - **Signed capability tokens** (`src/token.ml`): `pp cluster-init` mints
+    `~/.pp/cluster/{secret,id}` (a 32-byte Cryptokit-RNG secret, hex,
+    mode 0600, `O_EXCL`-refuses to clobber an existing one). A token is
+    canonical TEXT — `(cluster-token (SPECS...) "cluster-id" issued
+    expires "mac")` — never a pp value, minted from the same `--grant`
+    spec strings and parsed back with the same parser (`Capabilities.
+    parse_grant`, moved out of a local main.ml closure so both share it).
+    `Token.verify` checks MAC -> cluster id -> expiry -> caps, in that
+    order; `token_to_caps` hands back a capability list usable directly as
+    `Store.hit ~authorized:(cell_authorized_for ...)` — zero new authority
+    code.
+  - **Transport** (`src/transport.ml`): a `TRANSPORT` module type
+    (push/pull of hash-named objects/blobs/traces + a control
+    request/reply channel in canonical text) with a `LocalDir`
+    implementation (a second store-shaped root, plain file copy — the CI
+    loopback) and a stubbed `Ssh` (every op a clear "not yet", drops in
+    later behind the identical shape). The receiving side ALWAYS
+    re-hashes an artifact against its claimed name before accepting it —
+    `ingest_object`/`ingest_blob`/`ingest_trace_lines` are the ONLY
+    functions that write a remote-sourced artifact into the local store,
+    so there is no bypass path; a mismatch is a hard error naming the
+    artifact, never a silent accept.
+  - **serve-hit**: given (node-key, token), verifies the token, then calls
+    the UNCHANGED `Store.hit ~authorized:(cell_authorized_for
+    (token_to_caps token))` and, on a hit, pushes only the result object +
+    the trace(s) the token's own caps cover + any file-cell-backed blobs —
+    nothing crosses on a miss or a denied token. Exercised via two `pp`
+    process invocations differing only in `$HOME` (Store.store_root is a
+    process-wide singleton fixed at startup, so two stores means two
+    processes — documented in transport.ml's header) rather than a
+    single-process dual-store or a real ssh round trip.
+  - **Sealed non-regression**: a node touching a sealed value already
+    fails at M4's existing node boundary, so there is nothing for
+    serve-hit to ever find for that key; a defense-in-depth re-check in
+    `decide`/`push_object` refuses to ship anything that fails to
+    re-encode as data, even though this is unreachable given `Codec`'s
+    grammar.
+  - `tests/047-cluster-sync.sh`: T1 (corrupted object/blob/trace rejected
+    on `--transport-pull`), T2 (tampered-MAC and expired tokens denied),
+    T3 (LAW 23b across the wire — an out-of-scope token's closure gets a
+    miss, a covering token gets a hit, for the identical key), T4 (`pp
+    why` redaction over a synced trace is byte-identical to a local run
+    under the same narrow grant), T5 (no secret bytes anywhere the sync
+    touched), T6-partial (identical key/result hash whether built locally,
+    independently, or fetched via serve-hit).
 - **M4 stage 1: probes, sealed cells, network** (docs/PLAN-m4-cells.md).
   Three additive features, one model — a cell whose write-discipline core
   enforces mechanically.
