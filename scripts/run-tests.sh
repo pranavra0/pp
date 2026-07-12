@@ -234,4 +234,11 @@ else
   echo "FAIL 040-caps-attenuation"; fail=1
 fi
 
+echo "--- M3 defmacro rekey (LAW 20 exit 3) suite ---"
+if PP="$PP" bash tests/042-defmacro-rekey.sh; then
+  echo "ok   042-defmacro-rekey"
+else
+  echo "FAIL 042-defmacro-rekey"; fail=1
+fi
+
 exit $fail

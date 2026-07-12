@@ -161,7 +161,7 @@ hosts while it is OCaml `Marshal`.
    flips to holds).
 4. CI green on both OSes; `v0.2.0` tagged and stranger-buildable.
 
-### M3 — Language self-growth
+### M3 — Language self-growth ✅ DONE
 
 The pieces a userland devops library stands on.
 
@@ -196,10 +196,33 @@ The pieces a userland devops library stands on.
   sibling defs/value-defs resolve through local slots in their own runtime
   frame, isolated from the enclosing scope. `tests/039-vm-global-scope.pp`;
   fuzzer `stmt_do_scoped_def`/`stmt_module_sibling`.
-- **`defmacro`** on the total quote/quasiquote base (D10's promise). The
-  design decision it forces: LAW 20's code-hash must hash the **expanded**
-  form, or a macro edit becomes invisible to the store. Explicitly cuttable
-  if M3 slips — it gates neither M4 nor M6.
+- ✅ **`defmacro`** on the total quote/quasiquote base (D10's promise).
+  Landed the way the design decision forces: expansion (`macro.ml`) is ONE
+  shared step both backends pass through BEFORE their own machinery — the
+  tree-walker's `hash_expr`/`node_key_of` and the compiler — ever sees a
+  form, so LAW 20's code-hash needs no change to hash the **expanded**
+  form; it already does, by construction. `(defmacro (name params...)
+  body...)` parses as an ordinary application (no reader special form); a
+  macro runs its body through the tree-walker (LAW 36: the oracle) over
+  `quote_to_value`d argument forms and converts the result back via the new
+  `Types.value_to_expr` (`quote_to_value`'s inverse — the exhaustive dual of
+  every case it handles, plus the merged `(name params...)` shape a
+  quasiquoted `` `(def (,name ,@params) ,body) `` naturally produces).
+  `gensym` (primitives.ml) mints a fresh, genuinely-unwritable symbol (`~`
+  — excluded from `is_symbol_char` and unclaimed by any lexer rule, so a
+  bare `~` is a lex error) for manual hygiene; full hygiene is NOT required
+  (unhygienic capture is documented behavior). Scope, decided: macros are
+  recognized ONLY at the true top level of a file/REPL input, sequentially
+  like a value def (`load` shares the loader's macro table — load is
+  sequential evaluation); NOT inside `do`/`module`/`fn`/`node`/etc. bodies,
+  which answers "and in modules?" NO and means a `defmacro` inside a node
+  body is simply an ordinary unbound-symbol error in both backends, with no
+  special-cased detection code. `tests/041-defmacro.pp` (differential:
+  control flow, gensym hygiene, a macro building a node form, nested macro
+  use, a macro-generated def, redefinition) and
+  `tests/042-defmacro-rekey.sh` (the LAW 20 exit criterion, isolated HOME,
+  both backends, plus the node-body error pin); fuzzer `stmt_defmacro`
+  (full grammar).
 - ✅ **LAW 29 residual**: errors inside a `load`ed file cite the inner file.
   `Reader.read_string` now reads a loaded file under its own path, and each
   of its top-level forms is located/decorated individually
@@ -214,8 +237,9 @@ The pieces a userland devops library stands on.
 2. ✅ Attenuation adversarial suite green, including capture-vs-ambient
    (`tests/040-caps-attenuation.sh`'s two-direction differential) and
    anti-mint cases (`tests/capability-adversarial.sh`).
-3. `defmacro` has a fuzzer grammar arm and a differential test proving a
-   macro-definition edit re-keys dependent nodes.
+3. ✅ `defmacro` has a fuzzer grammar arm and a differential test proving a
+   macro-definition edit re-keys dependent nodes
+   (`tests/042-defmacro-rekey.sh`).
 
 ### M4 — The world as cells
 

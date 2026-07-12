@@ -40,10 +40,14 @@ let process_expr (e : expr) : value =
     | VEnvMap _ as v -> v
     | v -> v)
 
-(* Tree-walker: execute a source string *)
+(* Tree-walker: execute a source string. M3 defmacro: the WHOLE file's forms
+   are expanded together, in order, before any of them is evaluated — a
+   `defmacro` earlier in the string must be visible to a use later in the
+   SAME string, even though process_expr below evaluates one form at a
+   time. *)
 let execute_string ?(source : string = "<?>") (input : string) : value list =
   init ();
-  let exprs = read_string ~source input in
+  let exprs = Macro.expand_toplevel_list (read_string ~source input) in
   List.map process_expr exprs
 
 (* Tree-walker: execute a source file *)
@@ -57,12 +61,17 @@ let execute_file (path : string) : value list =
 let execute_string_bytecode ?(source : string = "<?>") (use_vm : bool) (input : string) : value list =
   if use_vm then begin
     let exprs = read_string ~source input in
+    (* Vm.init () first: it calls Evaluator.init (), which resets the macro
+       table and wires up Primitives' force/eval/apply refs that macro
+       expansion's Evaluator.eval call needs — expansion must run AFTER
+       that, never before. *)
     Vm.init ();
+    let expanded = Macro.expand_toplevel_list exprs in
     List.map (fun e ->
       with_toplevel_location e (fun () ->
         let bc = Compiler.compile_program [e] in
         Vm.run_program_expr bc)
-    ) exprs
+    ) expanded
   end else
     execute_string ~source input
 
@@ -315,7 +324,11 @@ let repl_loop ~(use_vm : bool) =
         else begin
           if tty then append_history input;
           (try
-             let exprs = read_string ~source:"<repl>" input in
+             (* M3 defmacro: the macro table persists across REPL turns
+                (reset only by init ()/Vm.init () at repl_loop's start), so
+                a macro defined on one line is usable on a later one — same
+                sequential-top-level rule as a file. *)
+             let exprs = Macro.expand_toplevel_list (read_string ~source:"<repl>" input) in
              List.iter (fun e ->
                let v = eval_one e in
                Printf.printf "%s\n%!" (string_of_value (Primitives.force_deep v))

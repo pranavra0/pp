@@ -395,7 +395,18 @@ best-effort.
 
 **Status: holds** — `quote_to_value` handles all expr forms; the reader
 parses quasiquote/unquote/unquote-splicing and a runtime walker expands them
-(including splicing, nested quasiquote, vectors, and maps).
+(including splicing, nested quasiquote, vectors, and maps). `defmacro` (M3,
+D10's promise, `macro.ml`) redeems the grounding: a macro receives its
+argument forms already `quote_to_value`d, computes over them as data (via
+`quote`/`quasiquote`/`list`/`cons`/`gensym`), and the result is converted
+back to syntax by `Types.value_to_expr` — the total, exhaustive DUAL of
+`quote_to_value`, so every case the reader can produce round-trips. This is
+possible only because quotation was already total in both directions the
+moment `value_to_expr` existed to complete it. `defmacro` is not itself a
+reader special form (its shape — `(defmacro (name params...) body...)` — is
+recognized structurally, at the one expansion point both backends share,
+never in `reader.ml`); a macro call is expanded, and gone, before either
+backend's own machinery (LAW 20's `hash_expr`, the compiler) ever sees it.
 
 **Test:** `'(if a b c)` ⇒ the list `(if a b c)` in both backends;
 `` `(1 ,(+ 1 1)) `` ⇒ `(1 2)` in both.
@@ -596,6 +607,18 @@ node records a `config:`/`handler:` trace cell instead (LAW 33/26,
 applied `defnode` is a named closure (LAW 6); and closure-valued free vars key
 per-backend (VM closures hash bytecode + captured frames, tree-walker closures
 hash AST + env), so those do not share across backends.
+
+**`defmacro` (M3, D10's promise) needed no change to this law, by
+construction.** `hash_expr` (`node_key_of`) and the compiler both consume an
+expr tree that has ALREADY been macro-expanded — expansion (`macro.ml`) is
+the ONE shared step every top-level-form-shaped list passes through before
+either backend's own machinery ever sees it (repl.ml's drivers, vm.ml's
+`LOAD_FILE`/`eval_module_from`, evaluator.ml's `ELoad`/`eval_module_file`).
+So "the code hash must hash the expanded form" is not a special case this
+law had to grow — a node built from a macro call is keyed on exactly the
+code the macro expanded into, and editing ONLY the macro's own definition
+(the call site unchanged) changes that expanded code, hence the key, hence
+forces a recompute (`tests/042-defmacro-rekey.sh`, MASTERPLAN M3 exit 3).
 
 **M3 — the node boundary is symmetric: authority may not cross it in EITHER
 direction.** Once capability *values* exist (M3's `current-capabilities` and
@@ -1181,7 +1204,14 @@ is no longer tree-walker-only — the VM shares the same store and key (D7,
 `tests/014`), so `(node …)` caching is not a one-backend feature. Deep non-tail
 recursion (D4) and the negative-literal reader bug (`-5` lexes as a symbol)
 remain non-differential issues. Phase 0 exit 1 requires the `full` grammar to
-stay green under extended CI runs.
+stay green under extended CI runs. `defmacro` (M3) is a one-backend-only
+FEATURE the moment it exists to violate this law — a macro table per backend,
+or expansion happening inside one backend's own compile/eval path, would be
+exactly the kind of divergence this law forbids. It does not, by
+construction: expansion (`macro.ml`) runs once, ahead of both backends,
+producing the SAME expanded AST regardless of which backend consumes it
+next — `stmt_defmacro` (fuzzer, full grammar) and `tests/041-defmacro.pp`
+exercise this the same way every other shared-AST feature is verified.
 
 **Test:** `dune exec ./tools/fuzz.exe -- --grammar core` exits zero (the CI gate);
 Phase 0 exit 1 extends this to the `full` grammar with zero value-or-effect
@@ -1256,13 +1286,13 @@ signatures, not line numbers — the source is under active migration.)
 | LAW 7 | demand-pruning at node granularity | partial | reverse-edge dirty-propagation graph exists for push `stabilize` (`pp --watch --stabilize`, `tests/032`); root desired-state formula / explicit wanted-set still absent (Q1/Q5) |
 | LAW 8 | `delay` ephemeral vs `node` persistent | partial | the split exists in both backends (`node` → `~/.pp/store`; `delay` never persists); residual: tree-walker's in-memory dedup table isn't mirrored in the VM (D7), separate from the node cache |
 | LAW 11 | stack-safe non-tail recursion | unimplemented | D4; fuzz `exitdiff:tw-err: Out_of_memory`, `crash:bc:timeout` |
-| LAW 12 | total quotation, quasiquote | holds | D11/D19 fixed; `tests/007-phase0-laws.pp` |
+| LAW 12 | total quotation, quasiquote | holds | D11/D19 fixed; `tests/007-phase0-laws.pp`; `defmacro` (M3, D10's promise) built on this base — `Types.value_to_expr` completes the round trip, `tests/041-defmacro.pp` |
 | LAW 15 | ordering never from capabilities | partial | negative half holds; fs-domain reconciler v1 exists (`tests/018`), process domain absent |
 | LAW 16 | opt-in per-node caching | partial | `(node e)` cached persistently across runs in both backends (D1, D7); scripting-tier exprs uncached; node writes sandbox-scratch-only (LAW 18, `tests/017`); `tests/010`, `tests/014` |
 | LAW 17 | hit ≠ effect replay | holds (node tier) | a `(node e)` hit does not replay in-node `log`/stdout, both backends (`tests/010`, `tests/014`) |
 | LAW 18 | sandbox-scratch writes | partial | per-node scratch sandbox real: relative node writes/reads are scratch-local, absolute node writes error, `run` cwd = scratch (`tests/017`); reconciled domains absent (Q4) |
 | LAW 19 | sound content hashing | partial | SHA-256 (D5 fixed); closure-env + handler holes closed → in-memory dedup sound (D6/D17 fixed); store objects content-addressed by result hash, shared by both backends (D1, D7); tree-walker's in-memory dedup table not mirrored in the VM |
-| LAW 20 | key = code ‖ arg-values | partial | persistent `(node e)` key = code + free-var value hashes; caps, whole-env, config, and handlers all excluded (`tests/011`, `tests/015`); binding-order not canonicalized (LAW 3); node boundary now symmetric (M3): a capability-containing free var is `Capability_error` at the key, a capability-containing result is rejected before storage, both backends (`tests/capability-adversarial.sh`) |
+| LAW 20 | key = code ‖ arg-values | partial | persistent `(node e)` key = code + free-var value hashes; caps, whole-env, config, and handlers all excluded (`tests/011`, `tests/015`); binding-order not canonicalized (LAW 3); node boundary now symmetric (M3): a capability-containing free var is `Capability_error` at the key, a capability-containing result is rejected before storage, both backends (`tests/capability-adversarial.sh`); `defmacro` (M3) expands before either backend's `hash_expr`/compiler ever sees a form, so the key is always over the EXPANDED code with no change to this law — a macro-only edit re-keys its call sites (`tests/042-defmacro-rekey.sh`) |
 | LAW 21 | cutoff via traces | partial | validity-via-verifying-trace real (key→SET of traces, cells re-checked on hit; `tests/010`, `tests/015`); hash-equality cutoff proven at scale — comment-only header edit on a 101-TU C build and on Lua 5.4.7 recompiles dependents and cuts off the link (`tests/016`, `tests/024`, `scripts/build-lua.sh`); reverse-edge/dirty-propagation graph now used by push `stabilize` (`pp --watch --stabilize`, `tests/032`); inline-nested cutoff still absent |
 | LAW 22 | unforgeable root-minted caps | holds | D18 fixed; constructors removed; `tests/capability-adversarial.sh` |
 | LAW 22b | `with-caps` narrows a held value, never widens | holds | `current-capabilities`/`with-caps`/`cap-restrict`'s mode argument (M3, docs/PLAN-m3-attenuation.md); `cap_subseteq` checked against the CURRENT ambient; `effect` removed; both backends, exception/tail-safe; `tests/capability-adversarial.sh` |
@@ -1279,7 +1309,7 @@ signatures, not line numbers — the source is under active migration.)
 | LAW 33 | config: computed keys, tail-safe scoping | holds | D15 fixed; computed keys and tail-safe scoping in both backends; config reads inside nodes are `config:<key>` trace cells, ambient config out of the node key (`tests/015`) |
 | LAW 34 | no location surface / scheduler exists | partial | negative half holds; scheduler half lands for local process-pool parallelism (M1, `tests/024`/`038`); cluster/remote placement still gated on Phase 4 |
 | LAW 35 | run-on-N-take-first as handler | holds (local) | `race:N` process-pool fan-out lands (M1, `tests/038`); cluster racing is Phase 4, threat-model-gated |
-| LAW 36 | backend parity | partial | catalogued divergences closed; `core` and sampled `full` green; deep non-tail recursion and negative-literal lexing remain same-side issues |
+| LAW 36 | backend parity | partial | catalogued divergences closed; `core` and sampled `full` green; deep non-tail recursion and negative-literal lexing remain same-side issues; `defmacro` (M3) expands once, ahead of both backends (`macro.ml`), so it cannot itself become a one-backend feature — `stmt_defmacro` in `full` |
 | LAW 37 | declared nondeterminism | partial | `random` builtin effect removed; no declared-nondeterminism mechanism yet |
 | LAW 38 | volatile-node containment | partial | `--check` double-run audit flags volatile nodes and fails the run, both backends (`tests/019`); per-pass cell containment absent |
 

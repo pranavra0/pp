@@ -185,8 +185,14 @@ hazards (D9) — for zero build-relevant benefit.
 *Fexprs' fate: cut.* `def-fexpr` is removed. It was thin (thunks, not syntax;
 D10) and its only mechanism (argument thunking) vanishes under CBV. The
 metaprogramming need is served by making the reader's quote path total
-(`quote_to_value` handles all forms; quasiquote; a future `defmacro`) — a
-cleaner homoiconicity story than operatives-over-thunks.
+(`quote_to_value` handles all forms; quasiquote) plus `defmacro` (M3, D10's
+promise landed: `macro.ml`) — a cleaner homoiconicity story than
+operatives-over-thunks. `defmacro` is not a reader special form: it parses
+as an ordinary application and is recognized only at the ONE shared
+expansion point both backends pass through before compiling/evaluating a
+top-level form, so `value_to_expr` (the inverse of `quote_to_value`) is what
+turns a macro's result value back into syntax, and LAW 20's code hash is
+computed on the already-expanded AST with no change to `hash_expr` itself.
 
 ### Q2 — Observed-read tracking. **Sound-but-coarse by default (whole mounted-cell tree hash); refined per-tool by depfile/toolchain-closure adapters.** [R6]
 

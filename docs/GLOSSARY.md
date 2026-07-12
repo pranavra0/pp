@@ -170,7 +170,11 @@ Terms marked *(planned)* do not exist in the code yet — see
   `pp --update` re-resolves and rewrites pins in the source; fetching is
   opt-in runtime authority (`--fetch-islands`, LAW 24), never ambient. D2.
 - **fexpr** *(cut)* — operatives that receive unevaluated arguments. Removed;
-  metaprogramming is served by total `quote`/quasiquote and a future `defmacro`.
+  metaprogramming is served by total `quote`/quasiquote and `defmacro` (M3,
+  `macro.ml`): a macro's body runs through the tree-walker at a single
+  shared expansion point, before either backend's own machinery (hash_expr,
+  the compiler) ever sees the form — so LAW 20 needs no change and both
+  backends stay byte-identical (LAW 36) by construction.
 
 ### Process and testing
 

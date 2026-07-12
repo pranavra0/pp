@@ -24,7 +24,12 @@
      statically-nonempty lists so arithmetic on the element is well-typed.
    - / and mod only ever get a nonzero positive literal divisor.
    - No random / wall-clock / network-island forms are ever generated;
-     pinned file: islands over a fixed fixture are sampled in `full`. *)
+     pinned file: islands over a fixed fixture are sampled in `full`.
+   - `defmacro` (M3/D10): `stmt_defmacro` (full only) defines a fresh,
+     well-scoped macro that doubles its (always-literal) argument via
+     `list`/`quote`, then calls it — exercises the shared expansion point
+     (macro.ml) that both backends pass through before compile/eval ever
+     see the form. *)
 
 (* ---------------------------------------------------------------- CLI ---- *)
 
@@ -656,6 +661,24 @@ let stmt_quote_special _env _d =
   if flip 0.5 then [S [A "print"; S [A "quote"; S [A "if"; A "1"; A "2"; A "3"]]]]
   else [S [A "print"; S [A "quote"; S [A "let"; V [A "x"; A "1"]; A "x"]]]]
 
+let stmt_defmacro _env _d =
+  (* (defmacro (name x) (list (quote +) x x)) then (print (name N)) — M3/D10:
+     the macro receives its argument FORM as a quoted value at expansion
+     time (never evaluating it inside the macro body) and builds a new form
+     with list/quote, converted back to syntax (Types.value_to_expr) before
+     either backend ever sees it — a correct shared expansion point prints
+     2*N identically on both backends. The argument is always a bare
+     literal (never a side-effecting expr), so the doubled reference in the
+     expansion can never double an observable effect — this arm is purely
+     about expansion parity, not evaluation-order semantics. Fresh macro
+     name per call site (fuzz.ml's `fresh`) since gen_program may pick this
+     arm more than once in one program. *)
+  let name = fresh "mac" in
+  let n = rint 1 20 in
+  [S [A "defmacro"; S [A name; A "x"];
+      S [A "list"; S [A "quote"; A "+"]; A "x"; A "x"]];
+   S [A "print"; S [A name; A (string_of_int n)]]]
+
 (* --- program generator --- *)
 
 let load_stdlib_form () =
@@ -697,6 +720,7 @@ let gen_program (gram : string) (iter : int) : string =
     1, (fun () -> stmt_eq_list env d);
     1, (fun () -> stmt_seq_let env d);
     1, (fun () -> stmt_quote_special env d);
+    2, (fun () -> stmt_defmacro env d);
   ] in
   let table = if gram = "full" then full_stmts else core_stmts in
   let n_stmts = rint 2 5 in

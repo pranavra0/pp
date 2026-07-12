@@ -202,6 +202,29 @@ two shell suites:
     `slurp` (scripting tier) and `run` (an fs-only restrict drops process
     authority entirely, since `CapRestrict` is filesystem-scoped). Isolated
     `$HOME` per case, like `tests/011`/`013`/`017`.
+  - **041** — `defmacro` (M3, D10's promise; `.pp` differential): a
+    control-flow macro (`unless`) via quasiquote; a `gensym`-based macro
+    whose introduced temporary shares its TEXTUAL prefix with a caller
+    variable of the same name, proving no capture; a macro building a
+    `(force (node ...))` form; nested macro use (one macro's expansion
+    calls another macro); a macro-generated `(def ...)`; a macro built with
+    plain `list`/`quote` (no quasiquote); redefining a macro changes later
+    expansions. Deliberately prints only VALUES, never node-body `log`
+    side effects — a hit/miss-dependent print would make repeated
+    `dune runtest` runs against a developer's real (non-isolated) `~/.pp`
+    flaky, since this file is a plain stdout diff, not one of the isolated-
+    `$HOME` shell suites.
+  - **042** — the LAW 20 exit criterion for `defmacro`
+    (MASTERPLAN M3 exit 3): a `build.pp`-style program whose node body comes
+    from expanding a macro; editing ONLY the macro's definition (the call
+    site `(build-step)` byte-identical) is a MISS that recomputes — proven
+    by the presence of the node's `log` output and by `pp why` reporting a
+    hit only after that recompute — and reverting the definition HITS again
+    with no recompute; both backends. Also pins the macro-in-node-body rule:
+    a `defmacro` textually inside a `(node ...)` body is never specially
+    recognized (only a true top-level form registers a macro), so it fails
+    as an ordinary "unbound symbol: defmacro" in both backends, byte-
+    identically. Isolated `$HOME`, like `tests/011`/`040`.
 
 Two proofs run OUTSIDE `dune runtest` (they invoke dune / the network):
 
@@ -275,8 +298,12 @@ Options (defaults in parens):
   `do` with a def that must NOT leak past the block, and `module` bodies
   whose function defs/value defs/bare statements reference EARLIER siblings
   (the D22 VM scope holes, both fixed — `stmt_do_scoped_def`,
-  `stmt_module_sibling`). This **now passes** (Phase 0 is closed); a
-  regression here is a new bug.
+  `stmt_module_sibling`), and `defmacro` (M3, D10's promise): `stmt_defmacro`
+  defines a fresh, well-scoped macro that doubles its (always-literal)
+  argument via `list`/`quote` and calls it, exercising the shared expansion
+  point (`macro.ml`) both backends pass through before compile/eval ever see
+  the form. This **now passes** (Phase 0 is closed); a regression here is a
+  new bug.
 
 Never generated: `random`, wall-clock forms, file-write effects, capability
 constructors and the `with-caps`/`current-capabilities`/`cap-restrict` surface

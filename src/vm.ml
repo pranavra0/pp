@@ -461,7 +461,11 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
            loaded file's OWN path, so its forms are located against it, not
            the reader's "<?>" default. *)
         let contents = Runtime.loader_read path in
-        let exprs = Reader.read_string ~source:path contents in
+        (* M3 defmacro: shared expansion hook, before compile_program ever
+           sees these forms — Macro.ml is compiled after Vm.ml's
+           dependencies (evaluator), so this is a direct call, not the
+           Primitives-ref indirection evaluator.ml needs. *)
+        let exprs = Macro.expand_toplevel_list (Reader.read_string ~source:path contents) in
         (* Compile and run ONE top-level form at a time (mirroring
            repl.ml's execute_file_bytecode for the outer file), each wrapped
            in ITS OWN location (LAW 29/D12): an error escaping a form here
@@ -549,7 +553,7 @@ and eval_module_from (path : string) (frames : frame list) : value =
     try Runtime.loader_read path
     with Sys_error msg -> failwith ("VM: cannot load module file: " ^ msg)
   in
-  let exprs = Reader.read_string source in
+  let exprs = Macro.expand_toplevel_list (Reader.read_string source) in
   let prog = Compiler.compile_program exprs in
   let saved_globals = Hashtbl.copy globals in
   Hashtbl.clear globals;

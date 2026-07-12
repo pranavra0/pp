@@ -529,9 +529,14 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
             (* `~source:path`: the loaded file's OWN path, so its top-level
                forms are located against it (not the reader's "<?>"
                default) — LAW 29/D12, closed via eval_expressions below,
-               which per-form-locates each of the loaded file's forms. *)
+               which per-form-locates each of the loaded file's forms.
+               Macro expansion (M3): routed through the shared hook so a
+               `load`ed file's macros are visible to the rest of THIS
+               file's forms and vice versa (load is sequential evaluation,
+               one shared macro table — Macro.ml's documented decision). *)
             let contents = Runtime.loader_read path in
-            let exprs = Reader.read_string ~source:path contents in
+            let exprs = !Primitives.expand_toplevel_ref
+                          (Reader.read_string ~source:path contents) in
             ignore (eval_expressions exprs env_ref);
             go rest
         | (ELoadModule path) :: rest ->
@@ -649,8 +654,11 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       k mod_val
 
   | ELoad path ->
+      (* M3 defmacro: same shared-expansion-hook treatment as EDo's ELoad
+         arm above. *)
       let contents = Runtime.loader_read path in
-      let exprs = Reader.read_string ~source:path contents in
+      let exprs = !Primitives.expand_toplevel_ref
+                    (Reader.read_string ~source:path contents) in
       let env_ref = ref env in
       k (eval_expressions exprs env_ref)
 
@@ -872,7 +880,7 @@ and has_fs_write (path : string) : bool =
    evaluator and EDo. *)
 and eval_module_file (path : string) : value =
   let source = Runtime.loader_read path in
-  let exprs = Reader.read_string source in
+  let exprs = !Primitives.expand_toplevel_ref (Reader.read_string source) in
   let mod_ref = ref (Primitives.initial_env ()) in
   ignore (eval_expressions exprs mod_ref);
   VEnvMap (new_bindings ~base:(Primitives.initial_env ()).bindings (!mod_ref).bindings)
@@ -914,9 +922,12 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
            | _ -> failwith "import expects a module value")
       | ELoad path ->
           (* `~source:path`: the loaded file's OWN path (not the reader's
-             "<?>" default), so ITS forms are in turn correctly located. *)
+             "<?>" default), so ITS forms are in turn correctly located.
+             M3 defmacro: shared expansion hook, same as every other
+             Reader.read_string call site. *)
           let contents = Runtime.loader_read path in
-          let sub_exprs = Reader.read_string ~source:path contents in
+          let sub_exprs = !Primitives.expand_toplevel_ref
+                            (Reader.read_string ~source:path contents) in
           eval_expressions sub_exprs env
       | _ ->
           let result = force (eval e !env) in
@@ -950,6 +961,15 @@ let init () =
   handler_stack := [];
   current_capabilities := !initial_capabilities;
   if not !Runtime.keep_thunks then Hashtbl.clear thunk_store;
+  (* M3 defmacro: reset the macro table AND the gensym counter at the start
+     of every fresh run — the counter matters for LAW 20 stability (a
+     gensym'd name can be baked into an expanded node's code, so re-running
+     the SAME source must reproduce the SAME counter sequence, or the same
+     program could hash differently run to run). Unconditional (not gated
+     on Runtime.keep_thunks like thunk_store): both are derived fresh from
+     source text each run, never persistent cache state. *)
+  !Primitives.macro_reset_ref ();
+  Primitives.gensym_counter := 0;
   Primitives.set_force force;
   Primitives.set_eval eval;
   Primitives.set_apply apply;

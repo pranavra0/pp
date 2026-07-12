@@ -43,9 +43,51 @@ let run_node_body_ref : (key:string -> run:(unit -> Types.value) -> Types.thunk 
 let resolve_if_hit_ref : (Types.thunk -> string -> bool) ref =
   ref (fun _ _ -> false)
 
+(* ---- M3 defmacro: the shared expansion hook (docs/PLAN, MASTERPLAN M3) ----
+
+   Set by Macro.ml (compiled after Evaluator, since expanding a macro call
+   runs its body through the tree-walker — LAW 36, "the tree-walker is the
+   oracle") once it loads. Primitives is compiled first, so this is the
+   same forward-reference trick as force_ref/eval_ref/apply_ref above: every
+   call site that turns a fresh Reader.read_string form list into something
+   either backend will actually see (repl.ml's top-level drivers, vm.ml's
+   LOAD_FILE/eval_module_from, evaluator.ml's ELoad/eval_module_file) MUST
+   route it through this ref first, so hash_expr and the compiler only ever
+   see already-expanded ASTs (LAW 20 needs no change elsewhere because of
+   this). Defaults to identity so a build that never links Macro (should
+   not happen — main.ml links everything) degrades to "macros do nothing"
+   rather than crashing. *)
+let expand_toplevel_ref : (Types.expr list -> Types.expr list) ref =
+  ref (fun exprs -> exprs)
+
+(* Reset the macro table (and anything else macro-expansion-related) at the
+   start of every fresh run — set by Macro.ml, called from Evaluator.init
+   alongside thunk_store/handler_stack's own resets. *)
+let macro_reset_ref : (unit -> unit) ref = ref (fun () -> ())
+
 (* Force helpers for builtins *)
 let force_val (v : value) : value = !force_ref v
 let force_args (args : value list) : value list = List.map force_val args
+
+(* ---- gensym (M3 / defmacro hygiene) ----
+
+   A process-global monotonic counter, reset at the start of every fresh run
+   (Evaluator.init, alongside thunk_store/handler_stack/macro table) so that
+   the SAME source, run twice, expands to the byte-identical AST both times
+   — gensym'd names are baked into a macro's expansion, and LAW 20 hashes
+   the expanded form, so a counter that did not reset per-run would make an
+   unchanged program's node keys drift from run to run.
+
+   `~` is the marker character: reader.ml's is_symbol_char excludes it
+   (alongside quote, backquote, the string-quote char, semicolon, and hash),
+   and no other lexer rule claims it either (checked: token() has no case
+   for `~`, so it falls to the read_symbol catch-all, which immediately
+   fails with an empty-symbol lex error — `~` cannot even start a token). A
+   bare `~` is therefore a genuine LEX ERROR anywhere in pp source outside a
+   string literal: no user-written symbol can ever equal a gensym'd name,
+   so gensym is unforgeable by construction, not merely unlikely to
+   collide. *)
+let gensym_counter = ref 0
 
 (* ---- Phase 3: scheduler-aware force-deep (docs/PLAN-phase3-parallel.md) ----
 
@@ -482,7 +524,18 @@ let () =
     let args = force_args args in
     match args with
     | [VString code] ->
-        let exprs = Reader.read_string code in
+        (* Route through the same shared expansion hook as every other
+           top-level-shaped form list (M3 defmacro): eval-pp code may itself
+           define or use macros, sequentially, exactly like a file's top
+           level — and it must not see a stale macro table from a PRIOR
+           eval-pp call, but starting a whole new one here is wrong too
+           (this is emphatically not a fresh program run); simplest sound
+           rule, matching the rest of this module's "macros are top-level
+           file/REPL scoped" decision: eval-pp shares the CURRENT run's
+           macro table, so it can use macros already defined by the calling
+           program and any it defines here are visible to LATER eval-pp
+           calls in the same run, but never resets between them. *)
+        let exprs = !expand_toplevel_ref (Reader.read_string code) in
         (* Capture the calling env into a local ref — avoid clobbering
            current_env_ref during inner evaluations. *)
         let local_env = ref !current_env_ref in
@@ -843,5 +896,23 @@ let () =
   register "unquote-splicing" (fun _ ->
     failwith "unquote-splicing not allowed outside quasiquote"
   );
+
+  (* (gensym) / (gensym "prefix") — a fresh, genuinely-unwritable symbol
+     (see gensym_counter's comment above). The macro-authoring discipline
+     (documented, not enforced): use gensym for every binding a macro
+     INTRODUCES; splice caller-supplied forms in via quasiquote/unquote
+     verbatim, never renamed. Without it, a macro's own temporary bindings
+     can capture (or be captured by) the call site's bindings — pp macros
+     are deliberately unhygienic (MASTERPLAN M3: full hygiene is not
+     required for a Lisp-1 with explicit quasiquote). *)
+  register "gensym" (fun args ->
+    let prefix = match force_args args with
+      | [] -> "g"
+      | [VString p] -> p
+      | [VSymbol p] -> p
+      | _ -> failwith "gensym expects an optional string/symbol prefix"
+    in
+    incr gensym_counter;
+    VSymbol (Printf.sprintf "%s~%d" prefix !gensym_counter));
 
   ()

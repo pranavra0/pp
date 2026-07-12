@@ -69,6 +69,45 @@ v0.2.0 predate this file and are reconstructed from history for context.
   (`Runtime.with_form_location`, one implementation shared by both
   backends). See [docs/STATUS.md](docs/STATUS.md) (D12, D22),
   [docs/SPEC.md](docs/SPEC.md) (LAW 4, LAW 29), `tests/027` case (g).
+- **M3 closed: `defmacro`** (D10's promise, the total quote/quasiquote
+  base). `(defmacro (name params...) body...)` is not a reader special
+  form — it parses as an ordinary application, exactly like any
+  unrecognized head symbol — and is recognized only at ONE shared
+  expansion point (`macro.ml`) both backends pass through before their own
+  machinery (the tree-walker's `hash_expr`/`node_key_of`, the compiler)
+  ever sees a form. A macro receives its argument forms already converted
+  by `quote_to_value`, runs its body through the tree-walker (LAW 36: the
+  oracle), and the result value is converted back to syntax by the new
+  `Types.value_to_expr` — `quote_to_value`'s exhaustive inverse, including
+  the flat-vector binding shape a quasiquoted `` `(let [,g ,v] ...) ``
+  naturally produces and the merged `(name params...)` shape a quasiquoted
+  `` `(def (,name ,@params) ,body) `` naturally produces (neither matches
+  `quote_to_value`'s OWN internal encoding, which keeps those parts
+  separate — both are now accepted). Because expansion happens before
+  either backend's own machinery, LAW 20 needed no change: a node whose
+  body came from a macro call is keyed on the EXPANDED code, so editing
+  ONLY the macro's definition (same call sites) re-keys it — the MASTERPLAN
+  M3 exit-3 criterion, `tests/042-defmacro-rekey.sh`. New `gensym`
+  primitive mints a fresh symbol using `~` as an unwritable marker
+  character (excluded from the reader's `is_symbol_char`, unclaimed by any
+  lexer rule — a bare `~` is a lex error), reset every run so the SAME
+  source expands identically run to run (gensym'd names are baked into a
+  node's expanded code; a counter that did not reset would make the node
+  key drift across runs of unchanged source). Scope decisions, documented:
+  macros are recognized ONLY at the true top level of a file/REPL input,
+  sequentially like a value def (used-before-definition is an ordinary
+  unbound-symbol error); a `load`ed file shares the loader's macro table
+  (load is sequential evaluation); NOT inside `do`/`module`/`fn`/`node`/etc.
+  bodies — so a `defmacro` inside a node body is simply an ordinary
+  unbound-symbol error, in both backends, with no special-cased detection
+  code. Hygiene is manual, not automatic (not required by M3): use
+  `gensym` for a macro's own introduced bindings. `tests/041-defmacro.pp`
+  (differential: control flow, gensym hygiene, a macro building a node
+  form, nested macro use, a macro-generated `def`, redefinition);
+  `tests/042-defmacro-rekey.sh` (the LAW 20 exit criterion plus the
+  node-body error pin); fuzzer `stmt_defmacro` (full grammar). See
+  [docs/MASTERPLAN.md](docs/MASTERPLAN.md) (M3), [docs/SPEC.md](docs/SPEC.md)
+  (LAW 12, LAW 20, LAW 36), [docs/STATUS.md](docs/STATUS.md) (D10).
 - **Phase 1 closed**: pp is a proven incremental hermetic build engine — a
   101-TU C project builds through a real `build.pp` meeting every exit
   criterion (null rebuild, mtime-only touch, single-file recompile+link,

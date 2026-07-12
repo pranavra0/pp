@@ -215,6 +215,38 @@ non-list `def` is a value binding — `tests/025`.)
   to check would violate LAW 14) — the use-time ⊆ gates (`with-caps`, the
   hit-gate) are the actual security floor for that case, not this hygiene
   check.
+- **`defmacro` (M3, D10's promise).** A macro is a function from
+  syntax-as-values to syntax-as-values: `(defmacro (name params...)
+  body...)` receives its argument FORMS already converted by
+  `quote_to_value` (the total base, D10/D19), runs its body through the
+  tree-walker (LAW 36: expansion is backend-independent by construction,
+  since it happens before either backend is even chosen), and the result
+  value is converted back to syntax by the new `Types.value_to_expr`
+  (quote_to_value's inverse). Expansion is the ONE shared step (`macro.ml`)
+  both backends pass through before their own machinery ever sees a form —
+  `hash_expr` (the tree-walker's node key, LAW 20) and the compiler both
+  operate on already-EXPANDED ASTs, so LAW 20 needed no change: a node whose
+  body comes from a macro call is keyed on the EXPANDED code, and an edit to
+  only the macro's definition (same call sites) re-keys it
+  (`tests/042-defmacro-rekey.sh`, the MASTERPLAN M3 exit-3 criterion). Not a
+  reader special form: `(defmacro ...)` parses as an ordinary application
+  (reader.ml's own fallthrough for an unrecognized car symbol), so the
+  `.ppc`/compiler paths never need to know macros exist. Scope: macros are
+  recognized ONLY at the true top level of a file/REPL input (sequential,
+  like a value def — used-before-definition is an ordinary unbound-symbol
+  error); a `load`ed file shares the loader's macro table (load is
+  sequential evaluation). NOT recognized inside `do`/`module`/`fn`/`node`/
+  etc. bodies — including node bodies specifically (MASTERPLAN's explicit
+  ask): a `defmacro` there is simply left alone by the expander and fails
+  as an ordinary unbound-symbol error at eval/compile time, in both
+  backends identically (`tests/042`). Hygiene is NOT automatic (not
+  required by M3): `(gensym ["prefix"])` produces a fresh symbol using `~`
+  as the marker character — genuinely unwritable by the reader
+  (`is_symbol_char` excludes it, and no lexer rule claims it either, so a
+  bare `~` is a lex error), reset every run for LAW 20 stability. Fuzzer
+  arm `stmt_defmacro` (full grammar); differential test `tests/041-defmacro.pp`
+  (control-flow macro, gensym-hygiene, a macro building a `(node ...)` form,
+  nested macro use, a macro-generated `def`, macro redefinition).
 - **`run` process effect + per-node sandbox (D13).** `(perform run cmd args…)`
   in both backends: requires `--grant process` (denial raises
   `Capability_error`, never cached), returns `{"exit" int, "out" str,
@@ -409,7 +441,7 @@ their phase in [ROADMAP.md](ROADMAP.md).
 | D7 | VM shares the CA story | **Mostly fixed.** The VM now compiles `(node e)` to a `MAKE_NODE` opcode carrying the body AST + free-var descriptors, and forces it through the same `~/.pp/store` with the same LAW 20 key, verifying traces, failure memoization, and hit-time capability gate as the tree-walker — sharing store entries for data-valued free vars (`tests/014`). Remaining gap: the VM's *in-memory* thunk dedup still doesn't exist (only the persistent node path is wired); closures as free vars key per-backend (VM closures carry no captured env), so those don't share. |
 | D8 | Capabilities are the security story | **Mostly fixed.** Path checks are component-aware and full-path; `slurp` gated; `random` removed; `CapTime`/`CapMemory` removed. Cache hits are now gated on the caller's authority over the trace's transitive read closure (LAW 23b); capability denials raise a distinct `Capability_error` and are not memoized. Loader reads (`load`/`island`) run under interpreter authority BOUNDED to source roots + `~/.pp` (D8c closed) and are traced as authority-exempt `runtime:file:` cells (Q6 runtime/traced split; `tests/020`). |
 | D9 | VM effect/handler scoping | **Fixed.** Save-stacks restore the exact prior scope; bodies compiled non-tail so exits run before tail calls. |
-| D10 | Fexprs are operatives over syntax | **Cut.** `def-fexpr` removed. Metaprogramming is served by total `quote`/`quasiquote` and a future `defmacro`. |
+| D10 | Fexprs are operatives over syntax | **Cut, promise redeemed.** `def-fexpr` removed. Metaprogramming is served by total `quote`/`quasiquote` and `defmacro` (M3, `macro.ml`): a shared expansion point ahead of both backends, `value_to_expr` as `quote_to_value`'s inverse, `gensym` for manual hygiene (`tests/041`, `tests/042-defmacro-rekey.sh`). |
 | D11 | Quasiquote | **Fixed.** Reader parses quasiquote/unquote/splicing; a runtime walker expands (splicing, nested, vectors, maps). |
 | D12 | Source locations | **Fixed.** Reader emits locations and wraps def/fn/defnode bodies; the shared top-level driver appends the enclosing form's `file:line` to any unlocated runtime error in BOTH backends (never doubled). Arity errors name the callee, capability errors name the operation, unbound-symbol text is backend-identical, and uncaught errors print as one `pp: error: …` line, exit 1 (`tests/027`). The `load` residual (errors inside a loaded file citing the loading form's line, not the inner file's) is also closed: `Reader.read_string` is now called with the loaded file's own path in every `load` path (tree-walker `eval_expressions`, VM `LOAD_FILE`), and each loaded top-level form is evaluated/compiled-and-run individually under the SAME location-decoration discipline as the outer driver (`Runtime.with_form_location`, one implementation shared by both backends and both nesting levels) — so an error inside a loaded file is located against THAT file before it can unwind past the `load` (`tests/027` case (g)). |
 | D13 | Build-system-as-language | **Mostly fixed.** `(perform run cmd args…)` executes a process in both backends: gated on `--grant process` (`CapProcess`, LAW 22), returns `{"exit","out","err"}`, runs with the node's sandbox as cwd, and records `tool:`/`tree:` trace cells (Q2's coarse soundness floor) so tool or granted-tree changes invalidate cached run-nodes. Node `write-file` is sandbox-scratch-only (LAW 18); scripting tier unchanged. Pinned by `tests/017-run-effect.sh`. Remaining: depfile/toolchain-closure refinement, and `build.pp` itself (needs nothing more to be written). |

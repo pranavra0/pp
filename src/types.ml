@@ -812,3 +812,189 @@ and string_of_capability (c : capability) : string =
         | None -> "" | Some Read -> " :ro" | Some Write -> " :wo" | Some ReadWrite -> " :rw" in
       "#<cap restrict " ^ scope ^ m ^ ">"
   | CapNone -> "#<cap none>"
+
+(* =================================================================== *)
+(*  Unquotation: value -> expr — the inverse of quote_to_value          *)
+(*  (M3 / defmacro, D10's promise)                                      *)
+(* =================================================================== *)
+
+(* A macro is a function from syntax-as-VALUES to syntax-as-VALUES
+   (Macro.ml): it receives its argument forms already converted by
+   `quote_to_value`, computes a result value (typically via quasiquote/
+   `list`/`cons`), and that result must become the expr that REPLACES the
+   macro call — i.e. exactly the inverse operation. This function mirrors
+   quote_to_value's cases one-for-one: each shape quote_to_value builds for
+   an expr variant is recognized here and un-built back into that same
+   variant, so `value_to_expr (quote_to_value e)` round-trips to (a
+   structural copy of) `e` for every expr this language can parse. Any head
+   symbol that does not match one of these reserved shapes (exactly the
+   reader's own special-form set, reader.ml parse_special_form) is ordinary
+   application — EApply — mirroring the reader's fallthrough for an
+   unrecognized car symbol.
+
+   Values with no syntax — a closure, a builtin, a capability, an
+   unevaluated thunk, a module env-map, raw bytecode — cannot be expanded
+   into a form at all: `failwith` here, and the caller (Macro.expand_expr)
+   is responsible for naming the offending macro in the surfaced error
+   (MASTERPLAN M3's explicit ask). Callers should force-deep the value
+   before calling this (Primitives.force_deep) — this function does NOT
+   force thunks itself, so an unresolved VThunk reaching it is treated the
+   same as any other non-syntax value. *)
+
+let rec value_list_opt (v : value) : value list option =
+  match v with
+  | VNil -> Some []
+  | VPair (a, d) ->
+      (match value_list_opt d with
+       | Some rest -> Some (a :: rest)
+       | None -> None)
+  | _ -> None
+
+let rec value_to_expr (v : value) : expr =
+  match v with
+  | VNil | VBool _ | VInt _ | VFloat _ | VString _ | VKeyword _ -> ELiteral v
+  | VSymbol s -> ESymbol s
+  | VVector vs ->
+      EApply (ESymbol "vector", Array.to_list (Array.map value_to_expr vs))
+  | VMap kvs ->
+      EApply (ESymbol "hash-map",
+              List.concat_map (fun (k, v) -> [value_to_expr k; value_to_expr v]) kvs)
+  | VSet vs ->
+      EApply (ESymbol "hash-set", List.map value_to_expr vs)
+  | VPair _ ->
+      (match value_list_opt v with
+       | Some items -> expr_of_list items
+       | None ->
+           failwith "value_to_expr: cannot convert an improper (dotted) list to syntax")
+  | VClosure _ ->
+      failwith "value_to_expr: cannot convert a closure to syntax"
+  | VBuiltin (name, _) ->
+      failwith (Printf.sprintf "value_to_expr: cannot convert builtin '%s' to syntax" name)
+  | VCapability _ ->
+      failwith "value_to_expr: cannot convert a capability to syntax"
+  | VThunk _ ->
+      failwith "value_to_expr: cannot convert an unevaluated thunk to syntax"
+  | VEnvMap _ ->
+      failwith "value_to_expr: cannot convert a module (env-map) to syntax"
+  | VBytecode _ ->
+      failwith "value_to_expr: cannot convert bytecode to syntax"
+
+and symbol_name (v : value) : string =
+  match v with
+  | VSymbol s -> s
+  | VKeyword s -> s
+  | other -> failwith (Printf.sprintf
+      "value_to_expr: expected a symbol, got %s" (string_of_value other))
+
+and symbols_of_values (items : value list) : string list =
+  List.map (function
+    | VSymbol s -> s
+    | other -> failwith (Printf.sprintf
+        "value_to_expr: expected a symbol in a parameter list, got %s"
+        (string_of_value other)))
+    items
+
+and symbols_of_list (v : value) : string list =
+  match value_list_opt v with
+  | Some items -> symbols_of_values items
+  | None -> failwith "value_to_expr: malformed parameter list"
+
+and symbols_of_array (arr : value array) : string list =
+  symbols_of_values (Array.to_list arr)
+
+(* A binding list for let/let*/with-handler. TWO shapes are accepted, because
+   two different, equally natural routes produce them:
+   - quote_to_value's OWN internal encoding — a list of 2-element (name val)
+     sublists — is what `(quote (let [x 1] x))` reflects to, so a macro that
+     passes a captured let-form through must round-trip it.
+   - a flat, alternating-elements VECTOR — name1 val1 name2 val2 ... — is
+     what a macro naturally builds by quasiquoting the SAME bracket syntax
+     `[x 1]` a human would write directly (reader.ml parse_binding_vector /
+     parse_with_handler): `` `(let [,ga ,val] body) `` quasiquotes a vector
+     literal, which reader.ml's parse_qq_vector turns into a flat
+     `(vector ...)` call, never a list of pairs. Both must work. *)
+and binding_pairs (v : value) : (string * expr) list =
+  match v with
+  | VVector arr ->
+      let rec pair = function
+        | [] -> []
+        | [odd] -> failwith (Printf.sprintf
+            "value_to_expr: odd element in binding vector: %s" (string_of_value odd))
+        | n :: ve :: rest -> (symbol_name n, value_to_expr ve) :: pair rest
+      in
+      pair (Array.to_list arr)
+  | _ ->
+      (match value_list_opt v with
+       | Some items ->
+           List.map (fun item ->
+             match value_list_opt item with
+             | Some [n; ve] -> (symbol_name n, value_to_expr ve)
+             | _ -> failwith "value_to_expr: malformed binding pair")
+             items
+       | None -> failwith "value_to_expr: malformed binding list")
+
+(* [items] is always non-empty (it came from a VPair, which has at least a
+   car) — the shape dispatch mirrors quote_to_value's construction sites,
+   matching on (head symbol, item count/shape). Any shape that does not
+   match falls through to ordinary application (the reader's own fallback
+   for an unrecognized car symbol). *)
+and expr_of_list (items : value list) : expr =
+  match items with
+  | [VSymbol "if"; c; t; f] -> EIf (value_to_expr c, value_to_expr t, value_to_expr f)
+  | [VSymbol "let"; bindings; body] -> ELet (binding_pairs bindings, value_to_expr body)
+  | [VSymbol "let*"; bindings; body] -> ELetStar (binding_pairs bindings, value_to_expr body)
+  | [VSymbol "fn"; VVector params; body] ->
+      EFn (symbols_of_array params, value_to_expr body)
+  | [VSymbol "quote"; e] -> EQuote (value_to_expr e)
+  | [VSymbol "force"; e] -> EForce (value_to_expr e)
+  | [VSymbol "delay"; e] -> EDelay (value_to_expr e)
+  | [VSymbol "node"; e] -> ENode (value_to_expr e)
+  (* defnode/def, quote_to_value's OWN 4-item encoding: name and params kept
+     as SEPARATE items (this is what `(quote (def (f x) x))` reflects to). *)
+  | [VSymbol "defnode"; VSymbol name; params; body] ->
+      EDefNode (name, symbols_of_list params, value_to_expr body)
+  | [VSymbol "def"; VSymbol name; params; body] ->
+      EDef (name, symbols_of_list params, value_to_expr body)
+  (* def, 3-item value-binding form: `(def name value)`. Checked BEFORE the
+     natural merged-list case below so a bare-symbol 2nd item is never
+     mistaken for a one-element param list. *)
+  | [VSymbol "def"; VSymbol name; value] ->
+      EDefValue (name, value_to_expr value)
+  (* defnode/def, the NATURAL quasiquote/surface-syntax shape: name and
+     params MERGED into one list, exactly mirroring `(def (name p...)
+     body)` / `(defnode (name p...) body)` source syntax — reader.ml's
+     quasiquote list desugaring (parse_qq_list) conses every element
+     uniformly, with no def-specific special-casing, so
+     `` `(def (,name ,@params) ,body) `` produces exactly this shape. A
+     macro author writing "the way they'd write ordinary code" needs this
+     to work, not just quote_to_value's own decomposed encoding. *)
+  | [VSymbol "defnode"; combined; body] ->
+      (match value_list_opt combined with
+       | Some (name_v :: params) ->
+           EDefNode (symbol_name name_v, symbols_of_values params, value_to_expr body)
+       | _ -> failwith "value_to_expr: malformed defnode form")
+  | [VSymbol "def"; combined; body] ->
+      (match value_list_opt combined with
+       | Some (name_v :: params) ->
+           EDef (symbol_name name_v, symbols_of_values params, value_to_expr body)
+       | _ -> failwith "value_to_expr: malformed def form")
+  | [VSymbol "with-caps"; c; b] -> EWithCaps (value_to_expr c, value_to_expr b)
+  | (VSymbol "perform") :: name_v :: args ->
+      EPerform (symbol_name name_v, List.map value_to_expr args)
+  | [VSymbol "with-handler"; handlers; body] ->
+      EWithHandler (binding_pairs handlers, value_to_expr body)
+  | (VSymbol "module") :: rest -> EModule (List.map value_to_expr rest)
+  | [VSymbol "import"; e] -> EImport (value_to_expr e)
+  | [VSymbol "load"; VString path] -> ELoad path
+  | [VSymbol "load-module"; VString path] -> ELoadModule path
+  | [VSymbol "island"; VString uri; pin] ->
+      EIsland (uri, (match pin with
+        | VNil -> None
+        | VString p -> Some p
+        | _ -> failwith "value_to_expr: island pin must be a string"))
+  | [VSymbol "with-config"; m; b] -> EWithConfig (value_to_expr m, value_to_expr b)
+  | [VSymbol "config"; k; d] -> EConfig (value_to_expr k, Some (value_to_expr d))
+  | [VSymbol ":"; e; ty] -> ETyped (value_to_expr e, value_to_expr ty)
+  | (VSymbol "do") :: rest -> EDo (List.map value_to_expr rest)
+  | fn :: args -> EApply (value_to_expr fn, List.map value_to_expr args)
+  | [] -> ELiteral VNil (* unreachable: [items] always comes from a VPair *)
