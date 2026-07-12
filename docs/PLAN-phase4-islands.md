@@ -229,8 +229,13 @@ Per DESIGN, island imports are explicit node boundaries. Concretely:
   `Evaluator.cell_authorized` will then force the re-observation rule and
   the authority decision at compile time — re-observed through a
   `Runtime.island_observer` hook, because store.ml cannot call island.ml
-  (module order). That is exactly the existing `proc:` cell pattern
-  (`Runtime.proc_observer` → `Supervisor.observe_proc`, wired in main.ml).
+  (module order). That is exactly the existing hook pattern
+  `Runtime.probe_observer`/`Runtime.domain_cell_observer` use (wired to
+  `Primitives.probe_observe_for_store`/`domain_observe_cell_for_store` in
+  main.ml, Q13) -- `proc:` cells predate this and are no longer observed
+  via a hook at all (`stdlib/domain-proc.pp`'s `observe` reads
+  `domain-state` directly; nothing records a `proc:` cell via
+  `record_read` in practice).
 
 ### 3.4 Backend parity
 

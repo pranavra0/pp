@@ -42,6 +42,17 @@ type t =
                                path>" — hash of the secret bytes only; the bytes
                                themselves never enter the CAS (Runtime.sealed_pins,
                                in-memory-only) *)
+  | Domain of { name : string; sub : string }
+                           (* Q13: a third-party registered domain's own
+                              sub-cell, "domain:<name>:<sub>" — fs/proc keep
+                              their existing File/Tree/Stat/Proc kinds (no
+                              store-format bump); this kind exists only for
+                              domains registered via `register-domain` that
+                              supply an `:observe-cell` closure (the
+                              proc_observer/probe_observer hook pattern,
+                              generalized). [sub] is opaque to core — whatever
+                              string the domain's own diff/apply chose to
+                              name its own sub-observation. *)
   | Unknown of string      (* unrecognized kind: can never re-verify *)
 
 let to_string = function
@@ -57,6 +68,7 @@ let to_string = function
   | Proc name -> "proc:" ^ name
   | Probe name -> "probe:" ^ name
   | Sealed path -> "sealed:" ^ path
+  | Domain { name; sub } -> "domain:" ^ name ^ ":" ^ sub
   | Unknown s -> s
 
 let of_string (s : string) : t =
@@ -79,4 +91,12 @@ let of_string (s : string) : t =
   match strip "proc:" with Some n -> Proc n | None ->
   match strip "probe:" with Some n -> Probe n | None ->
   match strip "sealed:" with Some p -> Sealed p | None ->
+  match strip "domain:" with
+  | Some rest ->
+      (match String.index_opt rest ':' with
+       | Some i ->
+           Domain { name = String.sub rest 0 i;
+                    sub = String.sub rest (i + 1) (String.length rest - i - 1) }
+       | None -> Domain { name = rest; sub = "" })
+  | None ->
   if s = "argv:" then Argv else Unknown s

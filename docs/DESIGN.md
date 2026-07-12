@@ -475,6 +475,152 @@ stop assuming).
 
 ### Q12 — Self-hosting: **cut now.** `pc.pp` is unrunnable on three independent counts (D14); deleted. The thesis-proving dogfood is Phase 1's exit: `pp` builds `pp` via a real `build.pp`. Self-hosting the compiler is a Phase 4+ curiosity.
 
+### Q13 — The in-language reconciler-domain protocol. **A domain is an observe/diff/apply triple of pp functions running under core-enforced discipline; the reconciler and supervisor are no longer OCaml.**
+
+**Registration.** `(register-domain {:name :namespace :observe :diff :apply
+:write-cap [:observe-cell]})` — an ordinary primitive, script-tier only (the
+`fenced`/`register-probe` trace_stack guard). `:write-cap` is consumed into
+`Runtime.domain_registry`, a core-side table, never re-exposed as a pp
+value. **A probe is a domain with ⊥ write authority:** `register-probe`
+is sugar over the same call (`:diff`/`:apply` = `None`, `:namespace = []`)
+— one registry, one mechanism, two hats. There is no `CapDomain` kind: a
+domain's write authority IS the underlying resource capability (an fs or
+process grant, narrowed via `cap-restrict`), never a second name for the
+same ceiling.
+
+**Types.** `observe : () -> value` — fresh every pass, NEVER cached by the
+orchestrator (caching it would resurrect Terraform's trusted-state-file
+bug, Q4). `diff : (observed, desired) -> plan` — PURE, enforced by
+threading an EMPTY capability set for its extent (any gated `perform`
+inside `diff` is a `Capability_error`; no new purity checker — reusing the
+same with-caps mechanism M3 built). A plan is a map `{:items :summary}`:
+`:items` is an opaque list/vector `apply` alone interprets (core only asks
+"is it empty," for verify-after-write); `:summary` is an ORDERED VECTOR of
+`[key value]` string pairs the domain itself assembles (its own tally,
+e.g. `[[:root R] [:create "2"] [:update "0"] [:delete "0"]]`) — core
+echoes it verbatim into the journal line and the per-pass stderr summary,
+so the domain decides vocabulary, field order, and zero-defaults, and core
+never needs to know what "create" means. A VECTOR, not a map: plan caching
+round-trips a cache MISS's result through the content-addressed store,
+and the store's on-disk codec canonicalizes (sorts) a map's key order for
+determinism but preserves a vector's — a cache HIT reordering the summary
+would silently break the very byte-compatibility this format exists for.
+`apply : plan -> nil` — NOT a node (never key-resolved), runs under
+`with_ref current_capabilities [write_cap]` (the M3 `with-caps` mechanism,
+used directly from OCaml); a node built inside `apply` that closes over
+the cap hard-errors via the existing free-var ban (M3 layer 1).
+
+**Plan caching, concretely.** `key = H("domain-plan", hash(diff-closure),
+hash(observed), hash(desired))`. Since `diff` is pure over exactly
+`(observed, desired)`, this key captures the WHOLE identity of the call —
+so a store entry with an EMPTY read-set (`reads = []`) is sound: `Store.
+hit`'s trace-verification is vacuously true over an empty list, so a hit
+means exactly "same key ⇒ same plan," which is what a pure function's
+cache should mean. `src/domains.ml` calls `Store.hit`/`store_object`/
+`store_trace` directly rather than wiring a synthetic `(node …)` AST —
+there is no body to keep in sync with a node that doesn't exist, and the
+direct route gives the same key/store slot for free. `pp why` reports
+`domain <name>: plan <key>: hit|miss` exactly like a node.
+
+**The load-bearing wall found while landing this (not merely designed
+around): `observe`/`apply` MUST be cache-BUSTED per call, not just
+per-pass.** A 0-argument pp closure called twice in the SAME dynamic
+extent (the plan pass, then verify's re-observe; or two services'
+`domain-state` bookkeeping inside one `apply`) has an UNCHANGING captured
+environment and, under `with_domain`'s fixed cap, an unchanging ambient —
+so pp's ordinary content-addressed `let`-thunk memoization (LAW 20's
+`make_thunk_ca`, keyed on expr+env+caps+config+handlers) silently replays
+the FIRST call's `perform` results on the SECOND, rather than re-reading
+reality. This is invisible corruption, not an error: a killed process
+looked "still alive" one call later, in-process, with no exception raised
+anywhere. The fix reuses an existing mechanism rather than adding one:
+`Domains.call_uncached` pushes a fresh, unique config-stack layer (a
+counter no real `(config …)` read would ever query) before each
+observe/apply call, which is folded into `make_thunk_ca`'s key and so
+guarantees a distinct key per call. `diff` is deliberately NOT given this
+treatment — its memoization IS the plan cache and must stay content-keyed.
+Anywhere a domain's OWN pp code calls a zero-argument accessor with a
+`perform` in it more than once per pass (domain-proc.pp's original
+`known-services` bookkeeping did, inside one `apply`), the general,
+robust fix is mechanical: read once, thread the result through explicitly
+as an ordinary argument — a parameterized call is immune by construction,
+since a differing argument value changes the env hash.
+
+**Stratification (LAW 30 full form).** `:namespace` is a list of cell-id
+STRING PREFIXES the domain owns (fs supplies `["file:" ^ root; "tree:" ^
+root; "stat:" ^ root]`; proc supplies `["proc:"]`; a probe supplies `[]`
+— nothing to stratify, core never converges it). After root evaluation,
+core scans `Runtime.observed_all` per registered write-domain and rejects
+on a prefix match — the check generalized from hardwired-to-one-domain to
+declared-per-domain, the same error text. **Load-bearing core change:**
+`observed_all` collection is SUSPENDED (`Runtime.with_ref`, exception-safe,
+never hand-rolled) for the WHOLE extent of a domain's own observe/diff/
+apply/verify — otherwise a domain's own bookkeeping (its `tree-observe`
+walk, its `domain-state` reads) trips its own stratification. `trace_stack`
+is NOT suspended — node caching inside a domain's functions keeps working.
+
+**Journaling — byte-compatibility, honestly.** Core wraps every domain's
+apply in a generic per-pass `intent <hash> k1=v1 k2=v2 …` / `done <hash>`
+bracket (`Journal.DomainIntent`/`DomainDone`, replacing the old fs-only
+`FsIntent`/`FsDone`), where the `k=v` fields are exactly the domain's own
+`:summary` pairs joined in order — for fs, `root=R create=C update=U
+delete=D`, byte-identical in SHAPE to the pre-Q13 line. The identity HASH
+itself is not bit-identical to the old bespoke desired-state hash (it is
+now `H("domain-pass", name, hash(desired))`, a deliberate simplification)
+— no test or tool depends on the hash's digits, only the field
+names/order, which this format preserves exactly. Per-service journal
+lines (`intent/done proc start/stop …`) are UNCHANGED, moved verbatim into
+the trusted primitives `proc-spawn`/`proc-stop` (`src/domain_prims.ml`),
+which own them exactly as `supervisor.ml` did.
+
+**Verify-after-write.** Core re-runs `observe` after `apply` and re-diffs
+(the SAME cached-diff machinery — a genuine miss, since observed changed)
+against `desired`; a non-empty plan is a hard error ("reconcile:
+verify-after-write failed for domain `<name>`"). Whole-domain, deliberately
+stronger than the old per-file inline check.
+
+**`Cell.Domain {name; sub}`** (`domain:<name>:<sub>`) is for THIRD-PARTY
+domains only — fs/proc keep their existing `File`/`Tree`/`Stat`/`Proc`
+kinds (no store-format bump; nothing ever recorded a `Proc` cell via
+`record_read` in practice, so there was nothing to preserve there beyond
+the constructor). Authorization is `cap_subseteq` of the registered
+`write_cap` against the caller's held set — zero new authority code, the
+same narrowing check `with-caps` uses. `:observe-cell (fn (sub) ->
+hash|nil)` gives `Store.observe_cell` an O(1) targeted re-observation (the
+`proc_observer`/`probe_observer` hook pattern, generalized via `Runtime.
+domain_cell_observer`).
+
+**Driver wiring (the exit criterion).** `--reconcile ROOT` auto-loads
+`stdlib/domain-fs.pp` (resolved relative to the RUNNING EXECUTABLE —
+`Runtime.stdlib_root`, `dirname(dirname(realpath(argv0)))/stdlib` — so it
+works from any cwd) and registers it with a write-cap `cap-restrict`'d to
+ROOT, wrapping the program's value as `{"fs" -> v}`; `--supervise`
+likewise with `stdlib/domain-proc.pp`, `{"proc" -> v}`; both flags compose
+(the same `v` feeds both, exactly as the two old OCaml reconcilers each
+separately received it). A program calling `register-domain` itself, with
+NEITHER flag, returns `{name -> desired}` directly — N domains, one
+evaluation (`tests/046-domains.sh`'s toy "kv" domain). One documented
+deviation from an early literal draft of this contract: the fs domain's
+write-cap requests `:wo` (write), not `:rw` — `tests/023`'s write-only
+grant must still let the domain observe its OWN managed tree to converge
+it (not a distinct authority concern, since there is no other reader);
+`Domain_prims.tree_observe` accordingly accepts EITHER read or write.
+`src/reconciler.ml` and `src/supervisor.ml` are DELETED; `src/domains.ml`
+(generic orchestration) and `src/domain_prims.ml` (trusted mechanics —
+atomic materialize/remove, fork/exec/reap, domain-state persistence) are
+what remain OCaml; `stdlib/domain-fs.pp`/`domain-proc.pp` hold ALL the
+policy (the tree-walk diff, the start/stop/restart decision) as ordinary
+pp source, exactly where a reviewer would expect to find it.
+
+**E2 revision (below) is this Q13 section's direct consequence:** the
+trusted core shrank to journal + fence + stratification + cap threading +
+verify-after-write; observe/diff/apply are UNTRUSTED library code bounded
+by one threaded capability and the node boundary. The worst case a
+misbehaving (or malicious) domain can do is mis-converge its OWN
+namespace, under authority it was explicitly granted — never anything
+outside it, and never by escaping the journal/verify discipline, because
+that discipline lives in `src/domains.ml`, not in the domain's own code.
+
 ---
 
 ## 4. Honest edges — each with mitigation
@@ -482,10 +628,23 @@ stop assuming).
 - **E1 Fenced effects don't converge.** Sequenced, not tamed. Mitigation: Q3
   (reconciler-only, per-pass epoch, WAL, unknown-status policy). Residual:
   `:ask` reintroduces a human — acceptable; silent double-send is not.
-- **E2 The reconciler is a single privileged actor.** Holds the write authority
-  the rest of the system eliminates. Mitigation: Q4 (journal, atomic
-  materialization, verify-after-write, reality-driven convergence); its code is
-  small, the only code with domain write caps.
+- **E2 (revised by Q13) The reconciler is no longer a privileged actor —
+  domains are untrusted library code bounded by core-enforced discipline.**
+  Pre-Q13 this said "the reconciler's code is small, the only code with
+  domain write caps" — true when the reconciler WAS `reconciler.ml`/
+  `supervisor.ml`. Now the trusted core is journal + fence + stratification
+  + cap threading + verify-after-write (`src/domains.ml`,
+  `src/domain_prims.ml`); `observe`/`diff`/`apply` are ordinary,
+  UNTRUSTED pp library code (`stdlib/domain-fs.pp`, `domain-proc.pp`, or a
+  third-party domain, `tests/046`) bounded by exactly one threaded
+  capability and the M3 node boundary. Worst case: a domain mis-converges
+  its OWN namespace, under authority it was granted — it cannot touch
+  another domain's namespace (stratification), cannot smuggle authority
+  across the node boundary (M3), and cannot bypass the journal/verify
+  bracket (core wraps every apply in it, unconditionally). Mitigation
+  chain unchanged in spirit: Q4 (journal, atomic materialization,
+  verify-after-write, reality-driven convergence) — now enforced by core
+  AROUND arbitrary domain code, not embodied BY a small trusted module.
 - **E3 Dynamic discovery ⇒ no static "what will this touch."** Mitigation: the
   capability ceiling (static, sound) + last run's traces. Cycles are runtime
   errors with force-path reporting. Explicit trade vs Bazel's analyzability.

@@ -262,4 +262,11 @@ else
   echo "FAIL 045-network"; fail=1
 fi
 
+echo "--- Q13 domains (in-language reconciler-domain protocol) suite ---"
+if PP="$PP" bash tests/046-domains.sh; then
+  echo "ok   046-domains"
+else
+  echo "FAIL 046-domains"; fail=1
+fi
+
 exit $fail

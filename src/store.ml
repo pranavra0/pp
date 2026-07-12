@@ -406,6 +406,13 @@ let observe_cell (cell_id : string) : string option =
       (match Hashtbl.find_opt Runtime.sealed_pins cell_id with
        | Some bytes -> Some (hash_string bytes)
        | None -> hash_file_opt path)
+  (* Q13: a third-party domain's own sub-cell, via the domain's own
+     :observe-cell closure (Runtime.domain_cell_observer, wired in main.ml —
+     the proc_observer/probe_observer indirection, generalized: Store
+     cannot depend on Primitives directly). A domain with no :observe-cell,
+     or one this process never registered, returns None — cannot
+     re-observe, never verifies, forces a miss (the sound default). *)
+  | Cell.Domain { name; sub } -> (try Runtime.observe_domain_cell name sub with _ -> None)
   | Cell.Unknown _ -> None  (* cannot re-observe ⇒ never verifies *)
 
 let trace_verifies (tr : trace) : bool =

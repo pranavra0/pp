@@ -117,6 +117,15 @@ let cell_authorized_for (caps : capability list) (cell_id : string) : bool =
      aggregator (tests/044's narrow-caller case). *)
   | Cell.Sealed path ->
       List.exists (fun cap -> Capabilities.check_secret cap path) caps
+  (* Q13: a third-party domain's own sub-cell. Authorization is
+     cap_subseteq of the REGISTERED write-cap against the caller's held
+     set — zero new authority code, the same narrowing check with-caps
+     uses. An unregistered (in THIS process) domain name never verifies —
+     the sound, conservative default, like Cell.Unknown. *)
+  | Cell.Domain { name; sub = _ } ->
+      (match Hashtbl.find_opt Runtime.domain_registry name with
+       | Some entry -> Capabilities.cap_subseteq entry.Runtime.dm_cap caps
+       | None -> false)
 
 (* Trace replay for an already-Evaluated persistent node: replay its stored
    trace reads into the active trace frames so the caller's trace transitively
@@ -904,6 +913,57 @@ and perform_builtin_effect (name : string) (args : value list) : value =
            VNil
        | _ -> failwith "log expects a message string")
 
+  (* ---- Q13 domain primitives (PLAN-m4-cells.md; src/domain_prims.ml) ---- *)
+
+  | "tree-observe" ->
+      (match args with
+       | [VString root] -> Domain_prims.tree_observe root
+       | _ -> failwith "tree-observe expects a root path string")
+
+  | "materialize-file" ->
+      (match args with
+       | [VString path; VString content] ->
+           Domain_prims.materialize_file path content false; VNil
+       | [VString path; VString content; VKeyword "executable"] ->
+           Domain_prims.materialize_file path content true; VNil
+       | _ -> failwith "materialize-file expects a path, content, and optional :executable"
+      )
+
+  | "remove-file" ->
+      (match args with
+       | [VString path] -> Domain_prims.remove_file path; VNil
+       | _ -> failwith "remove-file expects a path string")
+
+  | "proc-spawn" ->
+      (match args with
+       | [spec] -> Domain_prims.proc_spawn spec
+       | _ -> failwith "proc-spawn expects a spec map")
+
+  | "proc-alive?" ->
+      (match args with
+       | [VInt pid] -> VBool (Domain_prims.proc_alive pid)
+       | _ -> failwith "proc-alive? expects a pid integer")
+
+  | "proc-stop" ->
+      (match args with
+       | [VString name; VInt pid] -> Domain_prims.proc_stop name pid; VNil
+       | _ -> failwith "proc-stop expects a service name and a pid integer")
+
+  | "proc-reap" ->
+      (match args with
+       | [] -> Domain_prims.proc_reap (); VNil
+       | _ -> failwith "proc-reap takes no arguments")
+
+  | "domain-state-get" ->
+      (match args with
+       | [VString key] -> Domain_prims.domain_state_get key
+       | _ -> failwith "domain-state-get expects a key string")
+
+  | "domain-state-put" ->
+      (match args with
+       | [VString key; v] -> Domain_prims.domain_state_put key v; VNil
+       | _ -> failwith "domain-state-put expects a key string and a value")
+
   | _ ->
       failwith ("unhandled effect: " ^ name)
 
@@ -1010,7 +1070,7 @@ let init () =
      not survive into one that no longer registers them. Pinned per-pass
      results (Runtime.probe_values) are a separate lifetime, cleared at the
      three points main.ml's watch loop clears Store.run_pins. *)
-  Hashtbl.reset Runtime.probe_registry;
+  Hashtbl.reset Runtime.domain_registry;
   (* M3 defmacro: reset the macro table AND the gensym counter at the start
      of every fresh run — the counter matters for LAW 20 stability (a
      gensym'd name can be baked into an expanded node's code, so re-running

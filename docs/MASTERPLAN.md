@@ -241,7 +241,7 @@ The pieces a userland devops library stands on.
    macro-definition edit re-keys dependent nodes
    (`tests/042-defmacro-rekey.sh`).
 
-### M4 — The world as cells
+### M4 — The world as cells ✅ DONE
 
 External state — remote services, endpoints, secrets, cloud resources —
 enters pp the way files already do: as observed cells with capability-gated
@@ -273,21 +273,38 @@ partial.
   clothes. Stage 1 ships the primitive (`http-get`/`http-post` via curl,
   `CapNetwork {host; port}`, `tests/045-network.sh`) — the domain-write half
   (mutating network state as a converged desired-state map) waits on (d).
-- **(d) Q13 — the in-language reconciler-domain protocol.** A domain is an
+- **(d) ✅ Q13 — the in-language reconciler-domain protocol.** A domain is an
   observe/diff/apply triple of pp functions running under **core-enforced**
   journal, fencing, stratification, and single-writer discipline. Each domain
   declares its cell namespace so `Runtime.observe_all` can enforce LAW 30
   stratification mechanically. Q13 is written into DESIGN.md through the same
   architect-pass + adversarial-review discipline that produced Q1–Q12, and
   includes the honest-edge E2 revision it forces: core-enforced discipline
-  replaces "the reconciler's code is small" as the trust argument.
+  replaces "the reconciler's code is small" as the trust argument. Landed:
+  `register-domain` (a probe is now sugar for the ⊥-write-authority case,
+  ONE registry, `Runtime.domain_registry`); the trusted primitives
+  (`tree-observe`, `materialize-file`, `remove-file`, `proc-spawn`,
+  `proc-alive?`, `proc-stop`, `proc-reap`, `domain-state-get/put`,
+  `src/domain_prims.ml`); the generic orchestrator (`src/domains.ml`:
+  journal bracket, `observed_all` suspension, plan caching via a direct
+  Store key — no synthetic node needed, verify-after-write); `Cell.Domain`
+  for third-party domains; and `stdlib/domain-fs.pp` /
+  `stdlib/domain-proc.pp`, which now hold ALL the policy `reconciler.ml`/
+  `supervisor.ml` used to — those two OCaml modules are **deleted**.
 
 **Exit (runnable):**
-1. The existing fs and process reconcilers are **re-implemented as pp
+1. ✅ The existing fs and process reconcilers are **re-implemented as pp
    libraries over the Q13 protocol and pass `tests/018` and `tests/033`
-   unchanged**. If the protocol cannot express the two domains the core
-   already ships, the protocol is wrong; if it can, principle 6 is proven
-   executable, not aspirational.
+   unchanged** (byte-for-byte assertions; `src/reconciler.ml`/
+   `src/supervisor.ml` deleted, `src/domains.ml` + `src/domain_prims.ml` +
+   `stdlib/domain-fs.pp` + `stdlib/domain-proc.pp` in their place). A
+   third-party toy domain unrelated to fs/proc (`tests/046-domains.sh`,
+   "kv": a directory of one-file-per-key values) proves the protocol is
+   genuinely generic, not fs/proc-shaped: plan caching, stratification,
+   cap threading, verify-after-write failure, the generic journal bracket,
+   and fenced-after-domains ordering all hold for it too. The protocol
+   expresses the two domains the core already shipped AND a domain neither
+   stdlib module defines — principle 6 is proven executable.
 2. ✅ Secret rotation invalidates exactly the observing nodes, and a
    store-wide scan proves sealed bytes never landed under `~/.pp/store`
    (`tests/044-sealed.sh`).
@@ -301,10 +318,7 @@ partial.
    `Runtime.probe_observer` hook), so the EXISTING generic watch-loop
    polling picks up a changed probe cell with no probe-specific wiring at
    all — verified empirically before writing this down, not assumed. LAW
-   37/38 hold on this evidence (SPEC.md). What stage 1 does NOT cover:
-   exit criterion 1 (Q13 protocol; the fs/process reconcilers are still the
-   OCaml `reconciler.ml`/`supervisor.ml`, untouched) — that is stage 2, and
-   the overall M4 milestone stays open until it lands.
+   37/38 hold on this evidence (SPEC.md).
 
 ### M5 (= Phase 4) — Distribution
 

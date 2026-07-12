@@ -233,6 +233,31 @@ let call_zero_arg (fn : value) : value =
   | VBuiltin _ -> !apply_ref fn [] !current_env_ref
   | _ -> failwith "probe: observe-fn is not a function"
 
+(* Call a function value with a fixed argument list, dispatching on
+   tree-walker vs VM closures exactly like [call_zero_arg] — Q13's
+   register-domain needs 1-arg (apply) and 2-arg (diff) calls into
+   user-registered closures from OCaml orchestration (Domains.ml), so this
+   generalizes call_zero_arg's dispatch to arbitrary arity instead of adding
+   two more near-duplicate functions. *)
+let call_with_args (fn : value) (args : value list) : value =
+  match fn with
+  | VClosure c when Array.length c.vm_bc.code > 0 ->
+      if List.length c.params <> List.length args then
+        failwith (Printf.sprintf
+          "domain function expects %d argument(s), got %d"
+          (List.length c.params) (List.length args));
+      let new_frame = Types.make_frame (List.length args) in
+      List.iteri (fun i a -> Types.frame_set new_frame i a) args;
+      !vm_run_thunk_ref c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
+  | VClosure c ->
+      if List.length c.params <> List.length args then
+        failwith (Printf.sprintf
+          "domain function expects %d argument(s), got %d"
+          (List.length c.params) (List.length args));
+      !apply_ref fn args !current_env_ref
+  | VBuiltin _ -> !apply_ref fn args !current_env_ref
+  | _ -> failwith "domain function value is not a function"
+
 (* [Some v]: the probe's value for THIS pass — pinned in Runtime.probe_values
    after the first read, so a probe fires AT MOST ONCE per pass no matter how
    many times it is read (demand-pruned: an unread probe never fires at all,
@@ -244,7 +269,7 @@ let probe_value_for (name : string) : value option =
   match Hashtbl.find_opt Runtime.probe_values name with
   | Some v -> Some v
   | None ->
-      (match Hashtbl.find_opt Runtime.probe_registry name with
+      (match Hashtbl.find_opt Runtime.domain_registry name with
        | None -> None
        | Some entry ->
            (* Evaluate OUTSIDE the caller's node trace stack — save/restore
@@ -253,15 +278,15 @@ let probe_value_for (name : string) : value option =
               node's trace; that node must record ONLY the `probe:<name>`
               cell itself (via the ordinary record_read the `probe`
               primitive does below). Runs under EXACTLY the registered
-              read_cap, replacing the ambient for the call's extent
-              (with_ref, exception-safe LAW 27 style) — the authority was
-              consumed HERE, once per pass, not at every read. *)
+              cap, replacing the ambient for the call's extent (with_ref,
+              exception-safe LAW 27 style) — the authority was consumed
+              HERE, once per pass, not at every read. *)
            let result =
              Runtime.with_ref Runtime.trace_stack []
                (fun () ->
                   Runtime.with_ref Runtime.current_capabilities
-                    [entry.Runtime.pr_read_cap]
-                    (fun () -> call_zero_arg entry.Runtime.pr_observe))
+                    [entry.Runtime.dm_cap]
+                    (fun () -> call_zero_arg entry.Runtime.dm_observe))
            in
            Hashtbl.replace Runtime.probe_values name result;
            Some result)
@@ -276,6 +301,29 @@ let probe_observe_for_store (name : string) : string option =
   match probe_value_for name with
   | Some v -> Some (Hasher.hash_value v)
   | None -> None
+
+(* Q13: Store.observe_cell's `domain:<name>:<sub>` dispatch — calls the
+   registered domain's own `:observe-cell` closure (fn (sub) -> hash|nil),
+   the proc_observer/probe_observer pattern generalized to third-party
+   domains. Runs under the domain's own registered cap (mirrors
+   probe_value_for's with_ref discipline) so a domain's O(1) targeted
+   re-observation can itself read whatever it needs to answer. [None]: no
+   such domain, or it declared no :observe-cell — cannot re-observe, the
+   caller (Store.observe_cell) treats that as a forced miss. *)
+let domain_observe_cell_for_store (name : string) (sub : string) : string option =
+  match Hashtbl.find_opt Runtime.domain_registry name with
+  | None -> None
+  | Some { Runtime.dm_observe_cell = None; _ } -> None
+  | Some { Runtime.dm_observe_cell = Some fn; dm_cap; _ } ->
+      (match
+         Runtime.with_ref Runtime.trace_stack []
+           (fun () ->
+              Runtime.with_ref Runtime.current_capabilities [dm_cap]
+                (fun () -> call_with_args fn [VString sub]))
+       with
+       | VNil -> None
+       | VString h -> Some h
+       | other -> Some (Hasher.hash_value other))
 
 (* A table of built-in functions: name -> value *)
 let builtins : (string, value) Hashtbl.t = Hashtbl.create 64
@@ -731,6 +779,33 @@ let () =
 
   (* ---- stdlib primitives (ROADMAP §2) ---- *)
 
+  (* (hash-value V) — a canonical, structural content hash of ANY value
+     (Hasher.hash_value, force-deep'd first) — order-INDEPENDENT for maps/
+     sets (hash_value sorts a VMap's entries by encoded-key hash before
+     hashing, exactly like Codec's on-disk canonicalization, PLAN-m4-
+     cells.md / domain-state). Needed because pp's `=` on two maps is
+     plain structural (assoc-list, ORDER-sensitive) list equality: a spec
+     value that round-tripped through `domain-state-get/put` (Codec sorts
+     VMap entries for canonical on-disk text) compares as "different" from
+     the in-memory original via `=` even with identical bindings, purely
+     because of key order — domain-proc.pp's diff needs a comparison that
+     is not fooled by that. *)
+  register "hash-value" (fun args ->
+    match args with
+    | [v] -> VString (Hasher.hash_value (force_deep (force_val v)))
+    | _ -> failwith "hash-value expects one argument");
+
+  (* (hash-string S) — SHA-256 hex digest of S's raw bytes, the SAME
+     algorithm Store.hash_file_opt uses for a file's content hash (Types.
+     hash_string) — needed so a domain's `diff` (Q13, PLAN-m4-cells.md;
+     domain-fs.pp) can compute a content hash from a string PURELY (no
+     capability, no store I/O — unlike `blob`, this never touches
+     ~/.pp/store) and compare it against what `tree-observe` observed. *)
+  register "hash-string" (fun args ->
+    match force_args args with
+    | [VString s] -> VString (Hasher.hash_string s)
+    | _ -> failwith "hash-string expects a string");
+
   register "number->string" (fun args ->
     match force_args args with
     | [VInt n] -> VString (string_of_int n)
@@ -895,17 +970,83 @@ let () =
         VNil
     | _ -> failwith "fenced expects a kind string and a spec map");
 
-  (* ---- M4 probes (PLAN-m4-cells.md) ----
+  (* ---- Q13: register-domain / register-probe (PLAN-m4-cells.md §Q13) ----
 
-     `(register-probe name observe-fn read-cap)` — script-tier only
-     (trace_stack guard, mirroring Fenced.register's LAW-31 pattern): a probe
-     is registered once, storing (name, observe-fn, read-cap) in
-     Runtime.probe_registry. `:write-cap`/`:diff`/`:apply` do not exist yet
-     (Q13's register-domain is stage 2) — a probe is "a domain with bottom
-     write authority," so this registry is deliberately just the observe
-     half, structured (a plain record keyed by name) so that refactor is a
-     natural extension, not a rewrite. read-cap is consumed into the
-     registry, never re-exposed to user code. Returns nil. *)
+     `(register-domain {:name :namespace :observe :diff :apply :write-cap
+     [:observe-cell]})` — script-tier only (trace_stack guard, the same
+     LAW-31 pattern Fenced.register uses): ordinary primitive, root/script
+     scope. `:write-cap` is consumed into Runtime.domain_registry, never
+     re-exposed to user code — the core-side registry IS the authority
+     boundary. `:diff`/`:apply` are REQUIRED for a full domain (a domain
+     with ⊥ write authority is a PROBE — register-probe below, a distinct,
+     simpler entry point); `:namespace` is a list of cell-id string
+     PREFIXES this domain owns (stratification, LAW 30 full form);
+     `:observe-cell` is optional. Returns nil. *)
+  let string_or_keyword where v =
+    match v with
+    | VString s | VKeyword s -> s
+    | other -> failwith (where ^ ": expected a string or keyword, got "
+                         ^ string_of_value other)
+  in
+  let find_kv (kvs : (value * value) list) (key : string) : value option =
+    List.find_map (fun (k, v) ->
+      match k with
+      | VKeyword k' when k' = key -> Some v
+      | VString k' when k' = key -> Some v
+      | _ -> None)
+      kvs
+  in
+  register "register-domain" (fun args ->
+    if !Runtime.trace_stack <> [] then
+      failwith "register-domain: may not be called inside a node body (script-tier only, like fenced)";
+    let args = force_args args in
+    match args with
+    | [spec] ->
+        let kvs = match spec with
+          | VMap kvs -> kvs
+          | other -> failwith ("register-domain expects a map, got " ^ string_of_value other)
+        in
+        let name = match find_kv kvs "name" with
+          | Some v -> string_or_keyword "register-domain :name" (force_val v)
+          | None -> failwith "register-domain: missing :name"
+        in
+        let namespace = match find_kv kvs "namespace" with
+          | Some v ->
+              (match force_val v with
+               | VVector arr -> Array.to_list (Array.map (fun p ->
+                   string_or_keyword "register-domain :namespace" (force_val p)) arr)
+               | VNil -> []
+               | other -> failwith ("register-domain :namespace must be a vector of strings, got "
+                                    ^ string_of_value other))
+          | None -> []
+        in
+        let observe = match find_kv kvs "observe" with
+          | Some v -> force_val v
+          | None -> failwith "register-domain: missing :observe"
+        in
+        (match observe with VClosure _ | VBuiltin _ -> ()
+         | _ -> failwith "register-domain: :observe must be a function");
+        let diff = Option.map force_val (find_kv kvs "diff") in
+        let apply = Option.map force_val (find_kv kvs "apply") in
+        let observe_cell = Option.map force_val (find_kv kvs "observe-cell") in
+        let write_cap = match find_kv kvs "write-cap" with
+          | Some v -> (match force_val v with
+                       | VCapability c -> c
+                       | other -> failwith ("register-domain :write-cap must be a capability, got "
+                                            ^ string_of_value other))
+          | None -> failwith "register-domain: missing :write-cap"
+        in
+        Hashtbl.replace Runtime.domain_registry name
+          { Runtime.dm_namespace = namespace; dm_observe = observe;
+            dm_diff = diff; dm_apply = apply; dm_cap = write_cap;
+            dm_observe_cell = observe_cell };
+        VNil
+    | _ -> failwith "register-domain expects one map argument");
+
+  (* `(register-probe name observe-fn read-cap)` — sugar over register-domain
+     for the ⊥-write-authority case: dm_namespace = [] (nothing to
+     stratify, core never converges it), dm_diff/dm_apply = None. Preserves
+     the pre-Q13 surface and error text exactly (tests/043-probes.sh). *)
   register "register-probe" (fun args ->
     if !Runtime.trace_stack <> [] then
       failwith "register-probe: may not be called inside a node body (script-tier only, like fenced)";
@@ -916,8 +1057,10 @@ let () =
         (match observe_fn with
          | VClosure _ | VBuiltin _ -> ()
          | _ -> failwith "register-probe: observe-fn must be a function");
-        Hashtbl.replace Runtime.probe_registry name
-          { Runtime.pr_observe = observe_fn; Runtime.pr_read_cap = read_cap };
+        Hashtbl.replace Runtime.domain_registry name
+          { Runtime.dm_namespace = []; dm_observe = observe_fn;
+            dm_diff = None; dm_apply = None; dm_cap = read_cap;
+            dm_observe_cell = None };
         VNil
     | _ -> failwith "register-probe expects a name, an observe-fn, and a read capability");
 

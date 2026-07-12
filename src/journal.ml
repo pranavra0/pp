@@ -15,8 +15,20 @@ type entry =
   | Exec of string list
       (* every external process execution — "null rebuild executes zero
          processes" is proved by these lines (Phase-1 exit criterion 1) *)
-  | FsIntent of { hash : string; root : string; create : int; update : int; delete : int }
-  | FsDone of { hash : string }
+  | DomainIntent of { hash : string; fields : (string * string) list }
+      (* Q13 generic per-pass bracket, shared by every registered write-domain
+         (fs, proc, and third-party). [fields] is an ORDERED k=v list the
+         domain's own diff assembled (its :summary) — core does not know or
+         care what the keys mean, only how to print/journal them, which is
+         what makes this format-compatible with the OLD fs-only
+         `intent HASH root=R create=C update=U delete=D` line: fs's diff
+         supplies fields = [("root",R); ("create",C); ("update",U);
+         ("delete",D)] in that order, and joining them here reproduces the
+         identical bytes (the hash VALUE differs — it is now the generic
+         plan-cache key, H(diff-code, observed, desired), not the old
+         bespoke desired-only hash; no test or tool depends on the digits,
+         only the shape, which is preserved exactly). *)
+  | DomainDone of { hash : string }
   | ProcStartIntent of { name : string; spec_hash : string }
   | ProcStartDone of { name : string; spec_hash : string; pid : int }
   | ProcStopIntent of { name : string }
@@ -28,10 +40,10 @@ type entry =
 
 let to_line = function
   | Exec argv -> "exec " ^ String.concat " " argv
-  | FsIntent { hash; root; create; update; delete } ->
-      Printf.sprintf "intent %s root=%s create=%d update=%d delete=%d"
-        hash root create update delete
-  | FsDone { hash } -> Printf.sprintf "done %s" hash
+  | DomainIntent { hash; fields } ->
+      "intent " ^ hash
+      ^ String.concat "" (List.map (fun (k, v) -> " " ^ k ^ "=" ^ v) fields)
+  | DomainDone { hash } -> "done " ^ hash
   | ProcStartIntent { name; spec_hash } ->
       Printf.sprintf "intent proc start %s %s" name spec_hash
   | ProcStartDone { name; spec_hash; pid } ->
@@ -70,20 +82,14 @@ let of_line (line : string) : entry option =
        | _ -> None)
   | "intent" :: "proc" :: "stop" :: [name] -> Some (ProcStopIntent { name })
   | "done" :: "proc" :: "stop" :: [name] -> Some (ProcStopDone { name })
-  | ["done"; hash] -> Some (FsDone { hash })
+  | ["done"; hash] -> Some (DomainDone { hash })
   | "intent" :: hash :: rest when rest <> [] ->
       (let kv s = match String.index_opt s '=' with
          | Some i -> Some (String.sub s 0 i,
                            String.sub s (i + 1) (String.length s - i - 1))
          | None -> None
        in
-       match List.filter_map kv rest with
-       | [("root", root); ("create", c); ("update", u); ("delete", d)] ->
-           (match int_of_string_opt c, int_of_string_opt u, int_of_string_opt d with
-            | Some create, Some update, Some delete ->
-                Some (FsIntent { hash; root; create; update; delete })
-            | _ -> None)
-       | _ -> None)
+       Some (DomainIntent { hash; fields = List.filter_map kv rest }))
   | _ -> None
 
 (* ---- The log file ---- *)

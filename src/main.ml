@@ -132,22 +132,153 @@ let main () =
   let initial_caps = List.map parse_grant (List.rev !grants) in
   Runtime.initial_capabilities := initial_caps;
   (* Loader authority bound (Q6/D8c): the interpreter may load source from
-     the CLI-named programs' directories, the cwd, and ~/.pp — nothing else. *)
+     the CLI-named programs' directories, the cwd, and ~/.pp — nothing else.
+     Q13 loader reachability: also the resolved stdlib/ dir next to the
+     running executable, so `--reconcile`/`--supervise`'s auto-loaded
+     stdlib/domain-fs.pp / domain-proc.pp work from ANY cwd. *)
   Runtime.source_roots :=
     Runtime.canonical_path (Sys.getcwd ())
-    :: List.map (fun f -> Filename.dirname (Runtime.canonical_path f)) !files;
+    :: List.map (fun f -> Filename.dirname (Runtime.canonical_path f)) !files
+    @ (match Runtime.stdlib_root () with Some d -> [d] | None -> []);
   Store.init ();
-  Runtime.proc_observer := Supervisor.observe_proc;
   Runtime.probe_observer := Primitives.probe_observe_for_store;
+  Runtime.domain_cell_observer := Primitives.domain_observe_cell_for_store;
   Runtime.fenced_policy := !fenced_policy;
   (* Collect every cell observation made by the program: needed for
-     --reconcile stratification (LAW 30) and for --watch polling. *)
-  if !reconcile_root <> None || !watch || !supervise then Runtime.observe_all := true;
+     stratification (LAW 30) and for --watch polling. Unconditional (not
+     gated on --reconcile/--watch/--supervise): a program may call
+     register-domain itself with neither flag set (Q13's "programs may
+     call register-domain themselves" mode) — main.ml cannot know in
+     advance whether the program it is about to run will do that, so
+     collection must always be live for the stratification check
+     domains.ml performs after root evaluation to see anything at all.
+     The cost is one list-cons per cell read; unused when nothing
+     converges. *)
+  Runtime.observe_all := true;
   (* Recover any unknown-status fenced actions from a prior crash before
      applying new state (Q3 / LAW 31). *)
   if !reconcile_root <> None || !supervise then
     Fenced.recover_unknown ~policy:!fenced_policy;
 
+
+  (* ---- Q13 driver wiring (PLAN-m4-cells.md §Q13, the exit criterion) ----
+
+     `--reconcile ROOT` auto-loads stdlib/domain-fs.pp and registers it with
+     a write-cap cap-restrict'd to ROOT, wrapping the program's final value
+     as {"fs" -> v}; `--supervise` likewise with stdlib/domain-proc.pp,
+     {"proc" -> v}; both compose (the same v feeds both, exactly as the
+     pre-Q13 code ran Reconciler.reconcile and Supervisor.reconcile on the
+     SAME `last` when both flags were given). A program that calls
+     register-domain itself needs none of this glue — it returns
+     {name -> desired} directly, one evaluation, N domains. *)
+  let read_file_content (path : string) : string =
+    let ch = open_in path in
+    let s = really_input_string ch (in_channel_length ch) in
+    close_in ch; s
+  in
+  (* Minimal pp string-literal quoting for embedding an OCaml-computed path
+     into synthetic glue source text (reader.ml supports the usual backslash
+     and double-quote escapes; anything else passes through) — NOT
+     Codec.quote_string, which is a different (store-line) escaping
+     dialect. *)
+  let pp_quote (s : string) : string =
+    let buf = Buffer.create (String.length s + 2) in
+    Buffer.add_char buf '"';
+    String.iter (fun c ->
+      if c = '\\' then Buffer.add_string buf "\\\\"
+      else if c = '"' then Buffer.add_string buf "\\\""
+      else Buffer.add_char buf c)
+      s;
+    Buffer.add_char buf '"';
+    Buffer.contents buf
+  in
+  let uses_domains () = !reconcile_root <> None || !supervise in
+  (* (source-tag, content) pairs to run BEFORE the user's file(s), under the
+     SAME init (Repl.execute_sources_bytecode) so the domain registrations
+     they perform survive into the user program's evaluation — two
+     SEPARATE execute_*_bytecode calls would each re-init and wipe
+     Runtime.domain_registry (Evaluator.init resets it every fresh run). *)
+  let stdlib_glue_sources () : (string * string) list =
+    if not (uses_domains ()) then []
+    else match Runtime.stdlib_root () with
+      | None ->
+          failwith "pp: could not locate the stdlib/ directory next to the running \
+                    executable (needed for --reconcile/--supervise's domain-fs.pp/\
+                    domain-proc.pp)"
+      | Some root ->
+          let common = List.map (fun f ->
+            ("<stdlib:" ^ f ^ ">", Printf.sprintf "(load %s)\n"
+               (pp_quote (Filename.concat root f))))
+            ["list.pp"; "map.pp"; "string.pp"]
+          in
+          let fs_glue = match !reconcile_root with
+            | None -> []
+            | Some r ->
+                let canon = Runtime.canonical_path r in
+                (* :wo, not :rw (a documented deviation from the contract's
+                   literal wording): tests/023 grants only `fs:ROOT:wo` and
+                   expects a full build+restore cycle to work — the single
+                   writer reading its OWN managed tree to converge is not a
+                   distinct authority concern (Domain_prims.tree_observe
+                   accepts read-OR-write for exactly this reason), so the
+                   domain's write-cap only needs to hold WRITE; requesting
+                   :rw here would make cap-restrict itself reject a
+                   write-only grant before the domain ever runs. *)
+                [("<domain-glue:fs>", Printf.sprintf
+                    "(load %s)\n(register-fs-domain %s (cap-restrict (current-capabilities) %s :wo))\n"
+                    (pp_quote (Filename.concat root "domain-fs.pp"))
+                    (pp_quote canon) (pp_quote canon))]
+          in
+          let proc_glue =
+            if not !supervise then []
+            else
+              [("<domain-glue:proc>", Printf.sprintf
+                  "(load %s)\n(register-proc-domain (current-capabilities))\n"
+                  (pp_quote (Filename.concat root "domain-proc.pp")))]
+          in
+          common @ fs_glue @ proc_glue
+  in
+  (* Merge rule for the auto-wrap: --reconcile alone -> {"fs" v}; --supervise
+     alone -> {"proc" v}; both -> {"fs" v, "proc" v} (both fed the SAME v,
+     exactly as the two old reconcilers each separately received it). A bare
+     register-domain program (neither flag) returns its own {name -> desired}
+     directly — [v] unwrapped. *)
+  let build_all_desired (v : Types.value) : Types.value =
+    let pairs =
+      (if !reconcile_root <> None then [(Types.VString "fs", v)] else [])
+      @ (if !supervise then [(Types.VString "proc", v)] else [])
+    in
+    if pairs <> [] then Types.VMap pairs else v
+  in
+  (* Run every given file plus (when needed) the domain-registration glue,
+     under ONE init — this is what lets `register-fs-domain`/
+     `register-proc-domain`'s registration survive to reach the user's
+     file. Falls back to the untouched per-file loop (today's exact
+     behavior, byte-for-byte) when no domain wiring is needed at all. *)
+  let run_files (files : string list) : Types.value option =
+    Runtime.fenced_actions := [];
+    if uses_domains () then
+      let sources = stdlib_glue_sources ()
+                    @ List.map (fun f -> (f, read_file_content f)) files in
+      match List.rev (Repl.execute_sources_bytecode !bytecode sources) with
+      | v :: _ -> Some v | [] -> None
+    else
+      List.fold_left (fun _ f ->
+        Runtime.fenced_actions := [];
+        match List.rev (Repl.execute_file_bytecode !bytecode f) with
+        | v :: _ -> Some v | [] -> None) None files
+  in
+  let should_run_domains () =
+    uses_domains () || Domains.any_write_domain_registered ()
+  in
+  let run_domains_pass (last : Types.value option) : unit =
+    if should_run_domains () then begin
+      (match last with
+       | Some v -> Domains.run_all (build_all_desired v)
+       | None -> failwith "reconcile: the program produced no value");
+      Fenced.drain ()
+    end
+  in
 
   (* ---- Phase 2: pp graph — delegates to Store.print_graph ---- *)
   let print_graph ?(verbose = false) () = Store.print_graph ~verbose () in
@@ -163,40 +294,24 @@ let main () =
       match Store.observe_cell id with
       | Some h -> Some (id, h) | None -> None) cell_ids
   in
-  let watch_loop ~bytecode ~reconcile_root ~supervise ~files ~interval ~stabilize =
+  let watch_loop ~files ~interval ~stabilize =
     Runtime.observe_all := true;
     let last_desired = ref None in
-    let apply_reconciliation last =
-      (match reconcile_root, last with
-       | Some root, Some v -> Reconciler.reconcile ~root v
-       | None, _ -> ()
-       | Some _, None -> failwith "reconcile: the program produced no value");
-      (if supervise then
-         match last with
-         | Some v -> Supervisor.reconcile v
-         | None -> failwith "supervise: the program produced no value");
-      (* Run fenced actions once per reconcile pass, after all convergent work
-         (Q3 / LAW 31).  Recovery set the epoch if resuming a crashed pass. *)
-      if reconcile_root <> None || supervise then
-        Fenced.drain ()
-    in
     let run_program () =
       (* Clear in-memory state for a fresh evaluation. The persistent store
-         survives — this is the store-level collapse. *)
-      if bytecode then Vm.init ()  (* clears thunk_store, globals, etc. *)
-      else Repl.init ();            (* clears thunk_store, resets global_env *)
+         survives — this is the store-level collapse. run_files itself
+         calls Vm.init ()/Repl.init () (via execute_sources_bytecode /
+         execute_file_bytecode). *)
       Hashtbl.clear Store.run_pins;  (* clear pinned cell observations *)
       Hashtbl.clear Runtime.probe_values;  (* M4: probes re-evaluate fresh each pass *)
       Hashtbl.clear Runtime.sealed_pins;   (* M4: sealed bytes never survive a pass *)
       Runtime.observed_all := [];     (* clear collected observations *)
-      Runtime.fenced_actions := [];   (* clear stale fenced registrations *)
       Runtime.current_capabilities := !Runtime.initial_capabilities;
-      (* Re-read and execute the program. *)
-      let last = List.fold_left (fun _ f ->
-        match List.rev (Repl.execute_file_bytecode bytecode f) with
-        | v :: _ -> Some v | [] -> None) None files in
+      (* Re-read and execute the program (plus, if --reconcile/--supervise
+         is active, the domain-registration glue — run_files/uses_domains). *)
+      let last = run_files files in
       last_desired := last;
-      apply_reconciliation last;
+      run_domains_pass last;
       (* Collect the cells we need to poll and snapshot their current hashes. *)
       let cell_ids = List.sort_uniq compare (List.map fst !(Runtime.observed_all)) in
       snapshot_cell_hashes cell_ids
@@ -205,19 +320,15 @@ let main () =
       let rev = Store.build_reverse_index () in
       let dirty = Store.dirty_keys_for changed_cells rev in
       Stabilize.reset_dirty dirty;
-      Runtime.keep_thunks := true;  (* set BEFORE execute_file_bytecode's internal init *)
+      Runtime.keep_thunks := true;  (* set BEFORE run_files's internal init *)
       Hashtbl.clear Store.run_pins;  (* fresh world observations, not last run's pins *)
       Hashtbl.clear Runtime.probe_values;  (* M4: probes re-evaluate fresh each pass *)
       Hashtbl.clear Runtime.sealed_pins;   (* M4: sealed bytes never survive a pass *)
       Runtime.observed_all := [];
-      Runtime.fenced_actions := [];
       Runtime.current_capabilities := !Runtime.initial_capabilities;
-      (* execute_file_bytecode calls init internally — keep_thunks gates thunk_store *)
-      let last = List.fold_left (fun _ f ->
-        match List.rev (Repl.execute_file_bytecode bytecode f) with
-        | v :: _ -> Some v | [] -> None) None files in
+      let last = run_files files in
       last_desired := last;
-      apply_reconciliation last;
+      run_domains_pass last;
       let cell_ids = List.sort_uniq compare (List.map fst !(Runtime.observed_all)) in
       let new_obs = snapshot_cell_hashes cell_ids in
       let new_set = List.map fst new_obs in
@@ -259,12 +370,15 @@ let main () =
           loop new_snapshot
         end
       end else begin
-        (* Process supervision: re-reconcile every tick so a killed service
-           is restarted within one interval even if no input cell changed. *)
-        if supervise then
-          (match !last_desired with
-           | Some v -> Supervisor.reconcile v
-           | None -> ());
+        (* Generalized from the old proc-only recheck: EVERY registered
+           write-domain is re-observed/re-diffed/re-applied on every tick,
+           not just proc — a killed service or an externally-drifted file
+           is caught within one poll interval either way. Cheap when
+           nothing actually changed: the plan cache (Domains.compute_plan)
+           makes an unchanged pass a cache hit, not a re-walk. *)
+        (match !last_desired with
+         | Some v -> run_domains_pass (Some v)
+         | None -> ());
         loop snapshot
       end
     in
@@ -299,8 +413,7 @@ let main () =
   | _, files ->
       let files = List.rev files in
       if !watch then
-        watch_loop ~bytecode:!bytecode ~reconcile_root:!reconcile_root
-          ~supervise:!supervise ~files ~interval:!watch_interval ~stabilize:!stabilize
+        watch_loop ~files ~interval:!watch_interval ~stabilize:!stabilize
       else if !diff then begin
         List.iter (fun f ->
           let tw_results = Repl.execute_file f in
@@ -317,21 +430,8 @@ let main () =
           end
         ) files
       end else begin
-        let last =
-          List.fold_left (fun _ f ->
-            Runtime.fenced_actions := [];
-            match List.rev (Repl.execute_file_bytecode !bytecode f) with
-            | v :: _ -> Some v | [] -> None) None files
-        in
-        (match !reconcile_root, last with
-         | Some root, Some v -> Reconciler.reconcile ~root v
-         | None, _ | Some _, None -> ());
-        (if !supervise then
-           match last with
-           | Some v -> Supervisor.reconcile v
-           | None -> failwith "supervise: the program produced no value");
-        if !reconcile_root <> None || !supervise then
-          Fenced.drain ();
+        let last = run_files files in
+        run_domains_pass last;
         (* Phase 3 schedule-transparency audit (D17 class 1 / LAW 26/34's
            promised --check): a result-transparent handler must never change
            WHAT a program computes, only where/when it runs. Under --check
@@ -358,12 +458,12 @@ let main () =
                Scheduler.policy := Scheduler.Serial;
                Hashtbl.clear Store.run_pins;
                Runtime.current_capabilities := !Runtime.initial_capabilities;
-               let last_serial =
-                 List.fold_left (fun _ f ->
-                   Runtime.fenced_actions := [];
-                   match List.rev (Repl.execute_file_bytecode !bytecode f) with
-                   | v :: _ -> Some v | [] -> None) None files
-               in
+               (* Deliberately reuses run_files (so a --reconcile/--supervise
+                  program's domain registration is available identically to
+                  the scheduled run) but never calls run_domains_pass — this
+                  comparison is value-only; convergent/fenced side effects
+                  must not apply twice. *)
+               let last_serial = run_files files in
                Scheduler.policy := saved_policy;
                (match last_serial with
                 | None -> ()

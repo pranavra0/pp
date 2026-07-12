@@ -1010,35 +1010,75 @@ and the reconciler applies the diff. Kubernetes controllers, Terraform's
 plan/apply — done with a language that makes `desired` cheap to recompute
 (cached) and with reality re-observed rather than a trusted state file.
 
-**Status: partial** — the filesystem domain has a v1 reconciler in both
-backends: `pp --reconcile ROOT prog.pp` takes the program's final value —
-`{relative-path → content}` — as the domain's desired state, diffs it against
-observed reality, applies atomically, deletes unmanaged files, journals,
-requires an fs write grant, and refuses stratification (`tests/018`). Desired
-contents may be inline strings or `blob:<sha256>` CAS references (`tests/023`).
-**Watch mode is now live:** `pp --watch --reconcile ROOT prog.pp` runs the
-program, reconciles, polls cells for changes, and re-runs on change
-(`tests/031`). **Push stabilize is now live:** `pp --watch --stabilize
-prog.pp` uses the reverse-edge index from stored traces to reset only dirty
-thunks, so clean nodes skip `Store.hit` entirely; differential test
-`tests/032` confirms identical re-evaluation patterns to pull mode on both
-backends. **The process domain is now live:** `pp --supervise prog.pp`
-(typically with `--watch`) takes a program whose final value is a map of
-service-name → spec, and keeps observed processes in sync: starts missing
-services, stops removed ones, restarts on spec-hash change, reaps zombies,
-and restarts a `kill -9`'d service within one poll interval. Requires
-`--grant process`, journals intent/done pairs, and refuses stratification on
-`proc:` observations (`tests/033`). **Fenced effects (LAW 31) are live:**
-`(fenced KIND SPEC)` registers a scripting-tier action; `--fenced-policy
-retry|abort|ask` resolves unknown-status intents; a killed mid-apply action
-is recovered without silent double-execution (`tests/034`).
+**Status: holds** (full form, per-domain stratification — Q13,
+PLAN-m4-cells.md) — the write-discipline law is now enforced GENERICALLY,
+for any registered domain, not hardwired to the filesystem: a domain is an
+`observe`/`diff`/`apply` triple of ordinary pp functions
+(`register-domain`, script-tier), and core (`src/domains.ml`) wraps every
+domain's `apply` in the same journal bracket, `observed_all` suspension,
+plan cache, and verify-after-write, regardless of what the domain
+converges. `src/reconciler.ml` and `src/supervisor.ml` (the pre-Q13 OCaml
+modules) are **deleted**; the trusted mechanics they contained (atomic
+materialize/remove, fork/exec/reap, per-domain state persistence) moved
+into primitives (`tree-observe`, `materialize-file`, `remove-file`,
+`proc-spawn`, `proc-alive?`, `proc-stop`, `proc-reap`, `domain-state-get/
+put` — `src/domain_prims.ml`), and ALL the policy (the tree-walk diff, the
+start/stop/restart decision) moved into `stdlib/domain-fs.pp` and
+`stdlib/domain-proc.pp` as real pp source.
+
+`pp --reconcile ROOT prog.pp` auto-loads `stdlib/domain-fs.pp` and
+registers it with a write-cap `cap-restrict`'d to ROOT, taking the
+program's final value — `{relative-path → content}` — as the fs domain's
+desired state: diffs it against observed reality by content hash, applies
+atomically, deletes unmanaged files (single writer), journals, requires an
+fs write grant, and refuses stratification (`tests/018`, unchanged byte-
+for-byte from the pre-Q13 implementation). Desired contents may be inline
+strings or `blob:<sha256>` CAS references (`tests/023`). **Watch mode:**
+`pp --watch --reconcile ROOT prog.pp` runs the program, reconciles, polls
+cells for changes, and re-runs on change (`tests/031`); every registered
+domain is now re-observed/re-diffed/re-applied on EVERY tick regardless of
+which cells changed (generalized from the pre-Q13 proc-only recheck — a
+killed service or an externally-drifted file is caught within one poll
+interval either way; cheap when nothing changed, since the plan cache
+turns a no-op pass into a cache hit). **Push stabilize:** `pp --watch
+--stabilize prog.pp` uses the reverse-edge index from stored traces to
+reset only dirty thunks, so clean nodes skip `Store.hit` entirely;
+differential test `tests/032` confirms identical re-evaluation patterns to
+pull mode on both backends. **The process domain:** `pp --supervise
+prog.pp` auto-loads `stdlib/domain-proc.pp` and registers it; the
+program's final value is a map of service-name → spec, kept in sync with
+observed reality: starts missing services, stops removed ones, restarts on
+spec change (compared structurally via `hash-value`, which canonicalizes
+map-key order the same way the on-disk codec does — a spec round-tripped
+through `domain-state-get/put` must not spuriously compare "different"),
+reaps zombies, and restarts a `kill -9`'d service within one poll interval.
+Requires `--grant process`, journals intent/done pairs (owned verbatim by
+the `proc-spawn`/`proc-stop` primitives), and refuses stratification on
+`proc:` observations (`tests/033`, unchanged byte-for-byte). **A
+third-party domain unrelated to fs/proc** (`tests/046-domains.sh`'s toy
+"kv" domain, registered from an ordinary pp program via `register-domain`
+with neither `--reconcile` nor `--supervise`) proves the protocol is
+genuinely generic: plan caching across separate process invocations
+(proved via `pp why`), stratification, cap threading (`cap-restrict`
+itself refuses before the domain ever runs), verify-after-write failure
+surfaced for a deliberately under-converging `apply`, the generic journal
+bracket, and fenced-after-domains ordering all hold for it too. **Fenced
+effects (LAW 31) are live:** `(fenced KIND SPEC)` registers a
+scripting-tier action, drained once per pass after ALL domains'
+convergent work; `--fenced-policy retry|abort|ask` resolves unknown-status
+intents; a killed mid-apply action is recovered without silent
+double-execution (`tests/034`).
 
 **Test:** first reconcile creates the tree; a null reconcile writes nothing;
 manual drift and foreign files converge away; a shrunk desired map deletes
 the leavers; no write grant ⇒ capability error; a self-reading desired state
-⇒ stratification error (`tests/018`). ROADMAP Phase-1 exits 1–5 + 7 hold on
-a 101-TU C build (`tests/024`), exit 6 via `scripts/build-self.sh`, and the
-lot replicate on Lua 5.4.7 (`scripts/build-lua.sh`).
+⇒ stratification error (`tests/018`); the process domain's equivalents hold
+(`tests/033`); a from-scratch third-party domain holds all of the above PLUS
+plan caching and verify-after-write failure (`tests/046`). ROADMAP Phase-1
+exits 1–5 + 7 hold on a 101-TU C build (`tests/024`), exit 6 via
+`scripts/build-self.sh`, and the lot replicate on Lua 5.4.7
+(`scripts/build-lua.sh`) — all unaffected by the Q13 migration, since
+`--reconcile`'s observable behavior is unchanged.
 
 ### [LAW 31] Fenced effects are reconciler-only, journaled, at-most-once per pass
 
@@ -1380,7 +1420,7 @@ signatures, not line numbers — the source is under active migration.)
 | LAW 27 | exception/tail-safe dynamic extent | holds | D9/D16/D20 fixed; save-stack restore on every exit |
 | LAW 28 | failure traces, error memoization | partial | both backends memoize `Failure` outcomes as failing traces, re-served until a recorded read changes; D16 `Evaluating`-leak fixed (`tests/012`, `tests/014`); non-`Failure` exceptions uncached |
 | LAW 29 | source locations in errors | holds | D12 closed: every top-level form's location is appended to unlocated runtime errors in both backends; arity/capability errors name the callee/operation; `pp: error:` single-line reporting; a `load`ed file's own forms are individually located and decorated with THAT file's location before the error can unwind past the `load` (`tests/027`, including case (g)) |
-| LAW 30 | desired-state + single writer | partial | fs-domain reconciler v1: plan/journal/atomic-apply/verify, single-writer deletes, stratification check, blob-hash desired values (Q4, `tests/018`, `tests/023`); drives a real 101-TU C build and Lua 5.4.7 end-to-end (`tests/024`); push `stabilize` live (`pp --watch --stabilize`, `tests/032`); process-domain reconciler live (`pp --supervise`, `tests/033`) |
+| LAW 30 | desired-state + single writer | holds | Q13 full form: `register-domain` (a probe is the ⊥-write-authority case, one registry) + generic orchestration (`src/domains.ml`) enforce plan/journal/atomic-apply/verify/stratification for ANY registered domain, not hardwired to fs — `src/reconciler.ml`/`supervisor.ml` deleted; `stdlib/domain-fs.pp`/`domain-proc.pp` hold the fs/proc policy as pp source (`tests/018`, `tests/023`, `tests/033` unchanged byte-for-byte); a from-scratch third-party domain proves genericity (`tests/046`); drives a real 101-TU C build and Lua 5.4.7 end-to-end (`tests/024`); push `stabilize` live (`pp --watch --stabilize`, `tests/032`) |
 | LAW 31 | fenced effects, intent journal | holds | scripting-tier `(fenced KIND SPEC)`, `--fenced-policy retry|abort|ask`, intent/done journal, recovery without silent retry; `tests/034` |
 | LAW 32 | gradual types, strictest oracle | holds | D3 fixed; both backends enforce; tests 004/005 restored; `tests/007-phase0-laws.pp` |
 | LAW 33 | config: computed keys, tail-safe scoping | holds | D15 fixed; computed keys and tail-safe scoping in both backends; config reads inside nodes are `config:<key>` trace cells, ambient config out of the node key (`tests/015`) |

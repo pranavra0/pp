@@ -150,8 +150,16 @@ let pop_trace_frame () : unit =
    observed hash is the hash of the forced value. *)
 let force_hook : (value -> value) ref = ref (fun v -> v)
 
-(* Process-domain reconciler cell observation hook. Set by Supervisor.init
-   so that Store.observe_cell can re-observe proc:<name> cells. *)
+(* Process-domain cell observation hook — pre-Q13 vestige. Was set by the
+   now-deleted Supervisor.init; nothing wires it anymore, and (checked
+   while landing Q13) nothing ever called record_read with a Cell.Proc id
+   either, so Store.observe_cell's `Cell.Proc` arm was already
+   unreachable dead weight before this refactor — a pre-existing gap, not
+   introduced by it. stdlib/domain-proc.pp's observe reads domain-state
+   directly instead of going through a proc: cell at all. Left as the
+   default no-op rather than removed: Cell.Proc itself stays (fs/proc
+   "keep their existing cell kinds," PLAN-m4-cells.md), so this hook stays
+   as its dormant counterpart rather than an asymmetric partial removal. *)
 let proc_observer : (string -> string option) ref = ref (fun _ -> None)
 
 let observe_proc (name : string) : string option =
@@ -226,6 +234,26 @@ let record_handler_observation (name : string) : unit =
    requirement (cell_authorized passes runtime: cells unconditionally). *)
 
 let source_roots : string list ref = ref []
+
+(* Q13 loader reachability: stdlib/domain-fs.pp and stdlib/domain-proc.pp
+   must load from ANY cwd (--reconcile/--supervise are meant to work from
+   wherever the user invokes pp, not just the repo root) — resolved
+   relative to the RUNNING EXECUTABLE, not the cwd: dirname(realpath(argv0))
+   is .../src (or .../bin under an install layout), and its sibling
+   "stdlib" is where dune mirrors (or an install lays out) the actual
+   stdlib/ tree. `bin/pp` is a symlink to `_build/default/src/main.exe`
+   (the dev convention this repo's .envrc documents), so realpath resolves
+   through it to .../_build/default/src/main.exe, whose sibling-of-parent
+   is .../_build/default/stdlib — exactly where dune's `(source_tree
+   stdlib)` mirrors the real stdlib/ directory for `dune runtest` too. *)
+let stdlib_root () : string option =
+  try
+    let exe = Unix.realpath Sys.executable_name in
+    let exe_dir = Filename.dirname exe in
+    let candidate = Filename.concat (Filename.dirname exe_dir) "stdlib" in
+    if Sys.file_exists candidate && Sys.is_directory candidate then Some candidate
+    else None
+  with _ -> None
 
 (* SPEC LAW 23 / DESIGN §2.1: the ONE cell-id canonicalization function,
    applied at every file:/tree:/stat:/tool:/runtime:file: construction site,
@@ -376,29 +404,56 @@ let fenced_policy_name = function
   | Abort -> "abort"
   | Ask -> "ask"
 
-(* ---- M4 probes: registration + per-pass pinned values (PLAN-m4-cells.md) ----
+(* ---- Q13: the in-language reconciler-domain protocol (PLAN-m4-cells.md) ----
 
-   `(register-probe name observe-fn read-cap)` is script-tier only
-   (primitives.ml guards on trace_stack, mirroring Fenced.register). This is
-   Q13's register-domain NOT built yet (stage 2) — a probe is "a domain with
-   bottom write authority" in the design's words, so this registry is
-   structured to make that refactor natural: a record with the fields a
-   future domain registration would also need (name is the hashtable key;
-   [pr_apply]/[pr_diff] are left as an explicit comment rather than fields,
-   since stage 1 has no caller for them and speculative fields would be dead
-   weight — stage 2 adds a variant or optional fields here, not a parallel
-   table). *)
-type probe_entry = {
-  pr_observe : value;       (* the observe-fn closure/builtin, forced once at
-                                registration (never re-forced per read — a
-                                stale forced closure value is fine, closures
-                                are immutable once built) *)
-  pr_read_cap : capability; (* consumed into this registry at registration —
-                                never re-exposed to user code (mirrors Q13's
-                                :write-cap discipline) *)
+   ONE registry for both hats of "a domain": a probe is a domain with BOTTOM
+   write authority (dm_diff/dm_apply = None, dm_namespace = [] — nothing to
+   converge, nothing to stratify); a full domain adds diff/apply and a
+   namespace. `register-probe` (primitives.ml) is now sugar over
+   `register-domain`, and `(probe name)`'s lookup / Store's re-observation
+   hook both read this one table — stage 1's probe_registry generalized in
+   place, not a parallel table. *)
+type domain_entry = {
+  dm_namespace : string list;
+    (* Cell-id PREFIXES this domain owns, for stratification (LAW 30 full
+       form) — []  for a probe (bottom write authority: nothing to
+       stratify, core never converges it). fs supplies ["file:" ^ root;
+       "tree:" ^ root; "stat:" ^ root]; proc supplies ["proc:"]. *)
+  dm_observe : value;       (* () -> value; fresh every pass, never cached *)
+  dm_diff : value option;   (* (observed, desired) -> plan, PURE; None = probe *)
+  dm_apply : value option;  (* plan -> nil, NOT a node; None = probe *)
+  dm_cap : capability;
+    (* The ONE capability consumed at registration: a probe's :read-cap
+       (observe only) or a domain's :write-cap (observe AND apply both run
+       under it — a write grant already covers read at the same scope, so
+       no separate read-cap is threaded). Never re-exposed to user code. *)
+  dm_observe_cell : value option;
+    (* Optional (fn (sub) -> hash|nil): Store.observe_cell's O(1) targeted
+       re-observation for a `domain:<name>:<sub>` cell (the proc_observer
+       pattern generalized to third-party domains). *)
 }
 
-let probe_registry : (string, probe_entry) Hashtbl.t = Hashtbl.create 16
+let domain_registry : (string, domain_entry) Hashtbl.t = Hashtbl.create 16
+
+(* Q13: which domain's observe/diff/apply is currently executing — set by
+   Domains.run_pass via with_ref for the extent of each call, so
+   domain-state-get/put (core-trusted, per-domain-scoped bookkeeping) know
+   where to read/write without an explicit domain-name argument at every
+   call site ("core knows which domain is running"). None at every other
+   time (script tier, node bodies, diff's empty-cap extent doesn't clear
+   this — the cap gate on domain-state-get/put is what blocks diff, not
+   this being None). *)
+let current_domain : string option ref = ref None
+
+(* Store-facing hook for a `domain:<name>:<sub>` cell's re-observation, wired
+   in main.ml (mirrors proc_observer/probe_observer just below) — Store
+   cannot depend on Primitives directly (module-cycle reasons identical to
+   those hooks). *)
+let domain_cell_observer : (string -> string -> string option) ref =
+  ref (fun _ _ -> None)
+
+let observe_domain_cell (name : string) (sub : string) : string option =
+  !domain_cell_observer name sub
 
 (* Per-pass pinned probe results: cleared at exactly the three points the
    watch loop clears Store.run_pins (main.ml) — probes are LAW 38's declared-

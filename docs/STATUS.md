@@ -259,35 +259,87 @@ non-list `def` is a value binding — `tests/025`.)
   any change to the tool or under a granted tree re-runs the node, including
   reads pp never saw. Hit authority: `tree:` needs the fs grant, `tool:` needs
   the process grant. Pinned by `tests/017-run-effect.sh`.
-- **Filesystem reconciler v1 (Q4/LAW 30).** `pp --reconcile ROOT prog.pp`
-  treats the program's final value — a map of relative paths to string
-  contents — as the desired state of the domain under ROOT: diffs against
-  observed reality (content hashes re-derived from the tree, no trusted state
-  file), journals `intent`/`done` to `~/.pp/store/journal`, applies via
-  temp + `rename(2)` with parents created and verify-after-write, and deletes
-  unmanaged files (single writer — the fs:rw grant over ROOT is required and
-  is the consent). Stratification (LAW 30): under `--reconcile` every cell
-  observation the program makes is collected (`Runtime.observe_all`), and a
+- **Q13 — the in-language reconciler-domain protocol (PLAN-m4-cells.md
+  §Q13).** `(register-domain {:name :namespace :observe :diff :apply
+  :write-cap [:observe-cell]})` — script-tier, consumes `:write-cap` into
+  `Runtime.domain_registry` (ONE registry; `register-probe` is now sugar
+  for the ⊥-write-authority case). `observe : () -> value` runs fresh
+  every pass (never cached); `diff : (observed, desired) -> plan` runs
+  PURE under an EMPTY capability set and is itself plan-cached (a direct
+  `Store.hit`/`store_object`/`store_trace` key `H(diff-code, observed,
+  desired)` with a trace-less, vacuously-verifying entry — no synthetic
+  node needed); `apply : plan -> nil` runs under the domain's own
+  threaded write-cap, journaled in a generic per-pass `intent <hash> k=v
+  …` / `done <hash>` bracket whose fields are the domain's own ordered
+  `:summary` (fs: `root=… create=… update=… delete=…`; proc: `started=…
+  restarted=… stopped=…`) — core knows nothing about what the fields
+  mean. Stratification generalizes to per-domain `:namespace` prefixes,
+  with `observed_all` collection SUSPENDED for the whole extent of a
+  domain's own observe/diff/apply/verify (the load-bearing new dynamic
+  scope). Core re-observes and re-diffs after apply (verify-after-write);
+  a non-empty result is a hard error. New trusted primitives
+  (`src/domain_prims.ml`): `tree-observe`, `materialize-file`,
+  `remove-file`, `proc-spawn`, `proc-alive?`, `proc-stop`, `proc-reap`,
+  `domain-state-get/put` (a generic per-domain KV store, replacing
+  `procs/`'s role). `src/reconciler.ml` and `src/supervisor.ml` are
+  **deleted** — `src/domains.ml` is the generic orchestrator;
+  `stdlib/domain-fs.pp` and `stdlib/domain-proc.pp` hold ALL the policy
+  (the tree-walk diff, the start/stop/restart decision) as real pp
+  source. A third-party toy domain unrelated to fs/proc (`tests/046-
+  domains.sh`, "kv": a directory of one-file-per-key values, registered
+  from an ordinary pp program via `register-domain` with neither CLI
+  flag) exercises plan caching, stratification, cap threading (a missing
+  grant is a `Capability_error` from `cap-restrict` itself, before the
+  domain ever runs), verify-after-write failure for a deliberately
+  under-converging `apply`, the generic journal bracket, and
+  fenced-after-domains ordering — proving the protocol is genuinely
+  generic, not fs/proc-shaped.
+- **Filesystem domain (Q4/LAW 30), now `stdlib/domain-fs.pp` over Q13.**
+  `pp --reconcile ROOT prog.pp` auto-loads `stdlib/domain-fs.pp` and
+  registers it (write-cap `cap-restrict`'d to ROOT, `:wo` — write-only
+  suffices, since the domain observing its OWN managed tree to converge
+  is not a distinct authority concern), treating the program's final
+  value — a map of relative paths to string contents — as the desired
+  state of the domain under ROOT: diffs against observed reality (content
+  hashes re-derived from the tree via the `tree-observe` primitive, no
+  trusted state file), journals `intent`/`done` to `~/.pp/store/journal`,
+  applies via `materialize-file` (temp + `rename(2)`, parents created)
+  with verify-after-write, and deletes unmanaged files via `remove-file`
+  (single writer — the fs write grant over ROOT is required and is the
+  consent). Stratification (LAW 30): every cell observation the program
+  makes is collected (`Runtime.observe_all`, now unconditional — a
+  register-domain program needs it with no CLI flag at all), and a
   desired state that observed its own domain is refused. Both backends.
-  Pinned by `tests/018-reconcile.sh`. Desired contents may be inline strings
-  or CAS references: `(blob S)` ingests bytes into `blobs/` and returns
-  `blob:<sha256>`; the reconciler diffs refs by hash without loading bytes
-  and materializes from the store — `rm -rf build/` + re-reconcile restores
-  the tree with zero tool re-runs when the desired-map nodes hit
-  (`tests/023`). Grant the output domain WRITE-ONLY (`fs:<root>:wo`): a
-  read-capable grant over it would make `run`'s coarse tree cell observe the
-  domain and trip stratification. v1 limits: filesystem domain only;
-  combine with `--watch` for continuous reconciliation.
-- **Process-domain reconciler (Phase 2).** `pp --supervise prog.pp`
-  (typically `pp --watch --supervise`) treats the program's final value as a
-  map of service-name → spec, and keeps observed processes in sync with the
-  desired specs: starts missing services, stops removed ones, restarts a
-  service when its spec hash changes, and reaps/restarts a process killed
-  with `kill -9` within one poll interval. Process state lives in
-  `~/.pp/store/procs/` and every start/stop is journaled intent/done.
-  Requires `--grant process`; a desired state that observed a `proc:` cell
-  (its own domain) is refused (LAW 30 stratification). Both backends.
-  Pinned by `tests/033-process-reconciler.sh`.
+  Pinned by `tests/018-reconcile.sh`, UNCHANGED byte-for-byte across the
+  Q13 migration. Desired contents may be inline strings or CAS
+  references: `(blob S)` ingests bytes into `blobs/` and returns
+  `blob:<sha256>`; the domain's diff (`stdlib/domain-fs.pp`) compares by
+  hash without loading bytes and materializes from the store — `rm -rf
+  build/` + re-reconcile restores the tree with zero tool re-runs when
+  the desired-map nodes hit (`tests/023`). Grant the output domain
+  WRITE-ONLY (`fs:<root>:wo`): a read-capable grant over it would make
+  `run`'s coarse tree cell observe the domain and trip stratification.
+  Combine with `--watch` for continuous reconciliation (every registered
+  domain, not just this one, is now re-checked every tick).
+- **Process domain (Phase 2), now `stdlib/domain-proc.pp` over Q13.**
+  `pp --supervise prog.pp` (typically `pp --watch --supervise`)
+  auto-loads `stdlib/domain-proc.pp` and registers it; the program's
+  final value is a map of service-name → spec, kept in sync with observed
+  processes: starts missing services, stops removed ones, restarts a
+  service when its spec changes (compared STRUCTURALLY via `hash-value`,
+  which canonicalizes map-key order the same way the on-disk codec does —
+  a spec round-tripped through `domain-state-get/put` must not spuriously
+  compare "different" purely from key reordering), and reaps/restarts a
+  process killed with `kill -9` within one poll interval. Process state
+  lives in `~/.pp/store/domain-state/proc/` (the generic per-domain KV
+  store, replacing `procs/`'s role — the domain maintains its own
+  "known-services" index, since there is still no OS process
+  enumeration) and every start/stop is journaled intent/done, owned
+  verbatim by the `proc-spawn`/`proc-stop` primitives. Requires `--grant
+  process`; a desired state that observed a `proc:` cell (its own domain)
+  is refused (LAW 30 stratification). Both backends. Pinned by
+  `tests/033-process-reconciler.sh`, UNCHANGED byte-for-byte across the
+  Q13 migration.
 - **Fenced effects (LAW 31).** `(fenced KIND SPEC)` is a scripting-tier
   primitive that registers a non-convergent action (e.g., send email, charge
   card) for reconciler sequencing.  It raises an error if used inside a node
@@ -424,9 +476,12 @@ non-list `def` is a value binding — `tests/025`.)
 - **Bytecode `.ppc` serialization** — complete but **dead** and lossy;
   `cache.ml` deleted; the value/trace store (`store.ml`) supersedes it and is
   now live in the tree-walker.
-- **M4 stage 1 — probes (LAW 37/38, docs/PLAN-m4-cells.md).**
+- **Probes (LAW 37/38, docs/PLAN-m4-cells.md).**
   `(register-probe name observe-fn read-cap)` (script-tier, `Runtime.
-  probe_registry`) and `(probe name)` (inside or outside nodes) are the one
+  domain_registry` — unified with Q13's `register-domain` in stage 2: a
+  probe is now sugar for the ⊥-write-authority case, `:diff`/`:apply =
+  None`, one registry not two) and `(probe name)` (inside or outside
+  nodes) are the one
   sanctioned nondeterministic dependency: the observe-fn runs at most once
   per pass, OUTSIDE the reading node's trace stack (`trace_stack` saved to
   `[]` via `with_ref`, exception-safe) and under exactly the registered
@@ -517,3 +572,4 @@ their phase in [ROADMAP.md](ROADMAP.md).
 
 | D23 | Module scope × top-level `let` (found while fixing D22) | **Open.** A module body can see a name bound by a top-level `let` in the VM (top-level `let` is special-cased to bind as a VM global) but not in the tree-walker (a module evaluates in a fresh `base_env`). Pre-existing, unrelated to D22 — confirmed present before and after the D22 fix. The tree-walker is the oracle: a module should NOT see enclosing `let` bindings. Not fuzzer-generated; avoid relying on it until fixed. |
 | D24 | VM dynamic-extent scoping under OCaml exceptions (found during M3 attenuation) | **Open.** The VM's flat enter/exit-opcode pattern for `with-handler`/`with-config` is not exception-safe: an OCaml exception raised mid-body unwinds past the exit opcode, leaking the installed handler/config past the error (confirmed by direct test). The tree-walker's `with_ref` restores correctly, so the backends diverge on error paths that install then observe dynamic extent — narrower than D9's claim (D9 fixed normal-return and tail-call restore, not exception unwind). `with-caps` deliberately does NOT use the flat pattern (its VM body runs via nested `run_isolated` under a real try/with) and is immune. Fix: give with-handler/with-config the same nested-run shape or an unwind-protect discipline. |
+| D25 | Content-addressed `let`-memoization silently caches repeated `perform` calls (found landing Q13) | **Fixed, with a residual discipline, not a language change.** `(perform domain-state-get …)` sat behind an ordinary `let` in `stdlib/domain-proc.pp`'s `proc-known-names` — LAW 20's `make_thunk_ca` keys a `let`-thunk on `(expr, env_hash, caps_hash, cfg_hash, handlers_hash)`, and a ZERO-ARGUMENT closure called twice in the same dynamic extent (once for `domains.ml`'s plan pass, once for its verify re-observe; or twice within one `apply`, for two services' bookkeeping) has an UNCHANGING env and, under `with_domain`'s fixed cap, an unchanging ambient — so the key is IDENTICAL and the second call silently replayed the first's memoized result instead of re-reading reality. Invisible: no exception, no error text — a killed service looked "still alive" one call later, entirely in-process. Repro: register a domain whose `:observe` reads `domain-state-get` inside a 0-arg helper, run reconcile, observe verify-after-write fail (or, worse, silently "succeed" while stale). Fix, two-part: (1) `Domains.call_uncached` pushes a fresh, unique `config-stack` layer before every `observe`/`apply` call — folded into `make_thunk_ca`'s key, guaranteeing each of the two TOP-LEVEL calls a pass makes gets a distinct key (`diff` is deliberately EXCLUDED — its memoization IS the plan cache and must stay content-keyed); (2) within a single call, the general/robust rule is mechanical, not automatic: never call a zero-argument `perform`-containing accessor more than once per dynamic extent — read once, thread the result through explicitly as an ordinary argument (a parameterized call is immune by construction, since a differing argument value changes the env hash). `stdlib/domain-proc.pp`'s `known-services` bookkeeping was restructured this way (`proc-apply` reads it once, via `foldl`'s seed, and writes it once at the end). No core semantics changed; this is a documented authoring discipline for domain policy code (and, latently, for ANY pp code that calls a 0-arg impure accessor more than once per extent), surfaced because Q13 was the first feature to call the SAME pp closure twice, deliberately, from OCaml orchestration. |

@@ -109,17 +109,26 @@ Terms marked *(planned)* do not exist in the code yet — see
   `pp --reconcile ROOT` (`tests/018`, `tests/023`), and for the process
   domain as `{service-name → spec}` consumed by `pp --supervise`
   (`tests/033`).
-- **reconciler** — the one privileged writer per domain.  v1 filesystem
-  (`reconciler.ml`, `pp --reconcile ROOT`): diff desired vs observed by
-  content hash, journal `intent`/`done`, apply via temp+rename with
-  verify-after-write, delete unmanaged files, refuse self-reading desired
-  state (stratification, LAW 30). Watch mode live (`--watch --reconcile`
-  polling loop). Process domain (`supervisor.ml`, `pp --supervise`) is live:
-  start/stop/restart on spec-hash change, zombie reaping, journal intent/done
-  (`tests/033`). Fenced effects (LAW 31) are sequenced after convergent work
-  and recovered by `--fenced-policy retry|abort|ask` (`tests/034`).
-- **domain** *(planned)* — a slice of external state under single ownership (an
-  output subtree, a process set, a DB schema).
+- **reconciler** — retired as a proper noun (there is no `reconciler.ml`
+  anymore): domains are now `observe`/`diff`/`apply` triples of pp
+  functions running under core-enforced discipline (Q13,
+  `src/domains.ml`), not a privileged OCaml module per domain. Filesystem
+  (`stdlib/domain-fs.pp`, `pp --reconcile ROOT`): diff desired vs observed
+  by content hash, journal `intent`/`done`, apply via `materialize-file`
+  (temp+rename) with verify-after-write, delete unmanaged files via
+  `remove-file`, refuse self-reading desired state (stratification, LAW
+  30). Watch mode live (`--watch --reconcile` polling loop; every
+  registered domain is re-checked every tick). Process domain
+  (`stdlib/domain-proc.pp`, `pp --supervise`) is live: start/stop/restart
+  on spec change, zombie reaping, journal intent/done (`tests/033`).
+  Fenced effects (LAW 31) are sequenced after ALL domains' convergent
+  work and recovered by `--fenced-policy retry|abort|ask` (`tests/034`).
+- **domain** *(real, Q13)* — a slice of external state under single
+  ownership (an output subtree, a process set, a third-party toy example
+  in `tests/046`), registered via `(register-domain {:name :namespace
+  :observe :diff :apply :write-cap})`. A probe (LAW 37/38) is a domain
+  with ⊥ write authority — one registry, `Runtime.domain_registry`, two
+  hats.
 
 ### Scheduling
 

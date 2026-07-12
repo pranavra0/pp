@@ -205,8 +205,8 @@ governed by [THREAT-MODEL-islands.md](THREAT-MODEL-islands.md).
 | `src/primitives.ml` | Built-in functions and the initial environment. |
 | `src/island.ml` | Islands (D2): URI parse (file/git/github), content-addressed cache + tamper verification, `--update` pin rewriter, `island-pins`, opt-in git fetch. |
 | `src/store.ml` | Persistent content-addressed store + verifying traces; wired into `force` for `(node e)` in both back ends. |
-| `src/reconciler.ml` | Filesystem-domain reconciler v1 (Q4/LAW 30); applies convergent fs state, then `main.ml` drains fenced actions. |
-| `src/supervisor.ml` | Process-domain reconciler (Phase 2): desired process map → start/stop/restart on spec-hash change, zombie reaping, intent/done journal; convergent proc work, then `main.ml` drains fenced actions. |
+| `src/domain_prims.ml` | Q13 trusted mechanics: atomic `materialize-file`/`remove-file`, `tree-observe`, `proc-spawn`/`proc-alive?`/`proc-stop`/`proc-reap`, and `domain-state-get/put` (a generic per-domain KV store). Moved out of the deleted `reconciler.ml`/`supervisor.ml`; owns no policy. |
+| `src/domains.ml` | Q13 generic domain orchestration: the journal bracket, `observed_all` suspension, cap threading into observe/apply, plan caching (direct `Store` calls, no synthetic node), verify-after-write, and stratification. Domain-agnostic — replaces `reconciler.ml`/`supervisor.ml`'s driver logic; `stdlib/domain-fs.pp`/`domain-proc.pp` hold the fs/proc POLICY as pp source, then `main.ml` drains fenced actions. |
 | `src/fenced.ml` | Fenced-effect executor (Q3/LAW 31): registers scripting-tier actions, journals intent/done, resolves unknown-status entries by policy. |
 | `src/repl.ml` | REPL and file-execution helpers for both back ends. |
 | `src/stabilize.ml` | Push scheduler: side-table (`node_key` → `thunk`) + dirty reset; the reverse-edge index is in `store.ml`. |

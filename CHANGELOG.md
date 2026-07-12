@@ -53,6 +53,70 @@ v0.2.0 predate this file and are reconstructed from history for context.
     [docs/SPEC.md](docs/SPEC.md) (LAW 37, LAW 38, LAW 39, LAW 22/26
     amendments), [docs/STATUS.md](docs/STATUS.md),
     [docs/MASTERPLAN.md](docs/MASTERPLAN.md) (M4).
+- **M4 stage 2: Q13, the in-language reconciler-domain protocol**
+  (docs/PLAN-m4-cells.md §Q13) — the M4 exit criterion. `src/reconciler.ml`
+  and `src/supervisor.ml` are **deleted**; `(register-domain {:name
+  :namespace :observe :diff :apply :write-cap [:observe-cell]})` is the
+  new script-tier primitive (`Runtime.domain_registry` — unified with
+  stage 1's probe registry: `register-probe` is now sugar for the
+  ⊥-write-authority case). `observe : () -> value` runs fresh every pass;
+  `diff : (observed, desired) -> plan` runs PURE under an empty capability
+  set and is itself plan-cached (a direct `Store.hit`/`store_object`/
+  `store_trace` key, no synthetic node); `apply : plan -> nil` runs under
+  the domain's threaded write-cap. A plan is `{:items :summary}` —
+  `:summary` an ORDERED VECTOR of `[key value]` pairs the domain itself
+  assembles (a vector, not a map, so plan-cache round-trips through the
+  store's canonicalizing codec cannot reorder it). New generic per-pass
+  journal bracket (`Journal.DomainIntent`/`DomainDone`, replacing the
+  fs-only `FsIntent`/`FsDone`) reproduces the pre-Q13
+  `root=R create=C update=U delete=D` shape for fs and a different
+  vocabulary for any other domain, verbatim from that domain's own
+  `:summary`. Stratification (LAW 30) generalizes to per-domain
+  `:namespace` cell-prefix lists, with `Runtime.observed_all` collection
+  SUSPENDED for a domain's own observe/diff/apply/verify extent (load-
+  bearing; does not suspend `trace_stack`) — and is now collected
+  UNCONDITIONALLY (previously gated on `--reconcile`/`--watch`/
+  `--supervise`), since a bare `register-domain` program needs it with no
+  CLI flag at all. New trusted primitives (`src/domain_prims.ml`, moved
+  from the deleted modules): `tree-observe`, `materialize-file`,
+  `remove-file`, `proc-spawn`, `proc-alive?`, `proc-stop`, `proc-reap`,
+  `domain-state-get/put` (a generic per-domain KV store replacing
+  `procs/`'s role); plus two small new pure builtins, `hash-string` (raw
+  SHA-256 of a string — domain-fs.pp's content-hash) and `hash-value` (a
+  canonical, map/set-order-INDEPENDENT structural hash — needed because
+  `=` on two maps is plain order-sensitive assoc-list equality, and a spec
+  value round-tripped through `domain-state-get/put` compares "different"
+  from the in-memory original purely because the store's codec sorts map
+  keys canonically). New `Cell.Domain {name; sub}` kind
+  (`domain:<name>:<sub>`) for third-party domains (fs/proc keep their
+  existing cell kinds). `stdlib/domain-fs.pp` and `stdlib/domain-proc.pp`
+  now hold ALL the fs/proc POLICY (the tree-walk diff, the start/stop/
+  restart decision) as real pp source; `--reconcile ROOT` auto-loads the
+  former (write-cap `:wo`, not `:rw` — a write-only grant must still let
+  the domain observe its own tree) and wraps the program's value as
+  `{"fs" -> v}`; `--supervise` likewise with the latter, `{"proc" -> v}`;
+  both compose; a program calling `register-domain` itself (neither flag)
+  returns `{name -> desired}` directly. Found and fixed while landing this
+  (docs/STATUS.md D25): pp's ordinary content-addressed `let`-memoization
+  silently replays a zero-argument closure's `perform` effects when called
+  twice in one dynamic extent (the plan pass and its verify re-observe;
+  or twice within one `apply`) — fixed by a per-call config-stack cache-
+  busting nonce (`Domains.call_uncached`) plus restructuring
+  `domain-proc.pp`'s bookkeeping to read its own index once and thread it
+  explicitly, never re-query it mid-pass. `tests/018-reconcile.sh` and
+  `tests/033-process-reconciler.sh` pass UNCHANGED (the exit criterion);
+  new `tests/046-domains.sh` registers a from-scratch third-party "kv"
+  domain (a directory of one-file-per-key values, unrelated to fs/proc) to
+  prove the protocol is genuinely generic: plan caching across separate
+  process invocations, stratification, cap threading, verify-after-write
+  failure for a deliberately under-converging apply, the generic journal
+  bracket, and fenced-after-domains ordering. All 681 tests (663
+  pre-existing + 18 new) and the fuzzer (`core`+`full`, 2000 programs
+  each) pass; `scripts/build-self.sh` and `scripts/build-lua.sh` (both go
+  through `--reconcile`) pass unchanged. See [docs/DESIGN.md](docs/DESIGN.md)
+  (Q13, the E2 revision), [docs/SPEC.md](docs/SPEC.md) (LAW 30 now
+  *holds*, full form), [docs/STATUS.md](docs/STATUS.md) (D25),
+  [docs/MASTERPLAN.md](docs/MASTERPLAN.md) (M4 exit criterion 1, M4 DONE).
 - **M3: in-language capability attenuation** (docs/PLAN-m3-attenuation.md).
   `(current-capabilities)` reifies the ambient set as of the call (never a
   mint); `cap-restrict` gains an optional `fs_mode` argument

@@ -261,6 +261,28 @@ two shell suites:
     `http-post`'s body actually reaches the server (echoed back); `perform
     http-get` inside a node body errors and never touches the network; a
     `curl`-absent run (an emptied `PATH`) is a clean error, not a crash.
+  - **046** — Q13, the in-language reconciler-domain protocol
+    (docs/PLAN-m4-cells.md §Q13; the M4 exit criterion). A THIRD-PARTY toy
+    "kv" domain (a directory of one-file-per-key values) is defined and
+    registered entirely INSIDE the test's own pp programs via
+    `register-domain` — never touching `stdlib/domain-fs.pp`/
+    `domain-proc.pp` — to prove the protocol is genuinely generic, not
+    fs/proc-shaped: cap threading (no grant ⇒ `cap-restrict` itself
+    refuses before the domain ever runs, nothing materializes); a cold
+    pass converges and the generic per-pass journal bracket appears
+    (`intent`/`done`, domain-agnostic); PLAN CACHING across two SEPARATE
+    `pp` process invocations (proved via `pp why`'s `domain kv: plan …:
+    hit`, not just an in-process reuse); stratification (a desired-state
+    computation that reads a file under its own kv directory is refused,
+    LAW 30 generalized); verify-after-write failure surfaced for a
+    deliberately-registered domain whose `apply` is a no-op (a real
+    `Capability_error`-free divergence the core must still catch); fenced-
+    after-domains ordering (a `(fenced ...)` action registered alongside
+    the domain runs, and its journal `intent fenced` line lands AFTER the
+    domain's own `done` line); VM parity. `tests/018-reconcile.sh` and
+    `tests/033-process-reconciler.sh` (unchanged, byte-for-byte, across
+    the whole Q13 migration — the exit criterion itself) are this test's
+    real companions, not duplicated here.
 
 Two proofs run OUTSIDE `dune runtest` (they invoke dune / the network):
 

@@ -81,6 +81,41 @@ let execute_file_bytecode (use_vm : bool) (path : string) : value list =
   close_in ch;
   execute_string_bytecode ~source:path use_vm source
 
+(* ---- Q13: run several sources under ONE init (main.ml's domain-glue
+   wiring) ----
+
+   `execute_string`/`execute_string_bytecode` each call `init()`
+   unconditionally — correct for a single top-level run, but `init()`
+   resets Runtime.domain_registry (Evaluator.init, alongside thunk_store/
+   handler_stack/macro table), so two SEPARATE calls would make the second
+   wipe out a `register-domain` a first call just performed. main.ml's
+   --reconcile/--supervise auto-wiring needs exactly that: a small glue
+   snippet that loads stdlib/domain-fs.pp and calls register-domain, THEN
+   the user's program — sharing one registry, one macro table, one
+   thunk_store. This is init() once, then each source processed in order
+   (mirroring what execute_string/execute_string_bytecode do internally,
+   without the redundant re-inits) — byte-identical to today's single-file
+   behavior when given a one-element list. *)
+let execute_sources_bytecode (use_vm : bool) (sources : (string * string) list) : value list =
+  if use_vm then begin
+    Vm.init ();
+    List.concat_map (fun (source, input) ->
+      let exprs = read_string ~source input in
+      let expanded = Macro.expand_toplevel_list exprs in
+      List.map (fun e ->
+        with_toplevel_location e (fun () ->
+          let bc = Compiler.compile_program [e] in
+          Vm.run_program_expr bc))
+        expanded)
+      sources
+  end else begin
+    init ();
+    List.concat_map (fun (source, input) ->
+      let exprs = Macro.expand_toplevel_list (read_string ~source input) in
+      List.map process_expr exprs)
+      sources
+  end
+
 (* =================================================================== *)
 (*  Input machinery                                                     *)
 (* =================================================================== *)
