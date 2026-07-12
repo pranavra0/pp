@@ -70,7 +70,7 @@ let main () =
         Printf.printf "  pp --bytecode <file.pp>  Run via bytecode VM\n";
         Printf.printf "  pp --diff <file.pp>      Run both backends and diff\n";
         Printf.printf "  pp -e '<expr>'           Evaluate an expression\n";
-        Printf.printf "  pp --grant <spec>        Grant capability (fs:/path:rw, net:tcp, process)\n";
+        Printf.printf "  pp --grant <spec>        Grant capability (fs:/path:rw, net:host[:port], secret:/path, process)\n";
         Printf.printf "  pp --reconcile <root>    Materialize the program's map value under <root>\n";
         Printf.printf "  pp --supervise <file.pp>  Reconcile program's process-map value (use with --watch)\n";
         Printf.printf "  pp --fenced-policy retry|abort|ask  Unknown-status fenced-action policy (default: abort)\n";
@@ -114,8 +114,17 @@ let main () =
            downstream comparison (authority checks, `tree:` cells built from
            granted paths) already sees the same spelling a cell would. *)
         Types.CapFilesystem { path = Runtime.canonical_path path; mode = m }
-    | ["net"; protocol] ->
-        Types.CapNetwork { protocol }
+    | ["net"; host] ->
+        Types.CapNetwork { host; port = None }
+    | ["net"; host; port] ->
+        (match int_of_string_opt port with
+         | Some p -> Types.CapNetwork { host; port = Some p }
+         | None -> failwith ("invalid port in --grant net spec: " ^ spec))
+    | ["secret"; path] ->
+        (* SPEC LAW 23 / DESIGN §2.1: canonicalize at the mint, exactly like
+           fs grants — so a secret grant spelled differently from a later
+           read (symlink, trailing slash) still authorizes it. *)
+        Types.CapSecret { path = Runtime.canonical_path path }
     | ["process"] ->
         Types.CapProcess
     | _ -> failwith ("invalid --grant spec: " ^ spec)
@@ -129,6 +138,7 @@ let main () =
     :: List.map (fun f -> Filename.dirname (Runtime.canonical_path f)) !files;
   Store.init ();
   Runtime.proc_observer := Supervisor.observe_proc;
+  Runtime.probe_observer := Primitives.probe_observe_for_store;
   Runtime.fenced_policy := !fenced_policy;
   (* Collect every cell observation made by the program: needed for
      --reconcile stratification (LAW 30) and for --watch polling. *)
@@ -176,6 +186,8 @@ let main () =
       if bytecode then Vm.init ()  (* clears thunk_store, globals, etc. *)
       else Repl.init ();            (* clears thunk_store, resets global_env *)
       Hashtbl.clear Store.run_pins;  (* clear pinned cell observations *)
+      Hashtbl.clear Runtime.probe_values;  (* M4: probes re-evaluate fresh each pass *)
+      Hashtbl.clear Runtime.sealed_pins;   (* M4: sealed bytes never survive a pass *)
       Runtime.observed_all := [];     (* clear collected observations *)
       Runtime.fenced_actions := [];   (* clear stale fenced registrations *)
       Runtime.current_capabilities := !Runtime.initial_capabilities;
@@ -195,6 +207,8 @@ let main () =
       Stabilize.reset_dirty dirty;
       Runtime.keep_thunks := true;  (* set BEFORE execute_file_bytecode's internal init *)
       Hashtbl.clear Store.run_pins;  (* fresh world observations, not last run's pins *)
+      Hashtbl.clear Runtime.probe_values;  (* M4: probes re-evaluate fresh each pass *)
+      Hashtbl.clear Runtime.sealed_pins;   (* M4: sealed bytes never survive a pass *)
       Runtime.observed_all := [];
       Runtime.fenced_actions := [];
       Runtime.current_capabilities := !Runtime.initial_capabilities;
@@ -222,6 +236,8 @@ let main () =
       (* Clear run pins so observe_cell reads the current world, not the
          snapshot from the last run (Q11 CAS-ingest pins the first read). *)
       Hashtbl.clear Store.run_pins;
+      Hashtbl.clear Runtime.probe_values;  (* M4: probes re-evaluate fresh each pass *)
+      Hashtbl.clear Runtime.sealed_pins;   (* M4: sealed bytes never survive a pass *)
       (* Detect cell changes FIRST, before reconcile work, so config edits
          are noticed promptly. Then reconcile processes only when no cell
          changed — this still restarts killed services within one interval. *)

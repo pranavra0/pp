@@ -5,9 +5,9 @@
    THE NON-DATA LAW: [encode_value] returns [Some text] only for values built
    entirely from VNil/VBool/VInt/VFloat/VString/VKeyword/VSymbol/VPair/
    VVector/VMap/VSet — data all the way down. Anything carrying code, a
-   captured environment, or a handle (VClosure, VThunk, VBuiltin, VCapability,
-   VEnvMap, VBytecode) makes the WHOLE containing value non-data: encoding
-   returns [None]. The persistent store holds data; code values are
+   captured environment, a handle (VClosure, VThunk, VBuiltin, VCapability,
+   VEnvMap, VBytecode), or a sealed secret (VSealed, M4) makes the WHOLE
+   containing value non-data: encoding returns [None]. The persistent store holds data; code values are
    process-local (see store.ml's store_object).
 
    Grammar (one value = one line; exactly one space between tokens, no
@@ -144,8 +144,12 @@ let rec encode (v : value) : string option =
       (match encode_list_opt vs with
        | None -> None
        | Some parts -> Some (wrap "t" (List.stable_sort String.compare parts)))
-  (* Non-data: code, captured environments, or handles. Process-local only. *)
-  | VClosure _ | VBuiltin _ | VCapability _ | VThunk _ | VEnvMap _ | VBytecode _ -> None
+  (* Non-data: code, captured environments, or handles. Process-local only.
+     VSealed (M4): confidentiality — encoding it would put secret bytes into
+     ~/.pp/store/objects; the non-data law already covers it for free, same
+     as every other opaque/handle kind. *)
+  | VClosure _ | VBuiltin _ | VCapability _ | VThunk _ | VEnvMap _ | VBytecode _
+  | VSealed _ -> None
 
 and encode_list_opt (vs : value list) : string list option =
   List.fold_right (fun v acc ->

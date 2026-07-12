@@ -264,3 +264,148 @@ let sandbox_read (path : string) : string option =
          Some s
        with _ -> None)
   | None -> None
+
+(* ---- M4 sealed cells: read dispatch shared by slurp/read-file ----
+
+   Sandbox scratch (above) takes precedence, unchanged. Outside a sandbox,
+   the GRANT decides the shape of the result, never the program text
+   (PLAN-m4-cells.md "Sealed cells": "program text stays deployment-
+   agnostic"):
+     - covered by a CapFilesystem read grant (with or without ALSO a
+       CapSecret grant) → ordinary VString, exactly as before M4. Both-
+       grants deliberately resolves to plain fs behavior: the deployment
+       that also handed out an fs grant over the same path is saying "not
+       secret HERE" (PLAN-m4-cells.md).
+     - covered by CapSecret and NOT by CapFilesystem → VSealed, read via
+       Store.read_sealed_cell (bytes pinned in Runtime.sealed_pins,
+       in-memory only — store_blob/the CAS is never called for this path).
+     - covered by neither → Capability_error, worded by the caller (`slurp`
+       and `read-file` keep their own pre-M4 message text via [cap_err]). *)
+let read_dispatch ~(tag : string) ~(cap_err : string -> string) (path : string) : value =
+  match sandbox_read path with
+  | Some content -> VString content
+  | None ->
+      let fs_ok =
+        List.exists (fun cap -> Capabilities.check_fs_read cap path)
+          !Runtime.current_capabilities
+      in
+      if fs_ok then
+        (try VString (Store.read_file_cell path)
+         with Sys_error msg -> failwith (tag ^ ": " ^ msg))
+      else
+        let secret_ok =
+          List.exists (fun cap -> Capabilities.check_secret cap path)
+            !Runtime.current_capabilities
+        in
+        if secret_ok then
+          (try VSealed (Store.read_sealed_cell path)
+           with Sys_error msg -> failwith (tag ^ ": " ^ msg))
+        else
+          raise (Capability_error (cap_err path))
+
+(* ---- M4 network: `(perform http-get url)` / `(perform http-post url body)` ----
+
+   Implemented by forking curl via [exec] above (E6: zero new OCaml
+   networking/TLS surface) but AUTHORIZED against CapNetwork host[:port] —
+   not CapProcess: granularity, "may read this host" is a much narrower
+   grant than "may exec anything" (PLAN-m4-cells.md "Network"). Banned
+   inside node bodies (trace_stack guard, the same LAW-31 pattern
+   `Fenced.register` and `write-file`'s node arm use) — network reads are
+   not convergent and are not the sanctioned nondeterminism mechanism
+   (probes are, LAW 37/38); legal in probe observe-fns (which run with
+   trace_stack forced to [] — Primitives.probe_value_for), domain
+   observe/apply (stage 2), and the script tier. *)
+
+let has_network_cap ~(host : string) ~(port : int option) : bool =
+  List.exists (fun cap -> Capabilities.check_network cap ~host ~port)
+    !Runtime.current_capabilities
+
+(* Parse an http(s) URL into (scheme, host, port); port defaults to the
+   scheme's standard port when the URL omits one, so a `--grant
+   net:host:PORT` still matches a URL that never spells the port out.
+   Deliberately minimal — no userinfo, no IPv6 literal brackets; documented
+   residuals, not needed for curl (curl gets the WHOLE url verbatim; this
+   parse exists only to name the (host, port) pair the authority check
+   tests). Anything other than http/https is a hard error (PLAN-m4-cells.md:
+   "anything else = error"). *)
+let parse_http_url (url : string) : string * string * int =
+  let strip prefix =
+    let n = String.length prefix in
+    if String.length url >= n && String.sub url 0 n = prefix then
+      Some (String.sub url n (String.length url - n))
+    else None
+  in
+  let (scheme, rest, default_port) =
+    match strip "https://" with
+    | Some rest -> ("https", rest, 443)
+    | None ->
+        (match strip "http://" with
+         | Some rest -> ("http", rest, 80)
+         | None -> failwith ("http: unsupported url scheme (only http/https supported): " ^ url))
+  in
+  let host_port =
+    match String.index_opt rest '/' with
+    | Some i -> String.sub rest 0 i
+    | None -> rest
+  in
+  if host_port = "" then failwith ("http: url has no host: " ^ url);
+  match String.index_opt host_port ':' with
+  | Some i ->
+      let host = String.sub host_port 0 i in
+      let port_s = String.sub host_port (i + 1) (String.length host_port - i - 1) in
+      (match int_of_string_opt port_s with
+       | Some p -> (scheme, host, p)
+       | None -> failwith ("http: invalid port in url: " ^ url))
+  | None -> (scheme, host_port, default_port)
+
+let curl_bin () : string =
+  match resolve_cmd "curl" with
+  | Some p -> p
+  | None -> failwith "http: curl not found on PATH"
+
+(* [body]: None for GET, Some content for POST — written to a temp file and
+   passed via `--data-binary @file` so no stdin plumbing is needed in
+   [exec]. `-w '\n%{http_code}'` appends the numeric status on its own
+   trailing line, which the response text can never itself end with
+   unambiguously except by this exact split (curl writes it AFTER the body,
+   as the very last bytes) — split on the LAST newline. Result shape:
+   `{"status" INT "body" STRING}`, mirroring `run`'s `{"exit" "out" "err"}`
+   convention (VString keys). A curl PROCESS failure (missing binary,
+   couldn't connect, timeout) is a pp-level error; an HTTP-level error
+   status (404, 500, …) is not — it comes back as an ordinary result, same
+   as `run`'s nonzero exit code never being an OCaml exception. *)
+let http_request ~(method_ : string) ~(url : string) ~(body : string option) : value =
+  if !Runtime.trace_stack <> [] then
+    failwith (Printf.sprintf
+      "perform http-%s: network effects may not appear inside node bodies (LAW 37/38)"
+      (String.lowercase_ascii method_));
+  let (_scheme, host, port) = parse_http_url url in
+  if not (has_network_cap ~host ~port:(Some port)) then
+    raise (Capability_error
+      (Printf.sprintf "capability error: no network authority for %s:%d" host port));
+  let curl = curl_bin () in
+  let base_argv = [curl; "-sS"; "--max-time"; "30"; "-w"; "\n%{http_code}"] in
+  let (argv, cleanup) =
+    match body with
+    | None -> (base_argv @ [url], fun () -> ())
+    | Some content ->
+        let tmp = Filename.temp_file "pp-http-body" "" in
+        let oc = open_out_bin tmp in
+        output_string oc content; close_out oc;
+        (base_argv @ ["-X"; "POST"; "--data-binary"; "@" ^ tmp; url],
+         fun () -> (try Sys.remove tmp with _ -> ()))
+  in
+  Fun.protect ~finally:cleanup (fun () ->
+    let (code, out, err) = exec argv in
+    if code <> 0 then
+      failwith (Printf.sprintf "perform http-%s: curl failed (exit %d): %s"
+                  (String.lowercase_ascii method_) code (String.trim err))
+    else
+      match String.rindex_opt out '\n' with
+      | Some i ->
+          let resp_body = String.sub out 0 i in
+          let status_s = String.trim (String.sub out (i + 1) (String.length out - i - 1)) in
+          let status = match int_of_string_opt status_s with Some s -> s | None -> 0 in
+          VMap [(VString "status", VInt status); (VString "body", VString resp_body)]
+      | None ->
+          VMap [(VString "status", VInt 0); (VString "body", VString out)])

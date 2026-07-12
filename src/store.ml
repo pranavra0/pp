@@ -390,6 +390,22 @@ let observe_cell (cell_id : string) : string option =
   | Cell.Config key -> (try Some (Runtime.observe_config key) with _ -> None)
   | Cell.Handler name -> (try Some (Runtime.observe_handler name) with _ -> None)
   | Cell.Proc name -> (try Runtime.observe_proc name with _ -> None)
+  (* M4 probes: re-observing evaluates the probe (once per pass, pinned in
+     Runtime.probe_values — the SAME cache `(probe name)` reads) via the
+     Runtime.probe_observer hook (Primitives.probe_observe_for_store, wired
+     in main.ml — Store cannot depend on Primitives directly). A probe this
+     process never registered returns None: cannot re-observe, never
+     verifies, forces a miss (the sound, conservative answer). *)
+  | Cell.Probe name -> (try Runtime.observe_probe name with _ -> None)
+  (* M4 sealed cells: re-hash the CURRENT bytes without ingesting — mirrors
+     the read-path logic (read_sealed_cell below) but never writes a pin or
+     touches the CAS; a pin from THIS run (Q11 consistency) is preferred
+     over a fresh disk read so a re-observation inside the same pass never
+     contradicts what was actually read. *)
+  | Cell.Sealed path ->
+      (match Hashtbl.find_opt Runtime.sealed_pins cell_id with
+       | Some bytes -> Some (hash_string bytes)
+       | None -> hash_file_opt path)
   | Cell.Unknown _ -> None  (* cannot re-observe ⇒ never verifies *)
 
 let trace_verifies (tr : trace) : bool =
@@ -447,6 +463,35 @@ let read_file_cell (path : string) : string =
       ignore (store_blob content);
       Hashtbl.replace run_pins cell h;
       serve content h
+
+(* ---- M4 sealed cells: read as a CONFIDENTIAL cell observation ----
+
+   A read covered by CapSecret and NOT by CapFilesystem (the read-dispatch
+   decision lives in the caller — Process.ml's slurp/read-file paths) never
+   calls [store_blob]/[read_file_cell]: the bytes must never reach
+   ~/.pp/store, by design (PLAN-m4-cells.md "Sealed cells"). Bytes instead
+   pin in Runtime.sealed_pins, in-memory only, keyed by the "sealed:<path>"
+   cell id exactly like [run_pins] keys a "file:<path>" cell id — same Q11
+   per-run consistency (first read of a run pins; later reads of the SAME
+   cell in the SAME run serve the pin), different storage (never the CAS).
+   The cell records via ordinary [Runtime.record_read] with hash_string of
+   the bytes (never the bytes themselves — that hash is what LAW 39's
+   rotation-invalidation and the trace mechanism need). Returns the raw
+   bytes; the caller wraps them as VSealed. *)
+let sealed_cell_id (path : string) : string =
+  Cell.(to_string (Sealed (Runtime.canonical_path path)))
+
+let read_sealed_cell (path : string) : string =
+  let cell = sealed_cell_id path in
+  match Hashtbl.find_opt Runtime.sealed_pins cell with
+  | Some bytes ->
+      Runtime.record_read cell (hash_string bytes);
+      bytes
+  | None ->
+      let bytes = read_raw path in
+      Hashtbl.replace Runtime.sealed_pins cell bytes;
+      Runtime.record_read cell (hash_string bytes);
+      bytes
 
 (* Result of a cache lookup: a verified success, a verified (memoized) failure
    to re-raise (LAW 28), or a miss. *)

@@ -624,15 +624,16 @@ and vm_force (v : value) : value =
    the SAME key in both backends and shares the store entry; closures hash per
    backend, so those key separately but each remains sound.
 
-   M3 free-var ban (LAW 20 node-boundary, import side): if a free variable's
-   forced value contains a VCapability (Hasher.contains_capability — never
-   forces an already-Unevaluated thunk, so this can't force the same value
-   twice or invalidate the "each is forced" note above; it just inspects
-   whatever [vm_force] already produced), the key can never be computed —
-   raise Capability_error instead, naming the variable. If forcing itself
-   raises Capability_error (e.g. the free var's value is itself a node whose
-   force hit this same ban, or a use-time gate), propagate that as-is rather
-   than falling back to hashing the unforced thunk. *)
+   M3 free-var ban (LAW 20 node-boundary, import side; extended M4/LAW 39 to
+   VSealed): if a free variable's forced value contains a VCapability or
+   VSealed (Hasher.contains_authority — never forces an already-Unevaluated
+   thunk, so this can't force the same value twice or invalidate the "each is
+   forced" note above; it just inspects whatever [vm_force] already
+   produced), the key can never be computed — raise Capability_error instead,
+   naming the variable. If forcing itself raises Capability_error (e.g. the
+   free var's value is itself a node whose force hit this same ban, or a
+   use-time gate), propagate that as-is rather than falling back to hashing
+   the unforced thunk. *)
 and vm_node_key (t : thunk) : string =
   let frames = match t.vm_code with Some (_, _, fr) -> fr | None -> [] in
   let fv_parts =
@@ -646,10 +647,11 @@ and vm_node_key (t : thunk) : string =
       let hv =
         match vm_force v with
         | fv ->
-            if Hasher.contains_capability fv then
+            if Hasher.contains_authority fv then
               raise (Capability_error
                 (Printf.sprintf
-                   "node: free variable '%s' may not be or contain a capability" name));
+                   "node: free variable '%s' may not be or contain a %s" name
+                   (if Hasher.contains_sealed fv then "sealed value" else "capability")));
             hash_value fv
         | exception e ->
             (match e with

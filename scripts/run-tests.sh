@@ -241,4 +241,25 @@ else
   echo "FAIL 042-defmacro-rekey"; fail=1
 fi
 
+echo "--- M4 probes (LAW 37/38) suite ---"
+if PP="$PP" bash tests/043-probes.sh; then
+  echo "ok   043-probes"
+else
+  echo "FAIL 043-probes"; fail=1
+fi
+
+echo "--- M4 sealed cells (LAW 39) suite ---"
+if PP="$PP" bash tests/044-sealed.sh; then
+  echo "ok   044-sealed"
+else
+  echo "FAIL 044-sealed"; fail=1
+fi
+
+echo "--- M4 network suite ---"
+if PP="$PP" bash tests/045-network.sh; then
+  echo "ok   045-network"
+else
+  echo "FAIL 045-network"; fail=1
+fi
+
 exit $fail

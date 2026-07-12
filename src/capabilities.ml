@@ -5,7 +5,8 @@ open Types
 (* Create capability values *)
 let cap_none = VCapability CapNone
 let cap_filesystem ~path ~mode = VCapability (CapFilesystem { path; mode })
-let cap_network ~protocol = VCapability (CapNetwork { protocol })
+let cap_network ~host ~port = VCapability (CapNetwork { host; port })
+let cap_secret ~path = VCapability (CapSecret { path })
 let cap_process = VCapability CapProcess
 
 let cap_compose caps =
@@ -63,10 +64,35 @@ let rec check_fs_write (cap : capability) (target_path : string) : bool =
       && (match mode with Some Read -> false | Some Write | Some ReadWrite | None -> true)
   | _ -> false
 
-let rec check_network (cap : capability) (protocol : string) : bool =
+(* M4: does [cap] grant access to [host]:[port]? "*" as a granted host
+   wildcards any host (the pre-M4 "any"-protocol shape, generalized); a grant
+   with no port (None) is unrestricted by port, a grant with Some p pins it
+   exactly — the query's port must be known (Some) and equal. Used both ways:
+   with [cap] = the ambient (as a CapCompose) and (host, port) = an http
+   effect's target (Process/Evaluator), and with [cap] = the ambient and
+   (host, port) = a REQUESTED CapNetwork's own fields (Capabilities.cap_subseteq,
+   mirroring how CapFilesystem's cap_subseteq arm tests a single (path, mode)
+   point against the held set). *)
+let rec check_network (cap : capability) ~(host : string) ~(port : int option) : bool =
   match cap with
-  | CapNetwork { protocol = p } -> p = protocol || p = "any"
-  | CapCompose caps -> List.exists (fun c -> check_network c protocol) caps
+  | CapNetwork { host = h; port = p } ->
+      (h = "*" || h = host)
+      && (match p with
+          | None -> true
+          | Some p -> (match port with Some q -> q = p | None -> false))
+  | CapCompose caps -> List.exists (fun c -> check_network c ~host ~port) caps
+  | _ -> false
+
+(* M4 sealed cells: does [cap] grant reading the secret at [target_path]?
+   Path-component scoping, same as fs (Paths.under via path_grants) — but a
+   SEPARATE capability kind (CapSecret), never fs_mode, because the read
+   surface must return a distinct VALUE KIND (VSealed) for the node-boundary
+   ban to pattern-match (PLAN-m4-cells.md kill-list: "CapSecret as an
+   fs_mode" was rejected for exactly this reason). *)
+let rec check_secret (cap : capability) (target_path : string) : bool =
+  match cap with
+  | CapSecret { path } -> path_grants ~scope:path target_path
+  | CapCompose caps -> List.exists (fun c -> check_secret c target_path) caps
   | _ -> false
 
 let rec check_process (cap : capability) : bool =
@@ -183,7 +209,8 @@ let rec cap_subseteq (requested : capability) (ambient : capability list) : bool
   match requested with
   | CapNone -> true
   | CapProcess -> check_process held
-  | CapNetwork { protocol } -> check_network held protocol
+  | CapNetwork { host; port } -> check_network held ~host ~port
+  | CapSecret { path } -> check_secret held path
   | CapFilesystem { path; mode } ->
       (match mode with
        | Read -> check_fs_read held path

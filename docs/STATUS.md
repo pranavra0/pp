@@ -424,6 +424,66 @@ non-list `def` is a value binding — `tests/025`.)
 - **Bytecode `.ppc` serialization** — complete but **dead** and lossy;
   `cache.ml` deleted; the value/trace store (`store.ml`) supersedes it and is
   now live in the tree-walker.
+- **M4 stage 1 — probes (LAW 37/38, docs/PLAN-m4-cells.md).**
+  `(register-probe name observe-fn read-cap)` (script-tier, `Runtime.
+  probe_registry`) and `(probe name)` (inside or outside nodes) are the one
+  sanctioned nondeterministic dependency: the observe-fn runs at most once
+  per pass, OUTSIDE the reading node's trace stack (`trace_stack` saved to
+  `[]` via `with_ref`, exception-safe) and under exactly the registered
+  read-cap (`with_ref current_capabilities`), so its own world-reads never
+  contaminate the reading node's trace; the reading node records only a
+  `probe:<name>` cell (hash of the observed value) via ordinary
+  `record_read`, capability-free at the read site — the authority was spent
+  evaluating the probe, once. Results pin in `Runtime.probe_values`,
+  in-memory only, cleared at the same three points the `--watch` loop clears
+  `Store.run_pins`; nothing a probe returns is ever written to
+  `~/.pp/store`. An unregistered probe name is a hard error; a probe never
+  read never fires. `Cell.Probe`/`Store.observe_cell`'s `probe:` arm
+  re-evaluate the SAME cached-per-pass value a live `(probe name)` read
+  would (`Runtime.probe_observer` hook, mirroring `proc_observer`), so a
+  node's cached trace and a fresh read can never disagree. Both backends
+  (ordinary primitives — the VM shares `Primitives.builtins`). Pinned by
+  `tests/043-probes.sh`.
+- **M4 stage 1 — sealed cells (LAW 39).** `--grant secret:<path>` mints
+  `CapSecret {path}` (canonicalized at mint like fs grants). `slurp`/`(perform
+  read-file ...)` now dispatch on GRANT coverage (`Process.read_dispatch`,
+  shared by both primitives): covered by `CapFilesystem` (with or without
+  ALSO `CapSecret`) → ordinary `VString`, unchanged; covered by `CapSecret`
+  and NOT `CapFilesystem` → a new value kind `VSealed`, read via
+  `Store.read_sealed_cell` (bytes pinned in `Runtime.sealed_pins`,
+  in-memory only, `store_blob` NEVER called) and recorded as a
+  `sealed:<canonical-path>` cell (hash of the bytes). `string_of_value`
+  redacts every `VSealed` to `#<sealed>` (every printer goes through it, so
+  redaction is total); `Codec.encode_value` returns `None` for it (the
+  non-data law covers it for free); the M3 node-boundary walk
+  (`contains_capability` → `contains_authority`) bans `VSealed` exactly like
+  `VCapability`, both directions, both backends, wording the error
+  distinctly ("... a sealed value" vs "... a capability" — `Hasher.
+  contains_sealed` disambiguates). `cell_authorized_for` requires a covering
+  `CapSecret` grant to serve a `sealed:` hit (LAW 23b/23c fall out: a narrow
+  caller cannot launder a cached secret through an aggregator; `pp why`
+  redacts it). `(unseal v)` is the one explicit, greppable way to `VString`
+  — no dataflow tainting beyond it, by design. A recursive scan of
+  `~/.pp/store` after a program that reads (and, separately, one that
+  unseals only at script tier) finds no secret bytes. Pinned by
+  `tests/044-sealed.sh`.
+- **M4 stage 1 — network.** `CapNetwork` is now `{host; port option}` (a
+  shape change from the earlier bare `{protocol}`); `--grant
+  net:<host>[:<port>]` mints it (`host = "*"` wildcards, an unspecified port
+  is unrestricted). `(perform http-get url)` / `(perform http-post url
+  body)` fork `curl` (`Process.http_request` — zero new OCaml
+  networking/TLS surface, E6) but are authorized against `CapNetwork`
+  host[:port], never `CapProcess` (granularity: "may read this host" ≠
+  "may exec anything"); banned inside node bodies outright (a `trace_stack`
+  guard, the same shape as `fenced`/`write-file`'s node arm — a network read
+  is not the declared-nondeterminism mechanism and is not convergent, so it
+  has no sound cached meaning). Result shape: `{"status" INT "body"
+  STRING}`. A missing `curl` is a clean error, not a crash. Both backends
+  (an ordinary `perform_effect` dispatch, shared). The differential fuzzer
+  never generates `--grant` specs at all (checked: no grant-generating arm
+  exists), so the CapNetwork shape change needed no fuzzer update — noted
+  rather than silently skipped. Pinned by `tests/045-network.sh` (skips
+  cleanly without `curl`/`python3`).
 
 ## Discrepancy ledger (D1–D24)
 

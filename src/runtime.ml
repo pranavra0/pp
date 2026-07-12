@@ -157,6 +157,16 @@ let proc_observer : (string -> string option) ref = ref (fun _ -> None)
 let observe_proc (name : string) : string option =
   !proc_observer name
 
+(* M4 probes: Store-facing re-observation hook, wired in main.ml
+   (`Runtime.probe_observer := Primitives.probe_observe_for_store`) exactly
+   like [proc_observer] above and for the same reason — Store.ml cannot
+   depend on Primitives.ml directly (Primitives already depends on Store, so
+   the reverse would be a module cycle), so the hook is the indirection. *)
+let probe_observer : (string -> string option) ref = ref (fun _ -> None)
+
+let observe_probe (name : string) : string option =
+  !probe_observer name
+
 let config_cell_id (key : string) : string = Cell.(to_string (Config key))
 let handler_cell_id (name : string) : string = Cell.(to_string (Handler name))
 
@@ -365,3 +375,48 @@ let fenced_policy_name = function
   | Retry -> "retry"
   | Abort -> "abort"
   | Ask -> "ask"
+
+(* ---- M4 probes: registration + per-pass pinned values (PLAN-m4-cells.md) ----
+
+   `(register-probe name observe-fn read-cap)` is script-tier only
+   (primitives.ml guards on trace_stack, mirroring Fenced.register). This is
+   Q13's register-domain NOT built yet (stage 2) — a probe is "a domain with
+   bottom write authority" in the design's words, so this registry is
+   structured to make that refactor natural: a record with the fields a
+   future domain registration would also need (name is the hashtable key;
+   [pr_apply]/[pr_diff] are left as an explicit comment rather than fields,
+   since stage 1 has no caller for them and speculative fields would be dead
+   weight — stage 2 adds a variant or optional fields here, not a parallel
+   table). *)
+type probe_entry = {
+  pr_observe : value;       (* the observe-fn closure/builtin, forced once at
+                                registration (never re-forced per read — a
+                                stale forced closure value is fine, closures
+                                are immutable once built) *)
+  pr_read_cap : capability; (* consumed into this registry at registration —
+                                never re-exposed to user code (mirrors Q13's
+                                :write-cap discipline) *)
+}
+
+let probe_registry : (string, probe_entry) Hashtbl.t = Hashtbl.create 16
+
+(* Per-pass pinned probe results: cleared at exactly the three points the
+   watch loop clears Store.run_pins (main.ml) — probes are LAW 38's declared-
+   nondeterminism mechanism, so a value must never survive past the pass
+   that observed it (unlike sealed_pins below, which share the same clearing
+   points for a completely different reason — Q11 per-run read consistency,
+   not volatility). *)
+let probe_values : (string, value) Hashtbl.t = Hashtbl.create 16
+
+(* ---- M4 sealed cells: in-memory-only bytes for a CapSecret-covered read ----
+
+   A read covered by CapSecret and NOT by CapFilesystem returns VSealed and
+   pins the raw bytes here (cell-id -> bytes), keyed exactly like
+   Store.run_pins but NEVER touching store_blob/the CAS — that is the whole
+   point (PLAN-m4-cells.md "Sealed cells": secret bytes must never land under
+   ~/.pp/store). Q11 per-run consistency: the first read of a sealed cell in
+   a run pins its bytes; later reads of the SAME cell in the SAME run serve
+   the pin, so one run can never observe two versions of one secret. Cleared
+   at exactly the three points Store.run_pins is cleared (main.ml's watch
+   loop) — same points, different justification per cell kind. *)
+let sealed_pins : (string, string) Hashtbl.t = Hashtbl.create 16

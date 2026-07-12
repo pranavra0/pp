@@ -33,6 +33,15 @@ type t =
   | Config of string       (* ambient config key observation (LAW 33) *)
   | Handler of string      (* which handler intercepted an effect (LAW 26) *)
   | Proc of string         (* supervised service: running spec hash or stopped *)
+  | Probe of string        (* M4: observer-written volatile cell, "probe:<name>" —
+                               driver-evaluated at most once per pass, capability-
+                               free at the read site (authority was consumed by
+                               the probe's own evaluation, under its registered
+                               read-cap) *)
+  | Sealed of string       (* M4: sealed (confidential) read, "sealed:<canonical-
+                               path>" — hash of the secret bytes only; the bytes
+                               themselves never enter the CAS (Runtime.sealed_pins,
+                               in-memory-only) *)
   | Unknown of string      (* unrecognized kind: can never re-verify *)
 
 let to_string = function
@@ -46,6 +55,8 @@ let to_string = function
   | Config key -> "config:" ^ key
   | Handler name -> "handler:" ^ name
   | Proc name -> "proc:" ^ name
+  | Probe name -> "probe:" ^ name
+  | Sealed path -> "sealed:" ^ path
   | Unknown s -> s
 
 let of_string (s : string) : t =
@@ -66,4 +77,6 @@ let of_string (s : string) : t =
   match strip "config:" with Some k -> Config k | None ->
   match strip "handler:" with Some n -> Handler n | None ->
   match strip "proc:" with Some n -> Proc n | None ->
+  match strip "probe:" with Some n -> Probe n | None ->
+  match strip "sealed:" with Some p -> Sealed p | None ->
   if s = "argv:" then Argv else Unknown s

@@ -9,4 +9,5 @@ let hash_expr = hash_expr
 let hash_value = hash_value
 let hash_capability = hash_capability
 let hash_bindings_flat = hash_bindings_flat
-let contains_capability = contains_capability
+let contains_authority = contains_authority
+let contains_sealed = contains_sealed

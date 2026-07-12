@@ -225,6 +225,42 @@ two shell suites:
     recognized (only a true top-level form registers a macro), so it fails
     as an ordinary "unbound symbol: defmacro" in both backends, byte-
     identically. Isolated `$HOME`, like `tests/011`/`040`.
+  - **043** — M4 probes (docs/PLAN-m4-cells.md; SPEC LAW 37/38): a
+    file-backed counter as the observe-fn, so its value is controllable; a
+    node reading `(probe name)` re-forces exactly when the counter changes
+    and hits (no recompute) when it doesn't, across four separate `pp`
+    invocations (cold/unchanged/changed/reverted, mirroring `tests/010`'s
+    shape) — both backends. Also: a recursive `~/.pp/store` scan (excluding
+    `blobs/`, which ordinary `slurp` inside the observe-fn legitimately
+    populates) proves the raw probe payload never lands in `objects/`/
+    `traces/`; a registered-but-never-read probe's observe-fn never fires
+    (an unrecorded side effect, the demand-pruning half of LAW 7 extended to
+    probes); an unregistered probe name is a hard error; `register-probe`
+    inside a node body errors (script-tier only, mirroring `fenced`). A
+    final section proves the SAME mechanism live under one long-running
+    `pp --watch` process (portable `timeout` shim, like `tests/031`): with
+    no probe-specific wiring at all, the existing generic watch-loop
+    polling (`Runtime.observed_all` → `Store.observe_cell`) already detects
+    a changed probe cell and re-evaluates exactly the dependent node.
+  - **044** — M4 sealed cells (SPEC LAW 39): `--grant secret:<path>` reads
+    redact on print (`#<sealed>`) and round-trip through `(unseal v)`; a
+    recursive store scan (the WHOLE store, `blobs/` included this time —
+    a sealed read must never call `store_blob`) finds no secret bytes after
+    a program that only reads, and separately one that unseals at script
+    tier only; the node-boundary ban fires both directions (free-var and
+    result) with byte-identical stderr across backends; rotating the
+    secret's bytes recomputes exactly the observing node, leaving a sibling
+    node untouched; a caller re-run with NO grant at all cannot hit a
+    node whose cached trace shows a covering grant existed once (LAW 23b);
+    covered by both `secret:` and `fs:` grants behaves as plain fs.
+  - **045** — M4 network: gated cleanly on `curl` and `python3` both being
+    present (a tiny stdlib `http.server`-based loopback fixture, no real
+    network). No `net:` grant, or a grant for a different host, denies
+    `(perform http-get/http-post ...)`; a covering grant (exact host, or a
+    `net:*` wildcard) allows it against the local server, both backends;
+    `http-post`'s body actually reaches the server (echoed back); `perform
+    http-get` inside a node body errors and never touches the network; a
+    `curl`-absent run (an emptied `PATH`) is a clean error, not a crash.
 
 Two proofs run OUTSIDE `dune runtest` (they invoke dune / the network):
 
@@ -392,3 +428,13 @@ fixed and now generated in `full` by `stmt_do_scoped_def` and
 `stmt_module_sibling` respectively: the former asserts a `do`-local def is
 unbound afterward in both backends, the latter has a module's function def,
 value def, and a bare statement all reference EARLIER siblings.)
+
+- **M4 probes/sealed cells/network are not fuzzer-generated.** `register-probe`/
+  `probe`, `slurp`/`read-file` under a `secret:` grant, and `http-get`/
+  `http-post` all depend on a `--grant` the fuzzer never mints (`tools/fuzz.ml`
+  has no grant-generating arm at all — checked, not merely undocumented — so
+  the `CapNetwork` shape change from `{protocol}` to `{host; port option}`
+  needed no fuzzer update). Adding any of these to the grammar is meaningful
+  future work but requires teaching the generator to emit `--grant` specs
+  first, which does not exist today for ANY capability kind (`fs:`/`process`
+  included).

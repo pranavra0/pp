@@ -92,6 +92,31 @@ let cell_authorized_for (caps : capability list) (cell_id : string) : bool =
      authorizing them is moot. *)
   | Cell.RuntimeFile _ | Cell.Env _ | Cell.Argv
   | Cell.Config _ | Cell.Handler _ | Cell.Proc _ | Cell.Unknown _ -> true
+  (* M4 probes: authority-exempt at the hit gate, like runtime:/config:/
+     handler:/proc: above — deliberately, not an oversight. The read_cap's
+     authority was already consumed ONCE, at probe evaluation time (under
+     with_ref current_capabilities [read_cap], PLAN-m4-cells.md), not at
+     every read; gating a CACHE HIT on it again would re-require an
+     authority the reading caller structurally cannot hold any other way
+     (probe reads are capability-free at the read site by design — LAW 37's
+     whole point is that the DECLARED nondeterminism mechanism, not the
+     reader, carries the authority). LAW 23b's transitive-closure concern
+     (a narrow caller laundering a broad SECRET read through an aggregator)
+     does not apply here: a probe's value is not confidential — sealed
+     cells are the confidentiality mechanism, and unlike Cell.Sealed below,
+     Cell.Probe never gates on CapSecret. Any caller who can force the node
+     at all may observe what the probe produced. *)
+  | Cell.Probe _ -> true
+  (* M4 sealed cells: the opposite choice from Probe above — a sealed read
+     is confidential, so a hit requires the caller to independently hold a
+     covering CapSecret grant over the path, exactly like Cell.File requires
+     fs-read authority. This is what makes LAW 23b's transitive-closure
+     check and LAW 23c's `pp why` redaction protect a secret exactly the way
+     they already protect a narrow fs grant: a caller without the secret
+     grant cannot hit a node whose closure read it, even through an
+     aggregator (tests/044's narrow-caller case). *)
+  | Cell.Sealed path ->
+      List.exists (fun cap -> Capabilities.check_secret cap path) caps
 
 (* Trace replay for an already-Evaluated persistent node: replay its stored
    trace reads into the active trace frames so the caller's trace transitively
@@ -149,17 +174,22 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
         raise e
   in
   (* Result ban (LAW 20 node-boundary, export side — adversarial-review
-     amendment): a node may not RETURN a capability. Checked before any store
-     write, so a would-be-cached VCapability never reaches the store; not
+     amendment; extended M4/LAW 39 to VSealed): a node may not RETURN a
+     capability or a sealed value. Checked before any store write, so a
+     would-be-cached VCapability/VSealed never reaches the store; not
      memoized as a failure either (mirrors Capability_error's own
      not-memoized discipline — an authority-shaped outcome is not cache
      material). Otherwise `(node (current-capabilities))` would be an
      ambient-dependent result invisible to both the key and the trace (a
-     determinism hole), and a broad cap could ride a result out to a
-     narrower caller — the node boundary must be symmetric. *)
-  if Hasher.contains_capability result then begin
+     determinism hole), and a broad cap (or a secret) could ride a result out
+     to a narrower/unauthorized caller — the node boundary must be
+     symmetric. *)
+  if Hasher.contains_authority result then begin
     t.thunk_status <- Unevaluated;
-    raise (Capability_error "a node may not return a capability")
+    if Hasher.contains_sealed result then
+      raise (Capability_error "a node may not return a sealed value")
+    else
+      raise (Capability_error "a node may not return a capability")
   end;
   (match t.type_ann with
    | Some ty -> check_type result ty t.thunk_loc
@@ -370,22 +400,25 @@ and node_key_of (t : thunk) : string =
     |> List.map (fun name ->
          match lookup_env t.thunk_env name with
          | Some v ->
-             (* M3 free-var ban (LAW 20 node-boundary, import side): if the
-                forced value contains a VCapability (Hasher.contains_capability
-                — never forces an already-Unevaluated thunk, LAW 14), the key
-                can never be computed — raise Capability_error naming the
+             (* M3 free-var ban (LAW 20 node-boundary, import side; extended
+                M4/LAW 39 to VSealed): if the forced value contains a
+                VCapability or VSealed (Hasher.contains_authority — never
+                forces an already-Unevaluated thunk, LAW 14), the key can
+                never be computed — raise Capability_error naming the
                 variable, rather than silently keying on (and thereby
-                smuggling identity information about) a capability. If
-                forcing itself raises Capability_error, propagate it as-is;
-                any OTHER exception falls back to hashing the unforced value
-                (pre-existing behavior, unrelated to this ban). *)
+                smuggling identity information about) a capability or secret.
+                If forcing itself raises Capability_error, propagate it
+                as-is; any OTHER exception falls back to hashing the
+                unforced value (pre-existing behavior, unrelated to this
+                ban). *)
              let hv =
                match force v with
                | fv ->
-                   if Hasher.contains_capability fv then
+                   if Hasher.contains_authority fv then
                      raise (Capability_error
                        (Printf.sprintf
-                          "node: free variable '%s' may not be or contain a capability" name));
+                          "node: free variable '%s' may not be or contain a %s" name
+                          (if Hasher.contains_sealed fv then "sealed value" else "capability")));
                    Hasher.hash_value fv
                | exception e ->
                    (match e with
@@ -825,15 +858,12 @@ and perform_builtin_effect (name : string) (args : value list) : value =
       (match args with
        | [VString path] ->
            (* Node-local sandbox scratch reads are capability-free and
-              unrecorded (LAW 18) — scratch is the node's working memory. *)
-           (match Process.sandbox_read path with
-            | Some content -> VString content
-            | None ->
-              if not (has_fs_read path) then
-                raise (Capability_error ("read-file: capability error: no read access for " ^ path));
-              (* Cell observation: recorded + CAS-pinned in node context (Q11). *)
-              (try VString (Store.read_file_cell path)
-               with Sys_error msg -> failwith ("read-file: " ^ msg)))
+              unrecorded (LAW 18) — scratch is the node's working memory.
+              Outside a sandbox: an fs-read grant returns plain data (Q11
+              CAS-ingested, pinned for the run), a CapSecret-only grant
+              returns VSealed (M4); see Process.read_dispatch. *)
+           Process.read_dispatch ~tag:"read-file"
+             ~cap_err:(fun p -> "read-file: capability error: no read access for " ^ p) path
        | _ -> failwith "read-file expects a string path")
 
   | "write-file" ->
@@ -852,6 +882,17 @@ and perform_builtin_effect (name : string) (args : value list) : value =
   | "run-dep" ->
       (* Q2 refinement: run + depfile → precise cells, no coarse tree cells. *)
       Process.run_dep_effect args
+
+  | "http-get" ->
+      (match args with
+       | [VString url] -> Process.http_request ~method_:"GET" ~url ~body:None
+       | _ -> failwith "http-get expects a url string")
+
+  | "http-post" ->
+      (match args with
+       | [VString url; VString body] ->
+           Process.http_request ~method_:"POST" ~url ~body:(Some body)
+       | _ -> failwith "http-post expects a url string and a body string")
 
   | "log" ->
       (match args with
@@ -961,6 +1002,15 @@ let init () =
   handler_stack := [];
   current_capabilities := !initial_capabilities;
   if not !Runtime.keep_thunks then Hashtbl.clear thunk_store;
+  (* M4 probes: the registry is script-tier registration state, re-established
+     by the program's own top-level `(register-probe ...)` forms on every
+     fresh evaluation — reset it here unconditionally (like the macro table
+     below), never gated on keep_thunks: a --watch pass always re-executes
+     the whole program's top level, so stale entries from a prior pass must
+     not survive into one that no longer registers them. Pinned per-pass
+     results (Runtime.probe_values) are a separate lifetime, cleared at the
+     three points main.ml's watch loop clears Store.run_pins. *)
+  Hashtbl.reset Runtime.probe_registry;
   (* M3 defmacro: reset the macro table AND the gensym counter at the start
      of every fresh run — the counter matters for LAW 20 stability (a
      gensym'd name can be baked into an expanded node's code, so re-running

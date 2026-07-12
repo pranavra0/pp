@@ -202,6 +202,81 @@ let force_deep (v : value) : value =
         | jobs -> Scheduler.dispatch_batch jobs));
   force_deep_plain v
 
+(* ---- M4 probes: shared evaluate-and-pin logic (PLAN-m4-cells.md) ----
+
+   One implementation, used both by the `probe` primitive (registered below)
+   and by the Store-facing re-observation hook wired in main.ml
+   (Runtime.probe_observer) — so a live program's `(probe name)` read and a
+   later trace-verification pass compute the identical value the identical
+   way and can never disagree (mirrors Runtime.proc_observer/observe_proc's
+   existing shape, same reason). *)
+
+(* Call a zero-argument function value, dispatching on tree-walker vs VM
+   closures exactly like `map`'s apply1 / apply-pp above (this module's own
+   precedent for "invoke a value as a function without going through
+   EApply"). *)
+let call_zero_arg (fn : value) : value =
+  match fn with
+  | VClosure c when Array.length c.vm_bc.code > 0 ->
+      if c.params <> [] then
+        failwith (Printf.sprintf
+          "probe: observe-fn expects 0 arguments, got a closure of %d"
+          (List.length c.params));
+      let new_frame = Types.make_frame 0 in
+      !vm_run_thunk_ref c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
+  | VClosure c ->
+      if c.params <> [] then
+        failwith (Printf.sprintf
+          "probe: observe-fn expects 0 arguments, got a closure of %d"
+          (List.length c.params));
+      !apply_ref fn [] !current_env_ref
+  | VBuiltin _ -> !apply_ref fn [] !current_env_ref
+  | _ -> failwith "probe: observe-fn is not a function"
+
+(* [Some v]: the probe's value for THIS pass — pinned in Runtime.probe_values
+   after the first read, so a probe fires AT MOST ONCE per pass no matter how
+   many times it is read (demand-pruned: an unread probe never fires at all,
+   since this function is never called for it). [None]: no probe registered
+   under [name] — the caller decides what that means (a hard error for
+   `(probe name)`; an unverifiable trace cell for Store's re-observation, so
+   a trace naming a probe this process never registered simply misses). *)
+let probe_value_for (name : string) : value option =
+  match Hashtbl.find_opt Runtime.probe_values name with
+  | Some v -> Some v
+  | None ->
+      (match Hashtbl.find_opt Runtime.probe_registry name with
+       | None -> None
+       | Some entry ->
+           (* Evaluate OUTSIDE the caller's node trace stack — save/restore
+              trace_stack to [] via the exception-safe with_ref pattern — so
+              the probe's OWN world-reads are never folded into the READING
+              node's trace; that node must record ONLY the `probe:<name>`
+              cell itself (via the ordinary record_read the `probe`
+              primitive does below). Runs under EXACTLY the registered
+              read_cap, replacing the ambient for the call's extent
+              (with_ref, exception-safe LAW 27 style) — the authority was
+              consumed HERE, once per pass, not at every read. *)
+           let result =
+             Runtime.with_ref Runtime.trace_stack []
+               (fun () ->
+                  Runtime.with_ref Runtime.current_capabilities
+                    [entry.Runtime.pr_read_cap]
+                    (fun () -> call_zero_arg entry.Runtime.pr_observe))
+           in
+           Hashtbl.replace Runtime.probe_values name result;
+           Some result)
+
+(* Store.observe_cell's "probe:" arm, via the Runtime.probe_observer hook
+   (wired in main.ml). Re-observing a probe cell at hit time evaluates the
+   probe (once per pass, pinned — [probe_value_for] is the SAME cache
+   `(probe name)` reads below, so a node forced earlier in this pass and one
+   verified later never disagree) and returns its hash for comparison
+   against the recorded one. *)
+let probe_observe_for_store (name : string) : string option =
+  match probe_value_for name with
+  | Some v -> Some (Hasher.hash_value v)
+  | None -> None
+
 (* A table of built-in functions: name -> value *)
 let builtins : (string, value) Hashtbl.t = Hashtbl.create 64
 
@@ -616,16 +691,12 @@ let () =
     match args with
     | [VString path] ->
         (* Node-local sandbox scratch reads are capability-free and unrecorded
-           (LAW 18) — scratch is the node's working memory. *)
-        (match Process.sandbox_read path with
-         | Some content -> VString content
-         | None ->
-           if not (List.exists (fun cap -> Capabilities.check_fs_read cap path) !Runtime.current_capabilities) then
-             raise (Types.Capability_error ("slurp: permission denied for " ^ path));
-           (* Cell observation: recorded into enclosing node traces; in node
-              context, CAS-ingested and pinned for the run (Q11). *)
-           (try VString (Store.read_file_cell path)
-            with Sys_error msg -> failwith ("slurp: " ^ msg)))
+           (LAW 18) — scratch is the node's working memory. Outside a
+           sandbox: an fs-read grant returns plain data (Q11 CAS-ingested,
+           pinned for the run), a CapSecret-only grant returns VSealed (M4 —
+           bytes pinned in-memory, NEVER the CAS); see Process.read_dispatch. *)
+        Process.read_dispatch ~tag:"slurp"
+          ~cap_err:(fun p -> "slurp: permission denied for " ^ p) path
     | _ -> failwith "slurp expects a file path string"
   );
 
@@ -824,6 +895,66 @@ let () =
         VNil
     | _ -> failwith "fenced expects a kind string and a spec map");
 
+  (* ---- M4 probes (PLAN-m4-cells.md) ----
+
+     `(register-probe name observe-fn read-cap)` — script-tier only
+     (trace_stack guard, mirroring Fenced.register's LAW-31 pattern): a probe
+     is registered once, storing (name, observe-fn, read-cap) in
+     Runtime.probe_registry. `:write-cap`/`:diff`/`:apply` do not exist yet
+     (Q13's register-domain is stage 2) — a probe is "a domain with bottom
+     write authority," so this registry is deliberately just the observe
+     half, structured (a plain record keyed by name) so that refactor is a
+     natural extension, not a rewrite. read-cap is consumed into the
+     registry, never re-exposed to user code. Returns nil. *)
+  register "register-probe" (fun args ->
+    if !Runtime.trace_stack <> [] then
+      failwith "register-probe: may not be called inside a node body (script-tier only, like fenced)";
+    let args = force_args args in
+    match args with
+    | [VString name; observe_fn; VCapability read_cap]
+    | [VKeyword name; observe_fn; VCapability read_cap] ->
+        (match observe_fn with
+         | VClosure _ | VBuiltin _ -> ()
+         | _ -> failwith "register-probe: observe-fn must be a function");
+        Hashtbl.replace Runtime.probe_registry name
+          { Runtime.pr_observe = observe_fn; Runtime.pr_read_cap = read_cap };
+        VNil
+    | _ -> failwith "register-probe expects a name, an observe-fn, and a read capability");
+
+  (* `(probe name)` — legal inside or outside a node body. The FIRST read in
+     a pass evaluates observe-fn (via probe_value_for, above: OUTSIDE the
+     trace stack, under exactly the registered read-cap) and pins the
+     result in Runtime.probe_values for the rest of the pass; every read
+     (first or not) records ONLY the `probe:<name>` cell into the caller's
+     trace, via the ordinary record_read every other cell-observing
+     primitive uses (slurp's `file:`, env-get's `env:`, …) — capability-free
+     at THIS call site, because the read-cap's authority was already spent
+     evaluating the probe, not reading its pinned result. An unregistered
+     name is a hard error naming it, on every read (never silently nil). *)
+  register "probe" (fun args ->
+    let args = force_args args in
+    match args with
+    | [VString name] | [VKeyword name] ->
+        (match probe_value_for name with
+         | None -> failwith ("probe: no such probe registered: " ^ name)
+         | Some v ->
+             Runtime.record_read (Cell.(to_string (Probe name))) (Hasher.hash_value v);
+             v)
+    | _ -> failwith "probe expects a probe name string");
+
+  (* ---- M4 sealed cells ---- *)
+
+  (* `(unseal v)` — the one sanctioned way out of VSealed to VString (the
+     explicit, greppable Vault/SOPS-style boundary; derived data is ordinary
+     data afterward — no dataflow tainting, by design). Anything else is a
+     hard error naming the mistake. *)
+  register "unseal" (fun args ->
+    match args with
+    | [arg] ->
+        (match force_val arg with
+         | VSealed bytes -> VString bytes
+         | other -> failwith ("unseal expects a sealed value, got " ^ string_of_value other))
+    | _ -> failwith "unseal expects one argument");
 
   register "ppc-emit-opcode" (fun _args ->
     failwith "ppc-emit-opcode: not yet implemented for self-hosting"

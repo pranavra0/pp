@@ -248,7 +248,7 @@ enters pp the way files already do: as observed cells with capability-gated
 authority. Nothing here is a new ontology; each item completes a documented
 partial.
 
-- **(a) Probes as observer-written volatile cells.** A probe is a
+- **(a) ✅ Probes as observer-written volatile cells.** A probe is a
   *registration* the watcher/prober machinery evaluates once per pass,
   feeding a cell that nodes then **read** — never a `perform` inside a node
   body ("the observer is the only writer of a cell's value," DESIGN §2.1).
@@ -256,13 +256,13 @@ partial.
   (volatile results contained at one edge) and LAW 37's missing
   declared-nondeterminism mechanism. That coincidence is the
   abstractions-first test passing.
-- **(b) Sealed cells (secrets).** A cell whose observed **hash** participates
+- **(b) ✅ Sealed cells (secrets).** A cell whose observed **hash** participates
   in traces — so rotation invalidates exactly its observers for free, LAW 23b
   blocks laundering, LAW 23c already redacts — but whose **bytes are excluded
   from CAS ingest and from store sync**, with reads capability-gated at the
   use site. Without this, Q11's snapshot-as-CAS-ingest puts secret plaintext
   in `blobs/<sha256>`, falsifying the M6 claim.
-- **(c) Network capability + effect**, decomposed into the categories that
+- **(c) ✅ Network capability + effect**, decomposed into the categories that
   already exist: content-addressed fetch = **convergent** (island-shaped);
   health check / API read = **probe cell** (via a); convergent network
   mutation = **a domain write through (d) — the only write path** (the fate
@@ -270,7 +270,9 @@ partial.
   non-convergent actions, reconciler-only (Q3/LAW 31). A "mutating API call =
   fenced" default is explicitly rejected: it would rebuild imperative
   Terraform inside pp — a principle-5 violation wearing principle-5's
-  clothes.
+  clothes. Stage 1 ships the primitive (`http-get`/`http-post` via curl,
+  `CapNetwork {host; port}`, `tests/045-network.sh`) — the domain-write half
+  (mutating network state as a converged desired-state map) waits on (d).
 - **(d) Q13 — the in-language reconciler-domain protocol.** A domain is an
   observe/diff/apply triple of pp functions running under **core-enforced**
   journal, fencing, stratification, and single-writer discipline. Each domain
@@ -286,10 +288,23 @@ partial.
    unchanged**. If the protocol cannot express the two domains the core
    already ships, the protocol is wrong; if it can, principle 6 is proven
    executable, not aspirational.
-2. Secret rotation invalidates exactly the observing nodes, and a
-   store-wide scan proves sealed bytes never landed under `~/.pp/store`.
-3. A probe-driven convergence test under `--watch` (endpoint state changes →
-   exactly the dependent subgraph re-runs), with LAW 37/38 flipped to holds.
+2. ✅ Secret rotation invalidates exactly the observing nodes, and a
+   store-wide scan proves sealed bytes never landed under `~/.pp/store`
+   (`tests/044-sealed.sh`).
+3. ✅ A probe-driven convergence test, both as two separate `pp` invocations
+   (a node reading `(probe name)` re-forces exactly when the probe's
+   underlying value changed, hits otherwise — `tests/043-probes.sh`) AND
+   live under one long-running `pp --watch` process on a timer (the same
+   test's final section): probe reads are ordinary cell observations
+   (`Runtime.observed_all` when `--watch`/`--reconcile`/`--supervise` sets
+   `observe_all`; `Store.observe_cell`'s `probe:` arm re-evaluates via the
+   `Runtime.probe_observer` hook), so the EXISTING generic watch-loop
+   polling picks up a changed probe cell with no probe-specific wiring at
+   all — verified empirically before writing this down, not assumed. LAW
+   37/38 hold on this evidence (SPEC.md). What stage 1 does NOT cover:
+   exit criterion 1 (Q13 protocol; the fs/process reconcilers are still the
+   OCaml `reconciler.ml`/`supervisor.ml`, untouched) — that is stage 2, and
+   the overall M4 milestone stays open until it lands.
 
 ### M5 (= Phase 4) — Distribution
 

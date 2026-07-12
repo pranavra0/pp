@@ -706,11 +706,20 @@ with extra steps.
 **Status: holds** — `filesystem`/`network`/`process`/etc. are unbound symbols;
 only `--grant` at process startup mints capabilities. `cap-restrict` and
 `cap-compose` only narrow or union capabilities the code already holds.
+**M4 amendment:** `CapNetwork` is now `{host; port option}` (a shape change
+from the earlier bare `{protocol}` — `--grant net:<host>[:<port>]`; `host =
+"*"` wildcards, an unspecified port is unrestricted); `CapSecret {path}` is a
+new kind (`--grant secret:<path>`, canonicalized at mint like fs grants).
+Both mint only via `--grant`, same as every other kind — the root-mint
+invariant is unchanged by adding kinds to it.
 
 **Test:** the adversarial suite (`tests/capability-adversarial.sh`): no
 program, through any user-code surface, reads or writes a path it was not
 granted; evaluating `(filesystem "/" :rw)` is an unbound-symbol error in both
-backends.
+backends. `tests/045-network.sh`: no `net:` grant, or a `net:` grant for a
+different host, denies `(perform http-get/http-post ...)`; a covering grant
+(exact host, or `net:*`) allows it, host-and-port component-aware (a grant
+for one host/port never authorizes another).
 
 ### [LAW 22b] `with-caps` narrows to a held value, never widens (M3)
 
@@ -879,6 +888,15 @@ cross-contaminate (`tests/015`). The recorded cell is coarser than the law's
 refinement yet), and the handler stack is still folded conservatively into the
 *in-memory* thunk key (the D17 fix). The result-transparent class does not
 exist yet — there are no scheduler handlers to classify (Phase 2/3).
+**M4 amendment:** `http-get`/`http-post` are new builtin (semantic-class)
+effects, dispatched through the SAME `perform_effect`/`handler:<effect>`
+machinery as `read-file`/`run` — no new handler category. They are banned
+inside node bodies outright (a `trace_stack` guard, the same shape as
+`fenced`/`write-file`'s node arm) rather than given a trace cell: a network
+read is not the declared-nondeterminism mechanism (LAW 37/38's probes are)
+and is not convergent, so it has no sound node-cached meaning at all — legal
+only in probe observe-fns, domain observe/apply (stage 2), and the script
+tier.
 
 **Test:** force a node under a mock `read-file` handler, then under the real
 one: two executions, two results, no cross-contamination (`tests/015`); a
@@ -1233,13 +1251,22 @@ and it is what every other law's cache-soundness quietly depends on. Hidden
 entropy is a hidden input, which is the one thing content-addressing cannot
 forgive.
 
-**Status: unimplemented** — `random` is an ambient, uncapped builtin effect
-today (D8c); the fuzzer must ban it from generation precisely because effect
-logs would be incomparable.
+**Status: holds** (M4) — `random` remains removed (D8c unchanged); the
+sanctioned nondeterministic dependency is now the **probe** (`(register-probe
+name observe-fn read-cap)`, script-tier; `(probe name)`, inside or outside
+nodes): observe-fn runs at most once per pass, OUTSIDE any node's trace stack
+(so its own reads never contaminate the reading node's trace), under exactly
+the registered `read-cap`; the reading node records only a `probe:<name>`
+trace cell (hash of the observed value), capability-free at the read site —
+the authority was already spent evaluating the probe. A node itself still
+has no ambient entropy: nondeterminism enters ONLY through a declared probe
+cell, never through an un-cell'd effect.
 
-**Test:** any node forced twice from a cold store yields the same result
-hash; a program using ungated `random` inside a node is an error — both
-backends.
+**Test:** a node reading `(probe name)` re-forces exactly when the probe's
+underlying value changes across two separate runs, and hits (no recompute)
+when it doesn't (`tests/043-probes.sh`, both backends); an unregistered
+probe name is a hard error; a probe registered but never read never fires
+(demand-pruned, mirroring LAW 7).
 
 ### [LAW 38] Volatile nodes are contained as cells and barred from shared caches
 
@@ -1255,16 +1282,66 @@ permanent gardening rather than wished away (ROADMAP E4). Cutoff above a
 volatile node is otherwise dead, and the store grows without bound along the
 cone.
 
-**Status: partial** — the *detection* half exists in both backends:
-`pp --check` runs every missed node's body twice, compares result hashes, and
-flags a divergence as a volatile node, failing the run (`tests/019`). The
-*containment* half (volatile result pinned as a per-pass cell so instability
-stops at one edge; exclusion from shared caches) is not built.
+**Status: holds** (M4) — the *detection* half already existed in both
+backends (`pp --check` runs every missed node's body twice, compares result
+hashes, flags a divergence as volatile, `tests/019`). The *containment* half
+is now the probe mechanism (LAW 37): wrapping a volatile read as
+`(register-probe name observe-fn read-cap)` / `(probe name)` moves it OUT of
+the node body and into its own `probe:<name>` cell — observed and pinned
+once per pass, exactly the "cell" treatment this law asked for — so a node
+reading it re-forces only when the probe's value actually changes, and its
+instability never re-keys or invalidates anything beyond that one cell edge.
+Probe results are never written to `~/.pp/store` at all (Runtime.probe_values
+is in-memory, cleared every pass) — stronger than "excluded from shared
+caches," since there is no cache to exclude them from.
 
-**Test:** a node whose tool emits a random value is flagged volatile by
-`--check` and the run exits nonzero; a deterministic node is not flagged
-(`tests/019`). Containment (parent key stable across builds via the cell
-edge) awaits the cell treatment — both backends.
+**Test:** a node whose tool emits a random value, wrapped as a probe, is
+observed once per pass and re-forces the reading node only when the probe's
+value changes across runs — never on an unrelated node, and never by
+re-running the underlying volatile read more than once per pass
+(`tests/043-probes.sh`, both backends). The pre-existing `--check`
+double-build detection (`tests/019`) is unchanged.
+
+### [LAW 39] Sealed cells: confidential reads are a distinct value kind, banned at the node boundary
+
+`--grant secret:<path>` mints `CapSecret {path}`. A read covered by
+`CapSecret` and NOT by `CapFilesystem` returns a new value kind, `VSealed`,
+instead of `VString`: the cell records `sealed:<canonical-path>` (a hash of
+the bytes — rotation invalidation needs it), the bytes pin in-memory only
+(never `store_blob`/the CAS — a store-wide scan must never find secret
+plaintext), and `string_of_value`/every printer redacts to `#<sealed>` (a
+print that leaked the bytes would defeat the feature). `VSealed` joins the
+M3 node-boundary ban exactly like `VCapability` — free-var ban and result ban,
+both directions, both backends — and `cell_authorized_for` requires a
+covering `CapSecret` grant to serve a hit on a `sealed:` cell (LAW 23b/23c
+fall out unchanged: a narrow caller cannot launder a cached secret read
+through an aggregator, and `pp why` redacts it). `(unseal v)` is the one
+explicit, greppable way out to `VString` — derived data is ordinary data
+afterward, by design (no dataflow tainting, the Vault/SOPS line); unsealing
+INSIDE a node makes the result cacheable ordinary data, a documented residual
+of the same shape as every other cache holding whatever a node chooses to
+return. Covered by BOTH `secret:` and `fs:` grants: ordinary fs behavior
+wins (the deployment that also granted plain fs access over the same path is
+saying "not secret here").
+
+*Grounding.* Q11's snapshot-as-CAS-ingest (every file read gets
+content-addressed into `blobs/`) is sound for ordinary data and a
+confidentiality bug for secrets; a security boundary needs a distinct VALUE
+KIND for the existing node-boundary/authority machinery to pattern-match on,
+not a new parallel authorization path.
+
+**Status: holds** — implemented in both backends;
+`tests/044-sealed.sh` covers: redacted print, `unseal` round-trip, a
+recursive store scan proving the secret's bytes never land under
+`~/.pp/store` (for a program that only reads, and separately one that
+unseals at script tier only); the node-boundary ban both directions with
+byte-identical stderr across backends; rotation invalidating exactly the
+observing node (a sibling node is untouched); a caller without the
+`secret:` grant unable to hit a node whose cached closure read it even
+though the trace exists on disk; and the both-grants case behaving as plain
+fs.
+
+**Test:** `tests/044-sealed.sh`, both backends.
 
 ---
 
@@ -1310,8 +1387,9 @@ signatures, not line numbers — the source is under active migration.)
 | LAW 34 | no location surface / scheduler exists | partial | negative half holds; scheduler half lands for local process-pool parallelism (M1, `tests/024`/`038`); cluster/remote placement still gated on Phase 4 |
 | LAW 35 | run-on-N-take-first as handler | holds (local) | `race:N` process-pool fan-out lands (M1, `tests/038`); cluster racing is Phase 4, threat-model-gated |
 | LAW 36 | backend parity | partial | catalogued divergences closed; `core` and sampled `full` green; deep non-tail recursion and negative-literal lexing remain same-side issues; `defmacro` (M3) expands once, ahead of both backends (`macro.ml`), so it cannot itself become a one-backend feature — `stmt_defmacro` in `full` |
-| LAW 37 | declared nondeterminism | partial | `random` builtin effect removed; no declared-nondeterminism mechanism yet |
-| LAW 38 | volatile-node containment | partial | `--check` double-run audit flags volatile nodes and fails the run, both backends (`tests/019`); per-pass cell containment absent |
+| LAW 37 | declared nondeterminism | holds | M4 probes: `register-probe`/`probe` are the one sanctioned nondeterministic dependency, evaluated at most once per pass outside the reading node's trace stack, exposed only as a `probe:<name>` cell (`tests/043-probes.sh`) |
+| LAW 38 | volatile-node containment | holds | `--check` double-run detection unchanged (`tests/019`); containment is the same M4 probe mechanism as LAW 37 — a volatile read wrapped as a probe is observed/pinned once per pass as its own cell, in-memory only, never written to `~/.pp/store` (`tests/043-probes.sh`) |
+| LAW 39 | sealed cells | holds | `CapSecret`/`VSealed`: confidential reads redact on print, exclude from the CAS, ban at the node boundary both directions, gate hits on a covering grant; `(unseal v)` is the explicit boundary (`tests/044-sealed.sh`) |
 
 Laws that **hold** today, for the record: LAW 1 (mutual `let`),
 LAW 5 (`let*` as sequential sugar), LAW 9 (branch pruning), LAW 10 (TCO),

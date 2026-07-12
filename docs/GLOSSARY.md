@@ -73,8 +73,22 @@ Terms marked *(planned)* do not exist in the code yet — see
   validity-bearing but authority-exempt, Q6), `stat:<path>` (a file
   predicate's presence/kind observation — `file-exists?`/`dir?`, fs-read
   authority), `env:<NAME>` (environment variable, absence included), and
-  `argv:` (the program-argument list after `--`). Planned: `glob:`,
-  `proc:web`.
+  `argv:` (the program-argument list after `--`). M4 (real): `probe:<name>`
+  (an observer-written volatile cell — see **probe** below) and
+  `sealed:<path>` (a confidential read's bytes-hash — see **sealed cell**
+  below). Planned: `glob:`, `domain:<name>:<sub>` (Q13 third-party domains).
+- **probe** *(real, M4)* — the sanctioned nondeterministic dependency (SPEC
+  LAW 37/38). `(register-probe name observe-fn read-cap)` (script-tier) then
+  `(probe name)` (anywhere): the observe-fn runs at most once per pass,
+  OUTSIDE the reading node's trace stack, under exactly `read-cap`; the
+  reader records only a `probe:<name>` cell, capability-free at the read
+  site. Never persisted (`Runtime.probe_values` is in-memory, cleared every
+  pass) — a probe is the volatility-containment mechanism, not a cache.
+- **sealed cell** *(real, M4)* — a confidential read (SPEC LAW 39).
+  `--grant secret:<path>` mints `CapSecret`; a read covered by it and NOT by
+  an fs grant returns `VSealed` instead of `VString` — redacted on print,
+  excluded from the CAS, banned at the node boundary like a capability.
+  `(unseal v)` is the explicit, greppable way back to `VString`.
 - **`run` / process effect** — `(perform run CMD ARG…)` executes an external
   command under `--grant process`, returning `{"exit","out","err"}`. Inside a
   node: cwd = the node's sandbox, and the trace records `tool:` + `tree:`
@@ -128,6 +142,12 @@ Terms marked *(planned)* do not exist in the code yet — see
   (`--grant`). The sole mint of capabilities.
 - **`cap-restrict` / `cap-compose`** — the only capability operations in user
   code: narrow a capability's scope, or union two the code already holds.
+- **`CapNetwork` / `http-get` / `http-post`** *(real, M4)* — `CapNetwork
+  {host; port option}` (`--grant net:<host>[:<port>]`, `host = "*"`
+  wildcards) authorizes `(perform http-get url)` / `(perform http-post url
+  body)`, which fork `curl` (no new OCaml networking code) and return
+  `{"status" INT "body" STRING}`. Banned inside node bodies — not
+  convergent, not the declared-nondeterminism mechanism (that's **probe**).
 
 ### Effects
 

@@ -6,6 +6,53 @@ v0.2.0 predate this file and are reconstructed from history for context.
 
 ## [Unreleased] — v0.2.0
 
+- **M4 stage 1: probes, sealed cells, network** (docs/PLAN-m4-cells.md).
+  Three additive features, one model — a cell whose write-discipline core
+  enforces mechanically.
+  - **Probes** (SPEC LAW 37/38, now holds): `(register-probe name observe-fn
+    read-cap)` (script-tier, `Runtime.probe_registry`) and `(probe name)`
+    (inside or outside nodes) are the sanctioned nondeterministic
+    dependency. The observe-fn runs at most once per pass, OUTSIDE the
+    reading node's trace stack (`trace_stack` saved to `[]` via the
+    exception-safe `with_ref` pattern) and under exactly the registered
+    read-cap; the reading node records only a `probe:<name>` cell (hash of
+    the observed value) via ordinary `record_read`, capability-free at the
+    read site. Results pin in `Runtime.probe_values`, in-memory only,
+    cleared at the same three points `--watch`'s loop clears
+    `Store.run_pins`; `Store.observe_cell`'s new `probe:` arm re-observes
+    through the same cache (`Runtime.probe_observer` hook, mirroring
+    `proc_observer`) — including live under a running `pp --watch` process,
+    with no probe-specific polling logic at all. New `Cell.Probe` kind.
+  - **Sealed cells** (new SPEC LAW 39): `--grant secret:<path>` mints a new
+    `CapSecret {path}` capability kind (canonicalized at mint like fs
+    grants). `slurp`/`(perform read-file ...)` dispatch on grant coverage
+    (`Process.read_dispatch`, shared): fs-covered (with or without ALSO a
+    secret grant) is unchanged plain `VString`; secret-covered and NOT
+    fs-covered returns a new value kind, `VSealed` — bytes pinned in-memory
+    only (`Runtime.sealed_pins`, `store_blob`/the CAS NEVER called) and
+    recorded as a `sealed:<canonical-path>` cell (hash of the bytes).
+    `string_of_value` redacts every `VSealed` to `#<sealed>`;
+    `Codec.encode_value` returns `None` for it; the M3 node-boundary walk
+    (renamed `contains_capability` → `contains_authority`, plus a new
+    `contains_sealed` for precise error wording) bans `VSealed` exactly like
+    `VCapability`, both directions, both backends; `cell_authorized_for`
+    requires a covering `CapSecret` grant to serve a `sealed:` hit.
+    `(unseal v)` is the one explicit way out to `VString`.
+  - **Network**: `CapNetwork` is now `{host; port option}` (was `{protocol}`
+    — `--grant net:<host>[:<port>]`, `host = "*"` wildcards). `(perform
+    http-get url)` / `(perform http-post url body)` fork `curl`
+    (`Process.http_request` — zero new OCaml networking/TLS surface)
+    authorized against `CapNetwork` host[:port], not `CapProcess`; banned
+    inside node bodies (`trace_stack` guard, mirroring `fenced`). Result
+    shape: `{"status" INT "body" STRING}`.
+  - New tests: `tests/043-probes.sh`, `tests/044-sealed.sh` (whole-store
+    recursive scans prove no secret bytes ever land in the store),
+    `tests/045-network.sh` (gated cleanly on `curl`/`python3`, a loopback
+    fixture, no real network). All 592 pre-existing tests and the fuzzer
+    (`core`+`full`, 2000 programs each) are unaffected. See
+    [docs/SPEC.md](docs/SPEC.md) (LAW 37, LAW 38, LAW 39, LAW 22/26
+    amendments), [docs/STATUS.md](docs/STATUS.md),
+    [docs/MASTERPLAN.md](docs/MASTERPLAN.md) (M4).
 - **M3: in-language capability attenuation** (docs/PLAN-m3-attenuation.md).
   `(current-capabilities)` reifies the ambient set as of the call (never a
   mint); `cap-restrict` gains an optional `fs_mode` argument

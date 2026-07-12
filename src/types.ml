@@ -82,6 +82,17 @@ and value =
   | VThunk of thunk
   | VEnvMap of (string * value) list  (* module export: list of (name, thunk) pairs *)
   | VBytecode of bytecode
+  | VSealed of string  (* M4: a sealed (confidential) read's bytes — opaque
+                          on purpose: string_of_value/print MUST redact
+                          ("#<sealed>"), Codec.encode_value returns None (the
+                          non-data law), and the node-boundary ban (M3's
+                          contains_authority) bans it both directions exactly
+                          like VCapability. hash_value hashes the ACTUAL bytes
+                          (rotation invalidation needs it — the hash appears
+                          only in trace lines, never in a printed value). The
+                          explicit `(unseal v)` primitive is the one sanctioned
+                          way out to VString — no dataflow tainting beyond it
+                          (PLAN-m4-cells.md's Vault/SOPS line). *)
 
 (* ---- Function closure ---- *)
 and closure = {
@@ -132,7 +143,18 @@ and thunk_status =
 (* ---- Capabilities — authority tokens ---- *)
 and capability =
   | CapFilesystem of { path : string; mode : fs_mode }
-  | CapNetwork of { protocol : string }
+  | CapNetwork of { host : string; port : int option }
+    (* host: "*" wildcards any host (the pre-M4 "any"-protocol shape,
+       generalized); port: None means unrestricted, Some p pins it exactly.
+       Minted only via `--grant net:<host>[:<port>]` (main.ml) — never
+       constructible in user code (LAW 22). *)
+  | CapSecret of { path : string }
+    (* M4 sealed cells: `--grant secret:<path>` (canonicalized at mint, like
+       fs grants). Authorizes reading the bytes under [path] as a VSealed
+       value — never as plain fs data — via the read dispatch in
+       Process/Store's slurp/read-file paths. Deliberately has no fs_mode:
+       a secret is read-only by construction, there is no "write a secret"
+       operation in stage 1. *)
   | CapProcess
   | CapCompose of capability list
   | CapRestrict of { cap : capability; scope : string; mode : fs_mode option }
@@ -447,6 +469,11 @@ and hash_value (v : value) : string =
         hash_concat ("envmap" :: parts)
     | VBytecode bc ->
         hash_concat ["bytecode"; string_of_int (Array.length bc.code)]
+    | VSealed bytes ->
+        (* Hash the ACTUAL bytes (rotation invalidation needs it, LAW 39) —
+           this hash appears only inside trace lines under a `sealed:` cell
+           id, never in a printed value (string_of_value redacts). *)
+        hash_concat ["sealed"; bytes]
   in
   hash_val v
 
@@ -455,8 +482,10 @@ and hash_capability (c : capability) : string =
   | CapFilesystem { path; mode } ->
       let m = match mode with Read -> "r" | Write -> "w" | ReadWrite -> "rw" in
       hash_concat ["cap_fs"; path; m]
-  | CapNetwork { protocol } ->
-      hash_concat ["cap_net"; protocol]
+  | CapNetwork { host; port } ->
+      hash_concat ["cap_net"; host; (match port with Some p -> string_of_int p | None -> "any")]
+  | CapSecret { path } ->
+      hash_concat ["cap_secret"; path]
   | CapProcess -> hash_string "cap_process"
   | CapCompose caps ->
       hash_concat ("cap_compose" :: List.map hash_capability caps)
@@ -466,17 +495,24 @@ and hash_capability (c : capability) : string =
       hash_concat ["cap_restrict"; hash_capability cap; scope; m]
   | CapNone -> hash_string "cap_none"
 
-(* ---- Node-boundary capability ban (SPEC LAW 20, M3) ----
+(* ---- Node-boundary authority ban (SPEC LAW 20, M3; extended M4) ----
 
-   Structural scan for an embedded VCapability, used by BOTH halves of the
-   node boundary: the free-var ban (node_key_of / vm_node_key, import side)
-   and the result ban (run_node_body, export side). Closure-env-aware — a
-   capability could be bound in a closure's captured environment/frames, not
-   just sitting directly in the scanned value — but it must NEVER force an
-   Unevaluated thunk (LAW 14): a capability hidden behind an unforced thunk
-   is invisible to this check, a documented residual (the layer-1 gap;
-   layers 2/3 — the result ban and the use-time ⊆ gates — are the actual
-   security floor, PLAN-m3-attenuation.md).
+   Structural scan for an embedded VCapability OR VSealed, used by BOTH
+   halves of the node boundary: the free-var ban (node_key_of / vm_node_key,
+   import side) and the result ban (run_node_body, export side). Named
+   `contains_authority` (M4 rename from `contains_capability`, PLAN-m4-cells.md
+   "Sealed cells / Node boundary") because it now bans two different KINDS of
+   authority-shaped value with the same structural walk: a capability (raw
+   authority) and a sealed secret (confidential bytes) — both must never cross
+   a node boundary in either direction, both for the same reason (a node's key
+   and result are content-addressed and shared across callers with different
+   authority/clearance). Closure-env-aware — either kind could be bound in a
+   closure's captured environment/frames, not just sitting directly in the
+   scanned value — but it must NEVER force an Unevaluated thunk (LAW 14): a
+   capability or sealed value hidden behind an unforced thunk is invisible to
+   this check, a documented residual (the layer-1 gap; layers 2/3 — the result
+   ban and the use-time ⊆ gates / sealed cell_authorized_for — are the actual
+   security floor, PLAN-m3-attenuation.md / PLAN-m4-cells.md).
 
    BOTH closure representations need a cycle guard, not just the VM's:
    - VM closures carry their capture as `vm_frames`, a mutable frame graph a
@@ -494,12 +530,13 @@ and hash_capability (c : capability) : string =
      Guarded by `env_id` (unique per env node, `Types.fresh_env_id`) in a
      hashtable — no physical/structural sharing needed, an id is already an
      equality-comparable proxy for "the exact same env value". *)
-let contains_capability (v : value) : bool =
+let contains_value_kind (is_target : value -> bool) (v : value) : bool =
   let visited_frames : frame list ref = ref [] in
   let visited_envs : (int, unit) Hashtbl.t = Hashtbl.create 16 in
   let rec go (v : value) : bool =
-    match v with
-    | VCapability _ -> true
+    if is_target v then true
+    else match v with
+    | VCapability _ | VSealed _ -> false  (* not the target kind; already false above *)
     | VThunk t ->
         (match t.thunk_status with
          | Evaluated result -> go result
@@ -531,6 +568,18 @@ let contains_capability (v : value) : bool =
     end
   in
   go v
+
+(* The two ban predicates share the walk above; only the leaf test differs.
+   [contains_authority]: does [v] contain a capability OR a sealed value
+   (either bans a node boundary crossing). [contains_sealed]: does [v]
+   specifically contain a sealed value — used only to word the error message
+   precisely ("... may not be or contain a sealed value" vs "... a
+   capability") when [contains_authority] already said yes. *)
+let contains_authority (v : value) : bool =
+  contains_value_kind (function VCapability _ | VSealed _ -> true | _ -> false) v
+
+let contains_sealed (v : value) : bool =
+  contains_value_kind (function VSealed _ -> true | _ -> false) v
 
 (* ---- Free-variable analysis (for the LAW 20 node key) ----
    The set of symbols a node's code references but does not itself bind. The
@@ -798,13 +847,20 @@ let rec string_of_value (v : value) : string =
       "#<envmap " ^ string_of_int (List.length bindings) ^ " exports>"
   | VBytecode bc ->
       "#<bytecode " ^ string_of_int (Array.length bc.code) ^ " ops>"
+  | VSealed _ ->
+      (* LAW 39: NEVER the bytes — a print that leaked them would defeat the
+         whole feature. Every printer (REPL, `print`, debug) goes through
+         this one function, so redaction is total by construction. *)
+      "#<sealed>"
 
 and string_of_capability (c : capability) : string =
   match c with
   | CapFilesystem { path; mode } ->
       let m = match mode with Read -> ":ro" | Write -> ":wo" | ReadWrite -> ":rw" in
       "#<cap fs " ^ path ^ " " ^ m ^ ">"
-  | CapNetwork { protocol } -> "#<cap net " ^ protocol ^ ">"
+  | CapNetwork { host; port } ->
+      "#<cap net " ^ host ^ (match port with Some p -> ":" ^ string_of_int p | None -> "") ^ ">"
+  | CapSecret { path } -> "#<cap secret " ^ path ^ ">"
   | CapProcess -> "#<cap process>"
   | CapCompose caps -> "#<cap compose " ^ string_of_int (List.length caps) ^ ">"
   | CapRestrict { scope; mode; _ } ->
@@ -878,6 +934,8 @@ let rec value_to_expr (v : value) : expr =
       failwith "value_to_expr: cannot convert a module (env-map) to syntax"
   | VBytecode _ ->
       failwith "value_to_expr: cannot convert bytecode to syntax"
+  | VSealed _ ->
+      failwith "value_to_expr: cannot convert a sealed value to syntax"
 
 and symbol_name (v : value) : string =
   match v with
