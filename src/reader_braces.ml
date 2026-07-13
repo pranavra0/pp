@@ -996,8 +996,29 @@ and parse_binding_group ps ~(allow_ty : bool) : (string * expr) list =
    levels, grouping, vectors, maps, quote/quasiquote nesting, fn/def/if/
    let/let*/do/perform/with-caps/with-config/with-handler/module/import/force/
    delay/config/load/load-module/island/assert/node and cell literals.
-   defmacro/needs/node-definitions inside quasiquote{} are parse errors
-   (S1 scope; no existing program quasiquotes them). *)
+
+   S5 ergonomics (was S1's deviation #2): `unquote(E)` is now legal in a
+   let/let* BINDING NAME and a def's FUNCTION NAME (parse_qq_name_slot) —
+   the two "computed name" shapes real macro templates need: a gensym'd
+   hygienic temporary (`let (unquote(g) = unquote(a)) { if unquote(g) ... }`)
+   and a macro-generated def name (`def unquote(name)(x) { ... }`).
+   splice(e) already worked in any list/argument/block position (parse_qq_*
+   already routed every element through parse_qq, which dispatches splice at
+   parse_qq_head) — it needed no reader change, only exercising.
+
+   Still parse errors, deliberately NOT lifted (documented in SPEC.md
+   Appendix B.7, not fuzzed, no existing/rewritten macro test needs them):
+   defmacro/needs inside quasiquote{} (a macro that itself generates a macro
+   definition or a `needs` clause is not a shape any test exercises); node
+   DEFINITIONS `node name { ... }` / `node f(p) { ... }` (only the bare node
+   EXPRESSION `node { E }` is data-representable) — the workaround for all
+   three is the pre-S5 one: build the application via `list`/`cons` calls
+   directly, exactly as `apply_macro`'s callers always could. Type
+   annotations (fn/def param types, let binding types, return types) inside
+   quasiquote{} are also still parse errors — no macro test needs a
+   templated annotation, and annotations are a separate AST node (`ETyped`),
+   not plain quoted-symbol data, so representing one as quasiquote DATA
+   would need a new data convention, not just a parser extension. *)
 
 and qq_nil : expr = EQuote (ELiteral VNil)
 
@@ -1193,6 +1214,28 @@ and parse_qq_primary ps : expr =
   | TName "nil" -> advance ps; EQuote (ELiteral VNil)
   | TName n -> parse_qq_head ps n
 
+(* S5 ergonomics: a "name slot" inside a qq_head shape (a let/let* binding
+   name, or a def's function name) — ordinarily a bare identifier, quoted
+   verbatim (qq_sym), OR `unquote(E)`, lifting S1's deviation #2 to the
+   extent macros actually need it: the canonical gensym hygiene pattern
+   `let (unquote(g) = unquote(a)) { ... }` (a macro's temp binding, named at
+   expansion time) and a macro-computed def name (`def unquote(name)(x)
+   { ... }`, e.g. `defadder`). Parameter LISTS stay literal-names-only —
+   unlifted; no macro test needs a computed parameter name, and
+   parse_paren_params is shared with the non-quasiquote parser, so
+   extending it would risk the real (non-qq) grammar. *)
+and parse_qq_name_slot ps ~(what : string) : expr =
+  match (peek ps ~nl:true).t with
+  | TName "unquote" when (peek2 ps).t = TLParen ->
+      advance ps; advance ps;
+      skip_nl ps;
+      let e = parse_expr ps free_ctx in
+      expect ps ~nl:true TRParen "')'";
+      EApply (ESymbol "list", [EQuote (ESymbol "unquote"); e])
+  | TName s -> advance ps; qq_sym s
+  | t -> parse_error ps (what ^ " must be a symbol or unquote(...), got "
+                         ^ string_of_btok t)
+
 and parse_qq_head ps (n : string) : expr =
   let next_t = (peek2 ps).t in
   match n with
@@ -1234,13 +1277,12 @@ and parse_qq_head ps (n : string) : expr =
       qq_chain (qq_sym "fn" :: param_data :: body)
   | "def" when (match next_t with TName _ -> true | _ -> false) ->
       advance ps;
-      let name = (match (cur ps).t with TName s -> s | _ -> assert false) in
-      advance ps;
+      let name_expr = parse_qq_name_slot ps ~what:"def name" in
       if (cur ps).t <> TLParen then
         parse_error ps "def requires a parameter list: def name(params) { ... }";
       let params = parse_paren_params ps in
       let head =
-        qq_chain (qq_sym name
+        qq_chain (name_expr
                   :: List.map (fun (p, ty) ->
                        match ty with
                        | None -> qq_sym p
@@ -1281,12 +1323,7 @@ and parse_qq_head ps (n : string) : expr =
       let rec binds acc =
         if (cur ps).t = TRParen then (advance ps; List.rev acc)
         else begin
-          let name =
-            match (peek ps ~nl:true).t with
-            | TName s -> advance ps; s
-            | t -> parse_error ps ("binding name must be a symbol, got "
-                                   ^ string_of_btok t)
-          in
+          let name_expr = parse_qq_name_slot ps ~what:"binding name" in
           if (cur ps).t = TColon then
             parse_error ps "type annotations are not representable inside quasiquote";
           (match (peek ps ~nl:true).t with
@@ -1295,8 +1332,8 @@ and parse_qq_head ps (n : string) : expr =
           skip_nl ps;
           let v = parse_qq ps in
           match (peek ps ~nl:true).t with
-          | TComma -> advance ps; skip_nl ps; binds (v :: qq_sym name :: acc)
-          | TRParen -> advance ps; List.rev (v :: qq_sym name :: acc)
+          | TComma -> advance ps; skip_nl ps; binds (v :: name_expr :: acc)
+          | TRParen -> advance ps; List.rev (v :: name_expr :: acc)
           | t -> parse_error ps ("expected ',' or ')', got " ^ string_of_btok t)
         end
       in

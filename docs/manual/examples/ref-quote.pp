@@ -1,4 +1,5 @@
-# Quotation is total: any form becomes data. Quasiquote (`) with unquote (,)
-# and unquote-splicing (,@) build structure with holes.
+# Braces are the surface; s-expressions are the AST. quote { ... } turns
+# the form inside into that AST, as data. Quasiquote is a template:
+# unquote(e) fills one hole, splice(e) splices a list into a list position.
 print(quote { if a { b } else { c } })
-print(quasiquote(cons(quote { 1 }, cons(list(quote { (unquote) }, 1 + 1), cons(list(quote { unquote-splicing }, list(3, 4)), quote { nil })))))
+print(quasiquote { f(1, unquote(1 + 1), splice(list(3, 4))) })

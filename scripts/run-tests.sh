@@ -332,4 +332,11 @@ else
   echo "FAIL 055-fmt"; fail=1
 fi
 
+echo "--- M7 S5: defmacro authored in braces vs sexpr, differentially ---"
+if PP="$PP" bash tests/056-defmacro-both-surfaces.sh; then
+  echo "ok   056-defmacro-both-surfaces"
+else
+  echo "FAIL 056-defmacro-both-surfaces"; fail=1
+fi
+
 exit $fail

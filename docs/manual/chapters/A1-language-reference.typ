@@ -98,9 +98,17 @@ A mismatch names the offending value and its source location.
 
 == Quotation
 
-Quotation is total: any form the reader accepts, `quote` turns into data.
-Quasiquote builds structure with holes — `unquote` splices one value,
-`unquote-splicing` splices a list.
+Braces are pp's surface syntax; s-expressions are its AST. `quote { ... }` is
+the bridge: it turns the one form inside into that AST, as data. This is the
+same position Elixir takes — homoiconicity lives at the AST layer, not the
+surface. The brace text you type is not itself a data structure, but the tree
+it reads to is, and `quote` hands you that tree. Quotation is total: any form
+the reader accepts, `quote` turns into data.
+
+Quasiquote builds structure with holes. The body of `quasiquote { ... }` is a
+template written in ordinary brace syntax, denoting the s-expression data it
+reads to; `unquote(e)` fills one hole with a computed value, `splice(e)`
+splices a list into a list position.
 
 #example("ref-quote")
 
@@ -126,11 +134,24 @@ Config is ambient, dynamically-scoped data, distinct from capabilities.
 
 == Macros
 
-`defmacro` defines a macro: it receives its arguments as unevaluated forms and
-returns a new form, expanded before either back end sees it. Quasiquote is the
-usual way to assemble the expansion.
+`defmacro` defines a macro: it receives its arguments as unevaluated forms —
+s-expression data, the same trees `quote` yields — and returns a new form,
+expanded before either back end sees it. You write the macro in braces; it
+consumes and produces the AST. A `quasiquote { ... }` template is the usual
+way to assemble the expansion: ordinary brace syntax with `unquote(e)` holes
+where the caller's forms go.
 
 #example("ref-defmacro")
+
+Because a macro's real domain is the AST, the s-expression notation remains a
+first-class way to write one: a `.ppl` file is the same language in AST-native
+form — `pp` reads it with the s-expression reader, and the template
+#raw("`(if ,test nil ,body)") there builds the identical tree the brace
+template above does. Data operations work on either origin: where quasiquote
+gets awkward, assemble the form directly with `list`/`cons` —
+`list(quote { + }, x, x)` is a complete macro body. `gensym` supplies fresh
+names for any binding a macro introduces; pp macros are unhygienic, so the
+discipline is manual.
 
 == Modules
 

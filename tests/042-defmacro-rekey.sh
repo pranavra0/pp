@@ -51,36 +51,61 @@ defmacro build-step() {
 print(force(node { build-step() }))
 EOF
 
-for flag in "" "--bytecode"; do
-  if [ -z "$flag" ]; then tag=tw; else tag=vm; fi
-  rm -rf "$TMP/.pp"
+# M7 S5: the SAME rekey battery, authored in the OTHER surface (.ppl,
+# sexpr) — same macro, same call site, same edit, proving LAW 20's rekey
+# property is a property of the AST macro.ml expands, not of which reader
+# produced it (docs/M7-SYNTAX.md S5: "every existing macro test passes
+# authored in either surface").
+cat > "$TMP/v1.ppl" <<'EOF'
+(defmacro (build-step) '(do (perform log "COMPUTE") 1))
+(print (force (node (build-step))))
+EOF
+cat > "$TMP/v2.ppl" <<'EOF'
+(defmacro (build-step) '(do (perform log "COMPUTE") 2))
+(print (force (node (build-step))))
+EOF
 
-  "$PP" $flag "$TMP/v1.pp" > "$TMP/o1" 2>&1
-  assert "$tag-v1-cold-miss-computes" "$TMP/o1" "COMPUTE" present
-  assert "$tag-v1-cold-value"         "$TMP/o1" "^1$"     present
+rekey_battery() {  # EXT (".pp" or ".ppl") -> asserts, using $TMP/v1$EXT/v2$EXT
+  local ext="$1"
+  for flag in "" "--bytecode"; do
+    if [ -z "$flag" ]; then tag="tw$ext"; else tag="vm$ext"; fi
+    rm -rf "$TMP/.pp"
 
-  "$PP" $flag "$TMP/v1.pp" > "$TMP/o1b" 2>&1
-  assert "$tag-v1-rerun-hit-no-compute" "$TMP/o1b" "COMPUTE" absent
-  assert "$tag-v1-rerun-value"          "$TMP/o1b" "^1$"     present
+    "$PP" $flag "$TMP/v1$ext" > "$TMP/o1" 2>&1
+    assert "$tag-v1-cold-miss-computes" "$TMP/o1" "COMPUTE" present
+    assert "$tag-v1-cold-value"         "$TMP/o1" "^1$"     present
 
-  "$PP" $flag why "$TMP/v1.pp" > "$TMP/why1" 2>&1
-  assert "$tag-v1-why-reports-hit" "$TMP/why1" "\[why\].*hit" present
+    "$PP" $flag "$TMP/v1$ext" > "$TMP/o1b" 2>&1
+    assert "$tag-v1-rerun-hit-no-compute" "$TMP/o1b" "COMPUTE" absent
+    assert "$tag-v1-rerun-value"          "$TMP/o1b" "^1$"     present
 
-  # Same call site, EDITED macro definition: the node's expanded code hash
-  # changes (LAW 20), so this MUST miss and recompute — the exit criterion.
-  "$PP" $flag "$TMP/v2.pp" > "$TMP/o2" 2>&1
-  assert "$tag-v2-edit-miss-computes" "$TMP/o2" "COMPUTE" present
-  assert "$tag-v2-edit-value"         "$TMP/o2" "^2$"     present
+    "$PP" $flag why "$TMP/v1$ext" > "$TMP/why1" 2>&1
+    assert "$tag-v1-why-reports-hit" "$TMP/why1" "\[why\].*hit" present
 
-  "$PP" $flag why "$TMP/v2.pp" > "$TMP/why2" 2>&1
-  assert "$tag-v2-why-reports-hit-after-recompute" "$TMP/why2" "\[why\].*hit" present
+    # Same call site, EDITED macro definition: the node's expanded code hash
+    # changes (LAW 20), so this MUST miss and recompute — the exit criterion.
+    "$PP" $flag "$TMP/v2$ext" > "$TMP/o2" 2>&1
+    assert "$tag-v2-edit-miss-computes" "$TMP/o2" "COMPUTE" present
+    assert "$tag-v2-edit-value"         "$TMP/o2" "^2$"     present
 
-  # Revert to v1: the ORIGINAL key is still in the store, so this hits
-  # again — no recompute.
-  "$PP" $flag "$TMP/v1.pp" > "$TMP/o3" 2>&1
-  assert "$tag-v1-revert-hit-no-compute" "$TMP/o3" "COMPUTE" absent
-  assert "$tag-v1-revert-value"          "$TMP/o3" "^1$"     present
-done
+    "$PP" $flag why "$TMP/v2$ext" > "$TMP/why2" 2>&1
+    assert "$tag-v2-why-reports-hit-after-recompute" "$TMP/why2" "\[why\].*hit" present
+
+    # Revert to v1: the ORIGINAL key is still in the store, so this hits
+    # again — no recompute.
+    "$PP" $flag "$TMP/v1$ext" > "$TMP/o3" 2>&1
+    assert "$tag-v1-revert-hit-no-compute" "$TMP/o3" "COMPUTE" absent
+    assert "$tag-v1-revert-value"          "$TMP/o3" "^1$"     present
+  done
+}
+
+rekey_battery ".pp"
+rekey_battery ".ppl"
+# NOTE: deliberately not also asserting the .pp and .ppl runs HIT the same
+# store key as each other — LAW 20's key includes ELocated (source path,
+# line) (SPEC Appendix B's elegance-criterion corollary), so v1.pp and
+# v1.ppl, being different FILES, get different keys regardless of surface;
+# that would be pinning file-path sensitivity, not surface-independence.
 
 # --- macro-in-node-body: an ordinary unbound-symbol error, both backends ---
 cat > "$TMP/innode.pp" <<'EOF'

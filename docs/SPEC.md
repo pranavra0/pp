@@ -1938,3 +1938,22 @@ because later stages implement exactly what S0 froze:
     node keys can embed `ELocated (file, line)` of nested `fn`/`def` forms,
     so S2/S3 must transpile line-stably and in place for the null-rebuild
     exit to be achievable.
+12. **Quasiquote-template name slots take `unquote(…)`** (M7 S5). Inside
+    `quasiquote { … }`, a `let`/`let*` *binding name* and a `def`'s
+    *function name* may each be `unquote(E)` as well as a bare identifier —
+    the two computed-name shapes real macro templates need: a gensym'd
+    hygienic temporary (`let (unquote(g) = unquote(a)) { … }` lowers to the
+    data `` `(let [,g ,a] …) ``) and a macro-generated definition
+    (`def unquote(name)(x) { … }` → `` `(def (,name x) …) ``). Everything
+    else deviation-listed at S1 stays a parse error inside `quasiquote{}`,
+    deliberately: `defmacro` and `needs` templates, *named* node
+    definitions (`node name { … }` / `node f(p) { … }`; the bare node
+    *expression* `node { E }` is representable), computed *parameter*
+    names, and type annotations (an `ETyped` is not plain quoted-symbol
+    data, so representing one would need a new data convention, not a
+    parser rule). **Workaround for all of these:** build the form as data
+    with ordinary `list`/`cons`/`quote{}` calls — `list(quote { defnode },
+    …)` etc. — exactly what macro bodies could always return; and a
+    block-vs-map ambiguity inside a template is resolved the same way as
+    outside quasiquote (B.7 #2): expression-position `{…}` is map data,
+    sequencing must be spelled `do { … }`.

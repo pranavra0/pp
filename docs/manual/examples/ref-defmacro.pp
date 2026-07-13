@@ -1,5 +1,7 @@
-# `defmacro` receives its arguments as unevaluated forms and returns a new
-# form. Quasiquote is the usual way to assemble the expansion.
-defmacro unless(test, body) { quasiquote(cons(quote { (if) }, cons(list(quote { (unquote) }, test), cons(quote { nil }, cons(list(quote { (unquote) }, body), quote { nil }))))) }
+# `defmacro` receives its arguments as unevaluated forms (sexpr data) and
+# returns a new form, expanded before either back end sees it. The body of
+# quasiquote { ... } is a template in ordinary brace syntax.
+defmacro unless(test, body) {
+  quasiquote { if unquote(test) { nil } else { unquote(body) } } }
 print(unless(false, "ran"))
 print(unless(true, "ran"))

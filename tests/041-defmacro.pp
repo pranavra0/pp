@@ -10,10 +10,21 @@
 # macro's definition re-keys a node built from its expansion — is
 # tests/042-defmacro-rekey.sh's job, under an isolated $HOME where hit vs.
 # miss can be observed directly.
+#
+# M7 S5: authored here in the brace surface, via quote{}/quasiquote{}/
+# unquote()/splice() — homoiconicity still lives at the AST layer (`quote`
+# yields sexpr data in both surfaces; the Elixir position, M7-SYNTAX.md's
+# thesis paragraph 2), but a template no longer has to be spelled out as
+# hand-nested cons/list calls. tests/041-defmacro.ppl is this SAME test,
+# authored in the sexpr surface (the AST-native notation `defmacro` has
+# always used); tests/056-defmacro-both-surfaces.sh is the M7 S5 gate
+# proving the two files produce byte-identical output on both backends —
+# a macro author may write braces or sexprs and the language does not
+# know the difference.
 
 print("=== control-flow macro (unless), via quasiquote ===")
 defmacro unless(cond, then-branch) {
-  quasiquote(cons(quote { (if) }, cons(list(quote { (unquote) }, cond), cons(quote { nil }, cons(list(quote { (unquote) }, then-branch), quote { nil }))))) }
+  quasiquote { if unquote(cond) { nil } else { unquote(then-branch) } } }
 print(unless(false, 42))  # expect 42
 print(unless(true, 42))  # expect nil
 
@@ -21,32 +32,44 @@ print("")
 print("=== gensym: a macro's own temp binding must not capture a ===")
 print("=== caller variable of the same name (M3 hygiene discipline) ===")
 # The macro's gensym prefix is deliberately "tmp" — the SAME name the
-# caller binds below. Without gensym, `(let [tmp ,a] ...)` would capture
-# the caller's `tmp` inside the expansion; `(gensym "tmp")` produces a
-# fresh, unwritable name (e.g. "tmp~3"), so the caller's `tmp` (bound to 7)
-# is what `,a` refers to, not the macro's own temporary.
+# caller binds below. Without gensym, the expansion's own
+# `let (tmp = unquote(a)) { ... }` would capture the caller's `tmp`;
+# `gensym("tmp")` produces a fresh, unwritable name (e.g. "tmp~3"), so the
+# caller's `tmp` (bound to 7) is what `unquote(a)` refers to, not the
+# macro's own temporary. This is exactly the "computed binding name" shape
+# quasiquote{} needed S5's `unquote(...)`-in-name-slot ergonomics for
+# (src/reader_braces.ml's parse_qq_name_slot) — `unquote(g)` names the
+# binding itself, not just its value.
 defmacro first-truthy(a, b) {
   let* (g = gensym("tmp")) {
-    quasiquote(cons(quote { (let) }, cons([list(quote { (unquote) }, g), list(quote { (unquote) }, a)], cons(cons(quote { (if) }, cons(list(quote { (unquote) }, g), cons(list(quote { (unquote) }, g), cons(list(quote { (unquote) }, b), quote { nil })))), quote { nil })))) } }
+    quasiquote {
+      let (unquote(g) = unquote(a)) {
+        if unquote(g) { unquote(g) } else { unquote(b) }
+      }
+    }
+  }
+}
 let (tmp = 7) { print(first-truthy(tmp, 5)) }
 # expect 7 (no capture)
 print(first-truthy(false, 9))  # expect 9
 
 print("")
 print("=== a macro building a (node ...) form ===")
-defmacro memo(e) { quasiquote(cons(quote { (force) }, cons(cons(quote { (node) }, cons(list(quote { (unquote) }, e), quote { nil })), quote { nil }))) }
+defmacro memo(e) { quasiquote { force(node { unquote(e) }) } }
 print(memo(2 + 3))  # expect 5
 
 print("")
 print("=== nested macro use: one macro's expansion calls another macro ===")
-defmacro twice(e) { quasiquote(cons(quote { (do) }, cons(list(quote { (unquote) }, e), cons(list(quote { (unquote) }, e), quote { nil })))) }
-defmacro say-twice(x) { quasiquote(cons(quote { twice }, cons(cons(quote { print }, cons(list(quote { (unquote) }, x), quote { nil })), quote { nil }))) }
+defmacro twice(e) { quasiquote { do { unquote(e); unquote(e) } } }
+defmacro say-twice(x) { quasiquote { twice(print(unquote(x))) } }
 say-twice("hi")  # expect "hi" printed twice
 
 print("")
 print("=== macro-generated def ===")
+# Another computed-name-slot use of parse_qq_name_slot: `unquote(name)` is
+# the def's OWN function name, not one of its arguments.
 defmacro defadder(name, n) {
-  quasiquote(cons(quote { (def) }, cons(cons(list(quote { (unquote) }, name), cons(quote { x }, quote { nil })), cons(cons(quote { + }, cons(quote { x }, cons(list(quote { (unquote) }, n), quote { nil }))), quote { nil })))) }
+  quasiquote { def unquote(name)(x) { x + unquote(n) } } }
 defadder(add10, 10)
 print(add10(5))  # expect 15
 
