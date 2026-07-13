@@ -280,15 +280,21 @@ let resolve ~(uri : string) ~(pin : string option) : string =
             end
       end
 
-(* The module root inside a pinned tree. M7 S1: a brace-surface island may
-   ship entry.ppb instead; entry.pp wins when both exist. *)
+(* The module root inside a pinned tree. M7 S3: entry.pp is brace surface
+   (the default), entry.ppb a permanent brace alias, entry.ppl the sexpr/AST
+   surface — all fully supported; entry.pp wins when several exist. The
+   reader is chosen by extension (Reader_braces.read_dispatch), so a pinned
+   tree may ship whichever surface it was authored in. *)
 let entry_file (tree_dir : string) : string =
   let e = Filename.concat tree_dir "entry.pp" in
   if Sys.file_exists e then e
   else
     let eb = Filename.concat tree_dir "entry.ppb" in
     if Sys.file_exists eb then eb
-    else failwith ("island: pinned tree has no entry.pp: " ^ tree_dir)
+    else
+      let el = Filename.concat tree_dir "entry.ppl" in
+      if Sys.file_exists el then el
+      else failwith ("island: pinned tree has no entry.pp: " ^ tree_dir)
 
 (* ---- Syntactic walk: every island form in an expression ---- *)
 
@@ -399,7 +405,12 @@ let update_file (path : string) : int * int =
          | Some (at, len) ->
              (match String.index_from_opt !text (at + len) ')' with
               | Some close ->
-                  text := splice !text close 0 (" \"" ^ fresh ^ "\"");
+                  (* M7 S3: the argument separator is surface-specific —
+                     brace files (island("URI", "PIN")) take a comma, sexpr
+                     files ((island URI "PIN")) plain whitespace. *)
+                  let sep =
+                    if Reader_braces.file_uses_braces path then ", " else " " in
+                  text := splice !text close 0 (sep ^ "\"" ^ fresh ^ "\"");
                   incr updated
               | None -> skip uri "no closing paren found after URI"
                           ("add pin \"" ^ fresh ^ "\" to the form"))

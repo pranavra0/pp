@@ -66,13 +66,12 @@ mkdir -p "$ROOT_A" "$ROOT_B"
 mk_fs_prog() {  # MEMBER ROOT -> writes $TMP/prog-<member>.pp
   local member="$1" root="$2"
   cat > "$TMP/prog-$member.pp" <<EOF
-(load "stdlib/list.pp")
-(load "stdlib/map.pp")
-(load "stdlib/string.pp")
-(load "stdlib/domain-fs.pp")
-(register-fs-domain "$root" (cap-restrict (current-capabilities) "$root" :wo))
-{"A" {"fs" {"a.txt" "from-A"}}
- "B" {"fs" {"b.txt" "from-B"}}}
+load("stdlib/list.pp")
+load("stdlib/map.pp")
+load("stdlib/string.pp")
+load("stdlib/domain-fs.pp")
+register-fs-domain("$root", cap-restrict(current-capabilities(), "$root", :wo))
+{"A" -> {"fs" -> {"a.txt" -> "from-A"}}, "B" -> {"fs" -> {"b.txt" -> "from-B"}}}
 EOF
 }
 mk_fs_prog A "$ROOT_A"
@@ -128,17 +127,12 @@ EOF
 chmod +x "$TMP/svc/run.sh"
 
 cat > "$TMP/prog-proc.pp" <<EOF
-(load "stdlib/list.pp")
-(load "stdlib/map.pp")
-(load "stdlib/string.pp")
-(load "stdlib/domain-proc.pp")
-(register-proc-domain (current-capabilities))
-{"C" {"proc" {"svc-c" {"cmd" "$TMP/svc/run.sh"
-                         "args" ["$TMP/pid-c"]
-                         "cwd" "$TMP"}}}
- "OTHER" {"proc" {"svc-other" {"cmd" "$TMP/svc/run.sh"
-                                 "args" ["$TMP/pid-other"]
-                                 "cwd" "$TMP"}}}}
+load("stdlib/list.pp")
+load("stdlib/map.pp")
+load("stdlib/string.pp")
+load("stdlib/domain-proc.pp")
+register-proc-domain(current-capabilities())
+{"C" -> {"proc" -> {"svc-c" -> {"cmd" -> "$TMP/svc/run.sh", "args" -> ["$TMP/pid-c"], "cwd" -> "$TMP"}}}, "OTHER" -> {"proc" -> {"svc-other" -> {"cmd" -> "$TMP/svc/run.sh", "args" -> ["$TMP/pid-other"], "cwd" -> "$TMP"}}}}
 EOF
 
 HOME="$HOSTC_HOME" timeout 20 "$PP" --watch --watch-interval 0.3 --grant process \
@@ -180,26 +174,29 @@ done
 # ===========================================================================
 KV="$TMP/kv"
 cat > "$TMP/flat.pp" <<EOF
-(load "stdlib/list.pp")
-(load "stdlib/map.pp")
+load("stdlib/list.pp")
+load("stdlib/map.pp")
 
-(def (register-kv-domain)
-  (register-domain
-    {:name "kv"
-     :namespace [(string-append "file:" "$KV") (string-append "tree:" "$KV")]
-     :observe (fn () (perform tree-observe "$KV"))
-     :diff (fn (observed desired)
-             {:items (map (fn (k) {:kind "create" :key k :value (hash-map-get desired k)})
-                          (filter (fn (k) (nil? (hash-map-get observed k))) (map-keys desired)))
-              :summary [[:created "n/a"]]})
-     :apply (fn (plan)
-              (each (fn (item)
-                      (perform materialize-file
-                        (string-append "$KV/" (hash-map-get item :key))
-                        (hash-map-get item :value)))
-                    (hash-map-get plan :items)))
-     :write-cap (cap-restrict (current-capabilities) "$KV" :wo)}))
-(do (register-kv-domain) {"kv" {"flat-a" "1"}})
+def register-kv-domain() {
+  register-domain({:name -> "kv", :namespace -> [string-append("file:", "$KV"), string-append("tree:", "$KV")], :observe -> (
+
+
+fn() { perform tree-observe("$KV") }), :diff -> (
+fn(observed, desired) { {:items -> map(
+fn(k) { {:kind -> "create", :key -> k, :value -> hash-map-get(desired, k)} }, filter(
+fn(k) { nil?(hash-map-get(observed, k)) }, map-keys(desired))), :summary -> [[:created, "n/a"]]}
+  }), :apply -> (
+fn(plan) { each(
+fn(item) {
+      perform materialize-file(string-append("$KV/", hash-map-get(item, :key)), hash-map-get(item, :value))
+    }, hash-map-get(plan, :items))
+  }), :write-cap -> cap-restrict(current-capabilities(), "$KV", :wo)})
+}
+
+do {
+  register-kv-domain()
+  {"kv" -> {"flat-a" -> "1"}}
+}
 EOF
 "$PP" --grant "fs:${KV}:wo" "$TMP/flat.pp" > "$TMP/out-flat" 2>&1
 [ -f "$KV/flat-a" ] && [ "$(cat "$KV/flat-a")" = "1" ] && ok "backcompat-flat-no-member-name" \

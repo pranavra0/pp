@@ -40,10 +40,11 @@ printf 'SYS1\n' > "$OTHER/sys.txt"
 # The "compiler": reads two granted inputs + one out-of-grant (system) input,
 # writes its output and a truthful depfile into the sandbox cwd.
 cat > "$TMP/c.pp" <<EOF
-(perform log (force (node (do (perform log "COMPUTE")
-  (do (perform run-dep "out.d" "sh" "-c"
-        "cat $SRC/h1.txt $SRC/src1.txt $OTHER/sys.txt > out.txt; printf 'out.txt: $SRC/h1.txt $SRC/src1.txt $OTHER/sys.txt\\n' > out.d")
-      (slurp "out.txt"))))))
+perform log(force(node {
+  perform log("COMPUTE")
+  perform run-dep("out.d", "sh", "-c", "cat $SRC/h1.txt $SRC/src1.txt $OTHER/sys.txt > out.txt; printf 'out.txt: $SRC/h1.txt $SRC/src1.txt $OTHER/sys.txt\\n' > out.d")
+  slurp("out.txt")
+}))
 EOF
 
 G=(--grant process --grant "fs:$SRC:ro")
@@ -75,10 +76,13 @@ assert "dep-system-value"   "SYS2"    present
 
 # --- no depfile produced ⇒ coarse fallback: unrelated change re-runs ---
 cat > "$TMP/nodep.pp" <<EOF
-(perform log (force (node (do (perform log "COMPUTE")
-  (do (perform run-dep "missing.d" "sh" "-c"
-        "cat $SRC/h1.txt > out.txt")
-      (slurp "out.txt"))))))
+perform log(force(node {
+  perform log("COMPUTE")
+  do {
+    perform run-dep("missing.d", "sh", "-c", "cat $SRC/h1.txt > out.txt")
+    slurp("out.txt")
+  }
+}))
 EOF
 rm -rf "$TMP/.pp"
 run "${G[@]}" "$TMP/nodep.pp"

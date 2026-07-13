@@ -48,7 +48,7 @@ comment_texts() { "$PP" --list-comments "$1" "$2" 2>/dev/null | sed -E 's/^[0-9]
 
 # ---- (a) tricky-comments fixture, sexpr-authored ----
 mkdir -p "$TMP/a"
-cat > "$TMP/a/fix.pp" <<'EOF'
+cat > "$TMP/a/fix.ppl" <<'EOF'
 ;; a leading double-semicolon banner comment
 (def (f x) ; trailing on the def's own head line
   ; a standalone comment nested inside a multi-statement body
@@ -66,34 +66,34 @@ cat > "$TMP/a/fix.pp" <<'EOF'
 (print (g 2 3))
 ; a trailing standalone comment at the very end of the file
 EOF
-cp "$TMP/a/fix.pp" "$TMP/a/fix.orig.pp"
-expected_run=$("$PP" "$TMP/a/fix.pp" 2>&1)
+cp "$TMP/a/fix.ppl" "$TMP/a/fix.orig.ppl"
+expected_run=$("$PP" "$TMP/a/fix.ppl" 2>&1)
 
 # functional + comment chain (separately-named files at each hop, so the
 # extension-based run dispatch — braces need `.ppb` — still works; the
 # in-place/same-path hash check is done on its own copy below)
-if ! "$PP" fmt --to-braces "$TMP/a/fix.pp" > "$TMP/a/fix.ppb" 2>"$TMP/a/e1"; then
+if ! "$PP" fmt --to-braces "$TMP/a/fix.ppl" > "$TMP/a/fix.ppb" 2>"$TMP/a/e1"; then
   bad "fixture-a-to-braces" "$(cat "$TMP/a/e1")"
 else
   ok "fixture-a-to-braces"
 fi
-if ! "$PP" fmt --to-sexpr "$TMP/a/fix.ppb" > "$TMP/a/fix2.pp" 2>"$TMP/a/e2"; then
+if ! "$PP" fmt --to-sexpr "$TMP/a/fix.ppb" > "$TMP/a/fix2.ppl" 2>"$TMP/a/e2"; then
   bad "fixture-a-to-sexpr" "$(cat "$TMP/a/e2")"
 else
   ok "fixture-a-to-sexpr"
 fi
 
 got_ppb=$("$PP" "$TMP/a/fix.ppb" 2>&1)
-got_pp2=$("$PP" "$TMP/a/fix2.pp" 2>&1)
+got_pp2=$("$PP" "$TMP/a/fix2.ppl" 2>&1)
 if [ "$got_ppb" = "$expected_run" ] && [ "$got_pp2" = "$expected_run" ]; then
   ok "fixture-a-runs-identically"
 else
   bad "fixture-a-runs-identically" "orig: $expected_run" "braces: $got_ppb" "sexpr2: $got_pp2"
 fi
 
-c_orig=$(comment_texts sexpr "$TMP/a/fix.pp")
+c_orig=$(comment_texts sexpr "$TMP/a/fix.ppl")
 c_ppb=$(comment_texts brace "$TMP/a/fix.ppb")
-c_pp2=$(comment_texts sexpr "$TMP/a/fix2.pp")
+c_pp2=$(comment_texts sexpr "$TMP/a/fix2.ppl")
 n_orig=$(printf '%s\n' "$c_orig" | grep -c .)
 if [ "$c_orig" = "$c_ppb" ] && [ "$c_orig" = "$c_pp2" ] && [ "$n_orig" -ge 8 ]; then
   ok "fixture-a-comments-preserved ($n_orig comments)"
@@ -121,10 +121,10 @@ else
 fi
 
 # strict same-path (-i) hash check
-cp "$TMP/a/fix.orig.pp" "$TMP/a/work.pp"
-if "$PP" fmt --to-braces "$TMP/a/work.pp" -i 2>"$TMP/a/e3" \
-   && "$PP" fmt --to-sexpr "$TMP/a/work.pp" -i 2>>"$TMP/a/e3" \
-   && "$PP" --compare-hash "$TMP/a/work.pp" "$TMP/a/fix.orig.pp" >"$TMP/a/e3" 2>&1; then
+cp "$TMP/a/fix.orig.ppl" "$TMP/a/work.ppl"
+if "$PP" fmt --to-braces "$TMP/a/work.ppl" -i 2>"$TMP/a/e3" \
+   && "$PP" fmt --to-sexpr "$TMP/a/work.ppl" -i 2>>"$TMP/a/e3" \
+   && "$PP" --compare-hash "$TMP/a/work.ppl" "$TMP/a/fix.orig.ppl" >"$TMP/a/e3" 2>&1; then
   ok "fixture-a-hash-preserved"
 else
   bad "fixture-a-hash-preserved" "$(cat "$TMP/a/e3")"
@@ -155,18 +155,18 @@ EOF
 cp "$TMP/b/fix.ppb" "$TMP/b/fix.orig.ppb"
 expected_run_b=$("$PP" "$TMP/b/fix.ppb" 2>&1)
 
-if ! "$PP" fmt --to-sexpr "$TMP/b/fix.ppb" > "$TMP/b/fix.pp" 2>"$TMP/b/e1"; then
+if ! "$PP" fmt --to-sexpr "$TMP/b/fix.ppb" > "$TMP/b/fix.ppl" 2>"$TMP/b/e1"; then
   bad "fixture-b-to-sexpr" "$(cat "$TMP/b/e1")"
 else
   ok "fixture-b-to-sexpr"
 fi
-if ! "$PP" fmt --to-braces "$TMP/b/fix.pp" > "$TMP/b/fix2.ppb" 2>"$TMP/b/e2"; then
+if ! "$PP" fmt --to-braces "$TMP/b/fix.ppl" > "$TMP/b/fix2.ppb" 2>"$TMP/b/e2"; then
   bad "fixture-b-to-braces" "$(cat "$TMP/b/e2")"
 else
   ok "fixture-b-to-braces"
 fi
 
-got_pp=$("$PP" "$TMP/b/fix.pp" 2>&1)
+got_pp=$("$PP" "$TMP/b/fix.ppl" 2>&1)
 got_ppb2=$("$PP" "$TMP/b/fix2.ppb" 2>&1)
 if [ "$got_pp" = "$expected_run_b" ] && [ "$got_ppb2" = "$expected_run_b" ]; then
   ok "fixture-b-runs-identically"
@@ -175,7 +175,7 @@ else
 fi
 
 c_orig_b=$(comment_texts brace "$TMP/b/fix.ppb")
-c_pp_b=$(comment_texts sexpr "$TMP/b/fix.pp")
+c_pp_b=$(comment_texts sexpr "$TMP/b/fix.ppl")
 c_ppb2=$(comment_texts brace "$TMP/b/fix2.ppb")
 n_orig_b=$(printf '%s\n' "$c_orig_b" | grep -c .)
 if [ "$c_orig_b" = "$c_pp_b" ] && [ "$c_orig_b" = "$c_ppb2" ] && [ "$n_orig_b" -ge 8 ]; then
@@ -186,22 +186,23 @@ else
 fi
 
 # ---- (c) idempotence: deterministic output, run twice ----
-"$PP" fmt --to-braces "$TMP/a/fix.orig.pp" > "$TMP/a/out1.ppb" 2>/dev/null
-"$PP" fmt --to-braces "$TMP/a/fix.orig.pp" > "$TMP/a/out2.ppb" 2>/dev/null
+"$PP" fmt --to-braces "$TMP/a/fix.orig.ppl" > "$TMP/a/out1.ppb" 2>/dev/null
+"$PP" fmt --to-braces "$TMP/a/fix.orig.ppl" > "$TMP/a/out2.ppb" 2>/dev/null
 if diff -q "$TMP/a/out1.ppb" "$TMP/a/out2.ppb" >/dev/null; then
   ok "idempotent-to-braces"
 else
   bad "idempotent-to-braces" "$(diff "$TMP/a/out1.ppb" "$TMP/a/out2.ppb" | head -10)"
 fi
-"$PP" fmt --to-sexpr "$TMP/b/fix.orig.ppb" > "$TMP/b/out1.pp" 2>/dev/null
-"$PP" fmt --to-sexpr "$TMP/b/fix.orig.ppb" > "$TMP/b/out2.pp" 2>/dev/null
-if diff -q "$TMP/b/out1.pp" "$TMP/b/out2.pp" >/dev/null; then
+"$PP" fmt --to-sexpr "$TMP/b/fix.orig.ppb" > "$TMP/b/out1.ppl" 2>/dev/null
+"$PP" fmt --to-sexpr "$TMP/b/fix.orig.ppb" > "$TMP/b/out2.ppl" 2>/dev/null
+if diff -q "$TMP/b/out1.ppl" "$TMP/b/out2.ppl" >/dev/null; then
   ok "idempotent-to-sexpr"
 else
-  bad "idempotent-to-sexpr" "$(diff "$TMP/b/out1.pp" "$TMP/b/out2.pp" | head -10)"
+  bad "idempotent-to-sexpr" "$(diff "$TMP/b/out1.ppl" "$TMP/b/out2.ppl" | head -10)"
 fi
 
-# ---- (d) whole-tree sweep: to-braces + to-sexpr, in place, same path
+# ---- (d) whole-tree sweep (M7 S3: the tree is brace-authored now, so the
+#      direction is to-sexpr + to-braces), in place, same path
 #      throughout (so `assert`'s baked `at file:line` message — a STRING
 #      VALUE inside the hashed expression, not just location metadata —
 #      matches too), hash-compared against a saved-before-mutation copy,
@@ -229,10 +230,15 @@ for f in "$ROOT"/tests/[0-9]*.pp "$ROOT"/tests/gen-cproject.pp \
   # regardless).
   orig_mode=$(stat -f%Lp "$f" 2>/dev/null || stat -c%a "$f" 2>/dev/null || echo "")
   chmod u+w "$f" 2>/dev/null || true
-  c_before=$(comment_texts sexpr "$f")
+  c_before=$(comment_texts brace "$f")
   # count every comment, including delimiter-only lines whose content is
-  # empty after stripping (`;;` separators) — those still must survive
-  n_before=$("$PP" --list-comments sexpr "$f" 2>/dev/null | wc -l | tr -d ' ')
+  # empty after stripping (`#` separators) — those still must survive
+  n_before=$("$PP" --list-comments brace "$f" 2>/dev/null | wc -l | tr -d ' ')
+  if ! "$PP" fmt --to-sexpr "$f" -i 2>"$TMP/sweep.err"; then
+    bad "sweep-to-sexpr ($f)" "$(cat "$TMP/sweep.err")"; sweep_fail=1
+    cp "$backup" "$f"; continue
+  fi
+  c_mid=$(comment_texts sexpr "$f")
   if ! "$PP" fmt --to-braces "$f" -i 2>"$TMP/sweep.err"; then
     bad "sweep-to-braces ($f)" "$(cat "$TMP/sweep.err")"; sweep_fail=1
     cp "$backup" "$f"; continue
@@ -245,12 +251,7 @@ for f in "$ROOT"/tests/[0-9]*.pp "$ROOT"/tests/gen-cproject.pp \
   if grep -qE '^# ;|^#;;' "$f"; then
     bad "sweep-stacked-delimiter ($f)" "$(grep -nE '^# ;|^#;;' "$f" | head -2)"; sweep_fail=1
   fi
-  c_mid=$(comment_texts brace "$f")
-  if ! "$PP" fmt --to-sexpr "$f" -i 2>"$TMP/sweep.err"; then
-    bad "sweep-to-sexpr ($f)" "$(cat "$TMP/sweep.err")"; sweep_fail=1
-    cp "$backup" "$f"; continue
-  fi
-  c_after=$(comment_texts sexpr "$f")
+  c_after=$(comment_texts brace "$f")
   if [ "$c_before" != "$c_mid" ] || [ "$c_before" != "$c_after" ]; then
     bad "sweep-comments ($f)" \
       "before ($n_before):" "$c_before" "braces:" "$c_mid" "after:" "$c_after"

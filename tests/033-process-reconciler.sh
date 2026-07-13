@@ -74,15 +74,9 @@ mkdir -p "$TMP/cfg"
 echo "v1" > "$TMP/cfg/env.txt"
 
 cat > "$TMP/supervise.pp" <<EOF
-(let [cfg (slurp "$TMP/cfg/env.txt")]
-  {"svc-a" {"cmd" "$TMP/svc/run.sh"
-             "args" ["$TMP/pid-a"]
-             "cwd" "$TMP"
-             "env" {"MARKER" cfg}}
-   "svc-b" {"cmd" "$TMP/svc/run.sh"
-             "args" ["$TMP/pid-b"]
-             "cwd" "$TMP"
-             "env" {"MARKER" "stable"}}})
+let (cfg = slurp("$TMP/cfg/env.txt")) {
+  {"svc-a" -> {"cmd" -> "$TMP/svc/run.sh", "args" -> ["$TMP/pid-a"], "cwd" -> "$TMP", "env" -> {"MARKER" -> cfg}}, "svc-b" -> {"cmd" -> "$TMP/svc/run.sh", "args" -> ["$TMP/pid-b"], "cwd" -> "$TMP", "env" -> {"MARKER" -> "stable"}}}
+}
 EOF
 
 # --- (a) no process grant ⇒ capability error ---
@@ -177,10 +171,7 @@ wait_for 5 test -f "$TMP/pid-a" || { echo "FAIL stop-pid-a: pidfile missing"; fa
 PID_A=$(cat "$TMP/pid-a")
 # Shrink desired state to only svc-b.
 cat > "$TMP/supervise-stop.pp" <<EOF
-{"svc-b" {"cmd" "$TMP/svc/run.sh"
-           "args" ["$TMP/pid-b"]
-           "cwd" "$TMP"
-           "env" {"MARKER" "stable"}}}
+{"svc-b" -> {"cmd" -> "$TMP/svc/run.sh", "args" -> ["$TMP/pid-b"], "cwd" -> "$TMP", "env" -> {"MARKER" -> "stable"}}}
 EOF
 "$PP" --supervise --grant process "$TMP/supervise-stop.pp" > "$TMP/out-stop" 2>&1
 assert "stop-summary" "stopped=1" present "$TMP/out-stop"
@@ -190,9 +181,7 @@ kill -0 "$PID_A" 2>/dev/null && { echo "FAIL stop-a: svc-a still alive"; fail=1;
 # --- (g) VM parity: bytecode backend supervises too ---
 rm -rf "$TMP/.pp"
 cat > "$TMP/supervise-vm.pp" <<EOF
-{"svc-vm" {"cmd" "$TMP/svc/run.sh"
-            "args" ["$TMP/pid-vm"]
-            "cwd" "$TMP"}}
+{"svc-vm" -> {"cmd" -> "$TMP/svc/run.sh", "args" -> ["$TMP/pid-vm"], "cwd" -> "$TMP"}}
 EOF
 "$PP" --bytecode --supervise --grant process \
   "$TMP/supervise-vm.pp" > "$TMP/out-vm" 2>&1

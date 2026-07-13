@@ -1415,15 +1415,22 @@ let read_one ?(source : string = "<?>") (input : string) : expr =
   | [] -> failwith (Printf.sprintf "empty input at %s:1" source)
   | _ -> failwith (Printf.sprintf "multiple expressions at %s:1" source)
 
-(* ---- Extension dispatch (M7 S1, transitional) ----
+(* ---- Extension dispatch (M7 S3: flipped) ----
 
-   `.ppb` files read with the brace reader; everything else with the sexpr
-   reader, byte-for-byte unchanged. [path] chooses the reader; [source] is
-   the location label (when omitted, both readers' "<?>" default applies,
-   preserving e.g. load-module's existing label behavior). *)
+   `.pp` and `.ppb` read with the brace reader (`.pp` is now the default
+   surface; `.ppb` remains a permanent alias — tests/054's fixtures use it).
+   `.ppl` ("the AST form") reads with the sexpr reader — sexpr is demoted
+   from "the syntax" to "the AST", still fully supported forever (it is the
+   macro layer: `quote`/`defmacro` still traffic in sexpr data). Any other
+   extension (REPL "<repl>"/"<?>" labels, `-e` input, synthetic glue source
+   tags like "<stdlib:list.pp>") falls through to the sexpr reader,
+   preserving every non-file caller's existing behavior byte-for-byte.
+   [path] chooses the reader; [source] is the location label (when
+   omitted, both readers' "<?>" default applies, preserving e.g.
+   load-module's existing label behavior). *)
 
 let file_uses_braces (path : string) : bool =
-  Filename.check_suffix path ".ppb"
+  Filename.check_suffix path ".pp" || Filename.check_suffix path ".ppb"
 
 let read_dispatch ?(source : string option) ~(path : string) (input : string)
     : expr list =

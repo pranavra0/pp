@@ -10,7 +10,10 @@ A="$HOME/machine-a"; B="$HOME/machine-b"; SHARED="$HOME/shared"
 mkdir -p "$A" "$B" "$SHARED"
 
 cat > "$HOME/node.pp" <<'PP'
-(print (force (node (do (perform log "building greeter.o") (* 6 7)))))
+print(force(node {
+  perform log("building greeter.o")
+  6 * 7
+}))
 PP
 
 echo '$ pp node.pp                 # on machine A: the node body runs'

@@ -33,8 +33,10 @@ fail=0
 # is skipped and — per LAW 17 — "COMPUTE" is NOT replayed. The outer log always
 # emits the resulting content, so we can read the served value every run.
 cat > "$PROG" <<EOF
-(perform log
-  (force (node (do (perform log "COMPUTE") (slurp "$DATA")))))
+perform log(force(node {
+  perform log("COMPUTE")
+  slurp("$DATA")
+}))
 EOF
 
 run() { rm -f "$TMP/out"; "$PP" --grant "fs:$TMP:ro" "$PROG" > "$TMP/out" 2>&1; cat "$TMP/out"; }

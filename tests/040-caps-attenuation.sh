@@ -46,9 +46,9 @@ assert() {  # NAME  secret=leaked|safe  access=ok|denied
 # (a) narrowed-creation denied at broad force
 # =====================================================================
 cat > "$TMP/direction-a.pp" <<EOF
-(def narrow (cap-restrict (current-capabilities) "$TMP/other" :ro))
-(def n (with-caps narrow (node (slurp "$TMP/secret/data.txt"))))
-(perform log (force n))
+let narrow = cap-restrict(current-capabilities(), "$TMP/other", :ro)
+let n = with-caps(narrow) { node { slurp("$TMP/secret/data.txt") } }
+perform log(force(n))
 EOF
 
 rm -rf "$TMP/.pp"
@@ -62,9 +62,9 @@ assert "vm-narrowed-creation-denied-at-broad-force"  safe denied
 # (b) broad-creation succeeds under narrowed force
 # =====================================================================
 cat > "$TMP/direction-b.pp" <<EOF
-(def narrow (cap-restrict (current-capabilities) "$TMP/other" :ro))
-(def m (node (slurp "$TMP/secret/data.txt")))
-(with-caps narrow (perform log (force m)))
+let narrow = cap-restrict(current-capabilities(), "$TMP/other", :ro)
+let m = node { slurp("$TMP/secret/data.txt") }
+with-caps(narrow) { perform log(force(m)) }
 EOF
 
 rm -rf "$TMP/.pp"
@@ -78,12 +78,14 @@ assert "vm-broad-creation-succeeds-under-narrowed-force"  leaked ok
 # with-caps basic narrowing: slurp (scripting tier, no node)
 # =====================================================================
 cat > "$TMP/wc-slurp-denied.pp" <<EOF
-(with-caps (cap-restrict (current-capabilities) "$TMP/other" :ro)
-  (print (slurp "$TMP/secret/data.txt")))
+with-caps(cap-restrict(current-capabilities(), "$TMP/other", :ro)) {
+  print(slurp("$TMP/secret/data.txt"))
+}
 EOF
 cat > "$TMP/wc-slurp-allowed.pp" <<EOF
-(with-caps (cap-restrict (current-capabilities) "$TMP/other" :ro)
-  (print (slurp "$TMP/other/x.txt")))
+with-caps(cap-restrict(current-capabilities(), "$TMP/other", :ro)) {
+  print(slurp("$TMP/other/x.txt"))
+}
 EOF
 
 for bc in "" "--bytecode"; do
@@ -103,11 +105,12 @@ done
 # less match).
 # =====================================================================
 cat > "$TMP/wc-run-denied.pp" <<EOF
-(with-caps (cap-restrict (current-capabilities) "$TMP" :ro)
-  (print (hash-map-get (perform run "echo" "hi") "out")))
+with-caps(cap-restrict(current-capabilities(), "$TMP", :ro)) {
+  print(hash-map-get(perform run("echo", "hi"), "out"))
+}
 EOF
 cat > "$TMP/wc-run-allowed.pp" <<EOF
-(print (hash-map-get (perform run "echo" "hi") "out"))
+print(hash-map-get(perform run("echo", "hi"), "out"))
 EOF
 
 for bc in "" "--bytecode"; do

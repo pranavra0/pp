@@ -38,19 +38,19 @@ run() { (cd "$RUNDIR" && "$PP" "$@" > "$TMP/out" 2>&1); }
 
 # --- (a) loading beside the program works with ZERO grants (loader
 #         authority, not user caps) ---
-printf '(def libval "LIBVAL")\n' > "$APP/lib.pp"
+printf 'let libval = "LIBVAL"\n' > "$APP/lib.pp"
 cat > "$APP/main.pp" <<EOF
-(load "$APP/lib.pp")
-(perform log libval)
+load("$APP/lib.pp")
+perform log(libval)
 EOF
 run "$APP/main.pp"
 assert "beside-program-loads" "LIBVAL" present
 
 # --- (b) loading OUTSIDE every source root is refused, grants or no ---
-printf '(def evil "EVIL")\n' > "$ELSEWHERE/evil.pp"
+printf 'let evil = "EVIL"\n' > "$ELSEWHERE/evil.pp"
 cat > "$APP/esc.pp" <<EOF
-(load "$ELSEWHERE/evil.pp")
-(perform log evil)
+load("$ELSEWHERE/evil.pp")
+perform log(evil)
 EOF
 run "$APP/esc.pp"
 assert "outside-refused"        "source root" present
@@ -60,10 +60,15 @@ assert "outside-refused-despite-grant" "source root" present
 
 # --- (c) a node that loads a module: the load is a runtime cell —
 #         validity yes, authority requirement no ---
-printf '(def libval "V1")\n' > "$APP/lib.pp"
+printf 'let libval = "V1"\n' > "$APP/lib.pp"
 cat > "$APP/node.pp" <<EOF
-(perform log (force (node (do (perform log "COMPUTE")
-                              (do (load "$APP/lib.pp") libval)))))
+perform log(force(node {
+  perform log("COMPUTE")
+  do {
+    load("$APP/lib.pp")
+    libval
+  }
+}))
 EOF
 rm -rf "$TMP/.pp"
 run "$APP/node.pp"                # zero grants throughout
@@ -72,34 +77,34 @@ assert "node-run1-V1"     "V1"      present
 run "$APP/node.pp"
 assert "node-run2-hit"    "COMPUTE" absent   # hit needs NO fs grant over lib.pp
 assert "node-run2-V1"     "V1"      present
-printf '(def libval "V2")\n' > "$APP/lib.pp"
+printf 'let libval = "V2"\n' > "$APP/lib.pp"
 run "$APP/node.pp"
 assert "node-run3-stale"  "COMPUTE" present  # editing the module invalidates
 assert "node-run3-V2"     "V2"      present
 
 # --- (d) VM parity ---
-printf '(def libval "LIBVAL")\n' > "$APP/lib.pp"
+printf 'let libval = "LIBVAL"\n' > "$APP/lib.pp"
 run --bytecode "$APP/main.pp"
 assert "vm-beside-loads"  "LIBVAL" present
 run --bytecode "$APP/esc.pp"
 assert "vm-outside-refused" "source root" present
 rm -rf "$TMP/.pp"
-printf '(def libval "V1")\n' > "$APP/lib.pp"
+printf 'let libval = "V1"\n' > "$APP/lib.pp"
 run --bytecode "$APP/node.pp"
 assert "vm-node-run1-miss" "COMPUTE" present
 run --bytecode "$APP/node.pp"
 assert "vm-node-run2-hit"  "COMPUTE" absent
-printf '(def libval "V3")\n' > "$APP/lib.pp"
+printf 'let libval = "V3"\n' > "$APP/lib.pp"
 run --bytecode "$APP/node.pp"
 assert "vm-node-run3-stale" "COMPUTE" present
 assert "vm-node-run3-V3"    "V3"      present
 
 # --- (e) stdlib loads relative to cwd still work (cwd is a source root) ---
 mkdir -p "$RUNDIR/stdlib"
-printf '(def stdval "STDLIB-OK")\n' > "$RUNDIR/stdlib/x.pp"
+printf 'let stdval = "STDLIB-OK"\n' > "$RUNDIR/stdlib/x.pp"
 cat > "$APP/std.pp" <<'EOF'
-(load "stdlib/x.pp")
-(perform log stdval)
+load("stdlib/x.pp")
+perform log(stdval)
 EOF
 run "$APP/std.pp"
 assert "cwd-relative-load" "STDLIB-OK" present

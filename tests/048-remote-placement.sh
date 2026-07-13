@@ -80,46 +80,49 @@ if command -v cc >/dev/null 2>&1; then
     || { echo "FAIL fixture-generator (pp)"; cat "$TMP/gen.err"; exit 1; }
 
   cat > "$TMP/build.pp" <<EOF
-(def (each f lst) (if (nil? lst) nil (do (f (car lst)) (each f (cdr lst)))))
-(def (foldl2 f acc lst) (if (nil? lst) acc (foldl2 f (f acc (car lst)) (cdr lst))))
-(def (zip2 lst1 lst2)
-  (if (nil? lst1) nil (cons (cons (car lst1) (car lst2)) (zip2 (cdr lst1) (cdr lst2)))))
+def each(f, lst) { if nil?(lst) { nil } else { f(car(lst)); each(f, cdr(lst)) } }
+def foldl2(f, acc, lst) { if nil?(lst) { acc } else { foldl2(f, f(acc, car(lst)), cdr(lst)) } }
+def zip2(lst1, lst2) {
+  if nil?(lst1) { nil } else {
+    cons(cons(car(lst1), car(lst2)), zip2(cdr(lst1), cdr(lst2))) } }
+def compile(name) {
+  node {
+    perform run-dep(string-append(name, ".d"), "cc", "-MD", "-MF", string-append(name, ".d"), "-O0", "-c", string-append("$SRC/", string-append(name, ".c")), "-o", string-append(name, ".o"))
+    blob(slurp(string-append(name, ".o")))
+  }
+}
 
-(def (compile name)
-  (node
-    (do (perform run-dep (string-append name ".d")
-          "cc" "-MD" "-MF" (string-append name ".d") "-O0" "-c"
-          (string-append "$SRC/" (string-append name ".c"))
-          "-o" (string-append name ".o"))
-        (blob (slurp (string-append name ".o"))))))
 
-(def (link objs)
-  (force (node
-    (do (each (fn (o) (perform write-file (string-append (car o) ".o")
-                        (blob-get (cdr o)))) objs)
-        (do (perform write-file "link.d" "prog: ")
-            (do (perform run-dep "link.d" "sh" "-c"
-                  (string-append "cc -o prog "
-                    (foldl2 (fn (acc o) (string-append acc (string-append (car o) ".o ")))
-                            "" objs)))
-                (blob (slurp "prog"))))))))
-
-;; Materialize DIRECTLY — plain top-level write-file calls (outside any
-;; node body, absolute paths, capability-checked) into \$BUILD — rather
-;; than via --reconcile's fs domain, which would preload stdlib/list.pp
-;; and shadow the batching \`map\` builtin (the WALL noted at the top of
-;; this file). \$BUILD must already exist (this test's shell creates it).
-(let [names (string-split (slurp "$SRC/sources.txt") "\n")]
-  (let [results (force-deep (map compile names))]
-    (let [objs (zip2 names results)]
-      (let [prog (link objs)]
-        (do
-          (each (fn (o) (perform write-file
-                          (string-append "\$BUILD/" (string-append (car o) ".o"))
-                          (blob-get (cdr o))))
-                objs)
-          (perform write-file (string-append "\$BUILD/prog") (blob-get prog))
-          (perform run "chmod" "+x" (string-append "\$BUILD/prog")))))))
+def link(objs) {
+  force(node { each(
+fn(o) { perform write-file(string-append(car(o), ".o"), blob-get(cdr(o))) }, objs)
+    do {
+      perform write-file("link.d", "prog: ")
+      do {
+        perform run-dep("link.d", "sh", "-c", string-append("cc -o prog ", foldl2(
+fn(acc, o) { string-append(acc, string-append(car(o), ".o ")) }, "", objs)))
+        blob(slurp("prog"))
+      }
+    } }) }
+# Materialize DIRECTLY — plain top-level write-file calls (outside any
+# node body, absolute paths, capability-checked) into \$BUILD — rather
+# than via --reconcile's fs domain, which would preload stdlib/list.pp
+# and shadow the batching \`map\` builtin (the WALL noted at the top of
+# this file). \$BUILD must already exist (this test's shell creates it).
+let (names = string-split(slurp("$SRC/sources.txt"), "\n")) {
+  let (results = force-deep(map(compile, names))) {
+    let (objs = zip2(names, results)) {
+      let (prog = link(objs)) {
+        each(
+fn(o) {
+          perform write-file(string-append("\$BUILD/", string-append(car(o), ".o")), blob-get(cdr(o)))
+        }, objs)
+        perform write-file(string-append("\$BUILD/prog"), blob-get(prog))
+        perform run("chmod", "+x", string-append("\$BUILD/prog"))
+      }
+    }
+  }
+}
 EOF
   # \$BUILD is a per-run placeholder the shell fills in below (each cold
   # build gets its own BUILD dir, so the SAME build.pp text is reused
@@ -260,8 +263,8 @@ echo "D $NODED/.pp/store" > "$NODEC/.pp/cluster/members"
 WORK="$TMP/q11-work"; mkdir -p "$WORK"
 printf 'V1\n' > "$WORK/data.txt"
 cat > "$TMP/q11.pp" <<EOF
-(def (mk name) (node (slurp (string-append "$WORK/" name))))
-(car (force-deep (map mk (list "data.txt"))))
+def mk(name) { node { slurp(string-append("$WORK/", name)) } }
+car(force-deep(map(mk, list("data.txt"))))
 EOF
 
 export PP_REMOTE_TEST_HOOK="printf 'V2\n' > $WORK/data.txt"
@@ -304,9 +307,11 @@ cp "$NODEE/.pp/cluster/secret" "$NODEE/.pp/cluster/id" "$NODEF/.pp/cluster/"
 echo "F $NODEF/.pp/store" > "$NODEE/.pp/cluster/members"
 
 cat > "$TMP/closure.pp" <<'EOF'
-(def (mkclosure) (fn (x) (+ x 1)))
-(def (mk f) (node (f 41)))
-(perform log (if (= (car (force-deep (list (mk (mkclosure))))) 42) "OK" "FAIL"))
+def mkclosure() { fn(x) { x + 1 } }
+def mk(f) { node { f(41) } }
+perform log(if car(force-deep(list(mk(mkclosure())))) = 42 { "OK" } else {
+  "FAIL"
+})
 EOF
 HOME="$NODEE" "$PP" --schedule remote:F "$TMP/closure.pp" > "$TMP/closure.out" 2>&1
 if grep -q '\[info\] OK' "$TMP/closure.out"; then ok "non-data-closed-correct-result"

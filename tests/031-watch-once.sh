@@ -54,10 +54,15 @@ assert_count() {  # NAME PATTERN EXPECTED-COUNT FILE
 
 # Build a simple two-node program: compile reads a.c, link depends on compile.
 cat > "$TMP/build.pp" <<EOF
-(let [obj (force (node (do (perform log "COMPILE")
-                           (do (slurp "$TMP/a.c")))))]
-  (perform log (force (node (do (perform log "LINK")
-                                (string-append "linked:" obj))))))
+let (obj = force(node {
+  perform log("COMPILE")
+  do { slurp("$TMP/a.c") }
+})) {
+  perform log(force(node {
+    perform log("LINK")
+    string-append("linked:", obj)
+  }))
+}
 EOF
 echo "V1" > "$TMP/a.c"
 
@@ -132,7 +137,7 @@ wait $WATCH_PID 2>/dev/null || true
 rm -rf "$TMP/.pp"
 # Program that returns a desired-state map
 cat > "$TMP/reconcile.pp" <<EOF
-{"file.txt" (slurp "$TMP/a.c")}
+{"file.txt" -> slurp("$TMP/a.c")}
 EOF
 echo "RECONCILE-CONTENT" > "$TMP/a.c"
 OUTROOT="$TMP/outroot"

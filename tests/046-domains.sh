@@ -51,48 +51,46 @@ assert() {  # NAME PATTERN present|absent [FILE]
 kv_domain_source() {
   local dir="$1"
   cat <<EOF
-(load "stdlib/list.pp")
-(load "stdlib/map.pp")
+load("stdlib/list.pp")
+load("stdlib/map.pp")
 
-(def (kv-content-hash c) (hash-string c))
+def kv-content-hash(c) { hash-string(c) }
 
-(def (kv-diff observed desired)
-  (let [dkeys (map-keys desired)
-        okeys (map-keys observed)
-        creates (filter (fn (k) (nil? (hash-map-get observed k))) dkeys)
-        existing (filter (fn (k) (not (nil? (hash-map-get observed k)))) dkeys)
-        updates (filter (fn (k)
-                           (not (= (hash-map-get observed k)
-                                   (kv-content-hash (hash-map-get desired k)))))
-                         existing)
-        deletes (filter (fn (k) (nil? (hash-map-get desired k))) okeys)
-        items (append
-                (map (fn (k) {:kind "create" :key k :value (hash-map-get desired k)}) creates)
-                (append
-                  (map (fn (k) {:kind "update" :key k :value (hash-map-get desired k)}) updates)
-                  (map (fn (k) {:kind "delete" :key k :value nil}) deletes)))]
-    {:items items
-     :summary [[:created (number->string (length creates))]
-               [:updated (number->string (length updates))]
-               [:deleted (number->string (length deletes))]]}))
+def kv-diff(observed, desired) {
+  let (dkeys = map-keys(desired), okeys = map-keys(observed), creates = filter(
 
-(def (kv-apply plan)
-  (each (fn (item)
-          (let [k (hash-map-get item :key)
-                path (string-append "$dir/" k)]
-            (if (= (hash-map-get item :kind) "delete")
-                (perform remove-file path)
-                (perform materialize-file path (hash-map-get item :value)))))
-        (hash-map-get plan :items)))
+fn(k) { nil?(hash-map-get(observed, k)) }, dkeys), existing = filter(
+fn(k) { not(nil?(hash-map-get(observed, k))) }, dkeys), updates = filter(
+fn(k) {
+    not(hash-map-get(observed, k) = kv-content-hash(hash-map-get(desired, k)))
+  }, existing), deletes = filter(
 
-(def (register-kv-domain)
-  (register-domain
-    {:name "kv"
-     :namespace [(string-append "file:" "$dir") (string-append "tree:" "$dir")]
-     :observe (fn () (perform tree-observe "$dir"))
-     :diff kv-diff
-     :apply kv-apply
-     :write-cap (cap-restrict (current-capabilities) "$dir" :wo)}))
+fn(k) { nil?(hash-map-get(desired, k)) }, okeys), items = append(map(
+
+fn(k) { {:kind -> "create", :key -> k, :value -> hash-map-get(desired, k)} }, creates), append(map(
+
+fn(k) { {:kind -> "update", :key -> k, :value -> hash-map-get(desired, k)} }, updates), map(
+fn(k) { {:kind -> "delete", :key -> k, :value -> nil} }, deletes)))) {
+    {:items -> items, :summary -> [[:created, number->string(length(creates))], [:updated, number->string(length(updates))], [:deleted, number->string(length(deletes))]]}
+  }
+}
+
+
+def kv-apply(plan) { each(
+fn(item) {
+    let (k = hash-map-get(item, :key), path = string-append("$dir/", k)) {
+      if hash-map-get(item, :kind) = "delete" { perform remove-file(path) } else {
+        perform materialize-file(path, hash-map-get(item, :value))
+      }
+    }
+  }, hash-map-get(plan, :items))
+}
+def register-kv-domain() {
+  register-domain({:name -> "kv", :namespace -> [string-append("file:", "$dir"), string-append("tree:", "$dir")], :observe -> (
+
+
+fn() { perform tree-observe("$dir") }), :diff -> kv-diff, :apply -> kv-apply, :write-cap -> cap-restrict(current-capabilities(), "$dir", :wo)})
+}
 EOF
 }
 
@@ -106,7 +104,10 @@ run() { "$PP" "$@" > "$TMP/out" 2>&1; }
 KV1="$TMP/kv1"
 { kv_domain_source "$KV1"
   cat <<EOF
-(do (register-kv-domain) {"kv" {"a" "1"}})
+do {
+  register-kv-domain()
+  {"kv" -> {"a" -> "1"}}
+}
 EOF
 } > "$TMP/nogrant.pp"
 rm -rf "$TMP/.pp"
@@ -122,7 +123,10 @@ else echo "ok   cap-threading-no-write"; fi
 KV2="$TMP/kv2"
 { kv_domain_source "$KV2"
   cat <<EOF
-(do (register-kv-domain) {"kv" {"a" "1" "b" "2"}})
+do {
+  register-kv-domain()
+  {"kv" -> {"a" -> "1", "b" -> "2"}}
+}
 EOF
 } > "$TMP/kv.pp"
 rm -rf "$TMP/.pp"
@@ -157,7 +161,10 @@ mkdir -p "$KV3"
 printf 'seed' > "$KV3/seed"
 { kv_domain_source "$KV3"
   cat <<EOF
-(do (register-kv-domain) {"kv" {"a" (slurp "$KV3/seed")}})
+do {
+  register-kv-domain()
+  {"kv" -> {"a" -> slurp("$KV3/seed")}}
+}
 EOF
 } > "$TMP/strat.pp"
 rm -rf "$TMP/.pp"
@@ -174,15 +181,18 @@ assert "stratification-rejected" "tratification" present
 KV4="$TMP/kv4"
 { kv_domain_source "$KV4"
   cat <<EOF
-(def (register-broken-kv-domain)
-  (register-domain
-    {:name "kv"
-     :namespace [(string-append "file:" "$KV4") (string-append "tree:" "$KV4")]
-     :observe (fn () (perform tree-observe "$KV4"))
-     :diff kv-diff
-     :apply (fn (plan) nil)
-     :write-cap (cap-restrict (current-capabilities) "$KV4" :wo)}))
-(do (register-broken-kv-domain) {"kv" {"a" "1"}})
+def register-broken-kv-domain() {
+  register-domain({:name -> "kv", :namespace -> [string-append("file:", "$KV4"), string-append("tree:", "$KV4")], :observe -> (
+
+
+fn() { perform tree-observe("$KV4") }), :diff -> kv-diff, :apply -> (
+
+fn(plan) { nil }), :write-cap -> cap-restrict(current-capabilities(), "$KV4", :wo)})
+}
+do {
+  register-broken-kv-domain()
+  {"kv" -> {"a" -> "1"}}
+}
 EOF
 } > "$TMP/broken.pp"
 rm -rf "$TMP/.pp"
@@ -201,10 +211,11 @@ MARKER="$TMP/fenced-marker"
 rm -f "$MARKER"
 { kv_domain_source "$KV5"
   cat <<EOF
-(do
-  (register-kv-domain)
-  (fenced "touch-marker" {"run" ["/usr/bin/touch" "$MARKER"]})
-  {"kv" {"a" "1"}})
+do {
+  register-kv-domain()
+  fenced("touch-marker", {"run" -> ["/usr/bin/touch", "$MARKER"]})
+  {"kv" -> {"a" -> "1"}}
+}
 EOF
 } > "$TMP/fenced.pp"
 rm -rf "$TMP/.pp"
@@ -229,7 +240,10 @@ fi
 KV6="$TMP/kv6"
 { kv_domain_source "$KV6"
   cat <<EOF
-(do (register-kv-domain) {"kv" {"a" "1" "b" "2"}})
+do {
+  register-kv-domain()
+  {"kv" -> {"a" -> "1", "b" -> "2"}}
+}
 EOF
 } > "$TMP/kv-vm.pp"
 rm -rf "$TMP/.pp"

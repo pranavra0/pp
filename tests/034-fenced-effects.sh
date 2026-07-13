@@ -30,9 +30,9 @@ mkdir -p "$OUT"
 
 # --- (a) fenced inside a node body is an error (both backends) ---
 cat > "$TMP/in-node.pp" <<'EOF'
-(defnode bad
-  (do (fenced "x" {}) 1))
-(force bad)
+let bad = node {
+  fenced("x", {}); 1 }
+force(bad)
 EOF
 "$PP" "$TMP/in-node.pp" > "$TMP/outlog" 2>&1 || true
 assert "tw-node-body-error" "fenced effects may not appear inside node bodies" present
@@ -41,7 +41,10 @@ assert "bc-node-body-error" "fenced effects may not appear inside node bodies" p
 
 # --- (b) fenced in scripting tier without reconciler is a no-op ---
 cat > "$TMP/noop.pp" <<'EOF'
-(do (fenced "x" {"run" ["/usr/bin/false"]}) (print 42))
+do {
+  fenced("x", {"run" -> ["/usr/bin/false"]})
+  print(42)
+}
 EOF
 "$PP" "$TMP/noop.pp" > "$TMP/outlog" 2>&1
 assert "scripting-noop" "^42$" present
@@ -50,9 +53,10 @@ assert "scripting-noop" "^42$" present
 rm -rf "$TMP/.pp" "$OUT"
 rm -f "$TMP/touched"
 cat > "$TMP/simple.pp" <<EOF
-(do
-  (fenced "touch-file" {"run" ["/usr/bin/touch" "$TMP/touched"]})
-  {"file.txt" "hello"})
+do {
+  fenced("touch-file", {"run" -> ["/usr/bin/touch", "$TMP/touched"]})
+  {"file.txt" -> "hello"}
+}
 EOF
 "$PP" --fenced-policy retry --reconcile "$OUT" --grant "fs:$OUT:rw" "$TMP/simple.pp" > "$TMP/outlog" 2>&1
 assert "simple-summary" "create=1" present
@@ -133,9 +137,10 @@ exec sleep 60
 EOF
 chmod +x "$TMP/fenced-action.sh"
 cat > "$TMP/watch-crash.pp" <<EOF
-(do
-  (fenced "block-until-continue" {"run" ["$TMP/fenced-action.sh" "$TMP/fenced-active" "$TMP/fenced-continue" "$TMP/fenced-pid"]})
-  {"file.txt" "hello"})
+do {
+  fenced("block-until-continue", {"run" -> ["$TMP/fenced-action.sh", "$TMP/fenced-active", "$TMP/fenced-continue", "$TMP/fenced-pid"]})
+  {"file.txt" -> "hello"}
+}
 EOF
 "$PP" --watch --fenced-policy retry --reconcile "$OUT" --grant "fs:$OUT:rw" --watch-interval 1 "$TMP/watch-crash.pp" > "$TMP/watch-out" 2>&1 &
 WATCH_PID=$!

@@ -38,12 +38,25 @@ assert_count() {  # NAME PATTERN EXPECTED-COUNT FILE
 
 # Write the 4-node program — use unquoted heredoc so $TMP expands to literal paths.
 cat > "$TMP/stab.pp" <<EOF
-(let [a (node (do (perform log "A") (slurp "$TMP/f1")))
-      b (node (do (perform log "B") (do (force a) (slurp "$TMP/f2"))))
-      c (node (do (perform log "C") (force b)))
-      d (node (do (perform log "D") (slurp "$TMP/f3")))]
-  (force c)
-  (force d))
+let (a = node {
+  perform log("A")
+  slurp("$TMP/f1")
+}, b = node {
+  perform log("B")
+  do {
+    force(a)
+    slurp("$TMP/f2")
+  }
+}, c = node {
+  perform log("C")
+  force(b)
+}, d = node {
+  perform log("D")
+  slurp("$TMP/f3")
+}) {
+  force(c)
+  force(d)
+}
 EOF
 
 # Initial file contents

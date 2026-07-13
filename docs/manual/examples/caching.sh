@@ -4,9 +4,9 @@
 export HOME=$(mktemp -d)
 
 cat > prog.pp <<'PP'
-(def (expensive)
-  (node (do (print "compiling greeter.o") (* 6 7))))
-(print (expensive))
+def expensive() {
+  node { print("compiling greeter.o"); 6 * 7 } }
+print(expensive())
 PP
 
 echo '$ pp prog.pp     # first run: the node body executes'

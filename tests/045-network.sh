@@ -92,7 +92,7 @@ URL="http://127.0.0.1:$PORT/"
 # (1) no net grant → Capability_error, no request made — both backends.
 # =====================================================================
 cat > "$TMP/get.pp" <<EOF
-(print (perform http-get "$URL"))
+print(perform http-get("$URL"))
 EOF
 for bc in "" "--bytecode"; do
   tag=$([ -z "$bc" ] && echo tw || echo vm)
@@ -130,7 +130,7 @@ assert "wildcard-grant-marker" "GET-MARKER-abc123" present
 #     back), status 201.
 # =====================================================================
 cat > "$TMP/post.pp" <<EOF
-(print (perform http-post "$URL" "hello-from-pp"))
+print(perform http-post("$URL", "hello-from-pp"))
 EOF
 for bc in "" "--bytecode"; do
   tag=$([ -z "$bc" ] && echo tw || echo vm)
@@ -144,7 +144,7 @@ done
 #     backends, and the network is never actually touched.
 # =====================================================================
 cat > "$TMP/in-node.pp" <<EOF
-(force (node (perform http-get "$URL")))
+force(node { perform http-get("$URL") })
 EOF
 for bc in "" "--bytecode"; do
   tag=$([ -z "$bc" ] && echo tw || echo vm)

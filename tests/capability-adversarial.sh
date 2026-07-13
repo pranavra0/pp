@@ -37,13 +37,13 @@ echo "pp-cap-allowed" > "$TMP/allowed.txt"
 cp "$TMP/allowed.txt" /tmp/pp-cap-test-file 2>/dev/null || true
 
 cat > "$TMP/read-allowed.pp" <<'EOF'
-(print (slurp "/tmp/pp-cap-test-file"))
+print(slurp("/tmp/pp-cap-test-file"))
 EOF
 run_case read-allowed "pp-cap-allowed" "$TMP/read-allowed.pp" --grant fs:/tmp:ro
 
 # Negative: path-component scope — /tmp must NOT grant /tmpevil.
 cat > "$TMP/read-denied.pp" <<'EOF'
-(print (slurp "/tmpevil/secret"))
+print(slurp("/tmpevil/secret"))
 EOF
 run_case path-component-denied "slurp: permission denied" "$TMP/read-denied.pp" --grant fs:/tmp:ro
 
@@ -57,8 +57,9 @@ run_case read-no-grant "capability error: no read access" -e '(print (perform re
 
 # Positive: cap-restrict and cap-compose work on an already-granted cap.
 cat > "$TMP/cap-ops.pp" <<'EOF'
-(let [sub (cap-restrict (cap-compose (cap-none) (cap-none)) "x")]
-  (print "restricted:" sub))
+let (sub = cap-restrict(cap-compose(cap-none(), cap-none()), "x")) {
+  print("restricted:", sub)
+}
 EOF
 run_case cap-ops "restricted:" "$TMP/cap-ops.pp"
 
@@ -79,9 +80,9 @@ run_case forge-from-print "unexpected character after #" -e '#<cap compose 1>'
 mkdir -p "$TMP/cdnr/a" "$TMP/cdnr/b" "$TMP/cdnr/secret"
 printf 'SECRETDATA\n' > "$TMP/cdnr/secret/x.txt"
 cat > "$TMP/compose-no-resurrect.pp" <<EOF
-(with-caps (cap-compose (cap-restrict (current-capabilities) "$TMP/cdnr/a" :ro)
-                        (cap-restrict (current-capabilities) "$TMP/cdnr/b" :ro))
-  (print (slurp "$TMP/cdnr/secret/x.txt")))
+with-caps(cap-compose(cap-restrict(current-capabilities(), "$TMP/cdnr/a", :ro), cap-restrict(current-capabilities(), "$TMP/cdnr/b", :ro))) {
+  print(slurp("$TMP/cdnr/secret/x.txt"))
+}
 EOF
 run_case compose-does-not-resurrect "permission denied" "$TMP/compose-no-resurrect.pp" --grant "fs:$TMP/cdnr:ro"
 
@@ -141,8 +142,8 @@ run_repl_case with-caps-tail-safe "$WC_TAIL_INPUT" "SECRETDATA" --grant "fs:$TMP
 # --- node-cap-capture-direct (layer 1: free-var ban, import side): a node
 #     whose free variable IS a capability value must not be key-able. ---
 cat > "$TMP/node-cap-direct.pp" <<'EOF'
-(def c (current-capabilities))
-(force (node c))
+let c = current-capabilities()
+force(node { c })
 EOF
 run_case node-cap-capture-direct "may not be or contain a capability" "$TMP/node-cap-direct.pp"
 
@@ -151,9 +152,9 @@ run_case node-cap-capture-direct "may not be or contain a capability" "$TMP/node
 #     so it lands in the closure's frame/env either backend can see) is
 #     equally banned — the ban is structural, not "top of the value only". ---
 cat > "$TMP/node-cap-closure.pp" <<'EOF'
-(def (mk cap) (fn () cap))
-(def clos (mk (current-capabilities)))
-(force (node (clos)))
+def mk(cap) { fn() { cap } }
+let clos = mk(current-capabilities())
+force(node { clos() })
 EOF
 run_case node-cap-capture-via-closure "may not be or contain a capability" "$TMP/node-cap-closure.pp"
 

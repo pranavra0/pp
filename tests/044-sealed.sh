@@ -39,10 +39,10 @@ SECRET="$TMP/secret/data.txt"
 # (1) sealed read redacts on print; unseal round-trips — both backends
 # =====================================================================
 cat > "$TMP/print-sealed.pp" <<EOF
-(print (slurp "$SECRET"))
+print(slurp("$SECRET"))
 EOF
 cat > "$TMP/print-unsealed.pp" <<EOF
-(print (unseal (slurp "$SECRET")))
+print(unseal(slurp("$SECRET")))
 EOF
 for bc in "" "--bytecode"; do
   tag=$([ -z "$bc" ] && echo tw || echo vm)
@@ -64,11 +64,14 @@ done
 # =====================================================================
 rm -rf "$TMP/.pp"
 cat > "$TMP/read-only.pp" <<EOF
-(force (node (do (slurp "$SECRET") "read-but-not-returned")))
+force(node {
+  slurp("$SECRET")
+  "read-but-not-returned"
+})
 EOF
 "$PP" --grant "secret:$TMP/secret" "$TMP/read-only.pp" > "$TMP/out" 2>&1
 cat > "$TMP/unseal-script-tier.pp" <<EOF
-(print (string-length (unseal (slurp "$SECRET"))))
+print(string-length(unseal(slurp("$SECRET"))))
 EOF
 "$PP" --grant "secret:$TMP/secret" "$TMP/unseal-script-tier.pp" >> "$TMP/out" 2>&1
 if grep -rq "SECRETDATA" "$TMP/.pp/store" 2>/dev/null; then
@@ -83,11 +86,11 @@ fi
 #     both backends — and stderr BYTE-IDENTICAL between backends.
 # =====================================================================
 cat > "$TMP/ban-freevar.pp" <<EOF
-(def s (slurp "$SECRET"))
-(force (node s))
+let s = slurp("$SECRET")
+force(node { s })
 EOF
 cat > "$TMP/ban-result.pp" <<EOF
-(force (node (slurp "$SECRET")))
+force(node { slurp("$SECRET") })
 EOF
 
 for case_name in ban-freevar ban-result; do
@@ -110,8 +113,11 @@ rm -rf "$TMP/.pp"
 mkdir -p "$TMP/rot"
 printf 'V1\n' > "$TMP/rot/secret.txt"
 cat > "$TMP/rotate.pp" <<EOF
-(perform log (force (node (do (perform log "COMPUTE-A") (slurp "$TMP/rot/secret.txt") "done-a"))))
-(perform log (force (node (do (perform log "COMPUTE-B") "done-b"))))
+perform log(force(node { perform log("COMPUTE-A"); slurp("$TMP/rot/secret.txt"); "done-a" }))
+perform log(force(node {
+  perform log("COMPUTE-B")
+  "done-b"
+}))
 EOF
 run_rotate() { rm -f "$TMP/out"; "$PP" --grant "secret:$TMP/rot" "$TMP/rotate.pp" > "$TMP/out" 2>&1; }
 
@@ -136,7 +142,7 @@ assert "rotate-run3-rotated-b-still-hit"  "COMPUTE-B" absent
 # =====================================================================
 rm -rf "$TMP/.pp"
 cat > "$TMP/narrow.pp" <<EOF
-(perform log (force (node (unseal (slurp "$SECRET")))))
+perform log(force(node { unseal(slurp("$SECRET")) }))
 EOF
 "$PP" --grant "secret:$TMP/secret" "$TMP/narrow.pp" > "$TMP/out" 2>&1
 assert "narrow-populate-succeeds" "SECRETDATA" present
@@ -149,7 +155,7 @@ assert "narrow-caller-denied"    "(apability|permission denied)"  present
 # =====================================================================
 rm -rf "$TMP/.pp"
 cat > "$TMP/both-grants.pp" <<EOF
-(print (slurp "$SECRET"))
+print(slurp("$SECRET"))
 EOF
 "$PP" --grant "secret:$TMP/secret" --grant "fs:$TMP/secret:ro" "$TMP/both-grants.pp" > "$TMP/out" 2>&1
 assert "both-grants-plain-fs"       "SECRETDATA" present

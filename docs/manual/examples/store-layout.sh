@@ -4,8 +4,8 @@ export HOME=$(mktemp -d)
 cd "$HOME"
 
 cat > build.pp <<'PP'
-(def artifact (node (blob (slurp "input.txt"))))
-(print artifact)
+let artifact = node { blob(slurp("input.txt")) }
+print(artifact)
 PP
 echo hello > input.txt
 

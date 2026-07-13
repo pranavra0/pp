@@ -4,9 +4,9 @@
 export HOME=$(mktemp -d)
 
 cat > "$HOME/prog.pp" <<'PP'
-(def (fib n)
-  (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
-(print (fib 15))
+def fib(n) { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }
+
+print(fib(15))
 PP
 
 echo '$ pp prog.pp'

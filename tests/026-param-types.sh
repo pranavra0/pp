@@ -37,11 +37,11 @@ assert_err() {
 
 # ---- (a) well-typed calls pass ----
 cat > "$TMP/a.pp" <<'EOF'
-(def (f x : int) (+ x 1))
-(print (f 41))
-(def (g a : int b : string) (string-length b))
-(print (g 1 "abc"))
-(print ((fn [x : int] (* x 2)) 21))
+def f(x: int) { x + 1 }
+print(f(41))
+def g(a: int, b: string) { string-length(b) }
+print(g(1, "abc"))
+print((fn(x: int) { x * 2 })(21))
 EOF
 expected=$'42\n3\n42'
 assert_out "well-typed-tw" ""           "$TMP/a.pp" "$expected"
@@ -49,8 +49,8 @@ assert_out "well-typed-vm" "--bytecode" "$TMP/a.pp" "$expected"
 
 # ---- (b) ill-typed call errors with the def-site location, identically ----
 cat > "$TMP/b.pp" <<'EOF'
-(def (f x : int) (+ x 1))
-(print (f "oops"))
+def f(x: int) { x + 1 }
+print(f("oops"))
 EOF
 pat='type mismatch: expected int, got .*oops.* at .*b\.pp:1'
 assert_err "ill-typed-tw" ""           "$TMP/b.pp" "$pat"
@@ -62,26 +62,26 @@ else bad "ill-typed-identical-stderr" "tw: $(cat "$TMP/e1")" "vm: $(cat "$TMP/e2
 
 # ---- (c) unknown type names pass (gradual) ----
 cat > "$TMP/c.pp" <<'EOF'
-(def (h x : widget) x)
-(print (h 7))
+def h(x: widget) { x }
+print(h(7))
 EOF
 assert_out "unknown-type-passes-tw" ""           "$TMP/c.pp" "7"
 assert_out "unknown-type-passes-vm" "--bytecode" "$TMP/c.pp" "7"
 
 # ---- (d) vector param list checks ----
 cat > "$TMP/d.pp" <<'EOF'
-(def v (fn [s : string] (string-length s)))
-(print (v 5))
+let v = fn(s: string) { string-length(s) }
+print(v(5))
 EOF
 assert_err "vector-param-tw" ""           "$TMP/d.pp" "type mismatch: expected string, got 5"
 assert_err "vector-param-vm" "--bytecode" "$TMP/d.pp" "type mismatch: expected string, got 5"
 
 # ---- (e) return type + param type combine ----
 cat > "$TMP/e.pp" <<'EOF'
-(def (r x : int) : string (string-append "n=" "x"))
-(print (r 3))
-(def (bad x : int) : string x)
-(print (bad 3))
+def r(x: int): string { string-append("n=", "x") }
+print(r(3))
+def bad(x: int): string { x }
+print(bad(3))
 EOF
 if out=$("$PP" "$TMP/e.pp" 2>"$TMP/err"); then
   bad "ret-and-param-tw" "expected failure" "$out"

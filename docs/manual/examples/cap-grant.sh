@@ -10,7 +10,7 @@ printf 'db1.internal' > "$HOME/etc/hostname"
 cd "$HOME"
 
 cat > read-hostname.pp <<'PP'
-(print (perform read-file "etc/hostname"))
+print(perform read-file("etc/hostname"))
 PP
 
 echo '$ pp read-hostname.pp                       # no grant: refused'

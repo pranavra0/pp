@@ -43,10 +43,10 @@ check_file() {  # NAME PATH EXPECTED-CONTENT
 run() { "$PP" "$@" > "$TMP/out" 2>&1; }
 
 cat > "$TMP/d1.pp" <<'EOF'
-{"a.txt" "A1" "sub/b.txt" (string-append "B" "1")}
+{"a.txt" -> "A1", "sub/b.txt" -> string-append("B", "1")}
 EOF
 cat > "$TMP/d2.pp" <<'EOF'
-{"a.txt" "A2"}
+{"a.txt" -> "A2"}
 EOF
 
 # --- (a) no write grant ⇒ capability error, nothing materialized ---
@@ -96,7 +96,7 @@ fi
 
 # --- (g) stratification (LAW 30): desired state may not read its own domain ---
 cat > "$TMP/strat.pp" <<EOF
-{"a.txt" (slurp "$OUT/a.txt")}
+{"a.txt" -> slurp("$OUT/a.txt")}
 EOF
 run --grant "fs:$OUT:rw" --grant "fs:$OUT:ro" --reconcile "$OUT" "$TMP/strat.pp"
 assert "stratification-error" "tratification" present

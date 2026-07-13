@@ -36,7 +36,10 @@ run() { "$PP" "$@" > "$TMP/out" 2>&1; }
 
 printf 'V1\n' > "$WORK/data.txt"
 cat > "$TMP/p.pp" <<EOF
-(perform log (force (node (do (perform log "COMPUTE") (slurp "$WORK/data.txt")))))
+perform log(force(node {
+  perform log("COMPUTE")
+  slurp("$WORK/data.txt")
+}))
 EOF
 
 # --- (a) why: first build, hit, stale ---
@@ -54,7 +57,10 @@ assert "why-stale-names-cell" "data\.txt"        present
 # --- (b) why is capability-filtered: an unauthorized cell is redacted ---
 printf 'SECRETPATHCONTENT\n' > "$PRIV/secret-name.txt"
 cat > "$TMP/q.pp" <<EOF
-(perform log (force (node (do (perform log "COMPUTE") (slurp "$PRIV/secret-name.txt")))))
+perform log(force(node {
+  perform log("COMPUTE")
+  slurp("$PRIV/secret-name.txt")
+}))
 EOF
 rm -rf "$TMP/.pp"
 run --grant "fs:$TMP:ro" "$TMP/q.pp"                  # broad run populates
@@ -79,7 +85,9 @@ assert "check-deterministic" "volatile" absent
 if [ -s "$TMP/out" ] && ! grep -q "Fatal" "$TMP/out"; then echo "ok   check-det-exit"
 else echo "FAIL check-det-exit"; cat "$TMP/out"; fail=1; fi
 cat > "$TMP/vol.pp" <<'EOF'
-(perform log (force (node (hash-map-get (perform run "sh" "-c" "echo $RANDOM") "out"))))
+perform log(force(node {
+  hash-map-get(perform run("sh", "-c", "echo $RANDOM"), "out")
+}))
 EOF
 rm -rf "$TMP/.pp"
 if run --check --grant process "$TMP/vol.pp"; then

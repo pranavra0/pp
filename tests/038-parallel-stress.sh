@@ -35,11 +35,11 @@ JOURNAL="$TMP/.pp/store/journal/log"
 # Criterion 2: race:3 — one deliberately slow node
 # =====================================================================
 cat > "$TMP/slow.pp" <<'EOF'
-(def (slow)
-  (force (node
-    (do (perform run "sh" "-c" "sleep 0.4")
-        42))))
-(print (slow))
+def slow() {
+  force(node {
+    perform run("sh", "-c", "sleep 0.4")
+    42 }) }
+print(slow())
 EOF
 
 rm -rf "$TMP/.pp"
@@ -88,13 +88,13 @@ fi
 # the pairing trap. int-range/sum-list below are hand-rolled so nothing in
 # this file shadows the builtin (non-forcing) `map`.
 cat > "$TMP/stress64.pp" <<'EOF'
-(def (int-range a b) (if (>= a b) nil (cons a (int-range (+ a 1) b))))
-(def (sum-list lst) (if (nil? lst) 0 (+ (car lst) (sum-list (cdr lst)))))
-(def (mk i)
-  (node
-    (do (perform run "sh" "-c" (string-append "echo node-" (number->string i)))
-        i)))
-(print (sum-list (force-deep (map mk (int-range 0 64)))))
+def int-range(a, b) { if a >= b { nil } else { cons(a, int-range(a + 1, b)) } }
+def sum-list(lst) { if nil?(lst) { 0 } else { car(lst) + sum-list(cdr(lst)) } }
+def mk(i) {
+  node {
+    perform run("sh", "-c", string-append("echo node-", number->string(i)))
+    i } }
+print(sum-list(force-deep(map(mk, int-range(0, 64)))))
 EOF
 EXPECTED_SUM=2016  # 0+1+...+63
 
@@ -167,11 +167,11 @@ fi
 # DESIGN's drop-soundness claim (docs/PLAN-phase3-parallel.md) holds even
 # without the lock, not just with it.
 cat > "$TMP/onekey.pp" <<'EOF'
-(def (one)
-  (force (node
-    (do (perform run "sh" "-c" "echo racing")
-        99))))
-(print (one))
+def one() {
+  force(node {
+    perform run("sh", "-c", "echo racing")
+    99 }) }
+print(one())
 EOF
 rm -rf "$TMP/.pp"
 out=$(PP_TRACE_LOCK=0 "$PP" --grant process --schedule race:8 "$TMP/onekey.pp" 2>"$TMP/onekey.err")
@@ -198,9 +198,9 @@ fi
 # non-serial schedule too — placement must never widen what a node may do.
 # =====================================================================
 cat > "$TMP/fenced-in-node.pp" <<'EOF'
-(defnode bad
-  (do (fenced "x" {}) 1))
-(force bad)
+let bad = node {
+  fenced("x", {}); 1 }
+force(bad)
 EOF
 for spec in "parallel:4" "race:3"; do
   rm -rf "$TMP/.pp"

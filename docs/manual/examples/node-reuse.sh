@@ -7,8 +7,8 @@ export HOME=$(mktemp -d)
 cd "$HOME"
 
 cat > build.pp <<'PP'
-(def (compile) (node (do (print "compiling greeter.o") (* 6 7))))
-(print (compile))
+def compile() { node { print("compiling greeter.o"); 6 * 7 } }
+print(compile())
 PP
 
 echo '$ pp build.pp     # first process: the node body runs'

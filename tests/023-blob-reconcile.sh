@@ -38,7 +38,7 @@ run() { "$PP" "$@" > "$TMP/out" 2>&1; }
 
 # --- (a) blob refs and inline strings coexist in one desired map ---
 cat > "$TMP/d.pp" <<'EOF'
-{"a.o" (blob "OBJ-BYTES") "plain.txt" "INLINE"}
+{"a.o" -> blob("OBJ-BYTES"), "plain.txt" -> "INLINE"}
 EOF
 rm -rf "$TMP/.pp" "$OUT"
 run --grant "fs:$OUT:rw" --reconcile "$OUT" "$TMP/d.pp"
@@ -52,10 +52,13 @@ assert "blob-null"    "create=0" present
 #         tool-running node; rm -rf build ⇒ restored from the store with
 #         ZERO tool re-runs ---
 cat > "$TMP/b.pp" <<'EOF'
-(let [obj (force (node (do (perform log "COMPILE")
-                           (do (perform run "sh" "-c" "printf TOOL-OUT > a.o")
-                               (blob (slurp "a.o"))))))]
-  {"a.o" obj})
+let (obj = force(node {
+  perform log("COMPILE")
+  do {
+    perform run("sh", "-c", "printf TOOL-OUT > a.o")
+    blob(slurp("a.o"))
+  }
+})) { {"a.o" -> obj} }
 EOF
 rm -rf "$TMP/.pp" "$OUT"
 run --grant "fs:$OUT:wo" --grant process --reconcile "$OUT" "$TMP/b.pp"
@@ -68,7 +71,7 @@ check_file "c4-restored"   "$OUT/a.o" "TOOL-OUT"
 
 # --- (c) a dangling blob ref is a hard error, not silence ---
 cat > "$TMP/bad.pp" <<'EOF'
-{"x" "blob:0000000000000000000000000000000000000000000000000000000000000000"}
+{"x" -> "blob:0000000000000000000000000000000000000000000000000000000000000000"}
 EOF
 run --grant "fs:$OUT:rw" --reconcile "$OUT" "$TMP/bad.pp"
 assert "dangling-blob-errors" "blob" present

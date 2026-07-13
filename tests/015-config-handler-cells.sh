@@ -37,12 +37,20 @@ run() { "$PP" "$@" > "$TMP/out" 2>&1; }
 # --- (a) ambient config a node never reads must NOT re-key it (LAW 33) ---
 rm -rf "$TMP/.pp"
 cat > "$TMP/a1.pp" <<'EOF'
-(with-config {"amb" "A"}
-  (perform log (force (node (do (perform log "COMPUTE") 42)))))
+with-config({"amb" -> "A"}) {
+  perform log(force(node {
+    perform log("COMPUTE")
+    42
+  }))
+}
 EOF
 cat > "$TMP/a2.pp" <<'EOF'
-(with-config {"amb" "B"}
-  (perform log (force (node (do (perform log "COMPUTE") 42)))))
+with-config({"amb" -> "B"}) {
+  perform log(force(node {
+    perform log("COMPUTE")
+    42
+  }))
+}
 EOF
 run "$TMP/a1.pp"; assert "cfg-unrelated-run1-miss" "COMPUTE" present
 run "$TMP/a2.pp"; assert "cfg-unrelated-still-hit" "COMPUTE" absent
@@ -51,12 +59,20 @@ run "$TMP/a2.pp"; assert "cfg-unrelated-still-hit" "COMPUTE" absent
 #         recompute, revert ⇒ hit ---
 rm -rf "$TMP/.pp"
 cat > "$TMP/b1.pp" <<'EOF'
-(with-config {"k" "V1"}
-  (perform log (force (node (do (perform log "COMPUTE") (config "k"))))))
+with-config({"k" -> "V1"}) {
+  perform log(force(node {
+    perform log("COMPUTE")
+    config("k")
+  }))
+}
 EOF
 cat > "$TMP/b2.pp" <<'EOF'
-(with-config {"k" "V2"}
-  (perform log (force (node (do (perform log "COMPUTE") (config "k"))))))
+with-config({"k" -> "V2"}) {
+  perform log(force(node {
+    perform log("COMPUTE")
+    config("k")
+  }))
+}
 EOF
 run "$TMP/b1.pp"; assert "cfg-read-run1-miss"   "COMPUTE" present
                   assert "cfg-read-run1-V1"     "V1"      present
@@ -69,11 +85,18 @@ run "$TMP/b1.pp"; assert "cfg-read-revert-hit"  "COMPUTE" absent
 #         providing the key recomputes, then absence hits again ---
 rm -rf "$TMP/.pp"
 cat > "$TMP/c1.pp" <<'EOF'
-(perform log (force (node (do (perform log "COMPUTE") (config "k" "DEF")))))
+perform log(force(node {
+  perform log("COMPUTE")
+  config("k", "DEF")
+}))
 EOF
 cat > "$TMP/c2.pp" <<'EOF'
-(with-config {"k" "V5"}
-  (perform log (force (node (do (perform log "COMPUTE") (config "k" "DEF"))))))
+with-config({"k" -> "V5"}) {
+  perform log(force(node {
+    perform log("COMPUTE")
+    config("k", "DEF")
+  }))
+}
 EOF
 run "$TMP/c1.pp"; assert "cfg-absent-run1-miss"  "COMPUTE" present
                   assert "cfg-absent-run1-DEF"   "DEF"     present
@@ -86,12 +109,20 @@ run "$TMP/c1.pp"; assert "cfg-absent-revert-hit" "COMPUTE" absent
 #         (LAW 26: handlers are not identity) ---
 rm -rf "$TMP/.pp"
 cat > "$TMP/d1.pp" <<'EOF'
-(with-handler [ask (fn (n) "H1")]
-  (perform log (force (node (do (perform log "COMPUTE") 42)))))
+with-handler(ask = fn(n) { "H1" }) {
+  perform log(force(node {
+    perform log("COMPUTE")
+    42
+  }))
+}
 EOF
 cat > "$TMP/d2.pp" <<'EOF'
-(with-handler [ask (fn (n) "H2")]
-  (perform log (force (node (do (perform log "COMPUTE") 42)))))
+with-handler(ask = fn(n) { "H2" }) {
+  perform log(force(node {
+    perform log("COMPUTE")
+    42
+  }))
+}
 EOF
 run "$TMP/d1.pp"; assert "hnd-unrelated-run1-miss" "COMPUTE" present
 run "$TMP/d2.pp"; assert "hnd-unrelated-still-hit" "COMPUTE" absent
@@ -100,12 +131,20 @@ run "$TMP/d2.pp"; assert "hnd-unrelated-still-hit" "COMPUTE" absent
 #         swap ⇒ recompute, revert ⇒ hit ---
 rm -rf "$TMP/.pp"
 cat > "$TMP/e1.pp" <<'EOF'
-(with-handler [ask (fn (n) "A1")]
-  (perform log (force (node (do (perform log "COMPUTE") (perform ask 0))))))
+with-handler(ask = fn(n) { "A1" }) {
+  perform log(force(node {
+    perform log("COMPUTE")
+    perform ask(0)
+  }))
+}
 EOF
 cat > "$TMP/e2.pp" <<'EOF'
-(with-handler [ask (fn (n) "A2")]
-  (perform log (force (node (do (perform log "COMPUTE") (perform ask 0))))))
+with-handler(ask = fn(n) { "A2" }) {
+  perform log(force(node {
+    perform log("COMPUTE")
+    perform ask(0)
+  }))
+}
 EOF
 run "$TMP/e1.pp"; assert "hnd-sem-run1-miss"  "COMPUTE" present
                   assert "hnd-sem-run1-A1"    "A1"      present
@@ -119,11 +158,18 @@ run "$TMP/e1.pp"; assert "hnd-sem-revert-hit" "COMPUTE" absent
 rm -rf "$TMP/.pp"
 printf 'REAL\n' > "$TMP/f.txt"
 cat > "$TMP/f-real.pp" <<EOF
-(perform log (force (node (do (perform log "COMPUTE") (perform read-file "$TMP/f.txt")))))
+perform log(force(node {
+  perform log("COMPUTE")
+  perform read-file("$TMP/f.txt")
+}))
 EOF
 cat > "$TMP/f-mock.pp" <<EOF
-(with-handler [read-file (fn (p) "MOCKED")]
-  (perform log (force (node (do (perform log "COMPUTE") (perform read-file "$TMP/f.txt"))))))
+with-handler(read-file = fn(p) { "MOCKED" }) {
+  perform log(force(node {
+    perform log("COMPUTE")
+    perform read-file("$TMP/f.txt")
+  }))
+}
 EOF
 run --grant "fs:$TMP:ro" "$TMP/f-real.pp"; assert "mock-real-run1-miss"  "COMPUTE" present
                                            assert "mock-real-run1-REAL" "REAL"    present

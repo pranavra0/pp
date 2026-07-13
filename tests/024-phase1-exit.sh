@@ -59,37 +59,39 @@ TU=$((N + 1))
 # the whole build back to one-at-a-time (the pairing trap the design
 # review caught).
 cat > "$TMP/build.pp" <<EOF
-(def (each f lst) (if (nil? lst) nil (do (f (car lst)) (each f (cdr lst)))))
-(def (foldl2 f acc lst) (if (nil? lst) acc (foldl2 f (f acc (car lst)) (cdr lst))))
-(def (zip2 lst1 lst2)
-  (if (nil? lst1) nil (cons (cons (car lst1) (car lst2)) (zip2 (cdr lst1) (cdr lst2)))))
+def each(f, lst) { if nil?(lst) { nil } else { f(car(lst)); each(f, cdr(lst)) } }
+def foldl2(f, acc, lst) { if nil?(lst) { acc } else { foldl2(f, f(acc, car(lst)), cdr(lst)) } }
+def zip2(lst1, lst2) {
+  if nil?(lst1) { nil } else {
+    cons(cons(car(lst1), car(lst2)), zip2(cdr(lst1), cdr(lst2))) } }
+def compile(name) {
+  node {
+    perform run-dep(string-append(name, ".d"), "cc", "-MD", "-MF", string-append(name, ".d"), "-O0", "-c", string-append("$SRC/", string-append(name, ".c")), "-o", string-append(name, ".o"))
+    blob(slurp(string-append(name, ".o")))
+  }
+}
 
-(def (compile name)
-  (node
-    (do (perform run-dep (string-append name ".d")
-          "cc" "-MD" "-MF" (string-append name ".d") "-O0" "-c"
-          (string-append "$SRC/" (string-append name ".c"))
-          "-o" (string-append name ".o"))
-        (blob (slurp (string-append name ".o"))))))
 
-(def (link objs)
-  (force (node
-    (do (each (fn (o) (perform write-file (string-append (car o) ".o")
-                        (blob-get (cdr o)))) objs)
-        (do (perform write-file "link.d" "prog: ")
-            (do (perform run-dep "link.d" "sh" "-c"
-                  (string-append "cc -o prog "
-                    (foldl2 (fn (acc o) (string-append acc (string-append (car o) ".o ")))
-                            "" objs)))
-                (blob (slurp "prog"))))))))
-
-(let [names (string-split (slurp "$SRC/sources.txt") "\n")]
-  (let [results (force-deep (map compile names))]
-    (let [objs (zip2 names results)]
-      (let [prog (link objs)]
-        (foldl2 (fn (m o) (map-insert m (string-append (car o) ".o") (cdr o)))
-                (map-insert (hash-map) "prog" (string-append prog ":x"))
-                objs)))))
+def link(objs) {
+  force(node { each(
+fn(o) { perform write-file(string-append(car(o), ".o"), blob-get(cdr(o))) }, objs)
+    do {
+      perform write-file("link.d", "prog: ")
+      do {
+        perform run-dep("link.d", "sh", "-c", string-append("cc -o prog ", foldl2(
+fn(acc, o) { string-append(acc, string-append(car(o), ".o ")) }, "", objs)))
+        blob(slurp("prog"))
+      }
+    } }) }
+let (names = string-split(slurp("$SRC/sources.txt"), "\n")) {
+  let (results = force-deep(map(compile, names))) {
+    let (objs = zip2(names, results)) {
+      let (prog = link(objs)) { foldl2(
+fn(m, o) { map-insert(m, string-append(car(o), ".o"), cdr(o)) }, map-insert({}, "prog", string-append(prog, ":x")), objs)
+      }
+    }
+  }
+}
 EOF
 
 G=(--grant "fs:$SRC:ro" --grant "fs:$BUILD:wo" --grant process)

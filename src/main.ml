@@ -222,8 +222,8 @@ let main () =
         Printf.printf "  pp gc [--gc-keep-epochs N] [--gc-grace-seconds S]  Explicit store GC (M5 stage C): mark-by-replay the last N reconcile/supervise epochs, sweep the rest\n";
         Printf.printf "  pp --pin-file <path> <file.pp>  Preseed Store.run_pins/Runtime.probe_values from a (pin ...)/(pin-probe ...) file before running (M6 stage B: the observation-pinning seam)\n";
         Printf.printf "  pp --dump-pins <path> <file.pp>  After running, write every run_pins/probe_values entry as (pin ...)/(pin-probe ...) lines to <path>\n";
-        Printf.printf "  pp --emit-braces <file.pp>  Print the file as brace-surface text (M7 S1; .ppb files run directly)\n";
-        Printf.printf "  pp --roundtrip-braces <file.pp>  Assert sexpr->braces->re-read AST + LAW-20 hash equality (the fuzz gate)\n";
+        Printf.printf "  pp --emit-braces <file.ppl>  Print a sexpr (.ppl) file as brace-surface text (M7 S3: .pp/.ppb are brace surface, .ppl is the sexpr/AST surface)\n";
+        Printf.printf "  pp --roundtrip-braces <file.ppl>  Assert sexpr->braces->re-read AST + LAW-20 hash equality (the fuzz gate)\n";
         Printf.printf "  pp fmt --to-braces <file> [-i]  Transpile sexpr source to brace source, carrying comments (M7 S2; -i/--in-place rewrites the file, same path)\n";
         Printf.printf "  pp fmt --to-sexpr <file> [-i]   Transpile brace source to sexpr source, carrying comments (M7 S2)\n";
         exit 0
@@ -342,8 +342,14 @@ let main () =
      "before" copy, not a real distinct source location. *)
   (match !compare_hash_args with
    | Some (f1, f2) ->
-       let forms1 = Reader.read_string ~source:f1 (read_whole f1) in
-       let forms2 = Reader.read_string ~source:f1 (read_whole f2) in
+       (* M7 S3: each side dispatches by its OWN extension (a brace `.pp`
+          can be compared against a sexpr `.ppl` scratch copy and vice
+          versa); the location label stays f1 for both, per the contract
+          above. *)
+       let forms1 =
+         Reader_braces.read_dispatch ~source:f1 ~path:f1 (read_whole f1) in
+       let forms2 =
+         Reader_braces.read_dispatch ~source:f1 ~path:f2 (read_whole f2) in
        if List.length forms1 <> List.length forms2 then
          failwith (Printf.sprintf
                      "--compare-hash: form count diverged: %d (%s) vs %d (%s)"

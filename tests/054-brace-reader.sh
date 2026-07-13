@@ -116,41 +116,41 @@ mkdir -p "$TMP/b"
 cat > "$TMP/b/lib.ppb" <<'EOF'
 def lib-fn(n) { n * 10 }
 EOF
-cat > "$TMP/b/use.pp" <<'EOF'
+cat > "$TMP/b/use.ppl" <<'EOF'
 (load "lib.ppb")
 (print (lib-fn 4))
 EOF
-cat > "$TMP/b/lib2.pp" <<'EOF'
+cat > "$TMP/b/lib2.ppl" <<'EOF'
 (def (lib2-fn n) (* n 100))
 EOF
 cat > "$TMP/b/use2.ppb" <<'EOF'
-load("lib2.pp")
+load("lib2.ppl")
 print(lib2-fn(4))
 EOF
 ( cd "$TMP/b" &&
-  [ "$("$PP" use.pp 2>&1)" = "40" ] && [ "$("$PP" --bytecode use.pp 2>&1)" = "40" ] ) \
-  && ok "pp-loads-ppb" || bad "pp-loads-ppb" "$(cd "$TMP/b" && "$PP" use.pp 2>&1)"
+  [ "$("$PP" use.ppl 2>&1)" = "40" ] && [ "$("$PP" --bytecode use.ppl 2>&1)" = "40" ] ) \
+  && ok "ppl-loads-ppb" || bad "ppl-loads-ppb" "$(cd "$TMP/b" && "$PP" use.ppl 2>&1)"
 ( cd "$TMP/b" &&
   [ "$("$PP" use2.ppb 2>&1)" = "400" ] && [ "$("$PP" --bytecode use2.ppb 2>&1)" = "400" ] ) \
-  && ok "ppb-loads-pp" || bad "ppb-loads-pp" "$(cd "$TMP/b" && "$PP" use2.ppb 2>&1)"
+  && ok "ppb-loads-ppl" || bad "ppb-loads-ppl" "$(cd "$TMP/b" && "$PP" use2.ppb 2>&1)"
 
 mkdir -p "$TMP/b/isl"
 cat > "$TMP/b/isl/entry.ppb" <<'EOF'
 let isl-x = 41
 def isl-add(n) { n + isl-x }
 EOF
-cat > "$TMP/b/useisl.pp" <<EOF
+cat > "$TMP/b/useisl.ppl" <<EOF
 (import (island file:$TMP/b/isl))
 (print (isl-add 1))
 EOF
-if "$PP" --update "$TMP/b/useisl.pp" >/dev/null 2>&1 \
-   && [ "$("$PP" "$TMP/b/useisl.pp" 2>&1)" = "42" ] \
-   && [ "$("$PP" --bytecode "$TMP/b/useisl.pp" 2>&1)" = "42" ]; then
-  ok "ppb-island-from-pp"
+if "$PP" --update "$TMP/b/useisl.ppl" >/dev/null 2>&1 \
+   && [ "$("$PP" "$TMP/b/useisl.ppl" 2>&1)" = "42" ] \
+   && [ "$("$PP" --bytecode "$TMP/b/useisl.ppl" 2>&1)" = "42" ]; then
+  ok "ppb-island-from-ppl"
 else
-  bad "ppb-island-from-pp" "$("$PP" "$TMP/b/useisl.pp" 2>&1)"
+  bad "ppb-island-from-ppl" "$("$PP" "$TMP/b/useisl.ppl" 2>&1)"
 fi
-PIN=$(sed -n 's/.*"\([0-9a-f]\{64\}\)".*/\1/p' "$TMP/b/useisl.pp" | head -1)
+PIN=$(sed -n 's/.*"\([0-9a-f]\{64\}\)".*/\1/p' "$TMP/b/useisl.ppl" | head -1)
 cat > "$TMP/b/useisl2.ppb" <<EOF
 import(island("file:$TMP/b/isl", "$PIN"))
 print(isl-add(9))
@@ -165,9 +165,9 @@ fi
 # ---- (c) assert parity: same message text (condition rendered as sexpr
 #      data, `at file:line` suffix), modulo only the file name ----
 mkdir -p "$TMP/c"
-printf '(print "start")\n(assert (< 2 1))\n' > "$TMP/c/t.pp"
+printf '(print "start")\n(assert (< 2 1))\n' > "$TMP/c/t.ppl"
 printf 'print("start")\nassert(2 < 1)\n' > "$TMP/c/t.ppb"
-err_pp=$("$PP" "$TMP/c/t.pp" 2>&1 >/dev/null)
+err_pp=$("$PP" "$TMP/c/t.ppl" 2>&1 >/dev/null | sed 's/t\.ppl/t.pp/')
 err_ppb=$("$PP" "$TMP/c/t.ppb" 2>&1 >/dev/null | sed 's/t\.ppb/t.pp/')
 if [ "$err_pp" = "$err_ppb" ] && printf '%s' "$err_pp" | grep -q 'assertion failed: (< 2 1) at .*t\.pp:2'; then
   ok "assert-desugar-parity"
@@ -175,9 +175,9 @@ else
   bad "assert-desugar-parity" "pp:  $err_pp" "ppb: $err_ppb"
 fi
 # custom-message form
-printf '(assert (< 2 1) "boom")\n' > "$TMP/c/m.pp"
+printf '(assert (< 2 1) "boom")\n' > "$TMP/c/m.ppl"
 printf 'assert(2 < 1, "boom")\n' > "$TMP/c/m.ppb"
-err_pp=$("$PP" "$TMP/c/m.pp" 2>&1)
+err_pp=$("$PP" "$TMP/c/m.ppl" 2>&1 | sed 's/m\.ppl/m.pp/')
 err_ppb=$("$PP" "$TMP/c/m.ppb" 2>&1 | sed 's/m\.ppb/m.pp/')
 if [ "$err_pp" = "$err_ppb" ] && printf '%s' "$err_pp" | grep -q 'boom at .*m\.pp:1'; then
   ok "assert-message-parity"
@@ -186,7 +186,12 @@ else
 fi
 
 # ---- (d) emit-braces on a real file: same output, both backends ----
-"$PP" --emit-braces "$ROOT/tests/007-phase0-laws.pp" > "$TMP/007.ppb" 2>"$TMP/emit.err"
+# M7 S3: the tree is brace-surface now; derive the sexpr (.ppl) form first,
+# then emit braces from IT — the emitted program must still behave
+# byte-identically to the original.
+"$PP" fmt --to-sexpr "$ROOT/tests/007-phase0-laws.pp" > "$TMP/007.ppl" 2>"$TMP/emit.err" \
+  || bad "fmt-to-sexpr-007" "$(cat "$TMP/emit.err")"
+"$PP" --emit-braces "$TMP/007.ppl" > "$TMP/007.ppb" 2>"$TMP/emit.err"
 if [ $? -ne 0 ]; then bad "emit-braces-007" "$(cat "$TMP/emit.err")"; fi
 for be in "" "--bytecode"; do
   tag=$([ -z "$be" ] && echo tw || echo vm)
@@ -200,12 +205,21 @@ for be in "" "--bytecode"; do
 done
 
 # ---- (e) round-trip (AST + LAW-20 hash) over the whole tree ----
+# M7 S3: the tree is brace-surface; --roundtrip-braces takes sexpr input
+# (it round-trips sexpr -> braces -> re-read), so derive each file's .ppl
+# form first — the property gated is unchanged: every tree file's AST
+# survives the printer/second-reader round trip with LAW-20 hash equality.
 rt_fail=0
+mkdir -p "$TMP/rt"
 for f in "$ROOT"/tests/[0-9]*.pp "$ROOT"/tests/gen-cproject.pp \
          "$ROOT"/tests/mutate-cproject.pp "$ROOT"/stdlib/*.pp \
          "$ROOT"/build.pp "$ROOT"/demo/*.pp "$ROOT"/examples/*.pp; do
   [ -f "$f" ] || continue
-  if ! "$PP" --roundtrip-braces "$f" >/dev/null 2>"$TMP/rt.err"; then
+  if ! "$PP" fmt --to-sexpr "$f" > "$TMP/rt/tree.ppl" 2>"$TMP/rt.err"; then
+    bad "roundtrip-tree-to-sexpr ($f)" "$(tail -1 "$TMP/rt.err")"
+    rt_fail=1; continue
+  fi
+  if ! "$PP" --roundtrip-braces "$TMP/rt/tree.ppl" >/dev/null 2>"$TMP/rt.err"; then
     bad "roundtrip-tree ($f)" "$(tail -1 "$TMP/rt.err")"
     rt_fail=1
   fi

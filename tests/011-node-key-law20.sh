@@ -32,12 +32,18 @@ assert() {  # NAME  FILE  present|absent
 # --- (a) an unrelated global must NOT invalidate the node ---
 rm -rf "$TMP/.pp"
 cat > "$TMP/a1.pp" <<'EOF'
-(def unrelated 1)
-(force (node (do (perform log "COMPUTE") 42)))
+let unrelated = 1
+force(node {
+  perform log("COMPUTE")
+  42
+})
 EOF
 cat > "$TMP/a2.pp" <<'EOF'
-(def unrelated 99999)
-(force (node (do (perform log "COMPUTE") 42)))
+let unrelated = 99999
+force(node {
+  perform log("COMPUTE")
+  42
+})
 EOF
 "$PP" "$TMP/a1.pp" > "$TMP/o" 2>&1; assert "unrelated-run1-miss"       "$TMP/o" present
 "$PP" "$TMP/a2.pp" > "$TMP/o" 2>&1; assert "unrelated-rebind-still-hit" "$TMP/o" absent
@@ -45,10 +51,20 @@ EOF
 # --- (b) changing a REFERENCED free variable must re-key ---
 rm -rf "$TMP/.pp"
 cat > "$TMP/c1.pp" <<'EOF'
-(let [x 1] (force (node (do (perform log "COMPUTE") x))))
+let (x = 1) {
+  force(node {
+    perform log("COMPUTE")
+    x
+  })
+}
 EOF
 cat > "$TMP/c2.pp" <<'EOF'
-(let [x 2] (force (node (do (perform log "COMPUTE") x))))
+let (x = 2) {
+  force(node {
+    perform log("COMPUTE")
+    x
+  })
+}
 EOF
 "$PP" "$TMP/c1.pp" > "$TMP/o" 2>&1; assert "freevar-x1-miss"      "$TMP/o" present
 "$PP" "$TMP/c2.pp" > "$TMP/o" 2>&1; assert "freevar-x2-miss"      "$TMP/o" present
@@ -58,7 +74,10 @@ EOF
 rm -rf "$TMP/.pp"
 printf 'DATA\n' > "$TMP/f.txt"
 cat > "$TMP/cap.pp" <<EOF
-(force (node (do (perform log "COMPUTE") (slurp "$TMP/f.txt"))))
+force(node {
+  perform log("COMPUTE")
+  slurp("$TMP/f.txt")
+})
 EOF
 "$PP" --grant "fs:$TMP:ro"  "$TMP/cap.pp" > "$TMP/o" 2>&1; assert "cap-narrow-miss" "$TMP/o" present
 "$PP" --grant "fs:/:ro"     "$TMP/cap.pp" > "$TMP/o" 2>&1; assert "cap-widen-hit"   "$TMP/o" absent

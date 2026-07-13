@@ -41,37 +41,38 @@ TU=$(wc -l < "$SRC/sources.txt" | tr -d ' ')
 echo "-- $TU translation units"
 
 cat > "$TMP/build.pp" <<EOF
-(def (map2 f lst) (if (nil? lst) nil (cons (f (car lst)) (map2 f (cdr lst)))))
-(def (each f lst) (if (nil? lst) nil (do (f (car lst)) (each f (cdr lst)))))
-(def (foldl2 f acc lst) (if (nil? lst) acc (foldl2 f (f acc (car lst)) (cdr lst))))
+def map2(f, lst) { if nil?(lst) { nil } else { cons(f(car(lst)), map2(f, cdr(lst))) } }
+def each(f, lst) { if nil?(lst) { nil } else { f(car(lst)); each(f, cdr(lst)) } }
+def foldl2(f, acc, lst) {
+  if nil?(lst) { acc } else { foldl2(f, f(acc, car(lst)), cdr(lst)) } }
+def compile(name) {
+  force(node {
+    perform run-dep(string-append(name, ".d"), "cc", "-MD", "-MF", string-append(name, ".d"), "-O2", "-c", string-append("$SRC/", string-append(name, ".c")), "-o", string-append(name, ".o"))
+    blob(slurp(string-append(name, ".o")))
+  })
+}
 
-(def (compile name)
-  (force (node
-    (do (perform run-dep (string-append name ".d")
-          "cc" "-MD" "-MF" (string-append name ".d") "-O2" "-c"
-          (string-append "$SRC/" (string-append name ".c"))
-          "-o" (string-append name ".o"))
-        (blob (slurp (string-append name ".o")))))))
 
-(def (link objs)
-  (force (node
-    (do (each (fn (o) (perform write-file (string-append (car o) ".o")
-                        (blob-get (cdr o)))) objs)
-        (do (perform write-file "link.d" "lua: ")
-            (do (perform run-dep "link.d" "sh" "-c"
-                  (string-append "cc -o lua "
-                    (string-append
-                      (foldl2 (fn (acc o) (string-append acc (string-append (car o) ".o ")))
-                              "" objs)
-                      "-lm")))
-                (blob (slurp "lua"))))))))
+def link(objs) {
+  force(node { each(
+fn(o) { perform write-file(string-append(car(o), ".o"), blob-get(cdr(o))) }, objs)
+    do {
+      perform write-file("link.d", "lua: ")
+      do {
+        perform run-dep("link.d", "sh", "-c", string-append("cc -o lua ", string-append(foldl2(
 
-(let [names (string-split (slurp "$SRC/sources.txt") "\n")]
-  (let [objs (force-deep (map2 (fn (n) (cons n (compile n))) names))]
-    (let [lua (link objs)]
-      (foldl2 (fn (m o) (map-insert m (string-append (car o) ".o") (cdr o)))
-              (map-insert (hash-map) "lua" (string-append lua ":x"))
-              objs))))
+fn(acc, o) { string-append(acc, string-append(car(o), ".o ")) }, "", objs), "-lm")))
+        blob(slurp("lua"))
+      }
+    }
+  }) }
+let (names = string-split(slurp("$SRC/sources.txt"), "\n")) { let (objs = force-deep(map2(
+fn(n) { cons(n, compile(n)) }, names))) {
+    let (lua = link(objs)) { foldl2(
+fn(m, o) { map-insert(m, string-append(car(o), ".o"), cdr(o)) }, map-insert({}, "lua", string-append(lua, ":x")), objs)
+    }
+  }
+}
 EOF
 
 G=(--grant "fs:$SRC:ro" --grant "fs:$BUILD:wo" --grant process)

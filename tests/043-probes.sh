@@ -52,11 +52,13 @@ assert() {  # NAME PATTERN present|absent  [FILE]
 # (1) basic register+read, cache/re-force across two runs
 # =====================================================================
 cat > "$TMP/prog.pp" <<EOF
-(register-probe "counter"
-  (fn () (string-trim (slurp "$COUNTER")))
-  (cap-restrict (current-capabilities) "$COUNTER" :ro))
-(perform log
-  (force (node (do (perform log "COMPUTE") (probe "counter")))))
+register-probe("counter",
+fn() { string-trim(slurp("$COUNTER")) }, cap-restrict(current-capabilities(), "$COUNTER", :ro))
+
+perform log(force(node {
+  perform log("COMPUTE")
+  probe("counter")
+}))
 EOF
 
 run() { rm -f "$TMP/out"; "$PP" "$@" --grant "fs:$TMP:ro" "$TMP/prog.pp" > "$TMP/out" 2>&1; }
@@ -103,10 +105,13 @@ PAYLOAD="PROBE-PAYLOAD-9f3d2a1c"
 rm -rf "$TMP/.pp"
 printf '%s\n' "$PAYLOAD" > "$TMP/payload.txt"
 cat > "$TMP/prog-payload.pp" <<EOF
-(register-probe "secretish"
-  (fn () (string-trim (slurp "$TMP/payload.txt")))
-  (cap-restrict (current-capabilities) "$TMP/payload.txt" :ro))
-(perform log (force (node (do (probe "secretish") "checked"))))
+register-probe("secretish",
+fn() { string-trim(slurp("$TMP/payload.txt")) }, cap-restrict(current-capabilities(), "$TMP/payload.txt", :ro))
+
+perform log(force(node {
+  probe("secretish")
+  "checked"
+}))
 EOF
 "$PP" --grant "fs:$TMP:ro" "$TMP/prog-payload.pp" > "$TMP/out" 2>&1
 if grep -rq "$PAYLOAD" "$TMP/.pp/store/objects" "$TMP/.pp/store/traces" 2>/dev/null; then
@@ -123,9 +128,9 @@ fi
 # =====================================================================
 rm -rf "$TMP/.pp"
 cat > "$TMP/prog-unread.pp" <<EOF
-(register-probe "counter" (fn () (string->number (string-trim (slurp "$COUNTER")))) (cap-restrict (current-capabilities) "$COUNTER" :ro))
-(register-probe "unused" (fn () (do (perform log "PROBE-FIRED") 0)) (cap-none))
-(perform log (force (node (probe "counter"))))
+register-probe("counter", fn() { string->number(string-trim(slurp("$COUNTER"))) }, cap-restrict(current-capabilities(), "$COUNTER", :ro))
+register-probe("unused", fn() { perform log("PROBE-FIRED"); 0 }, cap-none())
+perform log(force(node { probe("counter") }))
 EOF
 printf '1\n' > "$COUNTER"
 "$PP" --grant "fs:$TMP:ro" "$TMP/prog-unread.pp" > "$TMP/out" 2>&1
@@ -139,7 +144,7 @@ fi
 # (4) unregistered probe errors, naming it — both backends
 # =====================================================================
 cat > "$TMP/prog-unreg.pp" <<'EOF'
-(print (probe "no-such-probe"))
+print(probe("no-such-probe"))
 EOF
 for bc in "" "--bytecode"; do
   tag=$([ -z "$bc" ] && echo tw || echo vm)
@@ -152,7 +157,7 @@ done
 # (5) register-probe is script-tier only (trace_stack guard)
 # =====================================================================
 cat > "$TMP/prog-in-node.pp" <<EOF
-(force (node (register-probe "x" (fn () 1) (cap-none))))
+force(node { register-probe("x", fn() { 1 }, cap-none()) })
 EOF
 for bc in "" "--bytecode"; do
   tag=$([ -z "$bc" ] && echo tw || echo vm)

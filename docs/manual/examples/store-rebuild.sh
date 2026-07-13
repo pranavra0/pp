@@ -8,8 +8,8 @@ ROOT=$(cd "$HOME" && pwd -P)
 cd "$HOME"
 
 cat > build.pp <<'PP'
-(def greeting (node (slurp "greeting.txt")))
-(print greeting)
+let greeting = node { slurp("greeting.txt") }
+print(greeting)
 PP
 echo hello > greeting.txt
 

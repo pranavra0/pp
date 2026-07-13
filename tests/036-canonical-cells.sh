@@ -51,17 +51,17 @@ run() { "$PP" "$@" > "$TMP/out" 2>&1; }
 # --- (a1) loader authority: a source tree reached via a symlink can `load`
 #          a sibling named via the REAL path, and vice versa (M2 exit
 #          criterion 3: "symlinked trees are undefined behavior" ends here) ---
-printf '(def libval "LIBVAL")\n' > "$SRC/lib.pp"
+printf 'let libval = "LIBVAL"\n' > "$SRC/lib.pp"
 cat > "$SRC/via-link.pp" <<EOF
-(load "$LINK/lib.pp")
-(perform log libval)
+load("$LINK/lib.pp")
+perform log(libval)
 EOF
 run "$SRC/via-link.pp"          # invoked via the REAL path; loads via the SYMLINK
 assert "loader-real-invoke-symlink-load" "LIBVAL" present
 
 cat > "$SRC/via-real.pp" <<EOF
-(load "$SRC/lib.pp")
-(perform log libval)
+load("$SRC/lib.pp")
+perform log(libval)
 EOF
 run "$LINK/via-real.pp"         # invoked via the SYMLINK path; loads via the REAL
 assert "loader-symlink-invoke-real-load" "LIBVAL" present
@@ -70,8 +70,10 @@ assert "loader-symlink-invoke-real-load" "LIBVAL" present
 #          via a different spelling than the run that produced the trace ---
 printf 'DATA1\n' > "$SRC/in.txt"
 cat > "$TMP/build.pp" <<EOF
-(perform log (force (node (do (perform log "RUN")
-                              (hash-map-get (perform run "sh" "-c" "cat $SRC/in.txt") "out")))))
+perform log(force(node {
+  perform log("RUN")
+  hash-map-get(perform run("sh", "-c", "cat $SRC/in.txt"), "out")
+}))
 EOF
 
 rm -rf "$TMP/.pp"
@@ -110,8 +112,10 @@ REALVARDIR=$(cd "$VARDIR" && pwd -P)
 if [ "$REALVARDIR" != "$VARDIR" ]; then
   printf 'DATA2\n' > "$VARDIR/varin.txt"
   cat > "$TMP/varbuild.pp" <<EOF
-(perform log (force (node (do (perform log "RUN")
-                              (hash-map-get (perform run "sh" "-c" "cat $VARDIR/varin.txt") "out")))))
+perform log(force(node {
+  perform log("RUN")
+  hash-map-get(perform run("sh", "-c", "cat $VARDIR/varin.txt"), "out")
+}))
 EOF
   rm -rf "$TMP/.pp"
   run --grant process --grant "fs:$VARDIR:ro" "$TMP/varbuild.pp"
@@ -144,7 +148,7 @@ NEWDIR="$TMP/newdir"
 mkdir -p "$NEWDIR"
 TARGET="$NEWDIR/newfile.txt"
 cat > "$TMP/stat.pp" <<EOF
-(force (node (file-exists? "$TARGET")))
+force(node { file-exists?("$TARGET") })
 EOF
 
 rm -rf "$TMP/.pp"

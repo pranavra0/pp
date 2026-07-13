@@ -8,8 +8,7 @@ export HOME=$(mktemp -d)
 ROOT="$HOME/site"
 
 cat > "$HOME/site.pp" <<'PP'
-{"index.html" "<h1>pp</h1>\n"
- "conf/app.txt" "mode=prod\n"}
+{"index.html" -> "<h1>pp</h1>\n", "conf/app.txt" -> "mode=prod\n"}
 PP
 
 filter() { sed "s#root=[^ ]*#root=ROOT#"; }

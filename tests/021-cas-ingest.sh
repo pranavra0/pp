@@ -35,9 +35,12 @@ run() { "$PP" "$@" > "$TMP/out" 2>&1; }
 # --- (a) torn read: an external writer mutates the file between two nodes;
 #         both nodes observe the SAME (pinned) snapshot ---
 cat > "$TMP/torn.pp" <<EOF
-(perform log (force (node (do (perform log "N1") (slurp "$F")))))
-(perform run "sh" "-c" "printf CHANGED > $F")
-(perform log (force (node (do (perform log "N2") (slurp "$F")))))
+perform log(force(node { perform log("N1"); slurp("$F") }))
+perform run("sh", "-c", "printf CHANGED > $F")
+perform log(force(node {
+  perform log("N2")
+  slurp("$F")
+}))
 EOF
 rm -rf "$TMP/.pp"
 printf 'ORIG' > "$F"
@@ -66,10 +69,13 @@ fi
 #         in-memory CA dedup already memoizes identical read exprs, so
 #         tier-split freshness was never coherent) ---
 cat > "$TMP/tiers.pp" <<EOF
-(force (node (slurp "$F")))
-(perform run "sh" "-c" "printf CHANGED2 > $F")
-(perform log (slurp "$F"))
-(perform log (force (node (do (perform log "N3") (slurp "$F")))))
+force(node { slurp("$F") })
+perform run("sh", "-c", "printf CHANGED2 > $F")
+perform log(slurp("$F"))
+perform log(force(node {
+  perform log("N3")
+  slurp("$F")
+}))
 EOF
 rm -rf "$TMP/.pp"
 printf 'ORIG2' > "$F"
@@ -80,9 +86,12 @@ assert "node-sees-snapshot"      "ORIG2"    present
 # --- (d) pp's own scripting write-file invalidates the pin: later node
 #         reads see the new content ---
 cat > "$TMP/coherent.pp" <<EOF
-(force (node (slurp "$F")))
-(perform write-file "$F" "WRITTEN")
-(perform log (force (node (do (perform log "N4") (slurp "$F")))))
+force(node { slurp("$F") })
+perform write-file("$F", "WRITTEN")
+perform log(force(node {
+  perform log("N4")
+  slurp("$F")
+}))
 EOF
 rm -rf "$TMP/.pp"
 printf 'ORIG3' > "$F"

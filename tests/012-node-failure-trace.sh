@@ -34,7 +34,10 @@ check() {  # NAME  FILE  attempt=present|absent  errsubstr
 # --- (1) failure is memoized: body runs once, same error re-served ---
 rm -rf "$TMP/.pp"
 cat > "$TMP/f.pp" <<'EOF'
-(force (node (do (perform log "ATTEMPT") (car 5))))
+force(node {
+  perform log("ATTEMPT")
+  car(5)
+})
 EOF
 "$PP" "$TMP/f.pp" > "$TMP/o" 2>&1; check "fail-run1-miss"  "$TMP/o" present "car expects a pair"
 "$PP" "$TMP/f.pp" > "$TMP/o" 2>&1; check "fail-run2-reserved" "$TMP/o" absent "car expects a pair"
@@ -49,7 +52,11 @@ fi
 rm -rf "$TMP/.pp"
 printf 'V1\n' > "$TMP/d.txt"
 cat > "$TMP/fr.pp" <<EOF
-(force (node (do (perform log "ATTEMPT") (slurp "$TMP/d.txt") (car 5))))
+force(node {
+  perform log("ATTEMPT")
+  slurp("$TMP/d.txt")
+  car(5)
+})
 EOF
 "$PP" --grant "fs:$TMP:ro" "$TMP/fr.pp" > "$TMP/o" 2>&1; check "failread-run1-miss"    "$TMP/o" present "car expects a pair"
 "$PP" --grant "fs:$TMP:ro" "$TMP/fr.pp" > "$TMP/o" 2>&1; check "failread-run2-reserved" "$TMP/o" absent  "car expects a pair"
@@ -60,8 +67,10 @@ printf 'V2\n' > "$TMP/d.txt"
 rm -rf "$TMP/.pp"
 printf 'bad\n' > "$TMP/n.txt"
 cat > "$TMP/cond.pp" <<EOF
-(force (node (do (perform log "ATTEMPT")
-                 (if (= (slurp "$TMP/n.txt") "ok\n") 42 (car 5)))))
+force(node {
+  perform log("ATTEMPT")
+  if slurp("$TMP/n.txt") = "ok\n" { 42 } else { car(5) }
+})
 EOF
 "$PP" --grant "fs:$TMP:ro" "$TMP/cond.pp" > "$TMP/o" 2>&1; check "cond-fail-first" "$TMP/o" present "car expects a pair"
 printf 'ok\n' > "$TMP/n.txt"

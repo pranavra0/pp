@@ -49,8 +49,10 @@ count_store() {
 run_iter() {  # I
   local i="$1"
   cat > "$TMP/d.pp" <<EOF
-(let [v (force (node (do (perform run "sh" "-c" "echo iter-$i") (number->string $i))))]
-  {"cur.txt" v "churn-$i.txt" "x"})
+let (v = force(node {
+  perform run("sh", "-c", "echo iter-$i")
+  number->string($i)
+})) { {"cur.txt" -> v, "churn-$i.txt" -> "x"} }
 EOF
   "$PP" --grant process --grant "fs:${OUT}:wo" --reconcile "$OUT" "$TMP/d.pp" > "$TMP/iter.out" 2>&1
 }
@@ -112,13 +114,13 @@ rm -rf "$TMP/.pp" "$OUT"; mkdir -p "$OUT"
 for i in $(seq 1 3); do run_iter "$i"; done
 
 cat > "$TMP/race.pp" <<'EOF'
-(def (int-range a b) (if (>= a b) nil (cons a (int-range (+ a 1) b))))
-(def (sum-list lst) (if (nil? lst) 0 (+ (car lst) (sum-list (cdr lst)))))
-(def (mk i)
-  (node
-    (do (perform run "sh" "-c" (string-append "sleep 0.1; echo race-" (number->string i)))
-        i)))
-(print (sum-list (force-deep (map mk (int-range 0 16)))))
+def int-range(a, b) { if a >= b { nil } else { cons(a, int-range(a + 1, b)) } }
+def sum-list(lst) { if nil?(lst) { 0 } else { car(lst) + sum-list(cdr(lst)) } }
+def mk(i) {
+  node {
+    perform run("sh", "-c", string-append("sleep 0.1; echo race-", number->string(i)))
+    i } }
+print(sum-list(force-deep(map(mk, int-range(0, 16)))))
 EOF
 "$PP" --grant process --schedule parallel:8 "$TMP/race.pp" > "$TMP/race-before.out" 2>&1 &
 RACE_PID=$!
@@ -156,9 +158,12 @@ fi
 rm -rf "$TMP/.pp" "$OUT"; mkdir -p "$OUT"
 TRIGGER="$TMP/trigger.txt"; echo "0" > "$TRIGGER"
 cat > "$TMP/watch.pp" <<EOF
-(let [n (slurp "$TRIGGER")
-      v (force (node (do (perform run "sh" "-c" (string-append "echo tick-" n)) n)))]
-  {"cur.txt" v (string-append "churn-" (string-append n ".txt")) "x"})
+let (n = slurp("$TRIGGER"), v = force(node {
+  perform run("sh", "-c", string-append("echo tick-", n))
+  n
+})) {
+  {"cur.txt" -> v, string-append("churn-", string-append(n, ".txt")) -> "x"}
+}
 EOF
 timeout_bin() { command -v timeout >/dev/null 2>&1 && echo timeout || echo ""; }
 TB=$(timeout_bin)

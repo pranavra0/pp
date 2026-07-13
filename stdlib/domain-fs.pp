@@ -1,132 +1,130 @@
-;; stdlib/domain-fs.pp — Q13 filesystem-domain policy (PLAN-m4-cells.md §Q13)
-;;
-;; This is the POLICY that used to live in src/reconciler.ml: what counts as
-;; create/update/delete, how a `blob:<hash>` reference resolves to bytes,
-;; single-writer deletion. The TRUSTED MECHANICS (atomic materialize/remove,
-;; whole-tree observation) are OCaml primitives (src/domain_prims.ml),
-;; reached only via `perform`. main.ml's `--reconcile ROOT` auto-loads this
-;; file (after stdlib/list.pp, map.pp, string.pp) and calls
-;; `register-fs-domain` with ROOT and a write-cap already narrowed via
-;; `cap-restrict`.
-;;
-;;   observe = (perform tree-observe root)   -> {relpath -> content-hash}
-;;   desired = {relpath -> content}  (content: an inline string, or a
-;;             "blob:<sha256>" / "blob:<sha256>:x" CAS reference from the
-;;             `blob` primitive — :x materializes with the executable bit)
-;;   diff    = create/update/delete by content hash, PURE — its only
-;;             inputs are `observed`/`desired` plus `root` (captured
-;;             lexically by register-fs-domain, not threaded as a diff
-;;             argument — Q13's diff signature stays (observed, desired))
-;;   apply   = materialize-file / remove-file per item
+# stdlib/domain-fs.pp — Q13 filesystem-domain policy (PLAN-m4-cells.md §Q13)
+#
+# This is the POLICY that used to live in src/reconciler.ml: what counts as
+# create/update/delete, how a `blob:<hash>` reference resolves to bytes,
+# single-writer deletion. The TRUSTED MECHANICS (atomic materialize/remove,
+# whole-tree observation) are OCaml primitives (src/domain_prims.ml),
+# reached only via `perform`. main.ml's `--reconcile ROOT` auto-loads this
+# file (after stdlib/list.pp, map.pp, string.pp) and calls
+# `register-fs-domain` with ROOT and a write-cap already narrowed via
+# `cap-restrict`.
+#
+# observe = (perform tree-observe root)   -> {relpath -> content-hash}
+# desired = {relpath -> content}  (content: an inline string, or a
+# "blob:<sha256>" / "blob:<sha256>:x" CAS reference from the
+# `blob` primitive — :x materializes with the executable bit)
+# diff    = create/update/delete by content hash, PURE — its only
+# inputs are `observed`/`desired` plus `root` (captured
+# lexically by register-fs-domain, not threaded as a diff
+# argument — Q13's diff signature stays (observed, desired))
+# apply   = materialize-file / remove-file per item
 
-;; ---- blob: reference parsing ----
+# ---- blob: reference parsing ----
 
-(def (fs-blob-ref? c) (starts-with? c "blob:"))
+def fs-blob-ref?(c) { starts-with?(c, "blob:") }
 
-(def (fs-blob-ref-hash c)
-  (let [rest (string-sub c 5 (- (string-length c) 5))]
-    (if (ends-with? rest ":x")
-        (string-sub rest 0 (- (string-length rest) 2))
-        rest)))
+def fs-blob-ref-hash(c) {
+  let (rest = string-sub(c, 5, string-length(c) - 5)) {
+    if ends-with?(rest, ":x") { string-sub(rest, 0, string-length(rest) - 2) } else {
+      rest
+    }
+  } }
+def fs-blob-ref-executable?(c) {
+  if fs-blob-ref?(c) { ends-with?(c, ":x") } else { false }
+}
+# A desired content's identity hash: a blob ref diffs BY HASH, without
+# loading bytes (exit criterion 4 — `rm -rf build/` restores from the CAS
+# with zero tool re-runs); inline content hashes its own bytes, the SAME
+# algorithm (hash-string, SHA-256) `tree-observe` used to hash the file on
+# disk, so the two sides of the diff compare like for like.
+def fs-content-hash(c) {
+  if fs-blob-ref?(c) { fs-blob-ref-hash(c) } else { hash-string(c) }
+}
+# Bytes are pulled from the store only when a write is actually needed
+# (apply time), never during diff.
+def fs-content-bytes(c) {
+  if fs-blob-ref?(c) { blob-get(string-append("blob:", fs-blob-ref-hash(c))) } else {
+    c
+# ---- desired-path validation (relative, no traversal) ----
+  } }
+def fs-validate-rel-part(rel, part) {
+  if part = ".." {
+    error(string-append("reconcile: '..' not allowed in desired path: ", rel))
+  }
+}
+def fs-validate-rel(rel) {
+  if rel = "" { error("reconcile: empty path in desired map") } else if starts-with?(rel, "/") {
+    error(string-append("reconcile: desired paths must be relative to the domain root: ", rel))
+  } else {
+    each(
 
-(def (fs-blob-ref-executable? c)
-  (and (fs-blob-ref? c) (ends-with? c ":x")))
+fn(part) { fs-validate-rel-part(rel, part) }, string-split(rel, "/"))
+  }
+# ---- diff ----
+}
+def fs-plan-item(kind, rel, content) {
+  {:kind -> kind, :rel -> rel, :content -> content}
+}
+# A closure over `root`: diff's PUBLIC shape stays (observed desired) ->
+# plan (Q13), root is baked in at registration time, not passed at every
+# call — this is what lets the plan's :summary include "root=" and still
+# leaves diff free of any implicit ambient dependency (root is a plain
+# lexical capture, like any other closed-over value).
+def fs-diff-for(root) {
+  fn(observed, desired) {
+    each(fs-validate-rel, map-keys(desired))
+    let (dkeys = map-keys(desired), okeys = map-keys(observed), creates = filter(
 
-;; A desired content's identity hash: a blob ref diffs BY HASH, without
-;; loading bytes (exit criterion 4 — `rm -rf build/` restores from the CAS
-;; with zero tool re-runs); inline content hashes its own bytes, the SAME
-;; algorithm (hash-string, SHA-256) `tree-observe` used to hash the file on
-;; disk, so the two sides of the diff compare like for like.
-(def (fs-content-hash c)
-  (if (fs-blob-ref? c) (fs-blob-ref-hash c) (hash-string c)))
 
-;; Bytes are pulled from the store only when a write is actually needed
-;; (apply time), never during diff.
-(def (fs-content-bytes c)
-  (if (fs-blob-ref? c) (blob-get (string-append "blob:" (fs-blob-ref-hash c))) c))
+fn(rel) { nil?(hash-map-get(observed, rel)) }, dkeys), existing = filter(
+fn(rel) { not(nil?(hash-map-get(observed, rel))) }, dkeys), updates = filter(
+fn(rel) {
+      not(hash-map-get(observed, rel) = fs-content-hash(hash-map-get(desired, rel)))
+    }, existing), deletes = filter(
 
-;; ---- desired-path validation (relative, no traversal) ----
+fn(rel) { nil?(hash-map-get(desired, rel)) }, okeys), items = append(map(
 
-(def (fs-validate-rel-part rel part)
-  (if (= part "..")
-      (error (string-append "reconcile: '..' not allowed in desired path: " rel))
-      nil))
+fn(rel) { fs-plan-item("create", rel, hash-map-get(desired, rel)) }, creates), append(map(
 
-(def (fs-validate-rel rel)
-  (if (= rel "")
-      (error "reconcile: empty path in desired map")
-      (if (starts-with? rel "/")
-          (error (string-append
-                   "reconcile: desired paths must be relative to the domain root: " rel))
-          (each (fn (part) (fs-validate-rel-part rel part)) (string-split rel "/")))))
+fn(rel) { fs-plan-item("update", rel, hash-map-get(desired, rel)) }, updates), map(
+fn(rel) { fs-plan-item("delete", rel, nil) }, deletes)))) {
+      {:items -> items, :summary -> [[:root, root], [:create, number->string(length(creates))], [:update, number->string(length(updates))], [:delete, number->string(length(deletes))]]}
+# A VECTOR of [key value] pairs, not a map — plan caching
+# round-trips a cache MISS's result through the store, and
+# Codec's on-disk format canonicalizes (sorts) a VMap's entries
+# but preserves a VVector's order (domains.ml), so a cache HIT
+# must not be allowed to reorder this or the "root=R create=C
+# update=U delete=D" journal/print byte-compatibility breaks on
+# exactly the passes that matter most (repeated/null reconciles).
+    }
+  }
+}
 
-;; ---- diff ----
 
-(def (fs-plan-item kind rel content)
-  {:kind kind :rel rel :content content})
+# ---- apply ----
 
-;; A closure over `root`: diff's PUBLIC shape stays (observed desired) ->
-;; plan (Q13), root is baked in at registration time, not passed at every
-;; call — this is what lets the plan's :summary include "root=" and still
-;; leaves diff free of any implicit ambient dependency (root is a plain
-;; lexical capture, like any other closed-over value).
-(def (fs-diff-for root)
-  (fn (observed desired)
-    (do
-      (each fs-validate-rel (map-keys desired))
-      (let [dkeys (map-keys desired)
-            okeys (map-keys observed)
-            creates (filter (fn (rel) (nil? (hash-map-get observed rel))) dkeys)
-            existing (filter (fn (rel) (not (nil? (hash-map-get observed rel)))) dkeys)
-            updates (filter (fn (rel)
-                               (not (= (hash-map-get observed rel)
-                                       (fs-content-hash (hash-map-get desired rel)))))
-                             existing)
-            deletes (filter (fn (rel) (nil? (hash-map-get desired rel))) okeys)
-            items (append
-                    (map (fn (rel) (fs-plan-item "create" rel (hash-map-get desired rel))) creates)
-                    (append
-                      (map (fn (rel) (fs-plan-item "update" rel (hash-map-get desired rel))) updates)
-                      (map (fn (rel) (fs-plan-item "delete" rel nil)) deletes)))]
-        {:items items
-         ;; A VECTOR of [key value] pairs, not a map — plan caching
-         ;; round-trips a cache MISS's result through the store, and
-         ;; Codec's on-disk format canonicalizes (sorts) a VMap's entries
-         ;; but preserves a VVector's order (domains.ml), so a cache HIT
-         ;; must not be allowed to reorder this or the "root=R create=C
-         ;; update=U delete=D" journal/print byte-compatibility breaks on
-         ;; exactly the passes that matter most (repeated/null reconciles).
-         :summary [[:root root]
-                   [:create (number->string (length creates))]
-                   [:update (number->string (length updates))]
-                   [:delete (number->string (length deletes))]]}))))
+def fs-apply-item(root, item) {
+  let (kind = hash-map-get(item, :kind), rel = hash-map-get(item, :rel), path = string-append(root, "/", rel)) {
+    if kind = "delete" { perform remove-file(path) } else {
+      let (content = hash-map-get(item, :content), bytes = fs-content-bytes(content)) {
+        if fs-blob-ref-executable?(content) {
+          perform materialize-file(path, bytes, :executable)
+        } else { perform materialize-file(path, bytes) }
+      }
+    }
+  }
+}
 
-;; ---- apply ----
+def fs-apply-for(root) {
+  fn(plan) { each(fn(item) { fs-apply-item(root, item) }, hash-map-get(plan, :items))
+  }
+# ---- registration ----
+}
+def register-fs-domain(root, write-cap) {
+  register-domain({:name -> "fs", :namespace -> [string-append("file:", root), string-append("tree:", root), string-append("stat:", root)], :observe -> (
 
-(def (fs-apply-item root item)
-  (let [kind (hash-map-get item :kind)
-        rel (hash-map-get item :rel)
-        path (string-append root "/" rel)]
-    (if (= kind "delete")
-        (perform remove-file path)
-        (let [content (hash-map-get item :content)
-              bytes (fs-content-bytes content)]
-          (if (fs-blob-ref-executable? content)
-              (perform materialize-file path bytes :executable)
-              (perform materialize-file path bytes))))))
 
-(def (fs-apply-for root)
-  (fn (plan) (each (fn (item) (fs-apply-item root item)) (hash-map-get plan :items))))
 
-;; ---- registration ----
 
-(def (register-fs-domain root write-cap)
-  (register-domain
-    {:name "fs"
-     :namespace [(string-append "file:" root)
-                 (string-append "tree:" root)
-                 (string-append "stat:" root)]
-     :observe (fn () (perform tree-observe root))
-     :diff (fs-diff-for root)
-     :apply (fs-apply-for root)
-     :write-cap write-cap}))
+fn() { perform tree-observe(root) }), :diff -> fs-diff-for(root), :apply -> fs-apply-for(root), :write-cap -> write-cap})
+}

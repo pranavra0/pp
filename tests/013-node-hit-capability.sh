@@ -39,7 +39,7 @@ assert() {  # NAME  secret=leaked|safe  access=ok|denied
 
 # --- direct: node reads the secret ---
 cat > "$TMP/direct.pp" <<EOF
-(perform log (force (node (slurp "$TMP/secret/data.txt"))))
+perform log(force(node { slurp("$TMP/secret/data.txt") }))
 EOF
 rm -rf "$TMP/.pp"
 "$PP" --grant "fs:$TMP:ro"        "$TMP/direct.pp" > "$TMP/o" 2>&1; assert "broad-run-caches"     leaked ok
@@ -48,8 +48,10 @@ rm -rf "$TMP/.pp"
 
 # --- transitive: outer node forces an inner node that reads the secret ---
 cat > "$TMP/nest.pp" <<EOF
-(perform log (force (node (do (perform log "OUTER")
-                              (force (node (slurp "$TMP/secret/data.txt")))))))
+perform log(force(node {
+  perform log("OUTER")
+  force(node { slurp("$TMP/secret/data.txt") })
+}))
 EOF
 rm -rf "$TMP/.pp"
 "$PP" --grant "fs:$TMP:ro"       "$TMP/nest.pp" > "$TMP/o" 2>&1; assert "nest-broad-caches"   leaked ok

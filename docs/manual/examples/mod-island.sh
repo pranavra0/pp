@@ -7,13 +7,14 @@
 # throwaway HOME (which also holds the island cache).
 export HOME=$(mktemp -d)
 mkdir -p "$HOME/lib"
-printf '(def (greet who) (string-append "hello, " who))\n' > "$HOME/lib/entry.pp"
+printf 'def greet(who) { string-append("hello, ", who) }\n' > "$HOME/lib/entry.pp"
 cd "$HOME"
 
 cat > app.pp <<'PP'
-(let [m (island file:./lib)]
-  (import m)
-  (print (greet "world")))
+let (m = island("file:./lib")) {
+  import(m)
+  print(greet("world"))
+}
 PP
 
 echo '$ pp island-pins app.pp   # the form is unpinned'

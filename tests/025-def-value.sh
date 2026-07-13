@@ -43,12 +43,12 @@ assert_err() {
 
 # ---- (a) value binding, sequential top level ----
 cat > "$TMP/a.pp" <<'EOF'
-(def x 5)
-(print x)
-(def y (+ x 1))
-(print y)
-(def (f n) (+ n x))
-(print (f 10))
+let x = 5
+print(x)
+let y = x + 1
+print(y)
+def f(n) { n + x }
+print(f(10))
 EOF
 expected=$'5\n6\n15'
 assert_out "value-binding-tw" ""           "$TMP/a.pp" "$expected"
@@ -56,9 +56,9 @@ assert_out "value-binding-vm" "--bytecode" "$TMP/a.pp" "$expected"
 
 # ---- (b) RHS runs at def time; delay is not forced ----
 cat > "$TMP/b.pp" <<'EOF'
-(def eff (print 111))
-(def d (delay (print 999)))
-(print 222)
+let eff = print(111)
+let d = delay(print(999))
+print(222)
 EOF
 expected=$'111\n222'
 assert_out "def-time-effects-tw" ""           "$TMP/b.pp" "$expected"
@@ -66,34 +66,36 @@ assert_out "def-time-effects-vm" "--bytecode" "$TMP/b.pp" "$expected"
 
 # ---- (c) letrec* block scope + referenced-before-definition error ----
 cat > "$TMP/c.pp" <<'EOF'
-(def (g n)
-  (do (def (h k) (+ k m))
-      (def m (* n 2))
-      (h 1)))
-(print (g 5))
+def g(n) {
+  def h(k) { k + m }
+  let m = n * 2
+  h(1) }
+print(g(5))
 EOF
 expected="11"
 assert_out "block-letrec-tw" ""           "$TMP/c.pp" "$expected"
 assert_out "block-letrec-vm" "--bytecode" "$TMP/c.pp" "$expected"
 
 cat > "$TMP/c2.pp" <<'EOF'
-(print (do (def a (+ b 1)) (def b 2) a))
+print(do { let a = b + 1; let b = 2
+  a
+})
 EOF
 assert_err "premature-ref-tw" ""           "$TMP/c2.pp" "b: referenced before its definition"
 assert_err "premature-ref-vm" "--bytecode" "$TMP/c2.pp" "b: referenced before its definition"
 
 # duplicate value-def name in one block is a reader error
 cat > "$TMP/c3.pp" <<'EOF'
-(print (do (def a 1) (def a 2) a))
+print(do { let a = 1; let a = 2; a })
 EOF
 assert_err "block-duplicate-def-tw" ""           "$TMP/c3.pp" "duplicate definition"
 assert_err "block-duplicate-def-vm" "--bytecode" "$TMP/c3.pp" "duplicate definition"
 
 # ---- (d) defnode binds the node thunk; forcing caches in the store ----
 cat > "$TMP/d.pp" <<'EOF'
-(defnode n (do (perform log "COMPUTE") 42))
-(print 1)
-(print (force n))
+let n = node { perform log("COMPUTE"); 42 }
+print(1)
+print(force(n))
 EOF
 rm -rf "$TMP/.pp"
 out=$("$PP" "$TMP/d.pp" 2>"$TMP/err")
@@ -112,8 +114,8 @@ else bad "vm-defnode-run2-hits" "out: $out" "err: $(cat "$TMP/err")"; fi
 
 # ---- (e) top-level forward reference from a value def errors ----
 cat > "$TMP/e.pp" <<'EOF'
-(def a (+ later 1))
-(def later 2)
+let a = later + 1
+let later = 2
 EOF
 assert_err "toplevel-forward-ref-tw" ""           "$TMP/e.pp" "unbound symbol: later"
 assert_err "toplevel-forward-ref-vm" "--bytecode" "$TMP/e.pp" "unbound symbol: later"

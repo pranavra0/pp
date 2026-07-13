@@ -38,25 +38,28 @@ both() {  # NAME ARGS... — run under both backends, diff, leave output in $TMP
 }
 
 # --- fixture island ---
+# M7 S3: `.pp` now dispatches to the brace reader, so every embedded
+# program below is brace syntax (`island("URI"[, "PIN"])` per the L55
+# lowering table — braces spell URIs as strings).
 mkdir -p lib
 cat > lib/entry.pp <<'EOF'
-(def isl-x 42)
-(def (isl-double n) (* n 2))
+let isl-x = 42
+def isl-double(n) { n * 2 }
 EOF
 
 # --- (1) parse & scheme dispatch ---
-echo '(island nope:foo "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")' > bad-scheme.pp
+echo 'island("nope:foo", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")' > bad-scheme.pp
 both "scheme" bad-scheme.pp
 assert "scheme-error" "island: unknown scheme in URI: nope:foo" present
 
-echo '(island file:./lib v1.0)' > bad-pin.pp
+echo 'island("file:./lib", "v1.0")' > bad-pin.pp
 both "bad-pin" bad-pin.pp
 assert "bad-pin-error" "pin for file:./lib must be a 64-hex content hash" present
 
 # --- (2) unpinned is a hard error naming the fix ---
 cat > prog.pp <<'EOF'
-(import (island file:./lib))
-(print (isl-double isl-x))
+import(island("file:./lib"))
+print(isl-double(isl-x))
 EOF
 both "unpinned" prog.pp
 assert "unpinned-error" "island: no pin for file:./lib; run pp --update" present
@@ -72,8 +75,8 @@ assert "pinned-value" "^84$" present
 # --- (4) pin is content-addressed & stable ---
 cp -R lib lib2
 cat > prog2.pp <<'EOF'
-(import (island file:./lib2))
-(print isl-x)
+import(island("file:./lib2"))
+print(isl-x)
 EOF
 "$PP" --update prog2.pp > /dev/null 2>&1
 PIN2=$(grep -oE '[0-9a-f]{64}' prog2.pp | head -1)
@@ -82,8 +85,8 @@ else echo "FAIL pin-stable: identical trees pinned differently ($PIN vs $PIN2)";
 
 # --- (5) island import is a node boundary (cold run, hit, VM shares) ---
 cat > nprog.pp <<EOF
-(import (island file:./lib "$PIN"))
-(perform log (force (node (do (perform log "RUN") (number->string (* isl-x 2))))))
+import(island("file:./lib", "$PIN"))
+perform log(force(node { perform log("RUN"); number->string(isl-x * 2) }))
 EOF
 rm -rf "$TMP/.pp/store"
 "$PP" nprog.pp > "$TMP/out" 2>&1
@@ -96,7 +99,7 @@ assert "node-vm-shared-hit" "RUN" absent
 assert "node-vm-value" "84" present
 
 # --- (6) editing the source dir does nothing (pinned); --update re-pins ---
-printf '(def isl-x 99)\n(def (isl-double n) (* n 2))\n' > lib/entry.pp
+printf 'let isl-x = 99\ndef isl-double(n) { n * 2 }\n' > lib/entry.pp
 both "pinned-frozen" prog.pp
 assert "pinned-frozen-value" "^84$" present
 "$PP" why prog.pp > "$TMP/out" 2>&1
@@ -121,7 +124,7 @@ both "offline" prog.pp
 assert "offline-value" "^198$" present
 
 # --- (9) pinned-but-uncached git island errors cleanly with fetch off ---
-echo '(island <github:foo/bar#main> "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")' > g.pp
+echo 'island("github:foo/bar#main", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")' > g.pp
 both "git-uncached" g.pp
 assert "git-uncached-error" "not in the cache; run pp --fetch-islands" present
 
@@ -133,13 +136,13 @@ assert "island-pins" "file:./lib\s+$NEWPIN\s+cached" present
 if [ "${PP_ISLAND_NET_TEST:-0}" = "1" ]; then
   mkdir -p srcrepo && cd srcrepo
   git init -q 2>/dev/null && git config user.email t@t && git config user.name t
-  echo '(def isl-net 7)' > entry.pp
+  echo 'let isl-net = 7' > entry.pp
   git add entry.pp && git commit -qm one
   cd "$TMP"
   git clone -q --bare srcrepo remote.git
   cat > netprog.pp <<EOF
-(import (island <git:$TMP/remote.git#master>))
-(print isl-net)
+import(island("git:$TMP/remote.git#master"))
+print(isl-net)
 EOF
   "$PP" netprog.pp > "$TMP/out" 2>&1
   assert "net-unpinned-error" "no pin for" present

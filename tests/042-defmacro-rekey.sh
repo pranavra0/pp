@@ -41,14 +41,14 @@ assert() {  # NAME FILE PATTERN present|absent
 # ONLY in the macro's own definition — the call site `(build-step)` is
 # byte-identical in both files.
 cat > "$TMP/v1.pp" <<'EOF'
-(defmacro (build-step)
-  '(do (perform log "COMPUTE") 1))
-(print (force (node (build-step))))
+defmacro build-step() {
+  quote { do { perform log("COMPUTE"); 1 } } }
+print(force(node { build-step() }))
 EOF
 cat > "$TMP/v2.pp" <<'EOF'
-(defmacro (build-step)
-  '(do (perform log "COMPUTE") 2))
-(print (force (node (build-step))))
+defmacro build-step() {
+  quote { do { perform log("COMPUTE"); 2 } } }
+print(force(node { build-step() }))
 EOF
 
 for flag in "" "--bytecode"; do
@@ -84,7 +84,7 @@ done
 
 # --- macro-in-node-body: an ordinary unbound-symbol error, both backends ---
 cat > "$TMP/innode.pp" <<'EOF'
-(print (force (node (defmacro (m x) x))))
+print(force(node { defmacro m(x) { x } }))
 EOF
 "$PP" "$TMP/innode.pp" > "$TMP/inn-tw" 2>&1
 assert "macro-in-node-tw-error" "$TMP/inn-tw" "unbound symbol: defmacro" present

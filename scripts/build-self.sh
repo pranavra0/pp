@@ -24,12 +24,13 @@ fail=0
 execs() { grep -c "^exec " "$J" 2>/dev/null; true; }
 
 cat > "$TMP/build-self.pp" <<EOF
-(let [pp-bin (force (node
-    (do (perform log "DUNE-BUILD")
-        (do (perform run "sh" "-c"
-              "out=\$(pwd); cd $REPO && HOME=$REAL_HOME opam exec -- dune build 2>&1 && cp _build/default/src/main.exe \"\$out/pp.bin\"")
-            (blob (slurp "pp.bin"))))))]
-  (map-insert (hash-map) "pp" (string-append pp-bin ":x")))
+let (pp-bin = force(node {
+  perform log("DUNE-BUILD")
+  do {
+    perform run("sh", "-c", "out=\$(pwd); cd $REPO && HOME=$REAL_HOME opam exec -- dune build 2>&1 && cp _build/default/src/main.exe \"\$out/pp.bin\"")
+    blob(slurp("pp.bin"))
+  }
+})) { map-insert({}, "pp", string-append(pp-bin, ":x")) }
 EOF
 
 G=(--grant "fs:$REPO/src:ro" --grant "fs:$OUT:wo" --grant process)

@@ -37,10 +37,18 @@ printf 'H1\n' > "$TMP/h.h"
 printf 'BODY\n' > "$TMP/a.c"
 
 cat > "$TMP/build.pp" <<EOF
-(let [obj (force (node (do (perform log "COMPILE")
-                           (do (slurp "$TMP/h.h") (slurp "$TMP/a.c")))))]
-  (perform log (force (node (do (perform log "LINK")
-                                (string-append "linked:" obj))))))
+let (obj = force(node {
+  perform log("COMPILE")
+  do {
+    slurp("$TMP/h.h")
+    slurp("$TMP/a.c")
+  }
+})) {
+  perform log(force(node {
+    perform log("LINK")
+    string-append("linked:", obj)
+  }))
+}
 EOF
 
 run() { "$PP" "$@" --grant "fs:$TMP:ro" "$TMP/build.pp" > "$TMP/out" 2>&1; }

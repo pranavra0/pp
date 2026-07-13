@@ -27,7 +27,10 @@ assert() {  # NAME  file  present|absent
 # --- (1) VM caches a pure node across runs ---
 rm -rf "$TMP/.pp"
 cat > "$TMP/pure.pp" <<'EOF'
-(force (node (do (perform log "COMPUTE") 42)))
+force(node {
+  perform log("COMPUTE")
+  42
+})
 EOF
 "$PP" --bytecode "$TMP/pure.pp" > "$TMP/o" 2>&1; assert "vm-pure-run1-miss" "$TMP/o" present
 "$PP" --bytecode "$TMP/pure.pp" > "$TMP/o" 2>&1; assert "vm-pure-run2-hit"  "$TMP/o" absent
@@ -35,7 +38,10 @@ EOF
 # --- (2) VM staleness: edit a read file ⇒ recompute ---
 rm -rf "$TMP/.pp"; printf 'V1\n' > "$TMP/d.txt"
 cat > "$TMP/rd.pp" <<EOF
-(force (node (do (perform log "COMPUTE") (slurp "$TMP/d.txt"))))
+force(node {
+  perform log("COMPUTE")
+  slurp("$TMP/d.txt")
+})
 EOF
 "$PP" --bytecode --grant "fs:$TMP:ro" "$TMP/rd.pp" > "$TMP/o" 2>&1; assert "vm-read-run1-miss" "$TMP/o" present
 "$PP" --bytecode --grant "fs:$TMP:ro" "$TMP/rd.pp" > "$TMP/o" 2>&1; assert "vm-read-run2-hit"  "$TMP/o" absent
@@ -45,20 +51,36 @@ printf 'V2\n' > "$TMP/d.txt"
 # --- (3) VM LAW 20: unrelated global ∉ key; referenced free var ∈ key ---
 rm -rf "$TMP/.pp"
 cat > "$TMP/g1.pp" <<'EOF'
-(def unrelated 1)
-(force (node (do (perform log "COMPUTE") 7)))
+let unrelated = 1
+force(node {
+  perform log("COMPUTE")
+  7
+})
 EOF
 cat > "$TMP/g2.pp" <<'EOF'
-(def unrelated 2)
-(force (node (do (perform log "COMPUTE") 7)))
+let unrelated = 2
+force(node {
+  perform log("COMPUTE")
+  7
+})
 EOF
 "$PP" --bytecode "$TMP/g1.pp" > "$TMP/o" 2>&1; assert "vm-law20-run1-miss"       "$TMP/o" present
 "$PP" --bytecode "$TMP/g2.pp" > "$TMP/o" 2>&1; assert "vm-law20-unrelated-hit"   "$TMP/o" absent
 cat > "$TMP/v1.pp" <<'EOF'
-(let [x 1] (force (node (do (perform log "COMPUTE") x))))
+let (x = 1) {
+  force(node {
+    perform log("COMPUTE")
+    x
+  })
+}
 EOF
 cat > "$TMP/v2.pp" <<'EOF'
-(let [x 2] (force (node (do (perform log "COMPUTE") x))))
+let (x = 2) {
+  force(node {
+    perform log("COMPUTE")
+    x
+  })
+}
 EOF
 rm -rf "$TMP/.pp"
 "$PP" --bytecode "$TMP/v1.pp" > "$TMP/o" 2>&1; assert "vm-law20-x1-miss" "$TMP/o" present
@@ -67,7 +89,10 @@ rm -rf "$TMP/.pp"
 # --- (4) VM failure memoization ---
 rm -rf "$TMP/.pp"
 cat > "$TMP/fail.pp" <<'EOF'
-(force (node (do (perform log "COMPUTE") (car 5))))
+force(node {
+  perform log("COMPUTE")
+  car(5)
+})
 EOF
 "$PP" --bytecode "$TMP/fail.pp" > "$TMP/o" 2>&1
 if grep -q "COMPUTE" "$TMP/o" && grep -q "car expects a pair" "$TMP/o"; then echo "ok   vm-fail-run1"; else echo "FAIL vm-fail-run1"; cat "$TMP/o"; fail=1; fi
@@ -77,7 +102,7 @@ if ! grep -q "COMPUTE" "$TMP/o" && grep -q "car expects a pair" "$TMP/o"; then e
 # --- (5) VM hit-time capability gate (no secret leak) ---
 rm -rf "$TMP/.pp"; mkdir -p "$TMP/secret" "$TMP/other"; printf 'SECRETDATA\n' > "$TMP/secret/s.txt"
 cat > "$TMP/sec.pp" <<EOF
-(perform log (force (node (slurp "$TMP/secret/s.txt"))))
+perform log(force(node { slurp("$TMP/secret/s.txt") }))
 EOF
 "$PP" --bytecode --grant "fs:$TMP:ro"       "$TMP/sec.pp" > "$TMP/o" 2>&1
 if grep -q "SECRETDATA" "$TMP/o"; then echo "ok   vm-cap-broad-caches"; else echo "FAIL vm-cap-broad-caches"; cat "$TMP/o"; fail=1; fi
@@ -87,7 +112,10 @@ if ! grep -q "SECRETDATA" "$TMP/o" && grep -q "permission denied" "$TMP/o"; then
 # --- (6) cross-backend key sharing (data node) ---
 rm -rf "$TMP/.pp"
 cat > "$TMP/shared.pp" <<'EOF'
-(force (node (do (perform log "COMPUTE") 123)))
+force(node {
+  perform log("COMPUTE")
+  123
+})
 EOF
 "$PP"            "$TMP/shared.pp" > "$TMP/o" 2>&1; assert "share-tw-populates" "$TMP/o" present
 "$PP" --bytecode "$TMP/shared.pp" > "$TMP/o" 2>&1; assert "share-vm-hits-tw"  "$TMP/o" absent

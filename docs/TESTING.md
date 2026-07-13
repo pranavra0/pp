@@ -485,6 +485,23 @@ byte-identical), and a whole-tree in-place round-trip sweep asserting every
 top-level form's `hash_expr` survives `to-braces` then `to-sexpr` — the two
 internal test seams `--compare-hash`/`--list-comments` exist only for this.
 
+**M7 S3 — the tree is brace surface; `.pp` dispatches to the brace reader.**
+Every `.pp` file in the tree (tests, stdlib, build.pp, demo, examples, the
+manual's executed examples, the store-v1 golden fixture) was migrated
+mechanically via `pp fmt --to-braces -i` — no file renamed (LAW-20 hashes
+the `ELocated` file name, so `pp fmt -i` at the same path preserves every
+node key; `scripts/build-self.sh` and `scripts/build-lua.sh` null-rebuild
+with 0 recomputes against a store populated pre-migration). Extension
+dispatch (`Reader_braces.read_dispatch`): `.pp` and `.ppb` read as braces,
+`.ppl` ("the AST form") reads as sexpr — supported forever, it IS the macro
+layer. Non-file sources (interactive/piped REPL input, `-e`, the
+`--reconcile` glue's synthetic `<...>` tags) still read as sexpr — flipping
+those display/input surfaces is S4's remaining scope. Shell tests' embedded
+programs were converted to braces except where a case specifically targets
+the sexpr surface (tests/054's cross-surface fixtures and
+`--roundtrip-braces`/`--emit-braces` inputs, which take `.ppl`); the fuzzer
+writes its generated sexpr programs to `.ppl` scratch files.
+
 The fuzzer shells out to the interpreter, defaulting to `bin/pp` (the symlink
 `dune build` targets). Run from the repo root, or pass `--pp PATH`.
 
@@ -562,10 +579,10 @@ thousands of failures collapse to a handful of bug classes.
 
 ```
 fuzz-failures/<sanitized-signature>/
-  <iter>.pp          # up to 3 raw failing programs
+  <iter>.ppl         # up to 3 raw failing programs (sexpr — M7 S3)
   <iter>.tw.out      # tree-walker status + stdout + stderr
   <iter>.bc.out      # VM status + stdout + stderr
-  min.pp             # shrunk minimal repro (not for BOTH-ERROR)
+  min.ppl            # shrunk minimal repro (not for BOTH-ERROR)
   min.tw.out / min.bc.out
 ```
 
@@ -581,10 +598,15 @@ Every artifact records its iteration number. To regenerate program 1234 of a
 `--seed 0 --grammar full` run:
 
 ```sh
-dune exec ./tools/fuzz.exe -- --grammar full --seed 0 --dump 1234 > repro.pp
+dune exec ./tools/fuzz.exe -- --grammar full --seed 0 --dump 1234 > repro.ppl
 dune exec ./tools/fuzz.exe -- --grammar full --seed 0 --start 1234 --count 1
-pp repro.pp; pp --bytecode repro.pp
+pp repro.ppl; pp --bytecode repro.ppl
 ```
+
+(M7 S3: fuzzer-generated programs are sexpr text, so the redirected file
+takes the `.ppl` extension — `.pp` now dispatches to the brace reader.
+Failure artifacts under `fuzz-failures/` are likewise named `<iter>.ppl`/
+`min.ppl`.)
 
 `--max-depth` and `--stdlib` must match the original run for byte-identity.
 

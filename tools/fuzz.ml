@@ -540,10 +540,15 @@ let island_fixture : (string * string) option Lazy.t = lazy (
     let dir = Filename.temp_file "ppfuzz-island" "" in
     Sys.remove dir;
     Unix.mkdir dir 0o755;
+    (* M7 S3: `.pp` now dispatches to the brace reader, so the fixture's
+       entry file (found by island.ml's entry_file via the literal name
+       "entry.pp") must hold brace-surface text. The seed file below stays
+       sexpr — it's read by `pp --update` as an argument file, so it gets
+       the `.ppl` extension (sexpr, forever supported) instead. *)
     let oc = open_out (Filename.concat dir "entry.pp") in
-    output_string oc "(def isl-x 42)\n(def (isl-add n) (+ n 5))\n";
+    output_string oc "let isl-x = 42\ndef isl-add(n) { n + 5 }\n";
     close_out oc;
-    let seed_f = Filename.temp_file "ppfuzz-island-seed" ".pp" in
+    let seed_f = Filename.temp_file "ppfuzz-island-seed" ".ppl" in
     let oc = open_out seed_f in
     output_string oc ("(import (island file:" ^ dir ^ "))\n(print isl-x)\n");
     close_out oc;
@@ -1073,7 +1078,13 @@ let shrink_candidates (forms : sx list) : sx list list =
   ) forms;
   List.rev !cands
 
-let prog_file = lazy (Filename.temp_file "ppfuzz" ".pp")
+(* M7 S3: `.pp` now dispatches to the brace reader; every program this
+   fuzzer generates is sexpr text (the `sx` tree's printer emits classic
+   S-expressions), so the scratch file keeps the `.ppl` extension — the
+   sexpr surface is still fully supported, just no longer the default for
+   `.pp`. `--roundtrip-braces` (below) also relies on this: it refuses a
+   file whose extension already dispatches to the brace reader. *)
+let prog_file = lazy (Filename.temp_file "ppfuzz" ".ppl")
 
 let run_both (src : string) : outcome * outcome =
   let f = Lazy.force prog_file in
@@ -1219,7 +1230,7 @@ let () =
          mkdir_p dir;
          if info.examples < 3 then begin
            info.examples <- info.examples + 1;
-           write_file (Filename.concat dir (Printf.sprintf "%d.pp" i)) src;
+           write_file (Filename.concat dir (Printf.sprintf "%d.ppl" i)) src;
            write_file (Filename.concat dir (Printf.sprintf "%d.tw.out" i))
              (outcome_to_string tw);
            write_file (Filename.concat dir (Printf.sprintf "%d.bc.out" i))
@@ -1233,7 +1244,7 @@ let () =
          if info.n_hits = 1 && kind <> `BothError then begin
            let small = shrink src s in
            info.min_repro <- small;
-           write_file (Filename.concat dir "min.pp") small;
+           write_file (Filename.concat dir "min.ppl") small;
            let (tw', bc') = run_both small in
            write_file (Filename.concat dir "min.tw.out") (outcome_to_string tw');
            write_file (Filename.concat dir "min.bc.out") (outcome_to_string bc')

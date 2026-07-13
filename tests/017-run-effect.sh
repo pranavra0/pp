@@ -41,7 +41,7 @@ run() { (cd "$TMP" && "$PP" "$@" > "$TMP/out" 2>&1); }
 
 # --- (a) no process grant ⇒ capability error, nothing executes ---
 cat > "$TMP/a.pp" <<'EOF'
-(perform run "echo" "hi")
+perform run("echo", "hi")
 EOF
 run "$TMP/a.pp"
 assert "nocap-denied"      "apability" present
@@ -49,8 +49,8 @@ assert "nocap-no-exec"     "^hi$"      absent
 
 # --- (b) granted: run executes, result map carries out and exit ---
 cat > "$TMP/b.pp" <<'EOF'
-(perform log (hash-map-get (perform run "echo" "hi") "out"))
-(print (hash-map-get (perform run "sh" "-c" "exit 3") "exit"))
+perform log(hash-map-get(perform run("echo", "hi"), "out"))
+print(hash-map-get(perform run("sh", "-c", "exit 3"), "exit"))
 EOF
 run --grant process "$TMP/b.pp"
 assert "run-out"           "hi"        present
@@ -59,8 +59,10 @@ assert "run-exit-code"     "3"         present
 # --- (c) a run inside a node records tool + granted-tree cells ---
 printf 'DATA1\n' > "$SRC/in.txt"
 cat > "$TMP/c.pp" <<EOF
-(perform log (force (node (do (perform log "RUN")
-                              (hash-map-get (perform run "sh" "-c" "cat $SRC/in.txt") "out")))))
+perform log(force(node {
+  perform log("RUN")
+  hash-map-get(perform run("sh", "-c", "cat $SRC/in.txt"), "out")
+}))
 EOF
 rm -rf "$TMP/.pp"
 run --grant process --grant "fs:$SRC:ro" "$TMP/c.pp"
@@ -81,9 +83,13 @@ assert "node-run4-coarse"  "RUN"    present
 # --- (d) per-node sandbox: run writes scratch, relative slurp reads it,
 #         nothing lands in the caller's cwd, and the node caches ---
 cat > "$TMP/d.pp" <<'EOF'
-(perform log (force (node (do (perform log "RUN")
-                              (do (perform run "sh" "-c" "printf OBJ > a.o")
-                                  (slurp "a.o"))))))
+perform log(force(node {
+  perform log("RUN")
+  do {
+    perform run("sh", "-c", "printf OBJ > a.o")
+    slurp("a.o")
+  }
+}))
 EOF
 rm -rf "$TMP/.pp"
 rm -f "$TMP/a.o"
@@ -99,10 +105,10 @@ assert "sandbox-run2-OBJ"  "OBJ"    present
 # --- (e) LAW 18: absolute write-file inside a node errors (even with rw
 #         grant); scripting-tier write-file is unchanged ---
 cat > "$TMP/e1.pp" <<EOF
-(force (node (perform write-file "$TMP/evil.txt" "X")))
+force(node { perform write-file("$TMP/evil.txt", "X") })
 EOF
 cat > "$TMP/e2.pp" <<EOF
-(perform write-file "$TMP/ok.txt" "X")
+perform write-file("$TMP/ok.txt", "X")
 EOF
 run --grant process --grant "fs:$TMP:rw" "$TMP/e1.pp"
 assert "node-write-denied"  "sandbox" present

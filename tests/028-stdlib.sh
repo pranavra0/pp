@@ -30,12 +30,12 @@ assert_out() {  # NAME FLAGS FILE EXPECTED [ARGS...]
 
 # ---- (a) value oracle for string/number primitives ----
 cat > "$TMP/a.pp" <<'EOF'
-(print (number->string 42))
-(print (string->number "42"))
-(print (string-index "hello world" "world"))
-(print (string-index "hello" "zz"))
-(print (string-trim "  x  "))
-(print (string-sub "abcdef" 1 3))
+print(number->string(42))
+print(string->number("42"))
+print(string-index("hello world", "world"))
+print(string-index("hello", "zz"))
+print(string-trim("  x  "))
+print(string-sub("abcdef", 1, 3))
 EOF
 expected=$'"42"\n42\n6\nnil\n"x"\n"bcd"'
 assert_out "string-prims-tw" ""           "$TMP/a.pp" "$expected"
@@ -43,7 +43,7 @@ assert_out "string-prims-vm" "--bytecode" "$TMP/a.pp" "$expected"
 
 # ---- (b) argv ----
 cat > "$TMP/b.pp" <<'EOF'
-(print (argv))
+print(argv())
 EOF
 expected='("x" "y z" "3")'
 assert_out "argv-tw" ""           "$TMP/b.pp" "$expected" -- x "y z" 3
@@ -52,8 +52,8 @@ assert_out "argv-empty-tw" ""     "$TMP/b.pp" "nil"
 
 # ---- (c) env-get ----
 cat > "$TMP/c.pp" <<'EOF'
-(print (env-get "PP_TEST_VAR"))
-(print (env-get "PP_DEFINITELY_UNSET_VAR"))
+print(env-get("PP_TEST_VAR"))
+print(env-get("PP_DEFINITELY_UNSET_VAR"))
 EOF
 expected=$'"hello"\nnil'
 PP_TEST_VAR=hello assert_out "env-get-tw" ""           "$TMP/c.pp" "$expected"
@@ -61,9 +61,9 @@ PP_TEST_VAR=hello assert_out "env-get-vm" "--bytecode" "$TMP/c.pp" "$expected"
 
 # ---- (d) exit-code control ----
 cat > "$TMP/d.pp" <<'EOF'
-(print 1)
-(exit 3)
-(print 2)
+print(1)
+exit(3)
+print(2)
 EOF
 for flags in "" "--bytecode"; do
   out=$("$PP" $flags "$TMP/d.pp" 2>"$TMP/err"); ec=$?
@@ -73,8 +73,8 @@ done
 
 # ---- (e) assert failure reports form + location ----
 cat > "$TMP/e.pp" <<'EOF'
-(def x 2)
-(assert (= x 1))
+let x = 2
+assert(x = 1)
 EOF
 for flags in "" "--bytecode"; do
   if "$PP" $flags "$TMP/e.pp" >"$TMP/out" 2>"$TMP/err"; then
@@ -84,7 +84,7 @@ for flags in "" "--bytecode"; do
   else bad "assert-fails${flags:+-vm}" "stderr: $(cat "$TMP/err")"; fi
 done
 cat > "$TMP/e2.pp" <<'EOF'
-(assert false "the sky is falling")
+assert(false, "the sky is falling")
 EOF
 if "$PP" "$TMP/e2.pp" >"$TMP/out" 2>"$TMP/err"; then
   bad "assert-custom-msg" "expected failure"
@@ -94,10 +94,10 @@ else bad "assert-custom-msg" "stderr: $(cat "$TMP/err")"; fi
 
 # ---- (f) file predicates: gated + stat: trace cells ----
 cat > "$TMP/f.pp" <<EOF
-(print (force (node (do (perform log "COMPUTE")
-                        (file-exists? "$TMP/probe")))))
-(print (dir? "$TMP"))
-(print (dir? "$TMP/probe"))
+print(force(node {
+  perform log("COMPUTE"); file-exists?("$TMP/probe") }))
+print(dir?("$TMP"))
+print(dir?("$TMP/probe"))
 EOF
 G=(--grant "fs:$TMP:ro")
 rm -rf "$TMP/.pp" "$TMP/probe"

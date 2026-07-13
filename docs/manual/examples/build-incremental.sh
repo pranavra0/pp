@@ -26,32 +26,31 @@ EOF
 # sandbox, link them, blob the result. The program's value is the desired
 # build tree: {relpath -> blob-ref}, ":x" marking the executable.
 cat > build.pp <<EOF
-(def (each f lst) (if (nil? lst) nil (do (f (car lst)) (each f (cdr lst)))))
-(def (foldl2 f acc lst) (if (nil? lst) acc (foldl2 f (f acc (car lst)) (cdr lst))))
-(def (zip2 a b)
-  (if (nil? a) nil (cons (cons (car a) (car b)) (zip2 (cdr a) (cdr b)))))
+def each(f, lst) { if nil?(lst) { nil } else { f(car(lst)); each(f, cdr(lst)) } }
+def foldl2(f, acc, lst) { if nil?(lst) { acc } else { foldl2(f, f(acc, car(lst)), cdr(lst)) } }
+def zip2(a, b) {
+  if nil?(a) { nil } else { cons(cons(car(a), car(b)), zip2(cdr(a), cdr(b))) }
+}
+def compile(name) {
+  node {
+    perform run-dep(string-append(name, ".d"), "cc", "-MD", "-MF", string-append(name, ".d"), "-O0", "-c", string-append("$HOME/src/", name, ".c"), "-o", string-append(name, ".o"))
+    blob(slurp(string-append(name, ".o")))
+  }
+}
 
-(def (compile name)
-  (node
-    (do (perform run-dep (string-append name ".d")
-          "cc" "-MD" "-MF" (string-append name ".d") "-O0" "-c"
-          (string-append "$HOME/src/" name ".c") "-o" (string-append name ".o"))
-        (blob (slurp (string-append name ".o"))))))
+def link(objs) {
+  force(node { each(
+fn(o) { perform write-file(string-append(car(o), ".o"), blob-get(cdr(o))) }, objs)
+    do {
+      perform write-file("link.d", "prog: ")
+      do {
+        perform run-dep("link.d", "sh", "-c", "cc -o prog greet.o main.o")
+        blob(slurp("prog")) } } }) }
+let (names = list("greet", "main"), objs = zip2(names, force-deep(map(compile, names))), prog = link(objs)) {
+  foldl2(
 
-(def (link objs)
-  (force (node
-    (do (each (fn (o) (perform write-file (string-append (car o) ".o")
-                        (blob-get (cdr o)))) objs)
-        (do (perform write-file "link.d" "prog: ")
-            (do (perform run-dep "link.d" "sh" "-c" "cc -o prog greet.o main.o")
-                (blob (slurp "prog"))))))))
-
-(let [names (list "greet" "main")
-      objs (zip2 names (force-deep (map compile names)))
-      prog (link objs)]
-  (foldl2 (fn (m o) (map-insert m (string-append (car o) ".o") (cdr o)))
-          (map-insert (hash-map) "prog" (string-append prog ":x"))
-          objs))
+fn(m, o) { map-insert(m, string-append(car(o), ".o"), cdr(o)) }, map-insert({}, "prog", string-append(prog, ":x")), objs)
+}
 EOF
 
 G="--grant fs:$HOME/src:ro --grant fs:$HOME/build:wo --grant process"

@@ -65,8 +65,7 @@ BLOB_SRC="$TMP/blob-payload.bin"
 printf 'THE-BLOB-PAYLOAD-BYTES\n' > "$BLOB_SRC"
 
 cat > "$TMP/dispatch.pp" <<EOF
-{"B" {"fs" {"inline.txt" "INLINE-CONTENT"
-             "from-blob.txt" (blob (slurp "$BLOB_SRC"))}}}
+{"B" -> {"fs" -> {"inline.txt" -> "INLINE-CONTENT", "from-blob.txt" -> blob(slurp("$BLOB_SRC"))}}}
 EOF
 HOME="$NODEA" "$PP" --grant "fs:${TMP}:ro" --publish-object "$SHARED" "$TMP/dispatch.pp" \
   > "$TMP/publish.out" 2>&1
@@ -93,11 +92,11 @@ fi
 # value is irrelevant (--desired-object overrides it).
 # ---------------------------------------------------------------------
 cat > "$TMP/member-b.pp" <<EOF
-(load "stdlib/list.pp")
-(load "stdlib/map.pp")
-(load "stdlib/string.pp")
-(load "stdlib/domain-fs.pp")
-(register-fs-domain "$ROOT_B" (cap-restrict (current-capabilities) "$ROOT_B" :wo))
+load("stdlib/list.pp")
+load("stdlib/map.pp")
+load("stdlib/string.pp")
+load("stdlib/domain-fs.pp")
+register-fs-domain("$ROOT_B", cap-restrict(current-capabilities(), "$ROOT_B", :wo))
 nil
 EOF
 HOME="$NODEB" "$PP" --grant "fs:${ROOT_B}:rw" --member-name B \
@@ -122,18 +121,18 @@ fi
 NODEC="$TMP/nodeC"; mkdir -p "$NODEC"
 SHARED2="$TMP/shared2"
 cat > "$TMP/dispatch2.pp" <<'EOF'
-{"B" {"fs" {"x.txt" "X"}}}
+{"B" -> {"fs" -> {"x.txt" -> "X"}}}
 EOF
 HOME="$NODEA" "$PP" --publish-object "$SHARED2" "$TMP/dispatch2.pp" > "$TMP/publish2.out" 2>&1
 HASH2=$(grep -oE '[0-9a-f]{64}' "$TMP/publish2.out" | head -1)
 printf 'CORRUPT' | dd of="$SHARED2/objects/$HASH2" bs=1 seek=2 count=7 conv=notrunc 2>/dev/null
 ROOT_C="$TMP/rootC"; mkdir -p "$ROOT_C"
 cat > "$TMP/member-c.pp" <<EOF
-(load "stdlib/list.pp")
-(load "stdlib/map.pp")
-(load "stdlib/string.pp")
-(load "stdlib/domain-fs.pp")
-(register-fs-domain "$ROOT_C" (cap-restrict (current-capabilities) "$ROOT_C" :wo))
+load("stdlib/list.pp")
+load("stdlib/map.pp")
+load("stdlib/string.pp")
+load("stdlib/domain-fs.pp")
+register-fs-domain("$ROOT_C", cap-restrict(current-capabilities(), "$ROOT_C", :wo))
 nil
 EOF
 HOME="$NODEC" "$PP" --grant "fs:${ROOT_C}:rw" --member-name B \

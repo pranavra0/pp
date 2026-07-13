@@ -6,11 +6,11 @@
 export HOME=$(mktemp -d)
 
 cat > "$HOME/prog.pp" <<'PP'
-;; a tail-recursive sum — both back ends must run it in constant stack
-;; and return the same value
-(def (sum-to n acc)
-  (if (= n 0) acc (sum-to (- n 1) (+ acc n))))
-(print (sum-to 100000 0))
+# a tail-recursive sum — both back ends must run it in constant stack
+# and return the same value
+def sum-to(n, acc) { if n = 0 { acc } else { sum-to(n - 1, acc + n) } }
+
+print(sum-to(100000, 0))
 PP
 
 echo '$ pp --diff prog.pp'
