@@ -6,6 +6,7 @@
  (deps
   (source_tree tests)
   (source_tree stdlib)
+  (source_tree demo)
   scripts/run-tests.sh
   src/main.exe)
  (action

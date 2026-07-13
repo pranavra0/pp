@@ -539,6 +539,28 @@ non-list `def` is a value binding — `tests/025`.)
   exists), so the CapNetwork shape change needed no fuzzer update — noted
   rather than silently skipped. Pinned by `tests/045-network.sh` (skips
   cleanly without `curl`/`python3`).
+- **M6 stage A — the devops-complete demonstration (ALL-LIBRARY)**
+  (docs/PLAN-m6-demo.md). `demo/deploy.pp` (a pure `{host -> {domain ->
+  desired}}` dispatcher: builds a C service once via `run-dep`, renders
+  each host's config in a node that `unseal`s that host's `secret:` key
+  and emits only `hash-string` of it), `demo/agent.pp` (byte-identical
+  per host: registers the fs + proc domains under its own `fs:rw` +
+  `process` grant, pulls its slice via `--desired-object --member-name`,
+  registers a report-only health probe), and `demo/src/greeter.c`
+  compose every capability M1–M5 shipped into the whole end-state with
+  **zero `src/*.ml` changes** — build, 2-host deploy, drift convergence,
+  `kill -9` recovery, secret rotation (exactly-the-observers, bytes never
+  under `~/.pp/store`), `pp why` audit with the sealed cell redacted for
+  an unauthorized caller. The diagonal oracle is green across all 12
+  backend×scheduler×placement combinations (six pull rows: identical
+  desired-state hash; `--check` schedule-transparency exit 0 for
+  parallel + remote; six push rows: byte-identical settled tree) — no
+  pinning needed, the demo's desired state being a pure function of
+  `file:`/`sealed:` cells. `tests/052-devops-complete.sh` (55 assertions).
+  The `dune` runtest rule mirrors `(source_tree demo)` into the build
+  root (D26 mirror class). Stage B — the `--pin-file`/`pin-probe`
+  observability seam generalizing the oracle to `probe:`-in-desired-state
+  programs — is separate and pending.
 - **M5 stage A — cluster transport, signed tokens, by-hash sync**
   (docs/PLAN-m5-distribution.md; gated on docs/THREAT-MODEL-cluster.md,
   now written). `pp cluster-init` mints `~/.pp/cluster/{secret,id}` (a

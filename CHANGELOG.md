@@ -6,6 +6,19 @@ v0.2.0 predate this file and are reconstructed from history for context.
 
 ## [Unreleased] — v0.2.0
 
+- **M6 stage A: the devops-complete demonstration + diagonal oracle**
+  (docs/PLAN-m6-demo.md). `demo/deploy.pp` + `demo/agent.pp` +
+  `demo/src/greeter.c` express the whole end-state — build a service from
+  source, deploy across two hosts, converge after drift and `kill -9`,
+  rotate a secret invalidating exactly its observers (bytes never under
+  `~/.pp/store`), audit via `pp why` — with **zero `src/*.ml` changes**
+  (the plan's thesis, git-verifiable: everything above the core is
+  libraries/islands). The diagonal oracle passes across all 12
+  backend×scheduler×placement combinations (`tests/052-devops-complete.sh`,
+  55 assertions). The root `dune` runtest rule now mirrors `(source_tree
+  demo)` so the suite finds the demo from the build root (the D26 mirror
+  class). Stage B (the `--pin-file`/`pin-probe` oracle-generalization seam)
+  is separate and pending.
 - **M5 stage A: cluster transport, signed tokens, by-hash sync**
   (docs/PLAN-m5-distribution.md; gated on docs/THREAT-MODEL-cluster.md).
   Remote placement, host-qualified domain distribution, and store GC are

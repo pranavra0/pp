@@ -304,4 +304,11 @@ else
   echo "FAIL 051-cluster-exit"; fail=1
 fi
 
+echo "--- M6 stage A: devops-complete demo + diagonal oracle ---"
+if PP="$PP" bash tests/052-devops-complete.sh; then
+  echo "ok   052-devops-complete"
+else
+  echo "FAIL 052-devops-complete"; fail=1
+fi
+
 exit $fail

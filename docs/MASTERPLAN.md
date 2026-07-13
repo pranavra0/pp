@@ -53,11 +53,20 @@ with everything above the core written as libraries/islands.
 recorded cell→hash map from one run replayed into the others — the
 desired-state root hash is byte-identical across
 **backend** (tree-walker / VM) × **scheduler** (pull / push) ×
-**placement** (serial / parallel / distributed). Probe and `proc:` cells are
-pinned inputs; fenced actions are excluded — they sit outside the
-desired-state law by construction (Q3, principle 5). The trace store already
-records every observation needed to build the pin set, so this is a runnable
-CI job, not prose.
+**placement** (serial / parallel / distributed). Probe cells are pinned
+inputs; fenced actions are excluded — they sit outside the desired-state law
+by construction (Q3, principle 5). The trace store already records every
+observation needed to build the pin set, so this is a runnable CI job, not
+prose. (Historical note: earlier drafts also named `proc:` cells as a
+volatile pinned input, but post-Q13 `proc:` cells are dead code —
+`stdlib/domain-proc.pp`'s observe reads domain-state directly, never through
+a `proc:` cell; `runtime.ml`'s `Cell.Proc` arm is unreachable. The only
+genuinely volatile cell kind that can enter desired state today is `probe:`.
+The M6 demo's own oracle needs no pinning at all — its desired state is a
+pure function of `file:`/`sealed:` cells, invariant across all 12
+combinations by construction; pinning matters only for a program that folds
+a `probe:` into its desired-state root, covered by the separate pin-seam
+test.)
 
 ---
 
@@ -431,6 +440,20 @@ watchers are a non-goal; see §3).
 **Exit (runnable):** every clause of §1, each proven by journal/exec counts
 or store scans in the `tests/024` style, plus the diagonal oracle green
 across all 2×2×3 combinations.
+
+**✅ Stage A DONE** — `demo/deploy.pp` + `demo/agent.pp` + `demo/src/greeter.c`
+(all-library, **zero `src/*.ml` changes** — the thesis, git-verifiable) build
+a service, deploy it across two hosts, converge after drift and `kill -9`,
+rotate a secret invalidating exactly its observers (bytes never under
+`~/.pp/store`), and audit via `pp why` — `tests/052-devops-complete.sh`, 55
+assertions. The diagonal oracle is green across all 12 combinations (six pull
+rows publish the identical desired-state hash; both `--check`
+schedule-transparency runs exit 0; six push rows settle to a byte-identical
+tree) — needing no pinning, since the demo's desired state is a pure function
+of `file:`/`sealed:` cells. **Stage B remaining:** the `--pin-file`/
+`pin-probe` observability seam that generalizes the oracle to a program
+folding a `probe:` into its desired-state root (the one small, additive core
+addition, kept separate so Stage A proves "zero core").
 
 ---
 
