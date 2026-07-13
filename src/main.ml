@@ -36,6 +36,13 @@ let main () =
   let gc_mark_out = ref None in            (* --gc-mark OUTFILE: internal, `pp gc`'s own replay subprocess *)
   let gc_mode = ref false in               (* `pp gc`: explicit, never automatic *)
   let gc_grace_seconds = ref Store_gc.default_grace_seconds in
+  (* M6 stage B: the observation-pinning seam (docs/PLAN-m6-demo.md
+     "Stage B — the pin seam") — a standalone top-level generalization of
+     Q11-bis's --remote-node pin machinery, for pinning a DIFFERENT
+     (adversarial) program's probe-in-desired-state reads, sans the
+     token/keys/reply ceremony that flag also carries. *)
+  let pin_file = ref None in               (* --pin-file PATH: preseed run_pins/probe_values before run_files *)
+  let dump_pins_file = ref None in         (* --dump-pins PATH: write run_pins/probe_values after run_files *)
 
   let rec parse = function
     | "--" :: rest ->
@@ -112,6 +119,9 @@ let main () =
          | _ -> failwith ("invalid --gc-grace-seconds: " ^ s));
         parse rest
     | "gc" :: rest -> gc_mode := true; parse rest
+    (* ---- M6 stage B: the pin seam ---- *)
+    | "--pin-file" :: path :: rest -> pin_file := Some path; parse rest
+    | "--dump-pins" :: path :: rest -> dump_pins_file := Some path; parse rest
     | "--fenced-policy" :: policy :: rest ->
         (match policy with
          | "retry" -> fenced_policy := Runtime.Retry
@@ -163,6 +173,8 @@ let main () =
         Printf.printf "  pp --publish-object <shared-root> <file>  Publish the program's value (+ its blob: refs) to a shared local-dir store, by hash\n";
         Printf.printf "  pp --desired-object <hash> <shared-root> [--member-name <n>] [flags]  Pull a published desired-state value by hash and converge it (never runs a program to derive it)\n";
         Printf.printf "  pp gc [--gc-keep-epochs N] [--gc-grace-seconds S]  Explicit store GC (M5 stage C): mark-by-replay the last N reconcile/supervise epochs, sweep the rest\n";
+        Printf.printf "  pp --pin-file <path> <file.pp>  Preseed Store.run_pins/Runtime.probe_values from a (pin ...)/(pin-probe ...) file before running (M6 stage B: the observation-pinning seam)\n";
+        Printf.printf "  pp --dump-pins <path> <file.pp>  After running, write every run_pins/probe_values entry as (pin ...)/(pin-probe ...) lines to <path>\n";
         exit 0
     | "--once" :: rest -> parse rest  (* no-op: explicit one-shot *)
     | "--watch" :: rest -> watch := true; parse rest
@@ -252,6 +264,16 @@ let main () =
   (match !remote_node_args with
    | Some (_, pins_file, _, _, _) ->
        Remote.preseed_pins_from_file ~pins_file
+   | None -> ());
+  (* M6 stage B: `--pin-file <path>` — the SAME preseed logic, standalone,
+     no --remote-node ceremony (docs/PLAN-m6-demo.md "Stage B — the pin
+     seam"). Also runs before run_files ever executes anything, for the
+     same structural reason as above. Composes with --remote-node
+     harmlessly (both would just preseed from their own file; not a
+     supported/needed combination in practice, but neither excludes the
+     other). *)
+  (match !pin_file with
+   | Some path -> Remote.preseed_pins_from_file ~pins_file:path
    | None -> ());
   Runtime.probe_observer := Primitives.probe_observe_for_store;
   Runtime.domain_cell_observer := Primitives.domain_observe_cell_for_store;
@@ -715,6 +737,35 @@ let main () =
       end else begin
         let last = run_files files in
         run_domains_pass last;
+        (* M6 stage B: `--dump-pins <path>` — after the canonical run
+           completes (this plain non-watch, non-remote-node branch only;
+           the other branches have their own, different, run shapes),
+           write every Store.run_pins entry as a `(pin ...)` line and every
+           Runtime.probe_values entry as a `(pin-probe ...)` line
+           (docs/PLAN-m6-demo.md "Stage B — the pin seam"). A probe value
+           Codec.encode_value can't encode (code/a handle/a sealed secret)
+           is skipped — mirrors how a node's RESULT value already treats
+           non-data (--publish-object's own "cannot be published as data"
+           check) — logged, not a hard failure, since the run itself
+           already succeeded. Placed BEFORE the --check re-run below,
+           which clears/repopulates Store.run_pins for its own serial
+           comparison — dumping first captures exactly this run's own
+           observations, not the re-run's. *)
+        (match !dump_pins_file with
+         | Some path ->
+             let buf = Buffer.create 256 in
+             Hashtbl.iter (fun cell hash -> Buffer.add_string buf (Remote.pin_line cell hash))
+               Store.run_pins;
+             Hashtbl.iter (fun name v ->
+               match Codec.encode_value v with
+               | Some text -> Buffer.add_string buf (Remote.pin_probe_line name text)
+               | None ->
+                   Printf.eprintf
+                     "[dump-pins] skipping non-data probe value for %s (code/handle/sealed)\n%!"
+                     name)
+               Runtime.probe_values;
+             Store.atomic_write path (Buffer.contents buf)
+         | None -> ());
         (* Phase 3 schedule-transparency audit (D17 class 1 / LAW 26/34's
            promised --check): a result-transparent handler must never change
            WHAT a program computes, only where/when it runs. Under --check

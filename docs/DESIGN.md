@@ -532,6 +532,24 @@ reason: today's pin table, like the rest of ambient state, rides fork's COW
 for free, which is exactly what a barrier or a shared table would need to
 stop assuming).
 
+**M6 stage B note (docs/PLAN-m6-demo.md "Stage B — the pin seam").** The
+pin machinery above (`Store.run_pins`, `Remote.preseed_pins_from_file`/
+`parse_pin_line`) was, until M6 stage B, reachable only behind the internal
+`--remote-node` ceremony (M5's cluster-member wiring). Stage B completes
+the same abstraction rather than adding a parallel one: `--pin-file`
+exposes the identical `preseed_pins_from_file` standalone, and a new
+`(pin-probe "NAME" <codec-value>)` line generalizes it to a probe's own
+value (`Runtime.probe_values`, populated directly via `Hashtbl.replace`,
+short-circuiting the observe-fn — `probe_value_for` already consults
+`Runtime.probe_values` first, unconditionally, so no primitives.ml change
+was needed). `--dump-pins` writes both tables back out mechanically. Pure
+observability throughout: no new authority, no write path, no key/hash/
+codec-grammar change — it only makes §1's diagonal-oracle claim
+("probe cells are pinned inputs") falsifiable for a program that folds a
+volatile probe into its desired state, which the M6 demo's own oracle
+deliberately never needs (its desired state is a pure function of
+`file:`/`sealed:` cells). See `tests/053-pin-observations.sh`.
+
 ### Q12 — Self-hosting: **cut now.** `pc.pp` is unrunnable on three independent counts (D14); deleted. The thesis-proving dogfood is Phase 1's exit: `pp` builds `pp` via a real `build.pp`. Self-hosting the compiler is a Phase 4+ curiosity.
 
 ### Q13 — The in-language reconciler-domain protocol. **A domain is an observe/diff/apply triple of pp functions running under core-enforced discipline; the reconciler and supervisor are no longer OCaml.**

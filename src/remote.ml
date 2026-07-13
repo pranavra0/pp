@@ -106,6 +106,29 @@ let parse_pin_line (line : string) : (string * string) option =
   Codec.parse_quoted_string line i >>= fun (hash, i) ->
   expect_char line i ')' >>= fun _ -> Some (cell, hash)
 
+(* ---- M6 Stage B: `(pin-probe "NAME" <codec-value>)` ----
+   docs/PLAN-m6-demo.md "Stage B — the pin seam": generalizes the pin file
+   to cover a probe's OWN value directly (not a blob-backed cell), so a
+   program that folds `(probe NAME)` into its desired state can be pinned
+   too. The value half is not a quoted string — it is Codec.encode_value's
+   own grammar (e.g. "(i 42)", "(s \"x\")") embedded verbatim, since that
+   grammar is already a well-formed, self-delimiting parenthesized token
+   stream; wrapping it in ANOTHER quoted-string layer would just be a
+   second, redundant escaping dialect for the same bytes. [line] must have
+   already been trimmed (no trailing newline) by the caller, exactly like
+   [parse_pin_line] assumes. *)
+let pin_probe_line (name : string) (value_text : string) : string =
+  Printf.sprintf "(pin-probe %s %s)\n" (quote name) value_text
+
+let parse_pin_probe_line (line : string) : (string * string) option =
+  expect_lit line 0 "(pin-probe " >>= fun i ->
+  Codec.parse_quoted_string line i >>= fun (name, i) ->
+  expect_char line i ' ' >>= fun i ->
+  let n = String.length line in
+  if n > 0 && i <= n - 1 && line.[n - 1] = ')' then
+    Some (name, String.sub line i (n - 1 - i))
+  else None
+
 (* ---- Member side: pre-seed Store.run_pins from the wire BEFORE anything
    runs (Q11-bis, the soundness crux) ----
 
@@ -130,28 +153,55 @@ let parse_pin_line (line : string) : (string * string) option =
    belt-and-suspenders, is that the blob's bytes actually hash to the
    claimed name before trusting it as a pin (the same re-hash-before-trust
    discipline every other synced artifact gets, applied to a same-machine
-   direct write instead of a pull). *)
+   direct write instead of a pull).
+
+   A `(pin-probe "NAME" <value>)` line (M6 Stage B) is handled the same
+   pass, populating Runtime.probe_values DIRECTLY instead — no blob, no
+   CAS, no re-hash-before-trust step, since the value's bytes travel
+   in-line in the pin file itself rather than by content-addressed
+   reference. [probe_value_for] (primitives.ml) consults
+   Runtime.probe_values FIRST, unconditionally, before ever calling a
+   registered probe's observe-fn — so a pre-seeded entry here short-
+   circuits the observe-fn for the whole pass exactly like an
+   already-observed value would mid-pass.
+
+   Also called directly by main.ml's standalone `--pin-file` flag (M6
+   Stage B) — the SAME function, sans the --remote-node token/keys/reply
+   ceremony (which was always separate wiring in main.ml, never part of
+   this function's own signature). *)
 let preseed_pins_from_file ~(pins_file : string) : unit =
   if Sys.file_exists pins_file then
     String.split_on_char '\n' (Store.read_raw pins_file)
     |> List.iter (fun line ->
          let line = String.trim line in
          if line <> "" then
-           match parse_pin_line line with
-           | None -> failwith ("pp: --preseed-pins: unparseable pin line: " ^ line)
-           | Some (cell, hash) ->
-               (match Store.load_blob hash with
-                | None ->
-                    failwith (Printf.sprintf
-                      "pp: --preseed-pins: pinned blob %s not found in this \
-                       member's own store (expected the dispatcher to have \
-                       pushed it directly before spawning this process)" hash)
-                | Some content ->
-                    if Hasher.hash_string content <> hash then
+           if String.length line >= 11 && String.sub line 0 11 = "(pin-probe " then
+             match parse_pin_probe_line line with
+             | None -> failwith ("pp: --pin-file: unparseable pin-probe line: " ^ line)
+             | Some (name, value_text) ->
+                 (match Codec.decode_value value_text with
+                  | None ->
+                      failwith ("pp: --pin-file: pin-probe " ^ name
+                                ^ ": undecodable value: " ^ value_text)
+                  | Some v -> Hashtbl.replace Runtime.probe_values name v)
+           else
+             match parse_pin_line line with
+             | None -> failwith ("pp: --pin-file: unparseable pin line: " ^ line)
+             | Some (cell, hash) ->
+                 (match Store.load_blob hash with
+                  | None ->
                       failwith (Printf.sprintf
-                        "pp: --preseed-pins: blob %s failed to re-verify \
-                         (corrupt) — refusing to pin" hash)
-                    else Hashtbl.replace Store.run_pins cell hash))
+                        "pp: --pin-file: pinned blob %s not found in this \
+                         process's own store (a --remote-node member expects \
+                         the dispatcher to have pushed it directly before \
+                         spawning; a plain --pin-file expects the blob \
+                         already present locally)" hash)
+                  | Some content ->
+                      if Hasher.hash_string content <> hash then
+                        failwith (Printf.sprintf
+                          "pp: --pin-file: blob %s failed to re-verify \
+                           (corrupt) — refusing to pin" hash)
+                      else Hashtbl.replace Store.run_pins cell hash))
 
 (* ---- "blob:<hash>" refs embedded in a node's RESULT value ----
 

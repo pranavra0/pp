@@ -311,4 +311,11 @@ else
   echo "FAIL 052-devops-complete"; fail=1
 fi
 
+echo "--- M6 stage B: observation-pinning seam (--pin-file/--dump-pins/pin-probe) ---"
+if PP="$PP" bash tests/053-pin-observations.sh; then
+  echo "ok   053-pin-observations"
+else
+  echo "FAIL 053-pin-observations"; fail=1
+fi
+
 exit $fail

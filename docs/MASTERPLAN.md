@@ -450,10 +450,25 @@ assertions. The diagonal oracle is green across all 12 combinations (six pull
 rows publish the identical desired-state hash; both `--check`
 schedule-transparency runs exit 0; six push rows settle to a byte-identical
 tree) — needing no pinning, since the demo's desired state is a pure function
-of `file:`/`sealed:` cells. **Stage B remaining:** the `--pin-file`/
-`pin-probe` observability seam that generalizes the oracle to a program
-folding a `probe:` into its desired-state root (the one small, additive core
-addition, kept separate so Stage A proves "zero core").
+of `file:`/`sealed:` cells.
+
+**✅ Stage B DONE** — the observation-pinning seam (docs/PLAN-m6-demo.md
+"Stage B — the pin seam"): `--pin-file`/`--dump-pins`/`(pin-probe ...)`
+complete the Q11-bis pin table (`Store.run_pins`,
+`Remote.preseed_pins_from_file`) standalone, sans the `--remote-node`
+ceremony, and generalize it to pin a `register-probe`'s own value
+(`Runtime.probe_values`) directly — the one small, additive core addition,
+kept separate so Stage A proves "zero core" on its own. `demo/volatile-
+deploy.pp` (a deliberately adversarial program, separate from the Stage A
+demo, folding `(probe "replica-count")` into its returned desired state)
+proves the probe genuinely volatile unpinned (two different metrics-file
+contents publish two different hashes) and, pinned, reproduces the
+canonical hash across 6 backend×placement combinations even with a THIRD,
+divergent metrics-file value in play, with the observe-fn proven never
+called (a sentinel file's absence) — `tests/053-pin-observations.sh`. Zero
+changes to `node_key_of`/`hash_value`/the codec grammar/cell authorization.
+
+**M6 is now ✅ DONE — both stages green, the plan complete.**
 
 ---
 

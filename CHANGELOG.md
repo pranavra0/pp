@@ -17,8 +17,34 @@ v0.2.0 predate this file and are reconstructed from history for context.
   backend×scheduler×placement combinations (`tests/052-devops-complete.sh`,
   55 assertions). The root `dune` runtest rule now mirrors `(source_tree
   demo)` so the suite finds the demo from the build root (the D26 mirror
-  class). Stage B (the `--pin-file`/`pin-probe` oracle-generalization seam)
-  is separate and pending.
+  class).
+- **M6 stage B: the observation-pinning seam** (docs/PLAN-m6-demo.md
+  "Stage B — the pin seam"; **M6 is now complete**). Completes the Q11-bis
+  pin table (`Store.run_pins`, `Remote.preseed_pins_from_file`/
+  `parse_pin_line`), previously reachable only behind the internal
+  `--remote-node` ceremony, with three new top-level flags: `--pin-file
+  <path>` calls the identical preseed logic standalone (no token/keys/
+  reply ceremony); a new `(pin-probe "NAME" <codec-value>)` pin-file line
+  kind (`Codec.decode_value` + `Hashtbl.replace Runtime.probe_values`)
+  pins a `register-probe`'s own value directly, short-circuiting its
+  observe-fn (`Primitives.probe_value_for` already checks
+  `Runtime.probe_values` first, unconditionally — zero primitives.ml
+  changes needed); `--dump-pins <path>` writes every `Store.run_pins` and
+  `Runtime.probe_values` entry back out mechanically after a run (skipping
+  a probe value `Codec.encode_value` can't encode, logged). Pure
+  observability: no new authority, no write path, no key/hash/codec-
+  grammar/cell-authorization change (`git diff` on those functions is
+  empty). `demo/volatile-deploy.pp` — a deliberately adversarial program,
+  separate from Stage A's demo — folds `(probe "replica-count")` directly
+  into its returned desired state: unpinned, two different metrics-file
+  contents publish two different hashes (genuinely volatile, not a
+  strawman); `--pin-file`d from one canonical `--dump-pins` run, it
+  reproduces the canonical hash across 6 backend×placement combinations
+  even with the metrics file mutated to a third, divergent value, with the
+  observe-fn's sentinel file proven absent in every one
+  (`tests/053-pin-observations.sh`). Push/materialization combos are not
+  wired (documented): the adversarial program registers no domain, so
+  there is no tree for a `--watch --stabilize` pass to converge/diff.
 - **M5 stage A: cluster transport, signed tokens, by-hash sync**
   (docs/PLAN-m5-distribution.md; gated on docs/THREAT-MODEL-cluster.md).
   Remote placement, host-qualified domain distribution, and store GC are

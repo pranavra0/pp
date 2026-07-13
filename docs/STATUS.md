@@ -560,7 +560,42 @@ non-list `def` is a value binding — `tests/025`.)
   The `dune` runtest rule mirrors `(source_tree demo)` into the build
   root (D26 mirror class). Stage B — the `--pin-file`/`pin-probe`
   observability seam generalizing the oracle to `probe:`-in-desired-state
-  programs — is separate and pending.
+  programs — is landed; see the next bullet. **M6 is now COMPLETE.**
+- **M6 stage B — the observation-pinning seam (pure observability)**
+  (docs/PLAN-m6-demo.md "Stage B — the pin seam"). Completes the Q11-bis
+  pin table (`Store.run_pins`, `Remote.preseed_pins_from_file`/
+  `parse_pin_line`) that stage A's demo never needed and that was
+  previously reachable only behind the internal `--remote-node` ceremony:
+  `--pin-file <path>` calls the SAME `preseed_pins_from_file` standalone,
+  before `run_files` executes anything, with no token/keys/reply
+  ceremony. A new `(pin-probe "NAME" <codec-value>)` line kind (parsed in
+  the same pass, `Codec.decode_value` + `Hashtbl.replace
+  Runtime.probe_values`) pins a `register-probe`'s own value directly —
+  `Primitives.probe_value_for` already consults `Runtime.probe_values`
+  FIRST, unconditionally, before ever calling a registered probe's
+  observe-fn, so a pre-seeded entry short-circuits it for the whole pass,
+  with zero primitives.ml changes needed. `--dump-pins <path>` (wired into
+  the plain non-watch/non-remote-node run branch only) writes every
+  `Store.run_pins` entry as a `(pin ...)` line and every
+  `Runtime.probe_values` entry as a `(pin-probe ...)` line (skipping a
+  probe value `Codec.encode_value` can't encode — logged, mirrors how a
+  node's own result treats non-data). `demo/volatile-deploy.pp` is a
+  DELIBERATELY adversarial program separate from the stage-A demo: it
+  folds `(probe "replica-count")` directly into its returned desired
+  state, so (unpinned) its published hash tracks a metrics file's CURRENT
+  content — proven genuinely volatile by two unpinned publishes with
+  different file content producing different hashes. `--pin-file` on that
+  same dump then reproduces the CANONICAL hash across all 6 pull
+  combinations (tw/vm x serial/parallel:4/remote:B) even with the
+  metrics file mutated to a third, divergent value, with the observe-fn's
+  sentinel file proven absent in every one (it never runs at all). Push/
+  materialization combos are not wired: the adversarial program registers
+  no domain (deliberately minimal), so there is no tree for a `--watch
+  --stabilize` pass to converge/diff — documented per the plan's own
+  escape hatch; the 6 pull combos are the hash-equality core. Zero
+  changes to `node_key_of`/`hash_value`/the codec grammar/cell
+  authorization — pure observability, verified by an empty `git diff` on
+  those functions. Pinned by `tests/053-pin-observations.sh`.
 - **M5 stage A — cluster transport, signed tokens, by-hash sync**
   (docs/PLAN-m5-distribution.md; gated on docs/THREAT-MODEL-cluster.md,
   now written). `pp cluster-init` mints `~/.pp/cluster/{secret,id}` (a

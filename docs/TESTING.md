@@ -392,6 +392,32 @@ two shell suites:
     store, whose one epoch was sourced via `--desired-object` (the one
     `Gcroots` field no other test exercises), replays and sweeps
     correctly, and the kept root's closure still converges afterward.
+  - **052** — M6 stage A: the devops-complete demo (docs/PLAN-m6-demo.md).
+    `demo/deploy.pp`/`demo/agent.pp`/`demo/src/greeter.c` — an all-library
+    composition, zero `src/*.ml` changes — build a C service, deploy it
+    across two hosts, converge after drift and after `kill -9`, rotate a
+    secret invalidating exactly its observers (bytes never under
+    `~/.pp/store`), and audit via `pp why` (55 assertions across six
+    clauses). Then the demo's OWN diagonal oracle: six pull rows
+    (backend×placement) publish the identical desired-state hash, both
+    non-serial `--check` runs exit 0, and six push rows settle to a
+    byte-identical materialized tree — needing no pinning, since this
+    demo's desired state is a pure function of `file:`/`sealed:` cells.
+  - **053** — M6 stage B: the observation-pinning seam (docs/PLAN-m6-demo.md
+    "Stage B — the pin seam"). `demo/volatile-deploy.pp` is a deliberately
+    ADVERSARIAL program, separate from 052's demo, that folds
+    `(probe "replica-count")` directly into its returned desired state.
+    Unpinned control: two `--publish-object` runs with different
+    metrics-file content publish two DIFFERENT hashes (the probe is
+    genuinely volatile, not a strawman). `--dump-pins` from one canonical
+    run, then `--pin-file` that dump across the 6 pull combinations
+    (backend×placement) with the metrics file mutated to a THIRD, divergent
+    value: all 6 published hashes equal the canonical hash, and the
+    observe-fn's sentinel file is proven ABSENT in every one (a
+    `(pin-probe "NAME" <value>)` line short-circuits `probe_value_for`
+    before it ever calls the registered observe-fn). Push/materialization
+    combos aren't wired — this adversarial program registers no domain, so
+    there is no tree for a `--watch --stabilize` pass to converge/diff.
 
 Two proofs run OUTSIDE `dune runtest` (they invoke dune / the network):
 
