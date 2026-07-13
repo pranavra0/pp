@@ -189,7 +189,7 @@ let main () =
         Printf.printf "  pp <file.pp>             Run a pp source file\n";
         Printf.printf "  pp --bytecode <file.pp>  Run via bytecode VM\n";
         Printf.printf "  pp --diff <file.pp>      Run both backends and diff\n";
-        Printf.printf "  pp -e '<expr>'           Evaluate an expression\n";
+        Printf.printf "  pp -e '<expr>'           Evaluate an expression (brace syntax, like the REPL)\n";
         Printf.printf "  pp --grant <spec>        Grant capability (fs:/path:rw, net:host[:port], secret:/path, process)\n";
         Printf.printf "  pp --reconcile <root>    Materialize the program's map value under <root>\n";
         Printf.printf "  pp --supervise <file.pp>  Reconcile program's process-map value (use with --watch)\n";

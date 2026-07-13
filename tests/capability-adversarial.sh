@@ -48,12 +48,12 @@ EOF
 run_case path-component-denied "slurp: permission denied" "$TMP/read-denied.pp" --grant fs:/tmp:ro
 
 # Negative: capability constructors removed from user code.
-run_case constructor-filesystem "unbound.*filesystem" -e '(print (filesystem "/" :rw))'
-run_case constructor-network     "unbound.*network"     -e '(print (network :any))'
-run_case constructor-process     "unbound.*process"     -e '(print (process))'
+run_case constructor-filesystem "unbound.*filesystem" -e 'print(filesystem("/", :rw))'
+run_case constructor-network     "unbound.*network"     -e 'print(network(:any))'
+run_case constructor-process     "unbound.*process"     -e 'print(process())'
 
 # Negative: read-file without any grant.
-run_case read-no-grant "capability error: no read access" -e '(print (perform read-file "/etc/hostname"))'
+run_case read-no-grant "capability error: no read access" -e 'print(perform read-file("/etc/hostname"))'
 
 # Positive: cap-restrict and cap-compose work on an already-granted cap.
 cat > "$TMP/cap-ops.pp" <<'EOF'
@@ -68,12 +68,27 @@ run_case cap-ops "restricted:" "$TMP/cap-ops.pp"
 # (docs/PLAN-m3-attenuation.md "Adversarial suite additions")
 # ============================================================
 
-# --- forge-from-print: a printed capability is inert text; nothing in the
-#     reader parses a `#<cap ...>` token back into a value (the SAME "#<...>"
-#     unparseable convention every other opaque value — closures, thunks —
-#     already relies on; this just re-confirms it for the new
-#     current-capabilities-producible value). ---
-run_case forge-from-print "unexpected character after #" -e '#<cap compose 1>'
+# --- forge-from-print: a printed capability is inert text; nothing reads a
+#     `#<cap ...>` token back into a value. Under the brace surface `#`
+#     starts a comment (not the sexpr reader's dedicated "unexpected
+#     character after #" error token) — so the STRONGER guarantee now holds:
+#     the printed form is not merely a parse error, it is syntactically
+#     invisible (a whole line of it vanishes, same as any other comment),
+#     which is still exactly "cannot be read back into a capability by any
+#     means". Sentinels on both sides confirm the line in between is
+#     swallowed without incident (no value, no binding, no error). ---
+out_tw=$("$PP" -e 'print("before")
+#<cap compose 1>
+print("after")' 2>&1)
+out_bc=$("$PP" --bytecode -e 'print("before")
+#<cap compose 1>
+print("after")' 2>&1)
+want=$'"before"\n"after"\nnil\nnil'
+if [ "$out_tw" = "$want" ] && [ "$out_bc" = "$want" ]; then
+  echo "ok forge-from-print-inert"
+else
+  echo "FAIL forge-from-print-inert: tw='$out_tw' bc='$out_bc'"
+fi
 
 # --- compose-does-not-resurrect: two narrowed views of the SAME broad root,
 #     composed, grant only their union — not the root's full authority. ---
@@ -89,15 +104,16 @@ run_case compose-does-not-resurrect "permission denied" "$TMP/compose-no-resurre
 # --- cap-restrict-mode-widen-rejected: requesting :rw on a cap that only
 #     holds :ro at that scope is a Capability_error, never a silent widen. ---
 run_case cap-restrict-mode-widen-rejected "cannot widen mode" \
-  -e '(cap-restrict (current-capabilities) "/tmp" :rw)' --grant fs:/tmp:ro
+  -e 'cap-restrict(current-capabilities(), "/tmp", :rw)' --grant fs:/tmp:ro
 
 # --- with-caps-widen-rejected: a lexically-held BROAD value fails the ⊆
 #     check when used INSIDE a narrowed with-caps extent — the gate runs
 #     against the CURRENT ambient, not the root grant. ---
 mkdir -p "$TMP/wwr/sub"
-WWR_SRC="(def broad (current-capabilities))
-(with-caps (cap-restrict broad \"$TMP/wwr/sub\" :ro)
-  (with-caps broad (print \"leak\")))"
+WWR_SRC="let broad = current-capabilities()
+with-caps(cap-restrict(broad, \"$TMP/wwr/sub\", :ro)) {
+  with-caps(broad) { print(\"leak\") }
+}"
 run_case with-caps-widen-rejected "requested capability is not a subset" \
   -e "$WWR_SRC" --grant "fs:$TMP/wwr:ro"
 
@@ -130,13 +146,13 @@ run_repl_case() {  # NAME  INPUT  EXPECTED_REGEX  [extra pp args...]
   fi
 }
 
-WC_EXC_INPUT="(with-caps (cap-restrict (current-capabilities) \"$TMP/wcex/a\" :ro) (error \"boom\"))
-(print (slurp \"$TMP/wcex/secret/s.txt\"))"
+WC_EXC_INPUT="with-caps(cap-restrict(current-capabilities(), \"$TMP/wcex/a\", :ro)) { error(\"boom\") }
+print(slurp(\"$TMP/wcex/secret/s.txt\"))"
 run_repl_case with-caps-exception-safe "$WC_EXC_INPUT" "SECRETDATA" --grant "fs:$TMP/wcex:ro"
 
-WC_TAIL_INPUT="(def (id x) x)
-(with-caps (cap-restrict (current-capabilities) \"$TMP/wcex/a\" :ro) (id 1))
-(print (slurp \"$TMP/wcex/secret/s.txt\"))"
+WC_TAIL_INPUT="def id(x) { x }
+with-caps(cap-restrict(current-capabilities(), \"$TMP/wcex/a\", :ro)) { id(1) }
+print(slurp(\"$TMP/wcex/secret/s.txt\"))"
 run_repl_case with-caps-tail-safe "$WC_TAIL_INPUT" "SECRETDATA" --grant "fs:$TMP/wcex:ro"
 
 # --- node-cap-capture-direct (layer 1: free-var ban, import side): a node
@@ -164,13 +180,13 @@ run_case node-cap-capture-via-closure "may not be or contain a capability" "$TMP
 #     trip the free-var ban; only the result ban catches it) must not store
 #     or return it. ---
 run_case node-cap-result-rejected "a node may not return a capability" \
-  -e '(force (node (current-capabilities)))'
+  -e 'force(node { current-capabilities() })'
 run_case node-cap-result-embedded "a node may not return a capability" \
-  -e '(force (node (list 1 (current-capabilities))))'
+  -e 'force(node { list(1, current-capabilities()) })'
 
-# --- effect-removed: the `effect` special form no longer exists; `(effect
-#     ...)` is now an ordinary (unbound) function call. `with-handler`/
-#     `perform` are unaffected. ---
-run_case effect-removed "unbound symbol: effect" -e '(effect)'
+# --- effect-removed: the `effect` special form no longer exists; `effect()`
+#     is now an ordinary (unbound) function call. `with-handler`/`perform`
+#     are unaffected. ---
+run_case effect-removed "unbound symbol: effect" -e 'effect()'
 
 echo "=== ALL ADVERSARIAL TESTS PASSED ==="

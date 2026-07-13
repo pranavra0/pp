@@ -1415,22 +1415,29 @@ let read_one ?(source : string = "<?>") (input : string) : expr =
   | [] -> failwith (Printf.sprintf "empty input at %s:1" source)
   | _ -> failwith (Printf.sprintf "multiple expressions at %s:1" source)
 
-(* ---- Extension dispatch (M7 S3: flipped) ----
+(* ---- Extension dispatch (M7 S3: flipped; M7 S4: `-e` joins the default) ----
 
    `.pp` and `.ppb` read with the brace reader (`.pp` is now the default
    surface; `.ppb` remains a permanent alias — tests/054's fixtures use it).
    `.ppl` ("the AST form") reads with the sexpr reader — sexpr is demoted
    from "the syntax" to "the AST", still fully supported forever (it is the
-   macro layer: `quote`/`defmacro` still traffic in sexpr data). Any other
-   extension (REPL "<repl>"/"<?>" labels, `-e` input, synthetic glue source
-   tags like "<stdlib:list.pp>") falls through to the sexpr reader,
-   preserving every non-file caller's existing behavior byte-for-byte.
+   macro layer: `quote`/`defmacro` still traffic in sexpr data). The reader's
+   own "<?>" default label — reached ONLY by `pp -e` (repl.ml's
+   execute_string/execute_string_bytecode, called with no ~source, i.e. no
+   real file at all) — now also reads braces, per M7 S4 "-e takes braces"
+   (docs/M7-SYNTAX.md). Synthetic glue source tags main.ml builds for itself
+   (e.g. "<stdlib:list.pp>", "<domain-glue:fs>" — literally sexpr text,
+   `(load ...)`) are NOT this label and keep falling through to the sexpr
+   reader untouched. The interactive REPL no longer reaches this dispatcher
+   at all (repl.ml calls the brace reader directly; see needs_more_input
+   below for its multi-line-continuation counterpart).
    [path] chooses the reader; [source] is the location label (when
    omitted, both readers' "<?>" default applies, preserving e.g.
    load-module's existing label behavior). *)
 
 let file_uses_braces (path : string) : bool =
   Filename.check_suffix path ".pp" || Filename.check_suffix path ".ppb"
+  || path = "<?>"
 
 let read_dispatch ?(source : string option) ~(path : string) (input : string)
     : expr list =
@@ -1441,3 +1448,38 @@ let read_dispatch ?(source : string option) ~(path : string) (input : string)
   | None ->
       if file_uses_braces path then read_string input
       else Reader.read_string input
+
+(* ---- REPL multi-line continuation (M7 S4) ----
+
+   Whether [input] is still an open form that needs more lines before it can
+   be read — used by repl.ml's read_form to decide whether to keep
+   accumulating under the "..> " prompt. Reused rather than reimplemented:
+   attempt the SAME parse the REPL will do to actually evaluate the input,
+   and classify the failure. A form still open always fails by running out
+   of tokens partway through — an unterminated string (the lexer's own
+   "unterminated string"/"unterminated escape"), a block/quasiquote reading
+   past its last token ("unterminated <what>"/"unterminated block in
+   quasiquote"), or the parser wanting one more token and finding none
+   (every "expected X, got <eof>"/"unexpected end of input[...]" message —
+   string_of_btok TEOF = "<eof>", and parse_primary's bare-EOF case says
+   "unexpected end of input"). This is the reader's actual bracket-nesting
+   AND infix/statement-continuation logic (skip_nl's transparency, e.g. a
+   trailing "+ " or a dangling `let`/`if`/`def` header awaiting its block) —
+   reimplementing it as a standalone bracket-counter would have to
+   rediscover every one of those "awaiting a block/paren/comma" shapes by
+   hand and inevitably drift from the grammar above. A genuine syntax error
+   (e.g. a stray extra ')') fails WITHOUT any of these markers, so it is
+   handed to the REPL's normal error path instead of stalling the prompt. *)
+let looks_incomplete (msg : string) : bool =
+  let contains sub =
+    let ls = String.length sub and lm = String.length msg in
+    let rec go i = i + ls <= lm && (String.sub msg i ls = sub || go (i + 1)) in
+    go 0
+  in
+  contains "<eof>" || contains "unterminated" || contains "unexpected end of input"
+
+let needs_more_input ?(source : string = "<repl>") (input : string) : bool =
+  try ignore (read_string ~source input); false
+  with
+  | Failure msg -> looks_incomplete msg
+  | _ -> false

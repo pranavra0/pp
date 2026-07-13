@@ -162,6 +162,44 @@ else
   bad "island-string-uri-from-ppb" "pin=$PIN" "$("$PP" "$TMP/b/useisl2.ppb" 2>&1)"
 fi
 
+# ---- (b, M7 S4) both cross-surface island directions with the LITERAL
+# .pp/.ppl extensions (not just their .ppb alias above) — docs/M7-SYNTAX.md
+# S4's exit criterion: "a .ppl island loads from a .pp program AND a .pp
+# island loads from a .ppl program" ----
+mkdir -p "$TMP/b/isl2"
+cat > "$TMP/b/isl2/entry.ppl" <<'EOF'
+(def isl2-x 41)
+(def (isl2-add n) (+ n isl2-x))
+EOF
+cat > "$TMP/b/useisl3.pp" <<EOF
+import(island("file:$TMP/b/isl2"))
+print(isl2-add(1))
+EOF
+if "$PP" --update "$TMP/b/useisl3.pp" >/dev/null 2>&1 \
+   && [ "$("$PP" "$TMP/b/useisl3.pp" 2>&1)" = "42" ] \
+   && [ "$("$PP" --bytecode "$TMP/b/useisl3.pp" 2>&1)" = "42" ]; then
+  ok "ppl-island-from-pp"
+else
+  bad "ppl-island-from-pp" "$("$PP" "$TMP/b/useisl3.pp" 2>&1)"
+fi
+
+mkdir -p "$TMP/b/isl3"
+cat > "$TMP/b/isl3/entry.pp" <<'EOF'
+let isl3-x = 41
+def isl3-add(n) { n + isl3-x }
+EOF
+cat > "$TMP/b/useisl4.ppl" <<EOF
+(import (island file:$TMP/b/isl3))
+(print (isl3-add 2))
+EOF
+if "$PP" --update "$TMP/b/useisl4.ppl" >/dev/null 2>&1 \
+   && [ "$("$PP" "$TMP/b/useisl4.ppl" 2>&1)" = "43" ] \
+   && [ "$("$PP" --bytecode "$TMP/b/useisl4.ppl" 2>&1)" = "43" ]; then
+  ok "pp-island-from-ppl"
+else
+  bad "pp-island-from-ppl" "$("$PP" "$TMP/b/useisl4.ppl" 2>&1)"
+fi
+
 # ---- (c) assert parity: same message text (condition rendered as sexpr
 #      data, `at file:line` suffix), modulo only the file name ----
 mkdir -p "$TMP/c"

@@ -102,6 +102,23 @@ load("$TMP/g-inner.pp")
 EOF
 assert_err_both "loaded-file-location" "$TMP/g-outer.pp" 'car expects a pair at .*g-inner\.pp:2'
 
+# ---- (h) M7 S4: LAW 29 error text is byte-identical across surfaces — the
+# SAME program (case (a)'s toplevel-location), authored in .ppl (the sexpr/
+# AST surface, still fully supported) instead of the now-default brace
+# surface, produces the identical message text modulo only the file name ----
+cat > "$TMP/a.ppl" <<'EOF'
+(def (f x) (+ x 1))
+(print (f 1))
+(car 5)
+EOF
+err_pp=$("$PP" "$TMP/a.pp" 2>&1 >/dev/null | sed 's/a\.pp:/a.X:/')
+err_ppl=$("$PP" "$TMP/a.ppl" 2>&1 >/dev/null | sed 's/a\.ppl:/a.X:/')
+if [ "$err_pp" = "$err_ppl" ] && printf '%s' "$err_ppl" | grep -qE 'car expects a pair at .*a\.X:3'; then
+  ok "error-text-parity-ppl"
+else
+  bad "error-text-parity-ppl" "pp:  $err_pp" "ppl: $err_ppl"
+fi
+
 rm -rf "$TMP"
 if [ "$fail" -eq 0 ]; then echo "=== ERROR MESSAGE TEST PASSED ==="; fi
 exit $fail

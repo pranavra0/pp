@@ -1,18 +1,19 @@
 (* pp REPL — Read-Eval-Print Loop
 
-   ROADMAP §1 REPL quality:
-   - multi-line input: a form left open (paren balance, string- and
-     comment-aware) continues onto the next line under a "..> " prompt;
+   ROADMAP §1 REPL quality / M7 S4 (docs/M7-SYNTAX.md "Flip the default"):
+   - reads the brace surface, like every `.pp` file (Reader_braces);
+   - multi-line input: a form left open (brace/paren/bracket/string nesting,
+     comment- and infix-continuation-aware — see Reader_braces
+     .needs_more_input) continues onto the next line under a "..> " prompt;
    - history: persisted to ~/.pp/history, browsable with Up/Down;
    - line editing: raw-mode editor (arrows, Home/End, Ctrl-A/E/K/U/W,
      backspace/delete) when stdin is a tty; plain line reads otherwise —
-     piped sessions print no prompts or banner, so `echo '(+ 1 2)' | pp`
+     piped sessions print no prompts or banner, so `echo '1 + 2' | pp`
      emits exactly "3";
    - printing: results are deep-forced for display (a thunk shows its value);
    - `:help`, `:why on|off` (the node-cache explainer), `:quit`. *)
 
 open Types
-open Reader
 open Evaluator
 
 (* Global environment for REPL *)
@@ -127,35 +128,11 @@ let execute_sources_bytecode (use_vm : bool) (sources : (string * string) list) 
 (*  Input machinery                                                     *)
 (* =================================================================== *)
 
-(* Paren balance of an input buffer, string- and comment-aware. > 0 means
-   the form is still open (keep reading); an unterminated string also holds
-   the form open. Negative imbalance is left for the reader to report. *)
-let input_balance (s : string) : int =
-  let n = String.length s in
-  let depth = ref 0 in
-  let i = ref 0 in
-  let unterminated_string = ref false in
-  while !i < n do
-    (match s.[!i] with
-     | '"' ->
-         incr i;
-         let closed = ref false in
-         while not !closed && !i < n do
-           (match s.[!i] with
-            | '\\' -> i := !i + 1  (* skip the escaped char too *)
-            | '"' -> closed := true
-            | _ -> ());
-           incr i
-         done;
-         unterminated_string := not !closed;
-         i := !i - 1  (* the outer loop increments *)
-     | ';' -> while !i < n && s.[!i] <> '\n' do incr i done
-     | '(' | '[' | '{' -> incr depth
-     | ')' | ']' | '}' -> decr depth
-     | _ -> ());
-    incr i
-  done;
-  if !unterminated_string && !depth <= 0 then 1 else !depth
+(* M7 S4: multi-line continuation is brace/paren/bracket/string-nesting
+   aware via the ACTUAL brace reader (Reader_braces.needs_more_input),
+   not a hand-rolled bracket counter — see that function's header comment
+   for why. *)
+let input_balance (s : string) : bool = Reader_braces.needs_more_input s
 
 (* ---- History (persisted to ~/.pp/history) ---- *)
 
@@ -345,7 +322,7 @@ let repl_loop ~(use_vm : bool) =
     | Some l ->
         let full = if acc = "" then l else acc ^ "\n" ^ l in
         if String.trim full = "" then read_form ""
-        else if input_balance full > 0 then read_form full
+        else if input_balance full then read_form full
         else Some full
   in
   let rec loop () =
@@ -369,8 +346,12 @@ let repl_loop ~(use_vm : bool) =
              (* M3 defmacro: the macro table persists across REPL turns
                 (reset only by init ()/Vm.init () at repl_loop's start), so
                 a macro defined on one line is usable on a later one — same
-                sequential-top-level rule as a file. *)
-             let exprs = Macro.expand_toplevel_list (read_string ~source:"<repl>" input) in
+                sequential-top-level rule as a file. M7 S4: the interactive
+                REPL reads braces directly (not via read_dispatch's
+                extension sniffing — there is no file here at all). *)
+             let exprs =
+               Macro.expand_toplevel_list
+                 (Reader_braces.read_string ~source:"<repl>" input) in
              List.iter (fun e ->
                let v = eval_one e in
                Printf.printf "%s\n%!" (string_of_value (Primitives.force_deep v))
