@@ -283,4 +283,25 @@ else
   echo "FAIL 048-remote-placement"; fail=1
 fi
 
+echo "--- M5 stage C host-qualified domain distribution suite ---"
+if PP="$PP" bash tests/049-host-domains.sh; then
+  echo "ok   049-host-domains"
+else
+  echo "FAIL 049-host-domains"; fail=1
+fi
+
+echo "--- M5 stage C store GC suite ---"
+if PP="$PP" bash tests/050-gc.sh; then
+  echo "ok   050-gc"
+else
+  echo "FAIL 050-gc"; fail=1
+fi
+
+echo "--- M5 exit battery (stage C gaps) suite ---"
+if PP="$PP" bash tests/051-cluster-exit.sh; then
+  echo "ok   051-cluster-exit"
+else
+  echo "FAIL 051-cluster-exit"; fail=1
+fi
+
 exit $fail

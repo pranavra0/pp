@@ -320,7 +320,7 @@ partial.
    all — verified empirically before writing this down, not assumed. LAW
    37/38 hold on this evidence (SPEC.md).
 
-### M5 (= Phase 4) — Distribution
+### M5 (= Phase 4) — Distribution — ✅ DONE (stages A + B + C all landed)
 
 **Gated on a written threat-model doc**, which must *name* multi-tenant
 stores and E7's hash-guessing exfiltration as out of scope: M6 is ≥2 machines
@@ -361,21 +361,37 @@ DONE):
   compute, never a wrong answer. `src/remote.ml`;
   `tests/048-remote-placement.sh`.
 
-**Stage C (later, NOT this work):**
+**Stage C (docs/PLAN-m5-distribution.md "Host-qualified domain
+distribution" / "Store GC" — DONE):**
 
-- **Domain distribution — the piece that makes M6's deploy claim real.**
-  Placement handlers distribute `force`; the reconciler is runtime, not a
-  node, and a process domain on host B can only be applied and re-observed on
-  host B. The mechanism falls out of existing pieces: **host-qualified cell
-  identity** (a process on host B is a *different cell* than on host A —
-  naming world state, not a location surface) + a per-machine supervisor
-  (`pp --watch --supervise`) pulling its desired-state value **by hash** from
-  the synced store. M2's cell grammar + Phase-2 machinery + object sync; no
-  new core surface.
-- **Minimal, executable store GC**: root set = current desired-state roots +
-  pinned islands; sweep unreachable objects/traces. A substrate for
-  long-running services that can never delete anything is a prose asterisk on
-  "devops-complete."
+- ✅ **Domain distribution — the piece that makes M6's deploy claim real.**
+  The desired map generalizes ONE level, `{host -> {domain -> desired}}`;
+  `--member-name <n>` (explicit opt-in, never inferred — the least-magic
+  detection rule) indexes ONE host's slice and hands it to the UNCHANGED
+  `Domains.run_all`. A by-hash desired-value seam (`--publish-object`/
+  `--desired-object`, reusing stage A's re-hash-verified push/pull
+  verbatim) is built as a local-dir two-store version, proving the
+  mechanism; an ssh-backed variant is deferred to the same place stage A's
+  `Ssh` stub already defers it. `kill -9` convergence is the local
+  supervisor's existing per-machine story, unchanged — M5 adds a new
+  SOURCE for the desired value, no new mechanism. `src/blobref.ml` (new)
+  factors the `blob:` ref scan out of `src/remote.ml` so GC's mark (below)
+  and this seam share one implementation instead of two.
+  `tests/049-host-domains.sh`, `tests/051-cluster-exit.sh`.
+- ✅ **Minimal, executable store GC.** Root set = the last N successful
+  `Domains.run_all` passes' desired-state root hashes (a new frozen
+  journal `epoch HASH` line, never rotated, per pass) + their transitive
+  `blob:` refs; the islands cache is a separate lifecycle, never touched.
+  Marks by REPLAY (the contract's own load-bearing finding — traces don't
+  record child-keys, so there's no on-disk node graph to walk): each
+  recorded root re-runs as an ordinary `pp ... --gc-mark` subprocess that
+  drives the same `Store.hit` path a live pass would (marking every
+  touched trace/object/blob live) but skips domain apply/fenced entirely —
+  read-only on the world by construction. Concurrency-safe: a
+  creation-time grace period + a delete-time re-check of the roots
+  manifest immediately before each unlink; any doubt (a failed replay, a
+  manifest that changed mid-sweep) biases toward keeping everything.
+  `tests/050-gc.sh`.
 
 **Exit (runnable):**
 1. ✅ The Phase-1 build across 2 machines (an 8-TU real-cc build, scaled down
@@ -390,8 +406,20 @@ DONE):
    LAW 23b holds across the wire: B without authority over a cell in the
    transitive closure is not served the hit. (`tests/047-cluster-sync.sh`
    T2/T3.)
-4. Store size stays bounded across N `--watch` iterations under GC.
-   *Stage C — not started.*
+4. ✅ Store size stays bounded across N `--watch` iterations under GC — both
+   repeated one-shot `--reconcile` passes AND a genuine long-running
+   `--watch` loop racing a concurrent `pp gc` (T7: no crash, correct
+   result, byte-identical subsequent rebuild). (`tests/050-gc.sh`.)
+
+**M5 is DONE.** All four exit criteria hold on the local-dir CI loopback
+(the same shape stages A/B were accepted on); what remains genuinely
+loopback-only — not yet proven on a real ≥2-machine network — is the
+TRANSPORT underneath (ssh is a stubbed "not yet", never claimed done) and
+a real "which member, when" deployment policy beyond a hand-authored
+members file. Every MECHANISM the milestone names (signed tokens,
+by-hash sync, remote placement, host-qualified distribution, mark-by-
+replay GC) is real, exercised as genuinely separate processes/`$HOME`s,
+not simulated.
 
 ### M6 — The devops-complete demonstration
 

@@ -124,6 +124,54 @@ v0.2.0 predate this file and are reconstructed from history for context.
     bytes, never its own transiently-different disk); non-data-closed
     stays local; unreachable member degrades; `tool:` not pre-seeded; VM
     parity.
+- **M5 stage C: host-qualified domain distribution + store GC** (docs/
+  PLAN-m5-distribution.md "Host-qualified domain distribution" / "Store
+  GC") — **closes M5**. Two additive pieces; `src/domains.ml`'s
+  `run_all`/`run_domain` are unchanged.
+  - **Host-qualified distribution**: the desired map generalizes ONE
+    level, `{host -> {domain -> desired}}`. A new `--member-name <n>` CLI
+    flag (main.ml) is the ONLY way host-keying activates — explicit
+    opt-in, never inferred from a value's shape (the least-magic
+    detection rule); without it, `select_member_slice` is the identity
+    function, so `all_desired` reaches `Domains.run_all` byte-identical to
+    before (every pre-existing program/flags combination is the back-
+    compat proof, not merely an assertion). With it, exactly one host
+    key's `{domain -> desired}` slice is handed to the unchanged driver;
+    an unknown `--member-name` is a named hard error. `kill -9`
+    convergence is the local supervisor's existing per-machine story,
+    unchanged.
+  - **The by-hash desired-value seam** (a local-dir two-store version,
+    proving the mechanism; an ssh-backed variant is deferred the same way
+    stage A's `Ssh` stub already is): `--publish-object <shared-root>`
+    runs a program, stores its value as a content-addressed object, and
+    pushes it plus every `blob:` ref it names (`src/blobref.ml`, new —
+    factored out of `src/remote.ml` so GC's mark, below, can reuse the
+    identical scan instead of duplicating it); `--desired-object <hash>
+    <shared-root>` pulls both (re-hash-verified, same T1 choke point) and
+    substitutes them for the derivation of the desired state entirely.
+    Never syncs fenced actions or journals.
+  - **`pp gc`** (explicit, never automatic): a new frozen journal entry,
+    `Journal.Epoch { hash }` (line `epoch HASH`, one per successful
+    `Domains.run_all` pass, never rotated), plus a companion replayable
+    manifest (`src/gcroots.ml`, `~/.pp/store/gc-roots`, Codec-encoded,
+    capped to the last `--gc-keep-epochs` entries) recording enough to
+    RE-RUN the exact `pp` invocation. Marks by REPLAY (traces don't record
+    child-keys, so there is no on-disk node graph to walk otherwise): each
+    recorded root spawns as a `pp ... --gc-mark <outfile>` subprocess
+    (`src/store_gc.ml`) that runs the program normally — marking every
+    `Store.hit` it makes live (`Store.gc_marking`/`gc_live`/`mark_live`) —
+    but skips domain apply and fenced actions entirely, making the replay
+    read-only on the world by construction. Concurrency-safe: a
+    creation-time grace period (`--gc-grace-seconds`) plus a delete-time
+    re-check of the roots manifest immediately before each unlink; a
+    single failed-to-replay root refuses the WHOLE sweep. Only `objects/`,
+    `traces/`, `blobs/` are ever swept — `fenced-specs/`, `procs/`,
+    `journal/`, and the islands cache are untouched.
+  - `tests/049-host-domains.sh`, `tests/050-gc.sh`,
+    `tests/051-cluster-exit.sh` (the remaining M5 exit-battery gap: the
+    by-hash seam across two genuinely separate `$HOME`s, including a
+    `blob:` ref's actual bytes, T1 on this seam's own call site, and `pp
+    gc` on a `--desired-object`-sourced epoch).
 - **M4 stage 1: probes, sealed cells, network** (docs/PLAN-m4-cells.md).
   Three additive features, one model — a cell whose write-discipline core
   enforces mechanically.

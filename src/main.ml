@@ -27,6 +27,15 @@ let main () =
      Internal — the dispatcher (src/remote.ml) invokes a member `pp` with
      this flag; not meant to be typed by hand. *)
   let remote_node_args = ref None in   (* (token-file, pins-file, shared-root, keys-file, reply-file) *)
+  (* M5 stage C: host-qualified domain distribution + store GC
+     (docs/PLAN-m5-distribution.md "Host-qualified domain distribution" /
+     "Store GC"). *)
+  let member_name = ref None in            (* --member-name NAME: explicit opt-in host-keying *)
+  let desired_object_args = ref None in    (* --desired-object HASH SHARED-ROOT (the by-hash pull seam) *)
+  let publish_object_root = ref None in    (* --publish-object SHARED-ROOT (the by-hash publish seam) *)
+  let gc_mark_out = ref None in            (* --gc-mark OUTFILE: internal, `pp gc`'s own replay subprocess *)
+  let gc_mode = ref false in               (* `pp gc`: explicit, never automatic *)
+  let gc_grace_seconds = ref Store_gc.default_grace_seconds in
 
   let rec parse = function
     | "--" :: rest ->
@@ -86,6 +95,23 @@ let main () =
         parse rest
     | "--reconcile" :: root :: rest -> reconcile_root := Some root; parse rest
     | "--supervise" :: rest -> supervise := true; parse rest
+    (* ---- M5 stage C: host-qualified domain distribution + store GC ---- *)
+    | "--member-name" :: n :: rest -> member_name := Some n; parse rest
+    | "--desired-object" :: hash :: root :: rest ->
+        desired_object_args := Some (hash, root); parse rest
+    | "--publish-object" :: root :: rest -> publish_object_root := Some root; parse rest
+    | "--gc-mark" :: out :: rest -> gc_mark_out := Some out; parse rest
+    | "--gc-keep-epochs" :: n :: rest ->
+        (match int_of_string_opt n with
+         | Some k when k > 0 -> Runtime.gc_keep_epochs := k
+         | _ -> failwith ("invalid --gc-keep-epochs: " ^ n));
+        parse rest
+    | "--gc-grace-seconds" :: s :: rest ->
+        (match float_of_string_opt s with
+         | Some g when g >= 0.0 -> gc_grace_seconds := g
+         | _ -> failwith ("invalid --gc-grace-seconds: " ^ s));
+        parse rest
+    | "gc" :: rest -> gc_mode := true; parse rest
     | "--fenced-policy" :: policy :: rest ->
         (match policy with
          | "retry" -> fenced_policy := Runtime.Retry
@@ -133,6 +159,10 @@ let main () =
         Printf.printf "  pp --recv-hit <reply-file> <shared-root>  Ingest a serve-hit reply (internal)\n";
         Printf.printf "  pp --schedule remote:<member>  Remote placement (M5 stage B); members: ~/.pp/cluster/members or $PP_CLUSTER_MEMBERS\n";
         Printf.printf "  pp --remote-node <token> <pins> <root> <keys> <reply>  Cluster-member side of remote placement (internal)\n";
+        Printf.printf "  pp --member-name <n> [--reconcile/--supervise] <file>  Host-qualified domain distribution (M5 stage C): converge only desired[<n>]'s slice\n";
+        Printf.printf "  pp --publish-object <shared-root> <file>  Publish the program's value (+ its blob: refs) to a shared local-dir store, by hash\n";
+        Printf.printf "  pp --desired-object <hash> <shared-root> [--member-name <n>] [flags]  Pull a published desired-state value by hash and converge it (never runs a program to derive it)\n";
+        Printf.printf "  pp gc [--gc-keep-epochs N] [--gc-grace-seconds S]  Explicit store GC (M5 stage C): mark-by-replay the last N reconcile/supervise epochs, sweep the rest\n";
         exit 0
     | "--once" :: rest -> parse rest  (* no-op: explicit one-shot *)
     | "--watch" :: rest -> watch := true; parse rest
@@ -153,6 +183,13 @@ let main () =
   Runtime.program_files := List.rev !files;
   Runtime.program_bytecode := !bytecode;
   Runtime.initial_grant_specs := List.rev !grants;
+  (* M5 stage C: the additional CLI shape this invocation was given, for the
+     SAME reason — Gcroots.record (domains.ml) needs it to reconstruct an
+     identical `pp` invocation later, for `pp gc`'s mark-by-replay. *)
+  Runtime.program_reconcile_root := !reconcile_root;
+  Runtime.program_supervise := !supervise;
+  Runtime.program_member_name := !member_name;
+  Runtime.program_desired_object := !desired_object_args;
 
   (* Parse --grant specs into capabilities (Capabilities.parse_grant — M5
      moved this out of a local closure here so the signed-token verifier
@@ -184,6 +221,29 @@ let main () =
     @ (match Runtime.stdlib_root () with Some d -> [d] | None -> []);
   Store.init ();
   Remote.init ();
+  (* M5 stage C: `--gc-mark` (internal — only `pp gc`'s own replay
+     subprocess, src/store_gc.ml, sets this) turns on Store.hit's
+     mark-by-replay side channel for the whole remainder of this process. *)
+  (match !gc_mark_out with Some _ -> Store.gc_marking := true | None -> ());
+  (* M5 stage C: the by-hash desired-value pull seam (docs/PLAN-m5-
+     distribution.md "Host-qualified domain distribution") — given a hash
+     already published (via `--publish-object`) into a shared local-dir
+     root, pull the object AND every "blob:" ref it names (Blobref.blob_refs_in,
+     shared with src/remote.ml's identical need) before anything else runs.
+     Every pull re-hash-verifies before accepting (Transport.LocalDir.pull_*
+     -> ingest_object/ingest_blob), the same choke point every other synced
+     artifact goes through — T1 unchanged. Does NOT sync fenced actions or
+     journals (per the contract): only the value object and its blob: refs
+     ever cross here. *)
+  (match !desired_object_args with
+   | Some (hash, root) ->
+       Transport.LocalDir.pull_object root ~hash;
+       (match Store.load_object ~key:hash with
+        | Some v ->
+            List.iter (fun h -> try Transport.LocalDir.pull_blob root ~hash:h with _ -> ())
+              (Blobref.blob_refs_in v)
+        | None -> ())
+   | None -> ());
   (* M5 stage B / Q11-bis: pre-seed Store.run_pins from the dispatcher's
      wire BEFORE run_files ever executes a single expression — this member
      process must never observe its own disk for a pre-seeded cell, and
@@ -208,8 +268,12 @@ let main () =
      converges. *)
   Runtime.observe_all := true;
   (* Recover any unknown-status fenced actions from a prior crash before
-     applying new state (Q3 / LAW 31). *)
-  if !reconcile_root <> None || !supervise then
+     applying new state (Q3 / LAW 31). Skipped under `--gc-mark`: a GC
+     replay must never perform a real recovery action — see the --gc-mark
+     branch below, which also skips run_domains_pass/Fenced.drain for the
+     same reason (mark-by-replay is read-only on the world by construction,
+     not merely by convention). *)
+  if (!reconcile_root <> None || !supervise) && !gc_mark_out = None then
     Fenced.recover_unknown ~policy:!fenced_policy;
 
 
@@ -323,11 +387,67 @@ let main () =
   let should_run_domains () =
     uses_domains () || Domains.any_write_domain_registered ()
   in
+  (* M5 stage C by-hash desired-value seam (docs/PLAN-m5-distribution.md
+     "Host-qualified domain distribution"): `--desired-object HASH ROOT`
+     substitutes the DERIVATION of the desired-state root entirely — the
+     object was already pulled (and its blob: refs with it) above, so this
+     process never runs a program to compute what to converge, only to
+     register domains (run_files still executes for that side effect; its
+     RETURN VALUE is discarded here in favor of the synced object). Without
+     `--desired-object`, behavior is EXACTLY today's: wrap the program's own
+     return value via build_all_desired. *)
+  let compute_all_desired (last : Types.value option) : Types.value =
+    match !desired_object_args with
+    | Some (hash, _) ->
+        (match Store.load_object ~key:hash with
+         | Some v -> v
+         | None ->
+             failwith (Printf.sprintf
+               "pp: --desired-object %s: not found in the local store even \
+                after pulling — check the shared root and that it was \
+                published there via --publish-object" hash))
+    | None ->
+        (match last with
+         | Some v -> build_all_desired v
+         | None -> failwith "reconcile: the program produced no value")
+  in
+  (* M5 stage C host-qualified domain distribution: the LEAST-MAGIC
+     detection rule the contract asks for — host-keying is opt-in ONLY via
+     an explicit `--member-name <n>` flag, never inferred from a value's
+     shape. Without it, [all_desired] passes through completely unchanged,
+     so a program/flags that never mention --member-name (tests/018,
+     tests/033, every pre-M5-stage-C test) behave byte-identically — this
+     is the whole back-compat proof. With it, [all_desired] MUST be a map
+     keyed by host name (string or keyword) and this indexes exactly one
+     entry, handing the UNCHANGED Domains.run_all only that host's own
+     {domain -> desired} slice. *)
+  let select_member_slice (all_desired : Types.value) : Types.value =
+    match !member_name with
+    | None -> all_desired
+    | Some name ->
+        (match Primitives.force_deep all_desired with
+         | Types.VMap kvs ->
+             (match List.find_opt (fun (k, _) ->
+                match k with
+                | Types.VString s | Types.VKeyword s -> s = name
+                | _ -> false)
+                kvs
+              with
+              | Some (_, v) -> v
+              | None ->
+                  failwith (Printf.sprintf
+                    "pp: --member-name %s: no such host key in the \
+                     desired-state map (host-qualified distribution expects \
+                     {host -> {domain -> desired}})" name))
+         | other ->
+             failwith (Printf.sprintf
+               "pp: --member-name %s: desired-state must be a map of \
+                host -> {domain -> desired} to index, got %s"
+               name (Types.string_of_value other)))
+  in
   let run_domains_pass (last : Types.value option) : unit =
     if should_run_domains () then begin
-      (match last with
-       | Some v -> Domains.run_all (build_all_desired v)
-       | None -> failwith "reconcile: the program produced no value");
+      Domains.run_all (select_member_slice (compute_all_desired last));
       Fenced.drain ()
     end
   in
@@ -486,6 +606,67 @@ let main () =
         | Transport.RMiss key -> Printf.printf "recv-hit: miss key=%s\n" key
         | Transport.RDeny (key, reason) ->
             Printf.printf "recv-hit: deny key=%s reason=%s\n" key reason);
+       exit 0
+   | None -> ());
+  (* ---- M5 stage C: `pp gc` (explicit, never automatic) ---- *)
+  if !gc_mode then (Store_gc.run ~grace_seconds:!gc_grace_seconds; exit 0);
+  (* ---- M5 stage C: `--publish-object <shared-root>` — the by-hash
+     desired-value PUBLISH seam's dispatcher side (docs/PLAN-m5-
+     distribution.md "Host-qualified domain distribution"): run the program
+     normally, store its (fully-forced) value as an ordinary content-
+     addressed object, push it AND every "blob:" ref it names (Blobref
+     .blob_refs_in — shared with src/remote.ml's identical need) into
+     [shared_root], and print the hash a member consumes via
+     `--desired-object <hash> <shared-root>`. Deliberately does NOT run
+     run_domains_pass here — publishing is the DISPATCHER computing a value
+     to hand off, not converging anything itself. Never pushes fenced
+     actions or journals (nothing here ever touches either). *)
+  (match !publish_object_root with
+   | Some shared_root ->
+       let last = run_files (List.rev !files) in
+       (match last with
+        | None -> failwith "pp: --publish-object: the program produced no value"
+        | Some v ->
+            let forced = Primitives.force_deep v in
+            let hash = Types.hash_value forced in
+            (match Codec.encode_value forced with
+             | None ->
+                 failwith "pp: --publish-object: the program's value contains \
+                           code (a closure/thunk/handle) and cannot be \
+                           published as data"
+             | Some _ -> Store.store_object ~key:hash ~value:forced);
+            List.iter (fun h -> try Transport.LocalDir.push_blob shared_root ~hash:h with _ -> ())
+              (Blobref.blob_refs_in forced);
+            Transport.LocalDir.push_object shared_root ~hash;
+            Printf.printf "publish-object: %s\n" hash);
+       exit 0
+   | None -> ());
+  (* ---- M5 stage C: `--gc-mark <outfile>` — internal, only `pp gc`'s own
+     replay subprocess (src/store_gc.ml) sets this. Runs the recorded root
+     program EXACTLY as a live pass would (registration glue, the user's
+     file(s), the same --grant/--bytecode/--reconcile/--supervise/
+     --member-name/--desired-object flags) so every Store.hit it makes
+     marks its trace/object/blob(s) live (Store.gc_marking, turned on
+     earlier, right after Store.init) — then STOPS: no run_domains_pass (no
+     domain apply), no Fenced.recover_unknown/drain (already skipped
+     above). This is what makes replay read-only on the world by
+     construction: nothing below this branch ever runs. *)
+  (match !gc_mark_out with
+   | Some out ->
+       let last = run_files (List.rev !files) in
+       (try
+          let all = select_member_slice (compute_all_desired last) in
+          let forced = Primitives.force_deep all in
+          Store.mark_live ("object:" ^ Types.hash_value forced);
+          List.iter (fun h -> Store.mark_live ("blob:" ^ h)) (Blobref.blob_refs_in forced)
+        with _ ->
+          (* A root whose desired-state can no longer be derived at all
+             (e.g. should_run_domains () is false for this replay) still
+             marks whatever Store.hit calls run_files itself made above —
+             conservative, not a hard failure of the whole replay. *)
+          ());
+       let marks = Hashtbl.fold (fun k () acc -> k :: acc) Store.gc_live [] in
+       Store.atomic_write out (String.concat "\n" marks ^ (if marks = [] then "" else "\n"));
        exit 0
    | None -> ());
   (* pp island-pins <file>: list island forms with pin + cache status. *)

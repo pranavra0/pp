@@ -37,6 +37,16 @@ type entry =
   | FencedDone of { key : string; result_hash : string }
   | IslandFetch of { uri : string; pin : string }
       (* every island fetch/re-pin — procurement is auditable (D2) *)
+  | Epoch of { hash : string }
+      (* M5 stage C (docs/PLAN-m5-distribution.md "Store GC"): recorded once
+         per SUCCESSFUL Domains.run_all pass — [hash] is the desired-state
+         root object's content hash (Hasher.hash_value of the fully-forced
+         `all_desired` value that pass converged). This is the audit-log
+         half of GC's root bookkeeping (frozen line shape, greppable, never
+         rotated); the REPLAYABLE half (which files/grants/flags reproduce
+         that hash) is deliberately NOT here — journal lines are frozen text
+         grepped by tests/tooling, not a place to grow a rich, evolving
+         schema — it lives in src/gcroots.ml's own small manifest instead. *)
 
 let to_line = function
   | Exec argv -> "exec " ^ String.concat " " argv
@@ -56,6 +66,7 @@ let to_line = function
       Printf.sprintf "done fenced %s %s" key result_hash
   | IslandFetch { uri; pin } ->
       Printf.sprintf "island fetch %s %s" uri pin
+  | Epoch { hash } -> "epoch " ^ hash
 
 (* Best-effort inverse. Only the fenced dialect is ever read back for
    recovery decisions; other shapes parse when unambiguous and fall to None
@@ -64,6 +75,7 @@ let to_line = function
 let of_line (line : string) : entry option =
   match String.split_on_char ' ' (String.trim line) with
   | "exec" :: argv -> Some (Exec argv)
+  | ["epoch"; hash] -> Some (Epoch { hash })
   | ["island"; "fetch"; uri; pin] -> Some (IslandFetch { uri; pin })
   | "intent" :: "fenced" :: key :: epoch :: kind :: spec_hash :: _ ->
       Some (FencedIntent { key; epoch; kind; spec_hash })

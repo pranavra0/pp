@@ -388,6 +388,26 @@ let program_files : string list ref = ref []
 let program_bytecode : bool ref = ref false
 let initial_grant_specs : string list ref = ref []
 
+(* M5 stage C (docs/PLAN-m5-distribution.md "Host-qualified domain
+   distribution" / "Store GC"): the additional CLI shape this invocation was
+   given, alongside program_files/program_bytecode/initial_grant_specs above —
+   set once by main.ml right after parsing. Two independent consumers read
+   these: (1) src/domains.ml's epoch bookkeeping (Gcroots.record) captures
+   them so `pp gc`'s mark-by-replay can reconstruct an IDENTICAL `pp`
+   invocation later; (2) main.ml's own --gc-mark replay path reads them back
+   to rebuild the same {all_desired} shape (build_all_desired/
+   select_member_slice) a live pass would have computed. *)
+let program_reconcile_root : string option ref = ref None
+let program_supervise : bool ref = ref false
+let program_member_name : string option ref = ref None
+let program_desired_object : (string * string) option ref = ref None
+(* How many recent successful-pass root hashes `pp gc`'s roots manifest keeps
+   (Gcroots.record's rotation cap) — ambient, overridable via
+   `--gc-keep-epochs N`; read by both domains.ml (write side) and
+   store_gc.ml (informational only; the manifest is already capped at write
+   time, so the read side just replays whatever is there). *)
+let gc_keep_epochs : int ref = ref 5
+
 (* --stabilize: when true, init skips Hashtbl.clear thunk_store so
    clean thunks remain Evaluated and skip Store.hit on re-execute.
    Set false for cold runs and --once; true for stabilize iterations. *)

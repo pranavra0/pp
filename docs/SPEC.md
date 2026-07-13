@@ -1067,7 +1067,16 @@ effects (LAW 31) are live:** `(fenced KIND SPEC)` registers a
 scripting-tier action, drained once per pass after ALL domains'
 convergent work; `--fenced-policy retry|abort|ask` resolves unknown-status
 intents; a killed mid-apply action is recovered without silent
-double-execution (`tests/034`).
+double-execution (`tests/034`). **Host-qualified domain distribution (M5
+stage C):** the desired map generalizes ONE level, `{host -> {domain ->
+desired}}` — `--member-name <n>` (explicit opt-in, never inferred) makes
+main.ml index that one host's `{domain -> desired}` slice and hand it to
+the UNCHANGED `Domains.run_all`/`run_domain` above, which never learn
+host-keying exists; without the flag, the desired value passes through
+untouched, so every pre-existing program/flags combination (this LAW's
+own `tests/018`/`tests/033`/`tests/046`) is byte-identical to before. A
+member's `kill -9` recovery is this LAW's existing per-machine story,
+unchanged (`tests/049-host-domains.sh`).
 
 **Test:** first reconcile creates the tree; a null reconcile writes nothing;
 manual drift and foreign files converge away; a shrunk desired map deletes
@@ -1209,9 +1218,19 @@ config, never `--grant` — an address is not an authority ceiling, the same
 distinction LAW 34 already draws between location and syntax. A member is
 an ordinary second `pp` invocation of the byte-identical program; a
 non-data-closed node, an unreachable member, or a crashed member all
-degrade to local compute, never a wrong answer (`src/remote.ml`). Store
-GC and host-qualified domain distribution (M5 stages C) remain
-unimplemented.
+degrade to local compute, never a wrong answer (`src/remote.ml`). **M5
+stage C (closing M5) adds cluster MEMBERSHIP's write-domain half:**
+host-qualified domain distribution generalizes the desired map ONE level,
+`{host -> {domain -> desired}}`, indexed by the SAME kind of ambient
+identifier this LAW already uses for `remote:<member>` — an explicit
+`--member-name <n>` CLI flag, never `--grant` (still no location surface;
+LAW 34's negative half intact) — handing the UNCHANGED `Domains.run_all`
+(LAW 30) only that host's slice; a member is simply `pp --watch
+[--supervise] --member-name <n>` on its own slice, the local supervisor's
+existing per-machine story, verbatim. Store GC (`pp gc`, explicit, never
+automatic) is orthogonal to placement — it never runs during a scheduled
+force, only via its own CLI command — and is documented under LAW 30 and
+`docs/PLAN-m5-distribution.md` "Store GC".
 
 **Test:** the reader rejects any placement form (unchanged). Phase 3's exit:
 the same 101-TU build under `--schedule parallel:N` produces a
@@ -1224,7 +1243,15 @@ M5 stage B's exit: the same build (scaled to 8 TU) under `--schedule
 remote:<member>` over the stage-A local-dir transport, byte-identical
 against serial, plus the cross-machine hit, Q11-bis differing-file, and
 degrade-path assertions (`tests/048`'s `T6`/`Q11-bis`/`cross-machine-hit`
-assertions).
+assertions). M5 stage C's exit: `--member-name` converges only its own
+slice while another host's stays untouched, and a member's `kill -9`
+recovery holds on that slice (`tests/049-host-domains.sh`); the by-hash
+desired-value seam crosses two separate `$HOME`s including a `blob:`
+ref's bytes, T1-rejects a tampered published object, and survives `pp gc`
+on the receiving side (`tests/051-cluster-exit.sh`); store size stays
+bounded across both repeated one-shot passes and a genuine `--watch`-loop/
+`pp gc` race, with the kept root's closure surviving the sweep
+(`tests/050-gc.sh`'s T7 assertions).
 
 ### [LAW 35] "Run on N, take the first" is a handler, not a feature
 

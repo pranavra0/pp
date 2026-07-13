@@ -639,6 +639,104 @@ non-list `def` is a value binding — `tests/025`.)
   byte-identical materialized tree + desired-state hash vs serial;
   cross-machine hit; the differing-file Q11-bis case; non-data-closed
   stays local; unreachable member degrades; VM parity).
+- **M5 stage C — host-qualified domain distribution + store GC, CLOSING
+  M5** (docs/PLAN-m5-distribution.md "Host-qualified domain distribution" /
+  "Store GC"). Two additive pieces; neither changes a byte of
+  `src/domains.ml`'s `run_all`/`run_domain`.
+
+  *Host-qualified distribution.* The desired map generalizes ONE level:
+  `{host -> {domain -> desired}}`. Detection rule (the least-magic option
+  the contract asked for, picked over shape-sniffing): a NEW `--member-name
+  <n>` CLI flag (main.ml), explicit opt-in only. `select_member_slice`
+  (main.ml) is the identity function when the flag is absent — so
+  `all_desired` reaches `Domains.run_all` completely unchanged, and every
+  program/flags combination that never mentions `--member-name` (every
+  test predating this stage: `tests/018`, `tests/033`, `tests/046`, `047`,
+  `048`, all still green unchanged) is the back-compat proof, not merely
+  an assertion about it. With the flag, `select_member_slice` indexes the
+  one matching host key (string or keyword) and hands `Domains.run_all`
+  only that slice; an unknown `--member-name` is a hard, named error, not
+  a silent no-op. `kill -9` convergence is the local supervisor's existing
+  per-machine story, verbatim: a member is simply `pp --watch [--supervise]
+  --member-name <n>` on its own slice, re-derived from scratch every pass
+  exactly as before — M5 adds a new SOURCE for the desired value, no new
+  mechanism (`tests/049-host-domains.sh`).
+
+  *The by-hash desired-value seam.* Built: a LOCAL-DIR two-store version
+  proving the mechanism (deferred: an ssh-backed variant — stage A's `Ssh`
+  stub already covers that gap; a real deployment's own "which member,
+  when" policy). `--publish-object <shared-root>` runs a program, stores
+  its fully-forced value as an ordinary content-addressed object
+  (`Types.hash_value`), and pushes it PLUS every `blob:` ref it names into
+  `shared-root` via the UNCHANGED stage-A `Transport.LocalDir.push_*`;
+  `--desired-object <hash> <shared-root>` pulls both (re-hash-verified —
+  T1 unchanged) and SUBSTITUTES them for the derivation of the desired
+  state entirely (`compute_all_desired`, main.ml) — the recorded program
+  still runs, for domain-registration side effects only, and its own
+  return value is discarded. `Blobref.blob_refs_in` (new: `src/blobref.ml`)
+  factors the "blob:<hash>" structural scan out of `src/remote.ml` — GC's
+  mark (below) needs the identical scan and is compiled before `remote.ml`,
+  so duplicating it a second time was the wrong call. Never syncs fenced
+  actions or journals — only the value object and its blob: refs ever
+  cross (`tests/051-cluster-exit.sh`).
+
+  *Store GC (`pp gc` — explicit, never automatic).* Roots = the last N
+  successful `Domains.run_all` passes' desired-state root hashes: a NEW
+  frozen journal entry, `Journal.Epoch { hash }` (line `epoch HASH`, never
+  rotated, greppable — the one honest bookkeeping addition the contract
+  asked for), plus a companion REPLAYABLE manifest, `src/gcroots.ml`
+  (`~/.pp/store/gc-roots`, one Codec-encoded record per root — not the
+  frozen journal grammar, since it needs richer, evolvable structure:
+  files/grants/`--bytecode`/`--reconcile`-root/`--supervise`/
+  `--member-name`/`--desired-object`, capped to the last
+  `--gc-keep-epochs` (default 5) entries). **Mark by REPLAY**, the
+  contract's own load-bearing finding (traces do not record child-keys —
+  there is no on-disk node graph to walk, so the only way to discover what
+  a root's closure touches is to re-run it): `pp gc` spawns each recorded
+  root as an ordinary `pp <same files/grants/flags> --gc-mark <outfile>`
+  subprocess (`src/store_gc.ml`) that runs the program EXACTLY as a live
+  pass would — so every `Store.hit` it makes marks its trace/object/
+  blob(s) live (`Store.gc_marking`/`gc_live`/`mark_live`, store.ml, plus
+  the embedded-`blob:`-ref scan via `Blobref.blob_refs_in`) — but SKIPS
+  `run_domains_pass` and `Fenced.recover_unknown`/`drain` entirely: no
+  domain apply, no fenced action, ever, during a replay (main.ml's
+  `--gc-mark` branch). This makes mark read-only on the world BY
+  CONSTRUCTION: the only way a replay could still perform a real write or
+  subprocess exec is if the world genuinely drifted since the epoch and a
+  node MISSES — documented as an honest residual (a drifted replay behaves
+  like any ordinary rebuild: real but idempotent recomputation, never a
+  hidden unsoundness; over-marking from a fresh recompute is always safe).
+  Swept: ONLY `objects/`, `traces/`, `blobs/` — `fenced-specs/`, `procs/`,
+  `journal/`, and the islands cache (`~/.pp/islands`, an explicitly
+  separate lifecycle) are never touched. Concurrency safety
+  (`src/store_gc.ml`): a creation-time grace period (`--gc-grace-seconds`,
+  default 2.0s — nothing younger is EVER a deletion candidate) plus a
+  delete-time re-check of the roots manifest's raw bytes immediately
+  before each unlink (a reconcile pass completing concurrently aborts the
+  rest of that sweep rather than risk deleting something the new epoch
+  needs); if even ONE recorded root fails to replay, the WHOLE sweep is
+  refused outright — every choice biases toward "keep it", since
+  over-retention is always safe and deleting live data is the only hazard.
+  Pinned by `tests/050-gc.sh`: store size stays bounded across repeated
+  one-shot `--reconcile` passes AND a genuine long-running `--watch` loop
+  racing a concurrent `pp gc` (not merely simulated by separate
+  invocations); the kept root's closure survives (a subsequent identical
+  rebuild is a pure cache hit, byte-identical materialized tree); the T7
+  concurrent-parallel-build-races-GC stress (no crash, correct result,
+  byte-identical subsequent rebuild); the islands cache untouched; an
+  empty store is a clean no-op.
+
+  *What's genuinely proven vs. what a real (non-loopback) cluster still
+  needs:* host-keying's OWN mechanism (`select_member_slice`) and the
+  by-hash pull/push seam are both real and tested across genuinely
+  separate `$HOME`s (the same "two machines" convention stages A/B use);
+  what remains loopback-only is the TRANSPORT underneath both (local-dir,
+  same residual stages A/B already carry — ssh is stubbed, not this
+  stage's job) and the "which member runs which host's slice" policy
+  (still a hand-authored members file / explicit flags, not service
+  discovery). GC's mark-by-replay is real (a genuine subprocess re-run
+  with a real mark side-channel), not simulated; its own residual is the
+  documented drift-behaves-like-a-rebuild case above.
 
 ## Discrepancy ledger (D1–D26)
 

@@ -432,6 +432,39 @@ verified like every other synced artifact; see STATUS.md's stage-B entry
 and `tests/048-remote-placement.sh` for the full flow and the Q11-bis
 pre-seed mechanism.
 
+**M5 stage C update (closing M5): host-qualified domain distribution +
+store GC.** Two additive pieces, neither touching a byte of Q13's
+`src/domains.ml`. (1) The desired map generalizes ONE level: `{host ->
+{domain -> desired}}`; detection is the least-magic rule the contract
+asked for — never shape-sniffed, opt-in ONLY via an explicit
+`--member-name <n>` CLI flag, so `all_desired` passes through main.ml's
+`select_member_slice` completely unchanged without the flag (the whole
+back-compat proof: every pre-stage-C test never mentions it). With the
+flag, `select_member_slice` indexes exactly one host's `{domain ->
+desired}` slice and hands the UNCHANGED `Domains.run_all` only that —
+kill -9 convergence is the local supervisor's existing per-machine story,
+verbatim (a member is `pp --watch [--supervise]` on its own slice; M5 adds
+a new SOURCE for the value, no new mechanism). A by-hash desired-value
+seam is built as a local-dir two-store version (`--publish-object`/
+`--desired-object`, reusing stage A's re-hash-verified push/pull
+verbatim), proving the mechanism without inventing an ssh-backed variant
+this stage doesn't need (`tests/049-host-domains.sh`,
+`tests/051-cluster-exit.sh`). (2) `pp gc` — explicit, never automatic —
+adds ONE new journal variant (`epoch HASH`, frozen format, never rotated)
+plus a companion replayable manifest (`src/gcroots.ml`) recording the last
+N successful passes' exact CLI shape. Since traces do not record
+child-keys (no on-disk node graph to walk — the contract's own load-
+bearing finding), GC marks by REPLAY: each recorded root re-runs as a
+`--gc-mark` subprocess that drives the SAME `Store.hit` code path a live
+pass would (marking every trace/object/blob it touches live) but skips
+domain apply/fenced entirely, making the replay read-only on the world by
+construction. Concurrency safety is a creation-time grace period plus a
+delete-time re-check of the roots manifest immediately before each
+unlink — over-retention is always safe, deleting live data is the only
+hazard, so any doubt (a failed replay, a manifest that changed mid-sweep)
+biases toward keeping everything (`tests/050-gc.sh`). See STATUS.md's
+stage-C entry for the full mechanism and residuals.
+
 ### Q10 — Backend strategy. **Keep both; oracle is strictest; differential-test in CI; soften the parity rule.**
 
 `--diff` is the cheapest correctness asset. The parity rule softens from "no

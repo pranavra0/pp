@@ -343,6 +343,55 @@ two shell suites:
     local: zero trace keys ever appear on the member. Unreachable member
     (a bad members-file target): the build still succeeds, byte-identical
     to serial. VM parity: the same remote build under `--bytecode`.
+  - **049** — M5 stage C: host-qualified domain distribution
+    (docs/PLAN-m5-distribution.md "Host-qualified domain distribution").
+    Two separate `$HOME`s (the tests/047/048 convention). `--member-name A`
+    converges only host A's fs slice under its own `$HOME`; `--member-name
+    B` only host B's, under a genuinely separate `$HOME` — neither's
+    materialized tree ever gains the other's file. An unknown
+    `--member-name` is a named hard error, not a silent no-op. `kill -9`
+    recovery on a member's OWN slice under `--watch --member-name` (a proc
+    domain registered by the member's own program) restarts within one
+    poll interval, exactly like tests/033's unqualified case, while a
+    DIFFERENT host's service in the same desired map is never even
+    started. Back-compat: a from-scratch third-party "kv" domain (the
+    tests/046 pattern) with no `--member-name` at all reconciles exactly
+    as it always has — the least-magic detection rule (opt-in only via the
+    explicit flag, never shape-sniffed) proven directly, not merely
+    inferred from other files staying green. VM parity.
+  - **050** — M5 stage C: store GC (`pp gc`, explicit, never automatic;
+    docs/PLAN-m5-distribution.md "Store GC"). N `--reconcile` passes with
+    CHURN (a per-pass file added then removed) show the store growing
+    without `pp gc` between passes and staying bounded with it; the
+    frozen journal gains exactly one `epoch HASH` line per successful
+    pass. The kept (most recent) root's closure survives every sweep: a
+    subsequent identical rebuild is a pure cache hit (zero new execs) with
+    a byte-identical materialized tree. A genuine long-running `--watch`
+    loop (not merely repeated one-shot invocations) races a CONCURRENT
+    `pp gc` process against the same store across several ticks: no
+    crash, bounded size, the loop's own converge still correct throughout.
+    T7: a `parallel:8` build (the tests/038 shape) races `pp gc` (a long
+    grace period standing in for "genuinely still in flight"): no crash,
+    correct result, and a subsequent rebuild is still byte-identical with
+    zero new execs. The islands cache (`~/.pp/islands`) is untouched by
+    any of the above. `pp gc` on a completely empty store is a clean
+    no-op, not an error.
+  - **051** — the M5 exit battery's own remaining gap (docs/PLAN-
+    m5-distribution.md "Exit tests" 1–5 are otherwise covered: 1/2/3/5 by
+    047/048, 4 by 050). Two genuinely separate `$HOME`s exercise the
+    by-hash desired-value seam stage C adds: a dispatcher `--publish-object`s
+    a host-qualified value (including a `(blob ...)` reference alongside
+    inline content) into a shared local-dir root; a member, a SEPARATE
+    `$HOME`, `--desired-object`s it by hash and converges only its own
+    slice — the blob's actual BYTES cross (byte-identical to the source),
+    not merely the small string reference; nothing beyond `objects/` and
+    `blobs/` is ever published (no journal, no fenced-specs) under the
+    shared root. A tampered published object is rejected on pull (T1, this
+    seam's own call site — the same `ingest_object` choke point every
+    other synced artifact goes through). `pp gc` on the receiving member's
+    store, whose one epoch was sourced via `--desired-object` (the one
+    `Gcroots` field no other test exercises), replays and sweeps
+    correctly, and the kept root's closure still converges afterward.
 
 Two proofs run OUTSIDE `dune runtest` (they invoke dune / the network):
 
@@ -521,15 +570,17 @@ value def, and a bare statement all reference EARLIER siblings.)
   first, which does not exist today for ANY capability kind (`fs:`/`process`
   included).
 
-- **M5 stages A and B (tokens/transport/remote placement) have no pp-
-  language surface at all, so there is nothing for the fuzzer to
-  generate.** `cluster-init`/`--mint-token`/`--serve-hit`/`--recv-hit`/
-  `--transport-push`/`--transport-pull`/`--remote-node` are CLI-only
-  administrative/test entries (src/token.ml, src/transport.ml,
-  src/remote.ml); no reader syntax, builtin, or expression form exists for
-  a token, a transport op, or a placement (`--schedule remote:<member>`
+- **M5 stages A/B/C (tokens/transport/remote placement/host-qualified
+  distribution/GC) have no pp-language surface at all, so there is nothing
+  for the fuzzer to generate.** `cluster-init`/`--mint-token`/`--serve-hit`/
+  `--recv-hit`/`--transport-push`/`--transport-pull`/`--remote-node`/
+  `--member-name`/`--publish-object`/`--desired-object`/`--gc-mark`/`gc`
+  are all CLI-only administrative/test/orchestration entries (src/token.ml,
+  src/transport.ml, src/remote.ml, src/blobref.ml, src/gcroots.ml,
+  src/store_gc.ml); no reader syntax, builtin, or expression form exists
+  for a token, a transport op, a placement (`--schedule remote:<member>`
   is a CLI flag, exactly like `parallel:N`/`race:N` before it — LAW 34's
-  negative half). `dune exec ./tools/fuzz.exe
-  -- --grammar core|full --count 2000` were re-run after this change and
-  came back clean (0 mismatch/crash), confirming the addition is additive
-  and doesn't touch the fuzzed surface.
+  negative half), a host key, or a GC root. `dune exec ./tools/fuzz.exe
+  -- --grammar core|full --count 2000` were re-run after every stage's
+  change and came back clean (0 mismatch/crash), confirming each addition
+  is additive and doesn't touch the fuzzed surface.

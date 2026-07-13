@@ -514,6 +514,26 @@ let why_mode = ref false      (* pp why / --why: explain hits and misses *)
 let check_mode = ref false    (* --check: double-run determinism audit *)
 let volatile_count = ref 0    (* nodes flagged volatile by --check *)
 
+(* ---- M5 stage C: GC mark-by-replay hook (docs/PLAN-m5-distribution.md
+   "Store GC") ----
+
+   Since traces do not record child-keys (no on-disk node graph to walk —
+   the contract's load-bearing finding), the only way to discover which
+   objects/traces/blobs a root program's closure actually touches is to
+   re-run it and watch which cache entries get consulted. [gc_marking],
+   set true only inside a `--gc-mark` replay (main.ml), makes every
+   verified [hit] below additionally record the touched trace key, result
+   object hash, and any file-cell-backed blob hashes (plus any "blob:<hash>"
+   refs embedded in the result value itself — the same
+   `(blob (slurp ...))` pattern src/remote.ml's dispatcher-side pull
+   already has to account for; Blobref.blob_refs_in is shared with that
+   module) into [gc_live]. Outside a `--gc-mark` replay this costs nothing
+   beyond the boolean check — no live set is built, no hash table grows. *)
+let gc_marking = ref false
+let gc_live : (string, unit) Hashtbl.t = Hashtbl.create 1024
+let mark_live (id : string) : unit =
+  if !gc_marking then Hashtbl.replace gc_live id ()
+
 let short_key (k : string) : string =
   if String.length k > 12 then String.sub k 0 12 else k
 
@@ -602,6 +622,17 @@ let hit ~key ~authorized : hit_result =
                (match tr.tr_outcome with Ok -> "ok" | Failed -> "failing")
                (List.length tr.tr_reads);
              List.iter (fun (c, h) -> Runtime.record_read c h) tr.tr_reads;
+             (* M5 stage C GC mark (see [gc_marking]'s header comment above):
+                a verified hit means this trace/object/blob(s) are LIVE for
+                whichever root program is currently being replayed. *)
+             mark_live ("trace:" ^ key);
+             mark_live ("object:" ^ tr.tr_result_hash);
+             List.iter (fun (c, h) ->
+               match Cell.of_string c with
+               | Cell.File _ -> mark_live ("blob:" ^ h)
+               | _ -> ())
+               tr.tr_reads;
+             List.iter (fun h -> mark_live ("blob:" ^ h)) (Blobref.blob_refs_in v);
              (match tr.tr_outcome with Ok -> HitOk v | Failed -> HitFailed v))
   end
 

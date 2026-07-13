@@ -189,8 +189,15 @@ landed early** (2026-07-11): content-addressed modules with inline pins
 pin rewriting, and opt-in `git:`/`github:` fetch under the narrow
 [THREAT-MODEL-islands.md](THREAT-MODEL-islands.md) (package-procurement
 trust — NOT the cluster-forcing threat model, which still gates the rest of
-this phase). Still here: LSP, cache GC, self-hosting reconsidered. Exit
-criteria drafted when Phase 3 closes.
+this phase). ✅ **M5 (docs/MASTERPLAN.md) is now fully DONE**: stage A
+(cluster transport + signed tokens + by-hash sync, `tests/047`), stage B
+(remote placement, `--schedule remote:<member>`, `tests/048`), and stage C
+(host-qualified domain distribution via `--member-name` + the by-hash
+desired-value seam, and `pp gc` — mark-by-replay store GC, explicit and
+never automatic — `tests/049`/`050`/`051`) all landed on the local-dir CI
+loopback. Still here: LSP, self-hosting reconsidered. Exit criteria drafted
+when Phase 3 closes; M5's own exit criteria are now checked off in
+MASTERPLAN.md.
 
 ---
 

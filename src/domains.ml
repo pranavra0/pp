@@ -232,8 +232,36 @@ let run_domain ~(name : string) ~(entry : Runtime.domain_entry) ~(desired : valu
    register-domain itself simply returns this shape directly, N domains,
    one evaluation). Every name must resolve to a registered WRITE domain
    (a probe named here is a hard error, not silently skipped). *)
+(* M5 stage C (docs/PLAN-m5-distribution.md "Store GC"): recorded ONCE per
+   SUCCESSFUL pass (after every domain's run_domain has completed without
+   raising) — [forced] is the exact fully-forced {domain -> desired} (or,
+   under host-qualified distribution, {host -> {domain -> desired}}) value
+   this pass converged, already computed by [run_all] below (reused, not
+   re-forced). Stores it as an ordinary content-addressed object (so
+   `pp gc`'s replay subprocess, which re-derives the identical value, can
+   cross-check its own hash against this one) and appends BOTH the frozen
+   journal Epoch line (audit trail) and the Gcroots manifest entry (the
+   replayable "how" — see gcroots.ml). Best-effort: a failure to persist
+   the epoch must never fail an otherwise-successful reconcile pass. *)
+let record_epoch (forced : value) : unit =
+  try
+    let hash = Hasher.hash_value forced in
+    (try Store.store_object ~key:hash ~value:forced with _ -> ());
+    Journal.append (Journal.Epoch { hash });
+    Gcroots.record ~keep:!Runtime.gc_keep_epochs
+      { Gcroots.gr_hash = hash;
+        gr_bytecode = !Runtime.program_bytecode;
+        gr_grants = !Runtime.initial_grant_specs;
+        gr_files = !Runtime.program_files;
+        gr_reconcile_root = !Runtime.program_reconcile_root;
+        gr_supervise = !Runtime.program_supervise;
+        gr_member_name = !Runtime.program_member_name;
+        gr_desired_object = !Runtime.program_desired_object }
+  with _ -> ()
+
 let run_all (all_desired : value) : unit =
-  let entries = match Primitives.force_deep all_desired with
+  let forced = Primitives.force_deep all_desired in
+  let entries = match forced with
     | VMap kvs -> kvs
     | other ->
         failwith ("reconcile: the program must return a map of domain-name to \
@@ -256,7 +284,8 @@ let run_all (all_desired : value) : unit =
   in
   let write_domains = List.map (fun (n, e, _) -> (n, e)) resolved in
   stratification_check write_domains;
-  List.iter (fun (name, entry, desired) -> run_domain ~name ~entry ~desired) resolved
+  List.iter (fun (name, entry, desired) -> run_domain ~name ~entry ~desired) resolved;
+  record_epoch forced
 
 (* Whether at least one registered domain can actually be converged — used
    by main.ml to decide whether a bare register-domain-only program (no

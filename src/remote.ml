@@ -172,26 +172,11 @@ let preseed_pins_from_file ~(pins_file : string) : unit =
    spine — never forces anything already-forced-by-Codec.decode_value) for
    "blob:" + exactly 64 lowercase-hex chars, the same shape blob-get's own
    prefix check already assumes. *)
-let is_hex64 (s : string) : bool =
-  String.length s = 64
-  && String.for_all (fun c -> (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) s
-
-let blob_hash_of_string (s : string) : string option =
-  let prefix = "blob:" in
-  let plen = String.length prefix in
-  if String.length s > plen && String.sub s 0 plen = prefix then
-    let h = String.sub s plen (String.length s - plen) in
-    if is_hex64 h then Some h else None
-  else None
-
-let rec blob_refs_in (v : value) : string list =
-  match v with
-  | VString s -> (match blob_hash_of_string s with Some h -> [h] | None -> [])
-  | VPair (a, d) -> blob_refs_in a @ blob_refs_in d
-  | VVector vs -> Array.to_list vs |> List.concat_map blob_refs_in
-  | VMap kvs -> List.concat_map (fun (k, v) -> blob_refs_in k @ blob_refs_in v) kvs
-  | VSet vs -> List.concat_map blob_refs_in vs
-  | _ -> []
+(* Factored out to src/blobref.ml (M5 stage C: src/store.ml's GC mark-by-
+   replay needs the identical scan and is compiled before this module) —
+   [blob_refs_in] here is just a re-export so every existing call site in
+   this file keeps working unchanged. *)
+let blob_refs_in = Blobref.blob_refs_in
 
 (* ---- Member side: serve the dispatcher's assigned keys after running ----
 

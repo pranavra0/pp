@@ -1,8 +1,8 @@
 (executable
  (name main)
  (public_name pp)
- (modules version types hasher codec paths cell runtime store journal reader capabilities process
-   scheduler domain_prims fenced island primitives domains evaluator macro compiler stabilize vm
-   repl token transport remote main)
+ (modules version types hasher blobref codec paths cell runtime store journal gcroots reader
+   capabilities process scheduler domain_prims fenced island primitives domains evaluator macro
+   compiler stabilize vm repl token transport remote store_gc main)
  (libraries cryptokit dune-build-info)
  (flags -no-strict-sequence))
