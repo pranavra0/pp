@@ -49,7 +49,7 @@ comment_texts() { "$PP" --list-comments "$1" "$2" 2>/dev/null | sed -E 's/^[0-9]
 # ---- (a) tricky-comments fixture, sexpr-authored ----
 mkdir -p "$TMP/a"
 cat > "$TMP/a/fix.pp" <<'EOF'
-; a leading standalone comment
+;; a leading double-semicolon banner comment
 (def (f x) ; trailing on the def's own head line
   ; a standalone comment nested inside a multi-statement body
   (print x) ; trailing on the first body statement
@@ -100,6 +100,24 @@ if [ "$c_orig" = "$c_ppb" ] && [ "$c_orig" = "$c_pp2" ] && [ "$n_orig" -ge 8 ]; 
 else
   bad "fixture-a-comments-preserved" \
     "orig ($n_orig):" "$c_orig" "braces:" "$c_ppb" "sexpr2:" "$c_pp2"
+fi
+
+# delimiter conversion: the `;;` banner must come out as a SINGLE `#`
+# with the delimiter run stripped — a stacked `# ;` means the scan kept
+# the source delimiter inside the text (hash gates can't catch this;
+# hashes ignore comments by construction)
+if grep -q '^# a leading double-semicolon banner comment$' "$TMP/a/fix.ppb" \
+   && ! grep -qE '(^|[[:space:]])# ;' "$TMP/a/fix.ppb"; then
+  ok "fixture-a-delimiter-stripped"
+else
+  bad "fixture-a-delimiter-stripped" "$(head -3 "$TMP/a/fix.ppb")"
+fi
+# noise: no line of the brace output may end in whitespace (which is also
+# where a trailing '; ' separator would show up)
+if grep -qE '[[:blank:]]$' "$TMP/a/fix.ppb"; then
+  bad "fixture-a-no-trailing-noise" "$(grep -nE '[[:blank:]]$' "$TMP/a/fix.ppb" | head -3)"
+else
+  ok "fixture-a-no-trailing-noise"
 fi
 
 # strict same-path (-i) hash check
@@ -212,10 +230,20 @@ for f in "$ROOT"/tests/[0-9]*.pp "$ROOT"/tests/gen-cproject.pp \
   orig_mode=$(stat -f%Lp "$f" 2>/dev/null || stat -c%a "$f" 2>/dev/null || echo "")
   chmod u+w "$f" 2>/dev/null || true
   c_before=$(comment_texts sexpr "$f")
-  n_before=$(printf '%s' "$c_before" | grep -c . || true)
+  # count every comment, including delimiter-only lines whose content is
+  # empty after stripping (`;;` separators) — those still must survive
+  n_before=$("$PP" --list-comments sexpr "$f" 2>/dev/null | wc -l | tr -d ' ')
   if ! "$PP" fmt --to-braces "$f" -i 2>"$TMP/sweep.err"; then
     bad "sweep-to-braces ($f)" "$(cat "$TMP/sweep.err")"; sweep_fail=1
     cp "$backup" "$f"; continue
+  fi
+  # brace-output quality gates: no line ends in whitespace (also where a
+  # trailing '; ' would appear), no stacked '# ;' delimiter
+  if grep -qE '[[:blank:]]$' "$f"; then
+    bad "sweep-noise ($f)" "$(grep -nE '[[:blank:]]$' "$f" | head -2)"; sweep_fail=1
+  fi
+  if grep -qE '^# ;|^#;;' "$f"; then
+    bad "sweep-stacked-delimiter ($f)" "$(grep -nE '^# ;|^#;;' "$f" | head -2)"; sweep_fail=1
   fi
   c_mid=$(comment_texts brace "$f")
   if ! "$PP" fmt --to-sexpr "$f" -i 2>"$TMP/sweep.err"; then

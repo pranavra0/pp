@@ -304,8 +304,11 @@ let main () =
        let src = read_whole f in
        let forms = Reader.read_string ~source:f src in
        let comments = Comments.scan_sexpr src in
+       (* comment lines are reserved: the pretty layout breaks around them
+          so standalone comments splice back onto lines of their own *)
+       let reserved = List.map (fun (c : Comments.t) -> c.line) comments in
        let base =
-         try Printer_braces.print_program ~source:f forms
+         try Printer_braces.print_program ~source:f ~reserved forms
          with Printer_braces.Unprintable msg ->
            failwith ("pp fmt --to-braces: " ^ msg)
        in

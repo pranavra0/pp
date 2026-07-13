@@ -219,6 +219,27 @@ let block_stmts_of (body : expr) : expr list =
   | EDo l when List.length l >= 2 -> l
   | e -> [e]
 
+(* The line [e]'s printing will demand BEFORE emitting its first character
+   (mirrors print_expr below: ELocated wrappers, the def/fn/defnode family
+   via inversion, EDefValue's located rhs). Used to elide a separator space
+   when location padding is about to supply the newline anyway — otherwise
+   the separator trails at the end of the previous line. *)
+let leading_anchor (e : expr) : int option =
+  match e with
+  | ELocated ((_, l), _) -> Some l
+  | EDefValue (_, ELocated ((_, l), _)) -> Some l
+  | EFn (ps, b) | EDef (_, ps, b) | EDefNode (_, ps, b) ->
+      (try match (invert_fn_body ps b).i_loc with
+         | Some (_, l) -> Some l
+         | None -> None
+       with Unprintable _ -> None)
+  | _ -> None
+
+let sep_before st (s : string) (e : expr) =
+  match leading_anchor e with
+  | Some l when st.strict && l > st.line -> ()
+  | _ -> emit st s
+
 (* ---- the printer ---- *)
 
 let rec print_expr st (e : expr) : unit =
@@ -282,23 +303,25 @@ let rec print_expr st (e : expr) : unit =
        | ELocated ((f, l), v) ->
            check_file st f;
            require_line st l ("def " ^ name);
-           emit st "(def "; emit st name; emit st " ";
+           emit st "(def "; emit st name; sep_before st " " v;
            print_expr st v; emit st ")"
        | v ->
-           emit st "(def "; emit st name; emit st " ";
+           emit st "(def "; emit st name; sep_before st " " v;
            print_expr st v; emit st ")")
-  | EQuote q -> emit st "(quote "; print_expr st q; emit st ")"
-  | EForce e -> emit st "(force "; print_expr st e; emit st ")"
-  | EDelay e -> emit st "(delay "; print_expr st e; emit st ")"
-  | ENode e -> emit st "(node "; print_expr st e; emit st ")"
+  | EQuote q -> emit st "(quote"; sep_before st " " q; print_expr st q; emit st ")"
+  | EForce e -> emit st "(force"; sep_before st " " e; print_expr st e; emit st ")"
+  | EDelay e -> emit st "(delay"; sep_before st " " e; print_expr st e; emit st ")"
+  | ENode e -> emit st "(node"; sep_before st " " e; print_expr st e; emit st ")"
   | EDo stmts -> emit st "(do"; print_body_stmts st stmts; emit st ")"
   | EWithCaps (c, body) ->
-      emit st "(with-caps ";
+      emit st "(with-caps";
+      sep_before st " " c;
       print_expr st c;
       print_body_stmts st (block_stmts_of body);
       emit st ")"
   | EWithConfig (m, body) ->
-      emit st "(with-config ";
+      emit st "(with-config";
+      sep_before st " " m;
       print_expr st m;
       print_body_stmts st (block_stmts_of body);
       emit st ")"
@@ -307,7 +330,7 @@ let rec print_expr st (e : expr) : unit =
       List.iteri (fun i (n, h) ->
         if i > 0 then emit st " ";
         if not (name_ok n) then unpr "handler name %s has no sexpr spelling" n;
-        emit st n; emit st " "; print_expr st h)
+        emit st n; sep_before st " " h; print_expr st h)
         handlers;
       emit st "]";
       print_body_stmts st (block_stmts_of body);
@@ -315,7 +338,7 @@ let rec print_expr st (e : expr) : unit =
   | EPerform (name, args) ->
       if not (name_ok name) then unpr "effect name %s has no sexpr spelling" name;
       emit st "(perform "; emit st name;
-      List.iter (fun a -> emit st " "; print_expr st a) args;
+      List.iter (fun a -> sep_before st " " a; print_expr st a) args;
       emit st ")"
   | EModule stmts -> emit st "(module"; print_body_stmts st stmts; emit st ")"
   | EImport e -> emit st "(import "; print_expr st e; emit st ")"
@@ -329,10 +352,11 @@ let rec print_expr st (e : expr) : unit =
        | None -> ());
       emit st ")"
   | EConfig (k, d) ->
-      emit st "(config ";
+      emit st "(config";
+      sep_before st " " k;
       print_expr st k;
       (match d with
-       | Some d -> emit st " "; print_expr st d
+       | Some d -> sep_before st " " d; print_expr st d
        | None -> ());
       emit st ")"
   | ETyped _ ->
@@ -343,15 +367,17 @@ and print_apply st (fn : expr) (args : expr list) : unit =
   match fn, args with
   | ESymbol "vector", elems ->
       emit st "[";
-      List.iteri (fun i e -> if i > 0 then emit st " "; print_expr st e) elems;
+      List.iteri (fun i e ->
+        if i > 0 then sep_before st " " e;
+        print_expr st e) elems;
       emit st "]"
   | ESymbol "hash-map", kvs when List.length kvs mod 2 = 0 ->
       emit st "{";
       let rec pairs i = function
         | [] -> ()
         | k :: v :: rest ->
-            if i > 0 then emit st " ";
-            print_expr st k; emit st " "; print_expr st v;
+            if i > 0 then sep_before st " " k;
+            print_expr st k; sep_before st " " v; print_expr st v;
             pairs (i + 1) rest
         | [_] -> assert false
       in
@@ -359,28 +385,31 @@ and print_apply st (fn : expr) (args : expr list) : unit =
       emit st "}"
   | ESymbol "hash-set", elems ->
       emit st "#{";
-      List.iteri (fun i e -> if i > 0 then emit st " "; print_expr st e) elems;
+      List.iteri (fun i e ->
+        if i > 0 then sep_before st " " e;
+        print_expr st e) elems;
       emit st "}"
   | ESymbol s, args when name_ok s ->
       if List.mem s special_form_heads then
         unpr "application of reserved head %s has no sexpr spelling" s;
       emit st "("; emit st s;
-      List.iter (fun a -> emit st " "; print_expr st a) args;
+      List.iter (fun a -> sep_before st " " a; print_expr st a) args;
       emit st ")"
   | fnexpr, args ->
       emit st "(";
       print_expr st fnexpr;
-      List.iter (fun a -> emit st " "; print_expr st a) args;
+      List.iter (fun a -> sep_before st " " a; print_expr st a) args;
       emit st ")"
 
 and print_if st c t e =
-  emit st "(if ";
+  emit st "(if";
+  sep_before st " " c;
   print_expr st c;
-  emit st " ";
+  sep_before st " " t;
   print_expr st t;
   (match e with
    | ELiteral VNil -> ()
-   | e -> emit st " "; print_expr st e);
+   | e -> sep_before st " " e; print_expr st e);
   emit st ")"
 
 (* `[name [: ty] value ...]` — let's typed binding vector *)
@@ -391,8 +420,9 @@ and print_bindings st (binds : (string * expr) list) : unit =
     emit st n;
     match v with
     | ETyped (v', ty) ->
-        emit st " : "; print_expr st ty; emit st " "; print_expr st v'
-    | v -> emit st " "; print_expr st v)
+        emit st " : "; print_expr st ty;
+        sep_before st " " v'; print_expr st v'
+    | v -> sep_before st " " v; print_expr st v)
     binds
 
 (* `[name value ...]` — let*'s untyped binding vector *)
@@ -400,7 +430,7 @@ and print_plain_bindings st (binds : (string * expr) list) : unit =
   List.iteri (fun i (n, v) ->
     if i > 0 then emit st " ";
     if not (name_ok n) then unpr "binding name %s has no sexpr spelling" n;
-    emit st n; emit st " "; print_expr st v)
+    emit st n; sep_before st " " v; print_expr st v)
     binds
 
 (* `(p1 [: ty1] p2 ...)` — fn's own parameter parens *)
@@ -440,14 +470,14 @@ and print_ret st (ret : expr option) : unit =
   | Some ty -> emit st " : "; print_expr st ty
 
 and print_body_stmts st (stmts : expr list) : unit =
-  List.iter (fun e -> emit st " "; print_expr st e) stmts
+  List.iter (fun e -> sep_before st " " e; print_expr st e) stmts
 
 (* ---- public API ---- *)
 
 let print_program ?(source : string = "<?>") (forms : expr list) : string =
   let st = { buf = Buffer.create 1024; line = 1; src = source; strict = true } in
   List.iteri (fun i e ->
-    if i > 0 then emit st " ";
+    if i > 0 then sep_before st " " e;
     print_expr st e)
     forms;
   if forms <> [] then newline st;

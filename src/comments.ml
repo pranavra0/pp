@@ -21,9 +21,12 @@
    that same line number — see [splice] below. *)
 
 type t = { line : int; text : string }
-(* [text] is everything after the marker up to (not including) the
-   terminating newline/EOF, UNMODIFIED (leading space typically present,
-   as written after `;`/`#` in the source). *)
+(* [text] is the comment's CONTENT with the source delimiter fully
+   stripped: the marker character, any immediately repeated markers
+   (`;;`/`###` banner styles — the whole run is delimiter, not content),
+   and one following space if present. Both surfaces' spellings of the
+   same comment therefore scan to the same [text], and a splice emits
+   exactly one target delimiter (never a stacked `# ;`). *)
 
 let is_alnum c =
   (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
@@ -60,6 +63,9 @@ let scan ~(marker : char) ~(island : bool) (input : string) : t list =
     | Some _ -> adv (); skip_island ()
   in
   let read_comment () =
+    (* the delimiter is the whole marker run plus one following space *)
+    while peek () = Some marker do adv () done;
+    (match peek () with Some ' ' -> adv () | _ -> ());
     let start = !pos in
     while (match peek () with Some c -> c <> '\n' | None -> false) do adv () done;
     let text = String.sub input start (!pos - start) in
