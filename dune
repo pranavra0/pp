@@ -10,3 +10,35 @@
   src/main.exe)
  (action
   (run bash scripts/run-tests.sh src/main.exe)))
+
+; Phase-3 fork-defeat regression, root cause: Runtime.stdlib_root()
+; (src/runtime.ml) resolves --reconcile/--supervise's auto-loaded
+; domain-fs.pp/domain-proc.pp (and their list.pp/map.pp/string.pp deps) to
+; _build/default/stdlib — the sibling directory of main.exe, i.e. THIS
+; mirror, not the repo's own stdlib/ — but until this rule existed, that
+; mirror was only ever refreshed as a side effect of the `runtest` alias's
+; `(source_tree stdlib)` dependency above. A bare `dune build` (which is
+; all `bin/pp` needs, per AGENTS.md) rebuilt main.exe without touching this
+; mirror at all, so editing stdlib/*.pp and running `dune build` silently
+; kept serving the OLD stdlib content to every --reconcile/--supervise run
+; until something else happened to invoke `dune runtest` first. This is
+; exactly how the list.pp `map`-shadow fix (removing the pp-level `(def
+; (map f lst) ...)` that shadowed the batching-aware builtin, defeating
+; Phase 3's parallel fan-out — docs/PLAN-phase3-parallel.md) silently
+; failed to take effect for `bin/pp`: the source was fixed, but the mirror
+; `bin/pp` actually reads stdlib from at runtime stayed stale.
+;
+; This rule (not just `(deps (source_tree stdlib))`) also re-lists
+; src/main.exe and tools/fuzz.exe explicitly: dune's default per-directory
+; alias, unless overridden, implicitly aggregates every subdirectory's own
+; default target (which is how a bare `dune build` built both executables
+; before this rule existed) — but defining ANY explicit `(alias default)`
+; rule in a directory REPLACES that implicit aggregation for the directory
+; it's declared in, root included. Naming the two executables here
+; preserves "plain `dune build` builds the interpreter and the fuzzer"
+; (AGENTS.md) while adding the stdlib mirror to the same alias, so both
+; guarantees hold from one ordinary build with no extra step.
+(rule
+ (alias default)
+ (deps (source_tree stdlib) src/main.exe tools/fuzz.exe)
+ (action (progn)))

@@ -19,7 +19,11 @@
    value channel, exactly as it already is for separate `pp` invocations
    (tests/010, tests/014). *)
 
-type policy = Serial | Parallel of int | Race of int
+(* [Remote member]: M5 stage B (docs/PLAN-m5-distribution.md "Remote
+   placement") — the same handler, over the stage-A transport, to a named
+   cluster member (ambient config, ~/.pp/cluster/members — never --grant,
+   an address is not an authority ceiling). *)
+type policy = Serial | Parallel of int | Race of int | Remote of string
 
 (* Ambient; set once from --schedule. Read only in the miss arms and here —
    NEVER by node_key_of / vm_node_key, and it never enters a trace (D17
@@ -34,6 +38,15 @@ type job = {
      forks — sound because LAW 37 nodes are deterministic; the first
      exit-0 wins). *)
   j_width : int;
+  (* The thunk this job forces (M5 stage B). Every existing call site
+     already has it in scope; carried here so remote dispatch can test
+     data-closedness (Evaluator.is_data_closed) and read node_caps without
+     Scheduler itself depending on Evaluator (see remote_dispatch_hook
+     below — the same cycle-breaking indirection Primitives' *_ref values
+     already use, because Evaluator depends on Scheduler and Transport
+     depends on Evaluator, so a remote dispatcher living above both cannot
+     be called directly from here). *)
+  j_thunk : Types.thunk;
 }
 
 (* ---- Live-child bookkeeping (for SIGINT and race-loser kills) ---- *)
@@ -129,11 +142,28 @@ let run_child (j : job) : unit =
   (try flush stderr with _ -> ());
   Unix._exit status
 
+(* Deterministic, load-independent observability of actual fan-out — the
+   real M1 claim is "nodes fork to workers," a fork COUNT, not a wall-clock
+   time (wall-clock masked a regression once: a shadowed `map` silently
+   defeated batching and a timing-only test read it as "no spare cores").
+   PP_FORK_LOG=<path> appends one line per fork; a test asserts the count. *)
+let fork_count = ref 0
+let fork_log_path = lazy (Sys.getenv_opt "PP_FORK_LOG")
+
 let fork_job (j : job) : int =
   flush_before_fork ();
   match Unix.fork () with
   | 0 -> run_child j; Unix._exit 1 (* unreachable: run_child always _exit's *)
-  | pid -> Hashtbl.replace live_children pid j.j_key; pid
+  | pid ->
+      incr fork_count;
+      (match Lazy.force fork_log_path with
+       | Some p ->
+           (try
+              let fd = Unix.openfile p [Unix.O_WRONLY; Unix.O_APPEND; Unix.O_CREAT] 0o644 in
+              ignore (Unix.write_substring fd "fork\n" 0 5); Unix.close fd
+            with _ -> ())
+       | None -> ());
+      Hashtbl.replace live_children pid j.j_key; pid
 
 (* ---- dispatch_batch ---- *)
 
@@ -206,7 +236,23 @@ let run_concurrent (limit : int) (jobs : job list) : unit =
     if !live_count > 0 then reap_one ()
   done
 
+(* Set by src/remote.ml at startup (main.ml calls Remote.init ()) — Remote
+   sits ABOVE Evaluator/Transport/Token in the dependency graph, so its
+   dispatch function cannot be called directly from this (much lower)
+   module; this ref is the seam, exactly like Primitives.run_node_body_ref
+   etc. break the analogous cycle for Evaluator. A batch job this hook
+   leaves untouched (non-data-closed, unreachable member, a dead worker,
+   ...) is NOT re-run here — it simply stays Unevaluated, and the ORIGINAL
+   caller (force_deep_plain's recursive walk, or force_node's Miss arm)
+   forces it in-process exactly as it would for a dead local worker: never
+   a wrong answer, never a hang, no special-cased "retry locally" code
+   needed at this layer. The default no-op is therefore already the safe
+   degrade-to-local behavior, not just a placeholder. *)
+let remote_dispatch_hook : (member:string -> job list -> unit) ref =
+  ref (fun ~member:_ (_ : job list) -> ())
+
 let dispatch_batch (jobs : job list) : unit =
   match !policy with
   | Serial -> run_serial jobs
   | Parallel n | Race n -> run_concurrent n jobs
+  | Remote member -> !remote_dispatch_hook ~member jobs

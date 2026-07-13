@@ -580,8 +580,67 @@ non-list `def` is a value binding — `tests/025`.)
   byte-identical to a local run; T5 no secret bytes cross; T6-partial:
   identical key/result hash whether built locally, independently, or via
   serve-hit).
+- **M5 stage B — remote placement** (docs/PLAN-m5-distribution.md "Remote
+  placement" / "Q11-bis"). `Scheduler.policy` gains `Remote of string`
+  (`--schedule remote:<member>`); membership is ambient
+  (`~/.pp/cluster/members` or `$PP_CLUSTER_MEMBERS`, mapping a member name
+  to its store-root path — never `--grant`, an address is not an
+  authority ceiling). A batch's data-closed predicate
+  (`Evaluator.is_data_closed`) reuses `Codec.encode_value` at the free-var
+  values — the store's own non-data check — with one necessary, documented
+  carve-out: a bare reference to a global primitive (`VBuiltin`, present in
+  the base env `Primitives.initial_env` populates) is code identical on
+  both sides by construction and is not "shipping code" the way a captured
+  `VClosure` would be, so it doesn't block shipping; a genuinely captured
+  closure still correctly fails and stays local. `src/remote.ml`
+  (compiled after Evaluator/Transport/Token, wiring itself into a new
+  `Scheduler.remote_dispatch_hook` — the same cycle-breaking indirection
+  the `Primitives.*_ref` values already use) ships a data-closed batch to a
+  member by: pre-observing the granted fs-read scope (Q11-bis,
+  coarse-but-sound) and pushing every file directly into the member's own
+  store as blobs; minting a cluster token from this process's own
+  top-level `--grant` specs; spawning the member as an ORDINARY second
+  `pp` invocation of the byte-identical program (own $HOME, `--schedule
+  serial`, a new internal `--remote-node` flag) — no "force only key K"
+  surface, no second evaluate-on-member function, the member simply runs
+  `run_node_body` via its own completely normal `main.ml` control flow;
+  and pulling each assigned key back via the UNCHANGED stage-A
+  `Transport.serve_hit`/`recv_hit` pair, re-hash-verified same as every
+  other synced artifact — extended (in `remote.ml`, not `transport.ml`) to
+  also ship "blob:" refs embedded in a node's RESULT value (the
+  `(blob (slurp ...))` compile-output pattern; `blob`/`blob-get` are
+  deliberately untraced, so `Transport.decide`'s `tr_reads`-derived
+  blob_hashes alone miss them). Q11-bis pre-seeding is unbypassable by
+  construction: `Store.run_pins`/`read_file_cell`/`observe_cell` already
+  consult the pin table FIRST, unconditionally, before ever touching disk
+  for a `file:` cell; populating it before `run_files` executes a single
+  expression means the disk-read branch is structurally unreachable for a
+  pre-seeded cell, proven by a differing-file test (`tests/048`, via a
+  test-only `PP_REMOTE_TEST_HOOK`/`_AFTER` synchronization seam simulating
+  the network-latency window a real dispatcher/member gap occupies).
+  `tool:` cells are deliberately NOT pre-seeded (the member's own `cc` is a
+  legitimate distinct observation, proven via the member's own journal).
+  Every degrade path (unknown/unreachable member, a nonzero/crashed
+  member, a non-data-closed free var, a malformed reply) leaves the
+  affected keys an ordinary store Miss — the caller's existing
+  `force_deep_plain`/`force_node` Miss path computes them in-process
+  exactly like a dead local Parallel/Race worker; never a wrong answer or
+  a hang. **Wall (found, not fixed — out of stage-B scope):** `--reconcile`
+  unconditionally preloads `stdlib/list.pp` as domain glue, and list.pp's
+  own pp-level `map` SHADOWS the batching-aware `map` BUILTIN Phase 3
+  added, silently defeating `collect_unevaluated_nodes` (so parallel/race/
+  remote all degrade to serial-shaped one-at-a-time forcing) for ANY
+  `--reconcile`-based build — masked in `tests/024`'s own parallel exit
+  criterion by exec-count-only assertions plus a soft timing check that
+  already accepts "no speedup" as a pass. `tests/048` avoids `--reconcile`
+  (direct top-level `write-file` materialization) to exercise the
+  scheduler correctly; a real fix belongs to Phase 3/reconcile, not M5.
+  Pinned by `tests/048-remote-placement.sh` (an 8-TU real-cc build,
+  byte-identical materialized tree + desired-state hash vs serial;
+  cross-machine hit; the differing-file Q11-bis case; non-data-closed
+  stays local; unreachable member degrades; VM parity).
 
-## Discrepancy ledger (D1–D24)
+## Discrepancy ledger (D1–D26)
 
 The punch list. "Fixed" means fixed and covered by a test; open items link to
 their phase in [ROADMAP.md](ROADMAP.md).
@@ -613,4 +672,5 @@ their phase in [ROADMAP.md](ROADMAP.md).
 
 | D23 | Module scope × top-level `let` (found while fixing D22) | **Open.** A module body can see a name bound by a top-level `let` in the VM (top-level `let` is special-cased to bind as a VM global) but not in the tree-walker (a module evaluates in a fresh `base_env`). Pre-existing, unrelated to D22 — confirmed present before and after the D22 fix. The tree-walker is the oracle: a module should NOT see enclosing `let` bindings. Not fuzzer-generated; avoid relying on it until fixed. |
 | D24 | VM dynamic-extent scoping under OCaml exceptions (found during M3 attenuation) | **Open.** The VM's flat enter/exit-opcode pattern for `with-handler`/`with-config` is not exception-safe: an OCaml exception raised mid-body unwinds past the exit opcode, leaking the installed handler/config past the error (confirmed by direct test). The tree-walker's `with_ref` restores correctly, so the backends diverge on error paths that install then observe dynamic extent — narrower than D9's claim (D9 fixed normal-return and tail-call restore, not exception unwind). `with-caps` deliberately does NOT use the flat pattern (its VM body runs via nested `run_isolated` under a real try/with) and is immune. Fix: give with-handler/with-config the same nested-run shape or an unwind-protect discipline. |
+| D26 | Parallel batching defeated under `--reconcile` — two compounding causes (found integrating M5 stage B, via a new deterministic fork-count guard) | **Fixed.** Two bugs stacked. (a) `stdlib/list.pp` defined a pp-level `(def (map f lst) (cons (f (car lst)) …))` that SHADOWED the batching-aware `map` BUILTIN; because application is strict (LAW 20 / `EApply` forces every argument, incl. `cons`'s), the pp `map` forced each `(compile n)` node inline — so `force-deep`'s `collect_unevaluated_nodes` saw zero unevaluated persistent thunks and dispatched nothing. `--reconcile`/`--supervise` auto-load `list.pp` for the domain libraries, so every reconcile build silently ran its compiles one-at-a-time under `parallel:`/`remote:`. Fix: removed the pp `map` (the builtin supersedes it) with a NOTE forbidding re-adding it. (b) The `bin/pp` binary loads stdlib from `_build/default/stdlib/` — dune's mirror — which was remirrored ONLY by `dune runtest`'s rule, never by a plain `dune build`. So the source fix to (a) was invisible to `bin/pp --reconcile` until a `runtest` happened to refresh the mirror — which is why the same program forked 6 one run and 0 the next (a stale-mirror heisenbug that misdirected the whole first investigation). Fix: root `dune` now ties `(source_tree stdlib)` to the `@default` alias (`dune build`), so the mirror can never go stale relative to `main.exe`. The masking meta-bug: M1's original wall-clock speedup assertion accepted "no speedup" as "no spare cores," hiding (a) after M4 introduced the auto-load. Now `tests/024`'s deterministic `p3-parallel-forked` assertion (fork count via `PP_FORK_LOG`) requires ≥ TU forks — 101/101 after the fix, ~3.3x speedup, from a clean `_build`. |
 | D25 | Content-addressed `let`-memoization silently caches repeated `perform` calls (found landing Q13) | **Fixed, with a residual discipline, not a language change.** `(perform domain-state-get …)` sat behind an ordinary `let` in `stdlib/domain-proc.pp`'s `proc-known-names` — LAW 20's `make_thunk_ca` keys a `let`-thunk on `(expr, env_hash, caps_hash, cfg_hash, handlers_hash)`, and a ZERO-ARGUMENT closure called twice in the same dynamic extent (once for `domains.ml`'s plan pass, once for its verify re-observe; or twice within one `apply`, for two services' bookkeeping) has an UNCHANGING env and, under `with_domain`'s fixed cap, an unchanging ambient — so the key is IDENTICAL and the second call silently replayed the first's memoized result instead of re-reading reality. Invisible: no exception, no error text — a killed service looked "still alive" one call later, entirely in-process. Repro: register a domain whose `:observe` reads `domain-state-get` inside a 0-arg helper, run reconcile, observe verify-after-write fail (or, worse, silently "succeed" while stale). Fix, two-part: (1) `Domains.call_uncached` pushes a fresh, unique `config-stack` layer before every `observe`/`apply` call — folded into `make_thunk_ca`'s key, guaranteeing each of the two TOP-LEVEL calls a pass makes gets a distinct key (`diff` is deliberately EXCLUDED — its memoization IS the plan cache and must stay content-keyed); (2) within a single call, the general/robust rule is mechanical, not automatic: never call a zero-argument `perform`-containing accessor more than once per dynamic extent — read once, thread the result through explicitly as an ordinary argument (a parameterized call is immune by construction, since a differing argument value changes the env hash). `stdlib/domain-proc.pp`'s `known-services` bookkeeping was restructured this way (`proc-apply` reads it once, via `foldl`'s seed, and writes it once at the end). No core semantics changed; this is a documented authoring discipline for domain policy code (and, latently, for ANY pp code that calls a 0-arg impure accessor more than once per extent), surfaced because Q13 was the first feature to call the SAME pp closure twice, deliberately, from OCaml orchestration. |

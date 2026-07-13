@@ -313,6 +313,36 @@ two shell suites:
     the identical node-key filename and a byte-identical result object,
     and the receiver's serve-hit-synced object is also byte-identical to
     the builder's own.
+  - **048** — M5 stage B: remote placement (docs/PLAN-m5-distribution.md
+    "Remote placement" / "Q11-bis"). Two `pp` process invocations
+    differing only in `$HOME` (dispatcher A, member B), addressed via
+    `~/.pp/cluster/members`, over the same local-dir loopback stage A
+    uses. An 8-TU real-cc build (scaled down from tests/024's 101 for a
+    two-process-per-node test) under `--schedule remote:B`: byte-
+    identical materialized tree AND desired-state hash (the `--check`
+    schedule-transparency audit, extended to `Remote` policy_name) vs a
+    serial build — deliberately materializes via plain top-level
+    `write-file` rather than `--reconcile`, working around a WALL this
+    test found (see STATUS.md/report: `--reconcile` preloads
+    `stdlib/list.pp`, whose own `map` shadows the batching `map` builtin,
+    silently defeating parallel/race/remote batching for any
+    `--reconcile` build — out of stage-B scope to fix). Cross-machine
+    hit: the dispatcher's and member's trace-key sets intersect (the
+    member genuinely forced compile nodes; the dispatcher's own
+    subsequent Store.hit serves them, no local recompute). `tool:` not
+    pre-seeded: the member's own journal shows real `cc` execs (its own
+    legitimate observation). Q11-bis: a `PP_REMOTE_TEST_HOOK`/`_AFTER`
+    test-only synchronization seam (src/remote.ml, unset in every normal
+    invocation) mutates a shared data file to a DIFFERENT value in the
+    exact window between the dispatcher pinning it and the member
+    running, then reverts once the member has exited — the member's own
+    stored object is the dispatcher's PINNED bytes, never the disk's
+    transiently-different value, and the dispatcher's own post-pull
+    Store.hit re-validation (against the reverted, now-matching world)
+    produces a clean hit. Non-data-closed (a free-var closure) stays
+    local: zero trace keys ever appear on the member. Unreachable member
+    (a bad members-file target): the build still succeeds, byte-identical
+    to serial. VM parity: the same remote build under `--bytecode`.
 
 Two proofs run OUTSIDE `dune runtest` (they invoke dune / the network):
 
@@ -491,13 +521,15 @@ value def, and a bare statement all reference EARLIER siblings.)
   first, which does not exist today for ANY capability kind (`fs:`/`process`
   included).
 
-- **M5 stage A (tokens/transport) has no pp-language surface at all, so
-  there is nothing for the fuzzer to generate.** `cluster-init`/
-  `--mint-token`/`--serve-hit`/`--recv-hit`/`--transport-push`/
-  `--transport-pull` are CLI-only administrative/test entries (src/token.ml,
-  src/transport.ml); no reader syntax, builtin, or expression form exists
-  for a token or a transport op, by design (PLAN-m5-distribution.md: "never
-  a pp value... no path into the value world"). `dune exec ./tools/fuzz.exe
+- **M5 stages A and B (tokens/transport/remote placement) have no pp-
+  language surface at all, so there is nothing for the fuzzer to
+  generate.** `cluster-init`/`--mint-token`/`--serve-hit`/`--recv-hit`/
+  `--transport-push`/`--transport-pull`/`--remote-node` are CLI-only
+  administrative/test entries (src/token.ml, src/transport.ml,
+  src/remote.ml); no reader syntax, builtin, or expression form exists for
+  a token, a transport op, or a placement (`--schedule remote:<member>`
+  is a CLI flag, exactly like `parallel:N`/`race:N` before it — LAW 34's
+  negative half). `dune exec ./tools/fuzz.exe
   -- --grammar core|full --count 2000` were re-run after this change and
   came back clean (0 mismatch/crash), confirming the addition is additive
   and doesn't touch the fuzzed surface.

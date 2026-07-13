@@ -3,6 +3,6 @@
  (public_name pp)
  (modules version types hasher codec paths cell runtime store journal reader capabilities process
    scheduler domain_prims fenced island primitives domains evaluator macro compiler stabilize vm
-   repl token transport main)
+   repl token transport remote main)
  (libraries cryptokit dune-build-info)
  (flags -no-strict-sequence))

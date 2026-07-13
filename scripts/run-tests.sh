@@ -276,4 +276,11 @@ else
   echo "FAIL 047-cluster-sync"; fail=1
 fi
 
+echo "--- M5 stage B remote placement suite ---"
+if PP="$PP" bash tests/048-remote-placement.sh; then
+  echo "ok   048-remote-placement"
+else
+  echo "FAIL 048-remote-placement"; fail=1
+fi
+
 exit $fail

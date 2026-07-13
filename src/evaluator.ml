@@ -276,7 +276,7 @@ let force_node ~(key : string) ~(run : unit -> value) (t : thunk) : value =
        | Scheduler.Race n when n > 1 ->
            let job = { Scheduler.j_key = key;
                        j_run = (fun () -> run_node_body ~key ~run t);
-                       j_width = n } in
+                       j_width = n; j_thunk = t } in
            Scheduler.dispatch_batch [job];
            (match serve_hit ~t (Store.hit ~key ~authorized) with
             | Some v -> v
@@ -284,7 +284,13 @@ let force_node ~(key : string) ~(run : unit -> value) (t : thunk) : value =
                 (* Every racing worker died: degrade to the ordinary serial
                    path — never a wrong answer, never a hang. *)
                 run_node_body ~key ~run t)
-       | Scheduler.Serial | Scheduler.Parallel _ | Scheduler.Race _ ->
+       (* A lone miss stays in-process under every OTHER policy too,
+          including [Remote _]: spinning up a cluster-member subprocess for
+          a single node buys nothing (there is no sibling to overlap with,
+          same reasoning as Serial/Parallel above) — only a force-deep BATCH
+          (collect_unevaluated_nodes, primitives.ml) is worth shipping. *)
+       | Scheduler.Serial | Scheduler.Parallel _ | Scheduler.Race _
+       | Scheduler.Remote _ ->
            run_node_body ~key ~run t)
 
 (* Module exports: the bindings of [bindings] not present in [base]
@@ -438,6 +444,48 @@ and node_key_of (t : thunk) : string =
          | None -> hash_concat ["fv-unbound"; name])
   in
   hash_concat (["node-key"; Hasher.hash_expr e] @ fv_parts)
+
+(* Remote placement (docs/PLAN-m5-distribution.md "Remote placement"): a
+   node is data-closed iff every free var's FORCED value re-encodes under
+   Codec.encode_value — the store's own non-data predicate (codec.ml),
+   reused verbatim at this new decision point rather than duplicated.
+   Mirrors node_key_of's own free-var walk/force (so "can this key be
+   computed" and "can this node be shipped" agree on what counts as a free
+   var) but never raises: a free var that forces to a capability/sealed
+   value (node_key_of's own ban above) or that raises for any other reason
+   is conservatively treated as NOT data-closed — the degrade-to-local
+   posture, never a crash and never a wrong ship. An unbound name (a
+   reference to a global/primitive function that initial_env never even
+   populated) needs nothing shipped, so it never blocks shipping the node
+   itself.
+
+   VBuiltin is a documented, necessary carve-out to the literal codec
+   check: `Primitives.initial_env` binds EVERY primitive into the base
+   env (repl.ml), so an ordinary reference to `slurp`/`string-append`/etc.
+   — present in nearly every real node body — resolves via [lookup_env]
+   exactly like a captured user value would, and forcing it yields a
+   VBuiltin, which [Codec.encode_value] correctly refuses (it is code, the
+   store's non-data law). But a bare reference to a global primitive is
+   NOT "shipping code" the way a captured VClosure over user state would
+   be: it is part of the identical program source both sides already run,
+   resolved identically by construction (the same pp binary's own builtin
+   table) — the exact "no code crosses the wire" invariant the source-hash
+   check already establishes at a coarser grain. A genuinely captured
+   VClosure is deliberately NOT exempted here — that free var really would
+   need code shipped, so it correctly still fails the encode check below,
+   exactly like Codec.encode_value already treats it (the "free var is a
+   closure stays local" contract scenario). *)
+and is_data_closed (t : thunk) : bool =
+  Types.SS.for_all (fun name ->
+    match lookup_env t.thunk_env name with
+    | None -> true
+    | Some v ->
+        (try
+           match force v with
+           | VBuiltin _ -> true
+           | fv -> Codec.encode_value fv <> None
+         with _ -> false))
+    (Types.free_vars t.thunk_expr)
 
 (* ---- Main Evaluator (non-tail) ---- *)
 

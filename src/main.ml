@@ -22,6 +22,11 @@ let main () =
   let transport_pull_args = ref None in (* (kind, hash-or-key, root) *)
   let serve_hit_args = ref None in     (* (key, token-file, shared-root, reply-file) *)
   let recv_hit_args = ref None in      (* (reply-file, shared-root) *)
+  (* M5 stage B: the cluster-member side of remote placement
+     (docs/PLAN-m5-distribution.md "Remote placement" / "Q11-bis").
+     Internal — the dispatcher (src/remote.ml) invokes a member `pp` with
+     this flag; not meant to be typed by hand. *)
+  let remote_node_args = ref None in   (* (token-file, pins-file, shared-root, keys-file, reply-file) *)
 
   let rec parse = function
     | "--" :: rest ->
@@ -50,6 +55,9 @@ let main () =
                   (match int_of_string_opt n with
                    | Some n when n > 0 -> Scheduler.policy := Scheduler.Race n
                    | _ -> failwith ("invalid --schedule race width: " ^ n))
+              | ["remote"; m] ->
+                  if m = "" then failwith "invalid --schedule remote spec: empty member name"
+                  else Scheduler.policy := Scheduler.Remote m
               | _ -> failwith ("invalid --schedule spec: " ^ spec)));
         parse rest
     | "island-pins" :: f :: rest -> island_pins_file := Some f; parse rest
@@ -73,6 +81,9 @@ let main () =
         serve_hit_args := Some (key, token_file, shared_root, reply_file); parse rest
     | "--recv-hit" :: reply_file :: shared_root :: rest ->
         recv_hit_args := Some (reply_file, shared_root); parse rest
+    | "--remote-node" :: token_file :: pins_file :: shared_root :: keys_file :: reply_file :: rest ->
+        remote_node_args := Some (token_file, pins_file, shared_root, keys_file, reply_file);
+        parse rest
     | "--reconcile" :: root :: rest -> reconcile_root := Some root; parse rest
     | "--supervise" :: rest -> supervise := true; parse rest
     | "--fenced-policy" :: policy :: rest ->
@@ -103,7 +114,7 @@ let main () =
         Printf.printf "  pp why <file.pp>         Explain node cache hits/misses (capability-filtered)\n";
         Printf.printf "  pp --no-cache <file.pp>  Skip cache reads (recompute); results still stored\n";
         Printf.printf "  pp --check <file.pp>     Determinism audit: run each node twice, flag volatile\n";
-        Printf.printf "  pp --schedule serial|parallel:N|race:N  Node-miss dispatch policy (default: serial)\n";
+        Printf.printf "  pp --schedule serial|parallel:N|race:N|remote:MEMBER  Node-miss dispatch policy (default: serial)\n";
         Printf.printf "  pp --once <file.pp>        Run once and exit (explicit; default behavior)\n";
         Printf.printf "  pp --watch <file.pp>       Run, then watch cell changes and re-evaluate\n";
         Printf.printf "  pp --watch --stabilize <file>  Watch with push stabilize (dirty-propagation)\n";
@@ -120,6 +131,8 @@ let main () =
         Printf.printf "  pp --transport-push/--transport-pull object|blob|trace <id> <root>  Local-dir sync (internal)\n";
         Printf.printf "  pp --serve-hit <key> <token-file> <shared-root> <reply-file>  Capability-gated hit (internal)\n";
         Printf.printf "  pp --recv-hit <reply-file> <shared-root>  Ingest a serve-hit reply (internal)\n";
+        Printf.printf "  pp --schedule remote:<member>  Remote placement (M5 stage B); members: ~/.pp/cluster/members or $PP_CLUSTER_MEMBERS\n";
+        Printf.printf "  pp --remote-node <token> <pins> <root> <keys> <reply>  Cluster-member side of remote placement (internal)\n";
         exit 0
     | "--once" :: rest -> parse rest  (* no-op: explicit one-shot *)
     | "--watch" :: rest -> watch := true; parse rest
@@ -133,10 +146,32 @@ let main () =
   in
   parse args;
 
+  (* M5 stage B (docs/PLAN-m5-distribution.md "Remote placement"): record
+     this invocation's own file list / --bytecode / raw --grant specs so
+     src/remote.ml can replicate them when spawning a cluster member as an
+     ordinary second `pp` invocation of the identical program. *)
+  Runtime.program_files := List.rev !files;
+  Runtime.program_bytecode := !bytecode;
+  Runtime.initial_grant_specs := List.rev !grants;
+
   (* Parse --grant specs into capabilities (Capabilities.parse_grant — M5
      moved this out of a local closure here so the signed-token verifier
-     can reuse the exact same parser; see capabilities.ml). *)
-  let initial_caps = List.map Capabilities.parse_grant (List.rev !grants) in
+     can reuse the exact same parser; see capabilities.ml). Under
+     --remote-node (the cluster-member side of remote placement, M5 stage
+     B), authority instead comes from a VERIFIED cluster token — never
+     plain --grant strings — so a tampered/expired/wrong-secret token fails
+     this member process outright (Failure -> the top-level handler ->
+     exit 1), which the dispatcher (src/remote.ml) reads as "member
+     failed" and degrades that batch to local compute. *)
+  let initial_caps =
+    match !remote_node_args with
+    | Some (token_file, _, _, _, _) ->
+        let token_text = Store.read_raw token_file in
+        (match Token.token_to_caps token_text with
+         | Ok caps -> caps
+         | Error reason -> failwith ("pp: --remote-node: token rejected: " ^ reason))
+    | None -> List.map Capabilities.parse_grant (List.rev !grants)
+  in
   Runtime.initial_capabilities := initial_caps;
   (* Loader authority bound (Q6/D8c): the interpreter may load source from
      the CLI-named programs' directories, the cwd, and ~/.pp — nothing else.
@@ -148,6 +183,16 @@ let main () =
     :: List.map (fun f -> Filename.dirname (Runtime.canonical_path f)) !files
     @ (match Runtime.stdlib_root () with Some d -> [d] | None -> []);
   Store.init ();
+  Remote.init ();
+  (* M5 stage B / Q11-bis: pre-seed Store.run_pins from the dispatcher's
+     wire BEFORE run_files ever executes a single expression — this member
+     process must never observe its own disk for a pre-seeded cell, and
+     the only way to make that structural (not just conventional) is to
+     populate the pin before the FIRST observation can happen at all. *)
+  (match !remote_node_args with
+   | Some (_, pins_file, _, _, _) ->
+       Remote.preseed_pins_from_file ~pins_file
+   | None -> ());
   Runtime.probe_observer := Primitives.probe_observe_for_store;
   Runtime.domain_cell_observer := Primitives.domain_observe_cell_for_store;
   Runtime.fenced_policy := !fenced_policy;
@@ -511,6 +556,7 @@ let main () =
                  | Scheduler.Serial -> "serial"
                  | Scheduler.Parallel n -> Printf.sprintf "parallel:%d" n
                  | Scheduler.Race n -> Printf.sprintf "race:%d" n
+                 | Scheduler.Remote m -> Printf.sprintf "remote:%s" m
                in
                Scheduler.policy := Scheduler.Serial;
                Hashtbl.clear Store.run_pins;
@@ -532,6 +578,18 @@ let main () =
                         (policy_name saved_policy)
                     end))
       end);
+
+  (* M5 stage B: after running the program (whatever nodes that forced,
+     including — but not limited to — the dispatcher's assigned batch keys;
+     duplicate/extra computation here is sound, contract's "advisory
+     responsibility partition"), serve each assigned key back to the
+     dispatcher via the UNCHANGED stage-A Transport.serve_hit, once per key,
+     against THIS process's own now-populated store. *)
+  (match !remote_node_args with
+   | Some (token_file, _, shared_root, keys_file, reply_file) ->
+       let token_text = Store.read_raw token_file in
+       Remote.serve_assigned_keys ~token_text ~keys_file ~shared_root ~reply_file
+   | None -> ());
 
   (* --check verdict: any volatile node fails the audit (LAW 38). *)
   if !Store.check_mode && !Store.volatile_count > 0 then begin

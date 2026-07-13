@@ -375,6 +375,19 @@ let initial_capabilities : capability list ref = ref []
    cell so a node that observed them recomputes when they change. *)
 let program_argv : string list ref = ref []
 
+(* M5 stage B (docs/PLAN-m5-distribution.md "Remote placement"): the
+   top-level file arguments and --bytecode flag this invocation was given,
+   and the RAW --grant spec strings (pre-Capabilities.parse_grant) behind
+   initial_capabilities above — set once by main.ml right after CLI
+   parsing, alongside initial_capabilities/program_argv. Remote dispatch
+   (src/remote.ml) replicates these to spawn a cluster member as an
+   ordinary second `pp` invocation (own $HOME) of the SAME program, and
+   mints that member's token from the SAME spec strings `pp --grant`
+   itself already parsed — never wider than this process's own authority. *)
+let program_files : string list ref = ref []
+let program_bytecode : bool ref = ref false
+let initial_grant_specs : string list ref = ref []
+
 (* --stabilize: when true, init skips Hashtbl.clear thunk_store so
    clean thunks remain Evaluated and skip Store.hit on re-execute.
    Set false for cold runs and --once; true for stabilize iterations. *)

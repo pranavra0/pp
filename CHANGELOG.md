@@ -59,6 +59,71 @@ v0.2.0 predate this file and are reconstructed from history for context.
     under the same narrow grant), T5 (no secret bytes anywhere the sync
     touched), T6-partial (identical key/result hash whether built locally,
     independently, or fetched via serve-hit).
+- **M5 stage B: remote placement** (docs/PLAN-m5-distribution.md "Remote
+  placement" / "Q11-bis", over the stage-A transport above). Host-
+  qualified domain distribution and store GC are the remaining M5 stages
+  and are NOT part of this change.
+  - **`Scheduler.policy` gains `Remote of string`** (`--schedule
+    remote:<member>`), dispatched exactly like `Parallel`/`Race` via
+    `dispatch_batch`, through a new `remote_dispatch_hook` ref wired at
+    startup by `src/remote.ml` — the same cycle-breaking indirection
+    Evaluator/VM already use for `Primitives.*_ref` (Transport depends on
+    Evaluator, so the remote dispatcher needs to sit above both, not
+    inside Scheduler itself).
+  - **Data-closed predicate** (`Evaluator.is_data_closed`): a batch job
+    ships only when every free var's forced value re-encodes under
+    `Codec.encode_value` — the store's own non-data law, reused verbatim,
+    with one documented carve-out (a bare `VBuiltin` reference is code
+    identical on both sides by construction, not "shipping code," so it
+    doesn't block shipping the node; a genuinely captured `VClosure`
+    still correctly fails). Non-data-closed jobs are simply left alone —
+    the caller's existing local Miss path computes them in-process.
+  - **Members file** (`~/.pp/cluster/members` or `$PP_CLUSTER_MEMBERS`):
+    `name store-root-path` lines, ambient config, never `--grant` (an
+    address is not an authority ceiling).
+  - **Remote dispatch** (`src/remote.ml`): pre-observes the granted
+    fs-read scope and pushes every file directly into the member's store
+    as blobs (Q11-bis); mints a cluster token from this process's own
+    top-level `--grant` specs; spawns the member as an ORDINARY second
+    `pp` invocation of the byte-identical program (own `$HOME`,
+    `--schedule serial`, new internal `--remote-node` flag) — no second
+    "evaluate on a member" code path, the member calls
+    `Evaluator.run_node_body` via its own completely normal `main.ml`;
+    pulls each assigned key back via the UNCHANGED stage-A `serve-hit`/
+    `recv-hit` pair. Extended (in `remote.ml`, not `transport.ml`) to
+    also ship "blob:" refs embedded in a node's RESULT value — the
+    `(blob (slurp ...))` compile-output pattern `blob`/`blob-get` use,
+    deliberately untraced so stage A's `tr_reads`-derived `blob_hashes`
+    alone would miss it.
+  - **Q11-bis (sandbox-inputs-by-hash)**: the member pre-seeds
+    `Store.run_pins` from the wire BEFORE `run_files` executes a single
+    expression; `read_file_cell`/`observe_cell` already consult the pin
+    table first, unconditionally, so a pre-seeded cell's own-disk read is
+    structurally unreachable, not merely avoided by convention. `tool:`
+    cells are deliberately NOT pre-seeded (the member's own toolchain is
+    a legitimate distinct observation).
+  - **Degrade paths**: an unreachable/unknown member, a nonzero/crashed
+    member subprocess, a malformed reply, or a failed pull all leave the
+    affected keys an ordinary store Miss — computed in-process exactly
+    like a dead local Parallel/Race worker; never a wrong answer or a
+    hang.
+  - **Wall found, not fixed (out of stage-B scope):** `--reconcile`
+    unconditionally preloads `stdlib/list.pp`, whose own pp-level `map`
+    shadows the batching-aware `map` builtin Phase 3 added — silently
+    defeating `collect_unevaluated_nodes` (so parallel/race/remote all
+    degrade to one-at-a-time forcing) for ANY `--reconcile`-based build.
+    Masked in `tests/024`'s own parallel exit criterion by exec-count-only
+    assertions plus a soft timing check that already accepts "no speedup"
+    as a pass. `tests/048` works around it (direct top-level `write-file`
+    materialization); a real fix belongs to Phase 3/reconcile.
+  - `tests/048-remote-placement.sh`: an 8-TU real-cc build under
+    `--schedule remote:<member>`, byte-identical materialized tree +
+    desired-state hash vs serial; cross-machine hit; the differing-file
+    Q11-bis case (a test-only `PP_REMOTE_TEST_HOOK`/`_AFTER`
+    synchronization seam proves the member used the dispatcher's pinned
+    bytes, never its own transiently-different disk); non-data-closed
+    stays local; unreachable member degrades; `tool:` not pre-seeded; VM
+    parity.
 - **M4 stage 1: probes, sealed cells, network** (docs/PLAN-m4-cells.md).
   Three additive features, one model — a cell whose write-discipline core
   enforces mechanically.

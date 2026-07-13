@@ -1200,9 +1200,18 @@ to an ordinary in-process recompute, never a wrong answer. `--schedule` is
 read only by the miss arms and the scheduler — never by `node_key_of` /
 `vm_node_key`, and it never enters a trace, so "a program is byte-identical
 whether it runs on one core [or] eight" holds by construction, not merely by
-intent. Cluster/remote placement remains unimplemented (Phase 4, gated on a
-threat-model doc — Q11 narrows under N workers in the meantime; see Q11-bis,
-DESIGN.md).
+intent. **M5 stage B extends this to a cluster:** `--schedule
+remote:<member>` is the SAME `Scheduler.policy`/`dispatch_batch` seam,
+gated to data-closed batches (every free var re-encodes under
+`Codec.encode_value`, docs/PLAN-m5-distribution.md "Remote placement");
+membership is `~/.pp/cluster/members`/`$PP_CLUSTER_MEMBERS`, ambient
+config, never `--grant` — an address is not an authority ceiling, the same
+distinction LAW 34 already draws between location and syntax. A member is
+an ordinary second `pp` invocation of the byte-identical program; a
+non-data-closed node, an unreachable member, or a crashed member all
+degrade to local compute, never a wrong answer (`src/remote.ml`). Store
+GC and host-qualified domain distribution (M5 stages C) remain
+unimplemented.
 
 **Test:** the reader rejects any placement form (unchanged). Phase 3's exit:
 the same 101-TU build under `--schedule parallel:N` produces a
@@ -1211,6 +1220,11 @@ with measured speedup (`tests/024`'s `p3-*` assertions); `--check` under a
 non-serial policy re-runs forced-serial against the same store and fails on
 any hash mismatch (schedule-transparency audit, same file). `tests/038`
 stress-tests N concurrent workers against one store and a `race:N` fan-out.
+M5 stage B's exit: the same build (scaled to 8 TU) under `--schedule
+remote:<member>` over the stage-A local-dir transport, byte-identical
+against serial, plus the cross-machine hit, Q11-bis differing-file, and
+degrade-path assertions (`tests/048`'s `T6`/`Q11-bis`/`cross-machine-hit`
+assertions).
 
 ### [LAW 35] "Run on N, take the first" is a handler, not a feature
 
@@ -1424,8 +1438,8 @@ signatures, not line numbers — the source is under active migration.)
 | LAW 31 | fenced effects, intent journal | holds | scripting-tier `(fenced KIND SPEC)`, `--fenced-policy retry|abort|ask`, intent/done journal, recovery without silent retry; `tests/034` |
 | LAW 32 | gradual types, strictest oracle | holds | D3 fixed; both backends enforce; tests 004/005 restored; `tests/007-phase0-laws.pp` |
 | LAW 33 | config: computed keys, tail-safe scoping | holds | D15 fixed; computed keys and tail-safe scoping in both backends; config reads inside nodes are `config:<key>` trace cells, ambient config out of the node key (`tests/015`) |
-| LAW 34 | no location surface / scheduler exists | partial | negative half holds; scheduler half lands for local process-pool parallelism (M1, `tests/024`/`038`); cluster/remote placement still gated on Phase 4 |
-| LAW 35 | run-on-N-take-first as handler | holds (local) | `race:N` process-pool fan-out lands (M1, `tests/038`); cluster racing is Phase 4, threat-model-gated |
+| LAW 34 | no location surface / scheduler exists | holds | negative half holds; scheduler half lands for local process-pool parallelism (M1, `tests/024`/`038`) AND remote cluster placement (M5 stage B, `--schedule remote:<member>`, `tests/048`); host-qualified domain distribution + GC remain M5 stage C |
+| LAW 35 | run-on-N-take-first as handler | holds | `race:N` process-pool fan-out lands (M1, `tests/038`); `remote:<member>` cluster dispatch lands (M5 stage B, `tests/048`), gated to data-closed batches, over the stage-A threat-model-gated transport |
 | LAW 36 | backend parity | partial | catalogued divergences closed; `core` and sampled `full` green; deep non-tail recursion and negative-literal lexing remain same-side issues; `defmacro` (M3) expands once, ahead of both backends (`macro.ml`), so it cannot itself become a one-backend feature — `stmt_defmacro` in `full` |
 | LAW 37 | declared nondeterminism | holds | M4 probes: `register-probe`/`probe` are the one sanctioned nondeterministic dependency, evaluated at most once per pass outside the reading node's trace stack, exposed only as a `probe:<name>` cell (`tests/043-probes.sh`) |
 | LAW 38 | volatile-node containment | holds | `--check` double-run detection unchanged (`tests/019`); containment is the same M4 probe mechanism as LAW 37 — a volatile read wrapped as a probe is observed/pinned once per pass as its own cell, in-memory only, never written to `~/.pp/store` (`tests/043-probes.sh`) |

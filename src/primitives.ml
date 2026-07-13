@@ -147,7 +147,8 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
              if not (Hashtbl.mem seen_keys k) then begin
                Hashtbl.add seen_keys k ();
                if not (!resolve_if_hit_ref t k) then
-                 jobs := { Scheduler.j_key = k; j_run = job_run t k; j_width = race_width () }
+                 jobs := { Scheduler.j_key = k; j_run = job_run t k;
+                           j_width = race_width (); j_thunk = t }
                          :: !jobs
              end
          | Unevaluated -> () (* ephemeral: stays in-process by design *))
@@ -196,7 +197,7 @@ let rec force_deep_plain (v : value) : value =
 let force_deep (v : value) : value =
   (match !Scheduler.policy with
    | Scheduler.Serial -> ()
-   | Scheduler.Parallel _ | Scheduler.Race _ ->
+   | Scheduler.Parallel _ | Scheduler.Race _ | Scheduler.Remote _ ->
        (match collect_unevaluated_nodes v with
         | [] -> ()
         | jobs -> Scheduler.dispatch_batch jobs));

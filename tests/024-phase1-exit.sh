@@ -205,13 +205,28 @@ if [ "$es" -eq $((TU + 1)) ]; then ok "p3-serial-cold-exec-count ($es)"
 else bad "p3-serial-cold-exec-count: expected $((TU + 1)), got $es" "$(tail -5 "$TMP/out")"; fi
 
 rm -rf "$TMP/.pp" "$BUILD_P"
+# Deterministic fan-out proof (load-independent, unlike wall-clock): the M1
+# claim is that compile nodes FORK to workers. PP_FORK_LOG records one line
+# per fork. A --reconcile build must fork for its TU compiles under
+# parallel:N>1 — this is the assertion that would have caught the shadowed-
+# `map` regression a timing check silently passed. Only meaningful with
+# spare width; on NPROC=1 no forking is expected.
+rm -f "$TMP/forks.log"
 t0=$(now_ms)
-run "${GP[@]}" --schedule "parallel:$NPROC" --reconcile "$BUILD_P" "$TMP/build.pp"
+PP_FORK_LOG="$TMP/forks.log" run "${GP[@]}" --schedule "parallel:$NPROC" --reconcile "$BUILD_P" "$TMP/build.pp"
 t1=$(now_ms)
 parallel_ms=$((t1 - t0))
+nforks=$(wc -l < "$TMP/forks.log" 2>/dev/null | tr -d ' '); nforks=${nforks:-0}
 ep=$(execs)
 if [ "$ep" -eq $((TU + 1)) ]; then ok "p3-parallel-cold-exec-count ($ep)"
 else bad "p3-parallel-cold-exec-count: expected $((TU + 1)), got $ep" "$(tail -5 "$TMP/out")"; fi
+if [ "$NPROC" -le 1 ]; then
+  ok "p3-parallel-forked (n/a: NPROC=$NPROC)"
+elif [ "$nforks" -ge "$TU" ]; then
+  ok "p3-parallel-forked ($nforks forks >= $TU compiles — fan-out real, not defeated by eager forcing)"
+else
+  bad "p3-parallel-forked: only $nforks forks for $TU compiles — batching defeated (a shadowed builtin? eager forcing?)" "$(tail -5 "$TMP/out")"
+fi
 
 if [ -x "$BUILD_P/prog" ] && "$BUILD_P/prog"; then ok "p3-parallel-binary-runs"
 else bad "p3-parallel-binary-runs"; fi

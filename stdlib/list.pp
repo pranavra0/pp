@@ -1,13 +1,16 @@
 ;; stdlib/list.pp — basic list operation library
-;;
-;; All functions are lazy: they produce thunks via `cons`.  Since `cons`
-;; stores its arguments as-is, elements are only computed on demand.
 
-;; (map f lst) — apply f to each element of lst, return a lazy list of results
-(def (map f lst)
-  (if (nil? lst)
-      nil
-      (cons (f (car lst)) (map f (cdr lst)))))
+;; NOTE: `map` is intentionally NOT defined here. It is a BUILTIN
+;; (src/primitives.ml) as of Phase 3, and the builtin is the batching
+;; fan-out point the parallel scheduler collects on: it applies f via the
+;; apply hook and conses the results WITHOUT forcing them, so a list of
+;; (node ...) elements stays unforced until force-deep dispatches the whole
+;; batch. A pp-level `(def (map f lst) (cons (f (car lst)) ...))` here would
+;; SHADOW the builtin and — because application is strict (Q1: EApply forces
+;; every argument, so cons's `(f (car lst))` argument is forced inline) —
+;; force each element one at a time, silently defeating parallel/remote
+;; batching for any program that loads this file (e.g. every --reconcile
+;; build, which auto-loads it for the domain libraries). Do not re-add it.
 
 ;; (filter pred lst) — return a lazy list of elements satisfying pred
 (def (filter pred lst)

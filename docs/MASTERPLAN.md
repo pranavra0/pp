@@ -344,11 +344,25 @@ both exactly.
   `src/transport.ml`'s local-dir implementation; ssh stubbed (a clear
   "not yet", drops in behind the same signature later).
 
-**Stages B/C (later, NOT this work):**
+**Stage B** (docs/PLAN-m5-distribution.md "Remote placement" / "Q11-bis" —
+DONE):
 
-- **Remote placement**: the M1 handler over a remote transport; cluster
-  membership is ambient config/capability (LAW 34's negative half preserved —
-  still no location surface).
+- ✅ **Remote placement**: the M1 handler (`Scheduler.dispatch_batch`) gains
+  `Remote of string` and, over the stage-A transport, ships a data-closed
+  batch to a named cluster member — an ORDINARY second `pp` invocation of
+  the byte-identical program (own $HOME, `--schedule serial`), never a
+  second "evaluate on a member" code path. Membership is ambient config
+  (`~/.pp/cluster/members`/`$PP_CLUSTER_MEMBERS`), never `--grant` (LAW
+  34's negative half preserved — still no location surface). Q11-bis
+  (sandbox-inputs-by-hash) makes the member's own disk structurally
+  unobservable for a pre-seeded cell (`Store.run_pins` consulted first,
+  unconditionally, before any disk read); every failure mode (unreachable
+  member, non-data-closed free var, a crashed member) degrades to local
+  compute, never a wrong answer. `src/remote.ml`;
+  `tests/048-remote-placement.sh`.
+
+**Stage C (later, NOT this work):**
+
 - **Domain distribution — the piece that makes M6's deploy claim real.**
   Placement handlers distribute `force`; the reconciler is runtime, not a
   node, and a process domain on host B can only be applied and re-observed on
@@ -364,8 +378,10 @@ both exactly.
   "devops-complete."
 
 **Exit (runnable):**
-1. The Phase-1 101-TU build across 2 machines, byte-identical outputs
-   (extending the M1 diagonal to distributed placement). *Stage B.*
+1. ✅ The Phase-1 build across 2 machines (an 8-TU real-cc build, scaled down
+   from 101 for a two-process-per-node test; local-dir transport, the same
+   CI-loopback shape stage A's exit test uses), byte-identical materialized
+   tree + desired-state hash vs serial. (`tests/048-remote-placement.sh`.)
 2. ✅ A node built on machine A hits on machine B; `pp why` on B explains the
    hit with correct redaction. (`tests/047-cluster-sync.sh`, two `pp`
    process invocations differing only in `$HOME` standing in for two

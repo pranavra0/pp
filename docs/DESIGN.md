@@ -406,6 +406,32 @@ marshal is the same inventory just enumerated, so M1 documents it instead of
 threading a `Runtime.t` against a fork-shaped worker that could never
 validate the refactor anyway.
 
+**M5 stage B update:** remote placement is delivered via fork-FREE
+data-closed dispatch, not a marshaled `Runtime.t`. `Scheduler.policy`
+gains `Remote of string`; a batch job is shipped only when its free vars'
+forced values all re-encode under `Codec.encode_value` (the store's own
+non-data law, reused at a new decision point — `Evaluator.is_data_closed`,
+with one documented carve-out: a bare reference to a global primitive,
+`VBuiltin`, is code identical on both sides by construction, not
+"shipping code," so it doesn't block shipping). Since a cluster member is
+a genuinely separate process on (potentially) a separate machine, the
+Wall-B state-inventory problem (marshaling `handler_stack`'s live
+closures, `current_capabilities`, etc.) doesn't need solving at all: the
+member doesn't receive marshaled ambient state, it runs an ORDINARY second
+`pp` invocation of the byte-identical program (own $HOME), independently
+re-deriving its own thunk graph and forcing whichever nodes its own
+evaluation reaches — the same "duplicate cross-machine computation is
+sound by determinism" argument the M5 plan's adversarial-review amendment
+already makes. `src/remote.ml` wires this into `Scheduler
+.remote_dispatch_hook`, set at startup exactly like the `Primitives.*_ref`
+cycle-breaking indirection Evaluator/VM already use (Transport depends on
+Evaluator, so the remote dispatcher — needing Evaluator, Transport, AND
+Token — must live above Scheduler, not inside it). Pulled results cross
+back via the UNCHANGED stage-A `serve-hit`/`recv-hit` pair, re-hash-
+verified like every other synced artifact; see STATUS.md's stage-B entry
+and `tests/048-remote-placement.sh` for the full flow and the Q11-bis
+pre-seed mechanism.
+
 ### Q10 — Backend strategy. **Keep both; oracle is strictest; differential-test in CI; soften the parity rule.**
 
 `--diff` is the cheapest correctness asset. The parity rule softens from "no
