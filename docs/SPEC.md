@@ -618,7 +618,7 @@ So "the code hash must hash the expanded form" is not a special case this
 law had to grow — a node built from a macro call is keyed on exactly the
 code the macro expanded into, and editing ONLY the macro's own definition
 (the call site unchanged) changes that expanded code, hence the key, hence
-forces a recompute (`tests/042-defmacro-rekey.sh`, MASTERPLAN M3 exit 3).
+forces a recompute (`tests/042-defmacro-rekey.sh`, M3 exit 3).
 
 **M3 — the node boundary is symmetric: authority may not cross it in EITHER
 direction.** Once capability *values* exist (M3's `current-capabilities` and
@@ -1010,8 +1010,8 @@ and the reconciler applies the diff. Kubernetes controllers, Terraform's
 plan/apply — done with a language that makes `desired` cheap to recompute
 (cached) and with reality re-observed rather than a trusted state file.
 
-**Status: holds** (full form, per-domain stratification — Q13,
-PLAN-m4-cells.md) — the write-discipline law is now enforced GENERICALLY,
+**Status: holds** (full form, per-domain stratification — M4, Q13) — the
+write-discipline law is now enforced GENERICALLY,
 for any registered domain, not hardwired to the filesystem: a domain is an
 `observe`/`diff`/`apply` triple of ordinary pp functions
 (`register-domain`, script-tier), and core (`src/domains.ml`) wraps every
@@ -1212,7 +1212,7 @@ whether it runs on one core [or] eight" holds by construction, not merely by
 intent. **M5 stage B extends this to a cluster:** `--schedule
 remote:<member>` is the SAME `Scheduler.policy`/`dispatch_batch` seam,
 gated to data-closed batches (every free var re-encodes under
-`Codec.encode_value`, docs/PLAN-m5-distribution.md "Remote placement");
+`Codec.encode_value`, M5, "Remote placement");
 membership is `~/.pp/cluster/members`/`$PP_CLUSTER_MEMBERS`, ambient
 config, never `--grant` — an address is not an authority ceiling, the same
 distinction LAW 34 already draws between location and syntax. A member is
@@ -1230,7 +1230,7 @@ LAW 34's negative half intact) — handing the UNCHANGED `Domains.run_all`
 existing per-machine story, verbatim. Store GC (`pp gc`, explicit, never
 automatic) is orthogonal to placement — it never runs during a scheduled
 force, only via its own CLI command — and is documented under LAW 30 and
-`docs/PLAN-m5-distribution.md` "Store GC".
+M5, "Store GC".
 
 **Test:** the reader rejects any placement form (unchanged). Phase 3's exit:
 the same 101-TU build under `--schedule parallel:N` produces a
@@ -1453,7 +1453,7 @@ signatures, not line numbers — the source is under active migration.)
 | LAW 20 | key = code ‖ arg-values | partial | persistent `(node e)` key = code + free-var value hashes; caps, whole-env, config, and handlers all excluded (`tests/011`, `tests/015`); binding-order not canonicalized (LAW 3); node boundary now symmetric (M3): a capability-containing free var is `Capability_error` at the key, a capability-containing result is rejected before storage, both backends (`tests/capability-adversarial.sh`); `defmacro` (M3) expands before either backend's `hash_expr`/compiler ever sees a form, so the key is always over the EXPANDED code with no change to this law — a macro-only edit re-keys its call sites (`tests/042-defmacro-rekey.sh`) |
 | LAW 21 | cutoff via traces | partial | validity-via-verifying-trace real (key→SET of traces, cells re-checked on hit; `tests/010`, `tests/015`); hash-equality cutoff proven at scale — comment-only header edit on a 101-TU C build and on Lua 5.4.7 recompiles dependents and cuts off the link (`tests/016`, `tests/024`, `scripts/build-lua.sh`); reverse-edge/dirty-propagation graph now used by push `stabilize` (`pp --watch --stabilize`, `tests/032`); inline-nested cutoff still absent |
 | LAW 22 | unforgeable root-minted caps | holds | D18 fixed; constructors removed; `tests/capability-adversarial.sh` |
-| LAW 22b | `with-caps` narrows a held value, never widens | holds | `current-capabilities`/`with-caps`/`cap-restrict`'s mode argument (M3, docs/PLAN-m3-attenuation.md); `cap_subseteq` checked against the CURRENT ambient; `effect` removed; both backends, exception/tail-safe; `tests/capability-adversarial.sh` |
+| LAW 22b | `with-caps` narrows a held value, never widens | holds | `current-capabilities`/`with-caps`/`cap-restrict`'s mode argument (M3); `cap_subseteq` checked against the CURRENT ambient; `effect` removed; both backends, exception/tail-safe; `tests/capability-adversarial.sh` |
 | LAW 23 | component/full-path + transitive hit check | holds (NFC residual) | (a) component-aware, canonicalized (realpath, no trailing slash) paths at every cell/grant/loader-bound site (`tests/036`); (b) hits gated on the caller's caps covering the trace's transitive read closure in both backends, cap denials not memoized (`tests/013`, `tests/014`) — "the caller's caps" is now the forcing thunk's captured `node_caps` (M3 node capture), collapsing to the pre-M3 per-process grant when `with-caps` is unused; (c) capability-filtered `pp why` real (`tests/019`); NFC Unicode normalization not implemented |
 | LAW 24 | loader = runtime authority | holds | loader bounded to source roots + ~/.pp, reads traced as authority-exempt `runtime:file:` cells (`tests/020`); realpath-canonical (`tests/036`) |
 | LAW 25 | no unenforced authority surface | holds | `CapTime`/`CapMemory` removed from types and surface (D8d) |

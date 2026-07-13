@@ -3,11 +3,11 @@
 Where pp is going, as falsifiable phases. For what works *today* see
 [STATUS.md](STATUS.md); for *why* the design is shaped this way (principles,
 the resolved open questions Q1–Q12, prior art, a worked example) see
-[DESIGN.md](DESIGN.md). The remaining phases (3–4) and the maturity track are
-elaborated as milestones M1–M6 — with dependencies, the devops-complete
-end-state claim, and the diagonal oracle — in
-[MASTERPLAN.md](MASTERPLAN.md); this file stays the phase ledger where
-exit-criteria bookkeeping lives.
+[DESIGN.md](DESIGN.md). This is the top-level plan doc: it carries the phases
+(3–4) and the maturity track as milestones M1–M6 — with dependencies, the
+devops-complete end-state claim, and the diagonal oracle — and stays the phase
+ledger where exit-criteria bookkeeping lives. M1–M6 are all DONE; their record
+lives here and in [STATUS.md](STATUS.md) / CHANGELOG.md.
 
 The thesis: build systems, package managers, provisioners, and orchestrators
 all manage one substrate — a dependency graph with caching and effects. pp
@@ -103,7 +103,7 @@ null rebuild ~130-140ms, well under the 1s budget — re-measured after M3's
 node-boundary capability scan landed, no regression); the `toolchain:cc`
 closure cell is *superseded* by per-file depfile `tool:` cells (DESIGN Q2);
 node-captured caps were *vacuous* until in-language attenuation existed —
-**M3 closed this** (docs/PLAN-m3-attenuation.md): `thunk.node_caps` is now a
+**M3 closed this**: `thunk.node_caps` is now a
 real per-occurrence capture, `with-caps` can move the ambient mid-process, and
 `tests/040-caps-attenuation.sh`'s two-direction differential is the test that
 was impossible to write before; LAW 26's per-arg handler-cell refinement, LAW
@@ -156,7 +156,7 @@ killed mid-apply action without double-execution (`tests/034`).
   `Runtime` global-mutable-state refactor** originally planned as the real
   deliverable: `fork()` inherits all ambient state byte-identically via
   copy-on-write, so the refactor is not on this phase's critical path after
-  all (MASTERPLAN.md M1, Wall B) — it is documented as an M5 design item
+  all (M1, Wall B) — it is documented as an M5 design item
   (the inventory a REMOTE transport would need to marshal) instead.
 - ✅ The other real deliverable: a non-forcing `map` builtin closes Wall A
   (`EApply` forces every argument, so no compound value could hold several
@@ -189,15 +189,15 @@ landed early** (2026-07-11): content-addressed modules with inline pins
 pin rewriting, and opt-in `git:`/`github:` fetch under the narrow
 [THREAT-MODEL-islands.md](THREAT-MODEL-islands.md) (package-procurement
 trust — NOT the cluster-forcing threat model, which still gates the rest of
-this phase). ✅ **M5 (docs/MASTERPLAN.md) is now fully DONE**: stage A
+this phase). ✅ **M5 is now fully DONE**: stage A
 (cluster transport + signed tokens + by-hash sync, `tests/047`), stage B
 (remote placement, `--schedule remote:<member>`, `tests/048`), and stage C
 (host-qualified domain distribution via `--member-name` + the by-hash
 desired-value seam, and `pp gc` — mark-by-replay store GC, explicit and
 never automatic — `tests/049`/`050`/`051`) all landed on the local-dir CI
 loopback. Still here: LSP, self-hosting reconsidered. Exit criteria drafted
-when Phase 3 closes; M5's own exit criteria are now checked off in
-MASTERPLAN.md.
+when Phase 3 closes; M5's own exit criteria are now checked off in this
+ledger.
 
 ---
 
@@ -316,7 +316,7 @@ ok, both ways). [CHANGELOG.md](../CHANGELOG.md) exists with an Unreleased
 v0.2.0 section; [docs/RELEASING.md](RELEASING.md) documents the tag/tarball
 procedure and the from-tarball smoke test. What remains: the CI above
 turning green on GitHub, and cutting the actual `v0.2.0` tag per
-RELEASING.md (MASTERPLAN M2 exit criterion 4 stays unchecked until CI is
+RELEASING.md (M2 exit criterion 4 stays unchecked until CI is
 green on both OSes and a tag exists that a stranger can build from the
 tarball alone).
 

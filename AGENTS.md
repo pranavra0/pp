@@ -56,6 +56,9 @@ If direnv isn't active, prefix commands with `opam exec --` and use `bin/pp` or
 
 ## Where things are
 
+- Learning the language: [docs/manual/](docs/manual/) — the reference manual,
+  built by pp (`scripts/build-manual.sh`); every example is run by pp, so it
+  can't drift. Authoring conventions in [docs/manual/AUTHORING.md](docs/manual/AUTHORING.md).
 - Code structure and data flow: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Vocabulary: [docs/GLOSSARY.md](docs/GLOSSARY.md)
 - What's real vs planned + the D-list: [docs/STATUS.md](docs/STATUS.md)

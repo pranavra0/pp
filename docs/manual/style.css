@@ -1,0 +1,102 @@
+/* pp reference manual — styled after the Zig language reference: plain,
+   system-font, a fixed left navigation column, thin-bordered code. No frills,
+   no dark theme, no rounded cards. Read via typst read() and inlined into the
+   exported HTML, so editing this file re-triggers the manual build. */
+
+body {
+  font-family: system-ui, -apple-system, Roboto, "Segoe UI", sans-serif;
+  line-height: 1.5;
+  color: #111;
+  background: #fff;
+  margin: 0;
+  padding: 1em;
+}
+
+/* content column */
+h1 { font-size: 1.8em; }
+h2 { font-size: 1.4em; margin-top: 1.8em; }
+h3 { font-size: 1.15em; }
+h4 { font-size: 1em; }
+h1, h2, h3, h4 { line-height: 1.2; }
+.prefix { color: #575757; font-weight: normal; }
+
+a { color: #1a1a8c; text-decoration: none; }
+a:hover, a:focus { background: #fff2a8; }
+
+p { max-width: 62em; }
+
+/* the outline() nav — a fixed left column on wide screens, like Zig */
+nav[role="doc-toc"] { line-height: 1.3; }
+nav[role="doc-toc"] h2 { font-size: 1.1em; margin: 0 0 0.5em; }
+nav[role="doc-toc"] ol { list-style-type: none; padding-left: 1em; margin: 0; }
+nav[role="doc-toc"] > ol { padding-left: 0; }
+nav[role="doc-toc"] a { color: #111; }
+nav[role="doc-toc"] a:hover { background: #fff2a8; }
+nav[role="doc-toc"] .prefix { color: #575757; margin-right: 0.4em; }
+
+@media screen and (min-width: 1025px) {
+  nav[role="doc-toc"] {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    width: 24em;
+    overflow: auto;
+    padding: 1em;
+    border-right: 1px solid #eee;
+    box-sizing: border-box;
+  }
+  body { margin-left: 25em; max-width: 60em; }
+}
+
+/* code */
+code, pre, kbd, samp {
+  font-family: "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
+}
+code { background: #f8f8f8; border: 1px dotted silver; padding: 0 0.3em; }
+pre { line-height: normal; }
+pre > code {
+  display: block;
+  overflow: auto;
+  padding: 0.5em;
+  border: 1px solid #eee;
+  background: #fff;
+}
+
+/* runnable example blocks: filename caption, source, shell command, output —
+   the Zig-reference layout. */
+.ex-file {
+  display: block;
+  width: fit-content;
+  font-weight: bold;
+  background: #fcdba5;
+  padding: 0.15em 0.6em;
+  border-radius: 5px 5px 0 0;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.85em;
+}
+/* the code block sits flush under its filename caption: no gap, no overlap */
+.ex-file + pre { margin-top: 0; }
+.ex-file + pre > code { margin-top: 0; border-top-left-radius: 0; }
+.ex-shell {
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  color: #575757;
+  margin: 0.6em 0 0.2em;
+}
+pre.ex-out {
+  margin-top: 0.2em;
+  overflow: auto;
+  padding: 0.5em;
+  border: 1px solid #eee;
+  background: #fafafa;
+}
+
+/* tables (kept plain, Zig-style) */
+.table-wrapper { width: 100%; margin: 1em 0; overflow-x: auto; }
+table { border-collapse: collapse; }
+table, th, td { border: 1px solid grey; }
+th, td { padding: 0.5em; text-align: left; }
+th { font-weight: bold; }
+
+hr { border: 0; border-top: 1px solid #eee; margin: 2em 0; }
+blockquote { margin: 1em 0; padding-left: 1em; border-left: 3px solid #eee; color: #444; }

@@ -31,7 +31,7 @@ itself the source of truth.
      the new version; check in the regenerated `pp.opam`.
 2. Update `CHANGELOG.md`: rename the `[Unreleased]` section to
    `[X.Y.Z] — YYYY-MM-DD`, start a fresh empty `[Unreleased]` above it.
-3. Update `docs/ROADMAP.md` / `docs/STATUS.md` / `docs/MASTERPLAN.md` where
+3. Update `docs/ROADMAP.md` / `docs/STATUS.md` where
    they reference version numbers or unchecked exit criteria that this
    release closes.
 4. Run the full local gate before tagging:
@@ -80,7 +80,7 @@ dune runtest --force
 
 If `--version` prints the correct `vX.Y.Z` with no `.git` directory present
 and `dune runtest` passes, the release is buildable from the tarball alone
-(ROADMAP maturity §4 / MASTERPLAN M2 exit criterion 4).
+(ROADMAP maturity §4).
 
 ### What this repo's CI proves vs. what it doesn't
 

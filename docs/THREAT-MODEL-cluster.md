@@ -1,8 +1,8 @@
 # Threat model: cluster forcing (M5)
 
 Scope: what a `pp` cluster — ≥2 machines under ONE owner, sharing store
-artifacts and dispatch via `docs/PLAN-m5-distribution.md` — trusts. This is
-the gate MASTERPLAN requires before M5 (= Phase 4) ships any distribution
+artifacts and dispatch via M5 — trusts. This is
+the gate required before M5 (= Phase 4) ships any distribution
 code; stage A (this document's implementation) is the transport
 abstraction, signed capability tokens, and by-hash artifact sync. Remote
 placement, host-qualified domain distribution, and store GC are later
@@ -67,7 +67,7 @@ control.
 ## Adversaries NOT considered
 
 - **Multi-tenant stores / E7 hash-guessing exfiltration.** This is
-  explicitly named out of scope per MASTERPLAN's M5 gate: a cluster is ONE
+  explicitly named out of scope per the M5 gate: a cluster is ONE
   owner's machines. Multi-tenancy (mutually distrusting members sharing
   one store) is cache-service product work, a different product with a
   different threat model, not language completeness. Sealed cells (M4)
@@ -113,7 +113,7 @@ control.
   "which member said this" dispute to resolve — a single owner trusts
   every member they've handed the secret to, exactly as they trust every
   machine they've copied an ssh private key to). Asymmetric PKI is
-  rejected for v1 for this reason (see PLAN-m5-distribution.md
+  rejected for v1 for this reason (see M5
   "Rejected").
 
 ## Falsifiable claims
@@ -208,8 +208,8 @@ used).
   operation; membership (who has a copy of the secret) is entirely an
   out-of-band, operator-managed fact, mirrored in ambient config for stage
   B's dispatch — never granted via `--grant` (an address/membership fact
-  is not an authority ceiling, LAW 34's own distinction, PLAN-m5-
-  distribution.md "Remote placement").
+  is not an authority ceiling, LAW 34's own distinction, M5,
+  "Remote placement").
 - **Not encrypted-by-us.** local-dir is plain file copy; ssh (stubbed this
   stage, `Transport.Ssh`) gets transport confidentiality for free from ssh
   itself, but this model never treats that confidentiality as

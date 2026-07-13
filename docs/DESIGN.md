@@ -272,7 +272,7 @@ the sole mint. **User code cannot construct capabilities**:
 remains is `cap-restrict`/`cap-compose`, which only narrow or union what the
 code already holds. Capability values are sealed, unforgeable tokens.
 
-*In-language attenuation (M3, docs/PLAN-m3-attenuation.md).*
+*In-language attenuation (M3).*
 `(current-capabilities)` observes the ambient ceiling as of the call (never a
 mint — it reifies exactly what every `perform` already checks against);
 `cap-restrict` gained an optional mode argument that only ever narrows
@@ -398,9 +398,9 @@ that state across a channel that exists independently of any one
 dispatch — impossible for handler closures under the store's own non-data
 law, and buying nothing over a cheap `fork()` given that a node body never
 reaches back into the parent's live state once it starts running. The
-`Runtime` global-mutable-state refactor MASTERPLAN M1 originally named as
+`Runtime` global-mutable-state refactor M1 originally named as
 "the real deliverable" is consequently NOT required to reach M1's exit
-(MASTERPLAN.md's M1 is amended accordingly) — but the state a REMOTE
+(M1 is amended accordingly) — but the state a REMOTE
 transport (M5, named/registrable handlers replacing closures) would need to
 marshal is the same inventory just enumerated, so M1 documents it instead of
 threading a `Runtime.t` against a fork-shaped worker that could never
@@ -486,7 +486,7 @@ converge-next-pass; single ownership. *Implemented* (`tests/018`).
 (3) **hidden writes in user handlers** —
 domain write caps are ungrantable to node code. (4) **laziness escape** — killed
 by Q1 strictness plus capturing the capability set at node creation.
-*Capture is now real (M3, docs/PLAN-m3-attenuation.md), not vacuous:* with
+*Capture is now real (M3), not vacuous:* with
 `(with-caps cap-expr body)` landed, the ambient CAN change mid-process, so
 "captured at creation" and "ambient at force" are now genuinely distinct and
 testable. `thunk.node_caps` is populated from `current_capabilities` at each
@@ -511,7 +511,7 @@ independent of the capture mechanism above them (they hold even where
 one documented gap — a capability hidden behind an unforced thunk, invisible
 to the free-var ban without violating LAW 14.
 
-**Q11-bis (Phase 3 / M1 narrowing — Wall C, docs/PLAN-phase3-parallel.md).**
+**Q11-bis (Phase 3 / M1 narrowing — Wall C).**
 `Store.run_pins` is in-memory, per-process. A forked worker inherits the
 pin table as of the fork instant via COW, but any cell it observes for the
 FIRST time after that pins independently in its own copy — so N workers
@@ -532,7 +532,7 @@ reason: today's pin table, like the rest of ambient state, rides fork's COW
 for free, which is exactly what a barrier or a shared table would need to
 stop assuming).
 
-**M6 stage B note (docs/PLAN-m6-demo.md "Stage B — the pin seam").** The
+**M6 stage B note (M6, "Stage B — the pin seam").** The
 pin machinery above (`Store.run_pins`, `Remote.preseed_pins_from_file`/
 `parse_pin_line`) was, until M6 stage B, reachable only behind the internal
 `--remote-node` ceremony (M5's cluster-member wiring). Stage B completes

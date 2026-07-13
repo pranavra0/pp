@@ -21,7 +21,7 @@ two shell suites:
 
 - `tests/capability-adversarial.sh` — capability-constructor removal,
   path-component scope, and gated `slurp` across both backends; extended for
-  M3 (docs/PLAN-m3-attenuation.md): a printed capability is unparseable text
+  M3: a printed capability is unparseable text
   (`forge-from-print`); composing two capabilities each narrowed from the same
   broad root never resurrects the root's full authority
   (`compose-does-not-resurrect`); `cap-restrict`'s mode argument and
@@ -191,8 +191,8 @@ two shell suites:
     `(module ...)` body's later children (a function def, a value def, and
     a bare statement) see EARLIER siblings, letrec*-style, exactly like the
     tree-walker's `env_acc` fold.
-  - **040** — M3 in-language capability attenuation
-    (docs/PLAN-m3-attenuation.md): the two-direction differential that is
+  - **040** — M3 in-language capability attenuation: the
+    two-direction differential that is
     IMPOSSIBLE to write before `with-caps` exists — a node created under a
     NARROWED `with-caps` extent is still denied when forced later under the
     full grant (capture-at-creation, not ambient-at-force), and a node
@@ -215,7 +215,7 @@ two shell suites:
     flaky, since this file is a plain stdout diff, not one of the isolated-
     `$HOME` shell suites.
   - **042** — the LAW 20 exit criterion for `defmacro`
-    (MASTERPLAN M3 exit 3): a `build.pp`-style program whose node body comes
+    (M3 exit 3): a `build.pp`-style program whose node body comes
     from expanding a macro; editing ONLY the macro's definition (the call
     site `(build-step)` byte-identical) is a MISS that recomputes — proven
     by the presence of the node's `log` output and by `pp why` reporting a
@@ -225,7 +225,7 @@ two shell suites:
     recognized (only a true top-level form registers a macro), so it fails
     as an ordinary "unbound symbol: defmacro" in both backends, byte-
     identically. Isolated `$HOME`, like `tests/011`/`040`.
-  - **043** — M4 probes (docs/PLAN-m4-cells.md; SPEC LAW 37/38): a
+  - **043** — M4 probes (M4; SPEC LAW 37/38): a
     file-backed counter as the observe-fn, so its value is controllable; a
     node reading `(probe name)` re-forces exactly when the counter changes
     and hits (no recompute) when it doesn't, across four separate `pp`
@@ -262,7 +262,7 @@ two shell suites:
     http-get` inside a node body errors and never touches the network; a
     `curl`-absent run (an emptied `PATH`) is a clean error, not a crash.
   - **046** — Q13, the in-language reconciler-domain protocol
-    (docs/PLAN-m4-cells.md §Q13; the M4 exit criterion). A THIRD-PARTY toy
+    (M4, Q13; the M4 exit criterion). A THIRD-PARTY toy
     "kv" domain (a directory of one-file-per-key values) is defined and
     registered entirely INSIDE the test's own pp programs via
     `register-domain` — never touching `stdlib/domain-fs.pp`/
@@ -284,7 +284,7 @@ two shell suites:
     the whole Q13 migration — the exit criterion itself) are this test's
     real companions, not duplicated here.
   - **047** — M5 stage A: cluster transport, signed tokens, by-hash sync
-    (docs/PLAN-m5-distribution.md; docs/THREAT-MODEL-cluster.md is the
+    (M5; docs/THREAT-MODEL-cluster.md is the
     gate). Two (or three) `pp` PROCESS invocations differing only in
     `$HOME` stand in for distinct cluster members, sharing a WORK dir the
     way tests/019 does. `pp cluster-init` mints `~/.pp/cluster/{secret,id}`
@@ -313,7 +313,7 @@ two shell suites:
     the identical node-key filename and a byte-identical result object,
     and the receiver's serve-hit-synced object is also byte-identical to
     the builder's own.
-  - **048** — M5 stage B: remote placement (docs/PLAN-m5-distribution.md
+  - **048** — M5 stage B: remote placement (M5,
     "Remote placement" / "Q11-bis"). Two `pp` process invocations
     differing only in `$HOME` (dispatcher A, member B), addressed via
     `~/.pp/cluster/members`, over the same local-dir loopback stage A
@@ -344,7 +344,7 @@ two shell suites:
     (a bad members-file target): the build still succeeds, byte-identical
     to serial. VM parity: the same remote build under `--bytecode`.
   - **049** — M5 stage C: host-qualified domain distribution
-    (docs/PLAN-m5-distribution.md "Host-qualified domain distribution").
+    (M5, "Host-qualified domain distribution").
     Two separate `$HOME`s (the tests/047/048 convention). `--member-name A`
     converges only host A's fs slice under its own `$HOME`; `--member-name
     B` only host B's, under a genuinely separate `$HOME` — neither's
@@ -360,7 +360,7 @@ two shell suites:
     explicit flag, never shape-sniffed) proven directly, not merely
     inferred from other files staying green. VM parity.
   - **050** — M5 stage C: store GC (`pp gc`, explicit, never automatic;
-    docs/PLAN-m5-distribution.md "Store GC"). N `--reconcile` passes with
+    M5, "Store GC"). N `--reconcile` passes with
     CHURN (a per-pass file added then removed) show the store growing
     without `pp gc` between passes and staying bounded with it; the
     frozen journal gains exactly one `epoch HASH` line per successful
@@ -392,7 +392,7 @@ two shell suites:
     store, whose one epoch was sourced via `--desired-object` (the one
     `Gcroots` field no other test exercises), replays and sweeps
     correctly, and the kept root's closure still converges afterward.
-  - **052** — M6 stage A: the devops-complete demo (docs/PLAN-m6-demo.md).
+  - **052** — M6 stage A: the devops-complete demo (M6).
     `demo/deploy.pp`/`demo/agent.pp`/`demo/src/greeter.c` — an all-library
     composition, zero `src/*.ml` changes — build a C service, deploy it
     across two hosts, converge after drift and after `kill -9`, rotate a
@@ -403,7 +403,7 @@ two shell suites:
     non-serial `--check` runs exit 0, and six push rows settle to a
     byte-identical materialized tree — needing no pinning, since this
     demo's desired state is a pure function of `file:`/`sealed:` cells.
-  - **053** — M6 stage B: the observation-pinning seam (docs/PLAN-m6-demo.md
+  - **053** — M6 stage B: the observation-pinning seam (M6,
     "Stage B — the pin seam"). `demo/volatile-deploy.pp` is a deliberately
     ADVERSARIAL program, separate from 052's demo, that folds
     `(probe "replica-count")` directly into its returned desired state.
@@ -502,8 +502,8 @@ Never generated: `random`, wall-clock forms, file-write effects, capability
 constructors and the `with-caps`/`current-capabilities`/`cap-restrict` surface
 (all nondeterministic or unsafe/security-sensitive), and **network** islands.
 The `effect` special form (the pre-M3 capability-union block) was previously
-generated by `stmt_effect`; M3 removed the form from the language entirely
-(docs/PLAN-m3-attenuation.md), so that generator arm is deleted too — `(effect
+generated by `stmt_effect`; M3 removed the form from the language entirely,
+so that generator arm is deleted too — `(effect
 ...)` is no longer valid pp syntax to generate, not merely excluded.
 Pinned `file:` islands over a fixed fixture ARE sampled in the `full`
 grammar (the fixture is pinned once at fuzzer startup via `pp --update`,

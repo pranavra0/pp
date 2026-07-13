@@ -179,7 +179,7 @@ non-list `def` is a value binding — `tests/025`.)
   aggregator. A capability denial raises the distinct `Capability_error` and is
   **not** cached (authority is not identity — LAW 15), so a later authorized run
   still hits. Pinned by `tests/013-node-hit-capability.sh`.
-- **In-language capability attenuation (M3, docs/PLAN-m3-attenuation.md).**
+- **In-language capability attenuation (M3).**
   `(current-capabilities)` reifies the ambient set (never a mint);
   `cap-restrict` gained an optional `fs_mode` argument (`:ro`/`:rw`/`:wo`,
   matching `--grant`'s names) that only ever narrows — requesting a mode wider
@@ -228,7 +228,7 @@ non-list `def` is a value binding — `tests/025`.)
   operate on already-EXPANDED ASTs, so LAW 20 needed no change: a node whose
   body comes from a macro call is keyed on the EXPANDED code, and an edit to
   only the macro's definition (same call sites) re-keys it
-  (`tests/042-defmacro-rekey.sh`, the MASTERPLAN M3 exit-3 criterion). Not a
+  (`tests/042-defmacro-rekey.sh`, the M3 exit-3 criterion). Not a
   reader special form: `(defmacro ...)` parses as an ordinary application
   (reader.ml's own fallthrough for an unrecognized car symbol), so the
   `.ppc`/compiler paths never need to know macros exist. Scope: macros are
@@ -236,7 +236,7 @@ non-list `def` is a value binding — `tests/025`.)
   like a value def — used-before-definition is an ordinary unbound-symbol
   error); a `load`ed file shares the loader's macro table (load is
   sequential evaluation). NOT recognized inside `do`/`module`/`fn`/`node`/
-  etc. bodies — including node bodies specifically (MASTERPLAN's explicit
+  etc. bodies — including node bodies specifically (M3's explicit
   ask): a `defmacro` there is simply left alone by the expander and fails
   as an ordinary unbound-symbol error at eval/compile time, in both
   backends identically (`tests/042`). Hygiene is NOT automatic (not
@@ -259,8 +259,7 @@ non-list `def` is a value binding — `tests/025`.)
   any change to the tool or under a granted tree re-runs the node, including
   reads pp never saw. Hit authority: `tree:` needs the fs grant, `tool:` needs
   the process grant. Pinned by `tests/017-run-effect.sh`.
-- **Q13 — the in-language reconciler-domain protocol (PLAN-m4-cells.md
-  §Q13).** `(register-domain {:name :namespace :observe :diff :apply
+- **Q13 — the in-language reconciler-domain protocol (M4, Q13).** `(register-domain {:name :namespace :observe :diff :apply
   :write-cap [:observe-cell]})` — script-tier, consumes `:write-cap` into
   `Runtime.domain_registry` (ONE registry; `register-probe` is now sugar
   for the ⊥-write-authority case). `observe : () -> value` runs fresh
@@ -443,12 +442,11 @@ non-list `def` is a value binding — `tests/025`.)
   from cold with byte-identical desired-state hash and tree
   (`tests/024`'s `p3-*` assertions); `race:3`/N-writer/same-key-no-lock
   stress and `(fenced ...)` still raising inside a node under every policy
-  are `tests/038`. The `Runtime` global-mutable-state refactor MASTERPLAN
-  M1 originally called for is **not** on this critical path — `fork()`
+  are `tests/038`. The `Runtime` global-mutable-state refactor M1
+  originally called for is **not** on this critical path — `fork()`
   inherits all ambient state (handler closures, capabilities, config,
   thunk_store) byte-identically via COW, so M1 ships with fork workers and
-  documents the state inventory as M5's design item instead (Wall B,
-  docs/PLAN-phase3-parallel.md; MASTERPLAN.md M1).
+  documents the state inventory as M5's design item instead (Wall B, M1).
 - **Depfile adapter (Q2 refinement).** `(perform run-dep DEPFILE CMD ARG…)`
   runs the tool, then parses its Makefile-style depfile: granted deps become
   precise `file:` cells (Q11-pinned + CAS-ingested), out-of-grant (system)
@@ -476,7 +474,7 @@ non-list `def` is a value binding — `tests/025`.)
 - **Bytecode `.ppc` serialization** — complete but **dead** and lossy;
   `cache.ml` deleted; the value/trace store (`store.ml`) supersedes it and is
   now live in the tree-walker.
-- **Probes (LAW 37/38, docs/PLAN-m4-cells.md).**
+- **Probes (LAW 37/38, M4).**
   `(register-probe name observe-fn read-cap)` (script-tier, `Runtime.
   domain_registry` — unified with Q13's `register-domain` in stage 2: a
   probe is now sugar for the ⊥-write-authority case, `:diff`/`:apply =
@@ -540,7 +538,7 @@ non-list `def` is a value binding — `tests/025`.)
   rather than silently skipped. Pinned by `tests/045-network.sh` (skips
   cleanly without `curl`/`python3`).
 - **M6 stage A — the devops-complete demonstration (ALL-LIBRARY)**
-  (docs/PLAN-m6-demo.md). `demo/deploy.pp` (a pure `{host -> {domain ->
+  (M6). `demo/deploy.pp` (a pure `{host -> {domain ->
   desired}}` dispatcher: builds a C service once via `run-dep`, renders
   each host's config in a node that `unseal`s that host's `secret:` key
   and emits only `hash-string` of it), `demo/agent.pp` (byte-identical
@@ -562,7 +560,7 @@ non-list `def` is a value binding — `tests/025`.)
   observability seam generalizing the oracle to `probe:`-in-desired-state
   programs — is landed; see the next bullet. **M6 is now COMPLETE.**
 - **M6 stage B — the observation-pinning seam (pure observability)**
-  (docs/PLAN-m6-demo.md "Stage B — the pin seam"). Completes the Q11-bis
+  (M6, "Stage B — the pin seam"). Completes the Q11-bis
   pin table (`Store.run_pins`, `Remote.preseed_pins_from_file`/
   `parse_pin_line`) that stage A's demo never needed and that was
   previously reachable only behind the internal `--remote-node` ceremony:
@@ -597,7 +595,7 @@ non-list `def` is a value binding — `tests/025`.)
   authorization — pure observability, verified by an empty `git diff` on
   those functions. Pinned by `tests/053-pin-observations.sh`.
 - **M5 stage A — cluster transport, signed tokens, by-hash sync**
-  (docs/PLAN-m5-distribution.md; gated on docs/THREAT-MODEL-cluster.md,
+  (M5; gated on docs/THREAT-MODEL-cluster.md,
   now written). `pp cluster-init` mints `~/.pp/cluster/{secret,id}` (a
   32-byte Cryptokit-RNG secret, hex-encoded, mode 0600, `O_EXCL`-refuses to
   overwrite); a signed cluster token (`src/token.ml`) is canonical TEXT —
@@ -637,7 +635,7 @@ non-list `def` is a value binding — `tests/025`.)
   byte-identical to a local run; T5 no secret bytes cross; T6-partial:
   identical key/result hash whether built locally, independently, or via
   serve-hit).
-- **M5 stage B — remote placement** (docs/PLAN-m5-distribution.md "Remote
+- **M5 stage B — remote placement** (M5, "Remote
   placement" / "Q11-bis"). `Scheduler.policy` gains `Remote of string`
   (`--schedule remote:<member>`); membership is ambient
   (`~/.pp/cluster/members` or `$PP_CLUSTER_MEMBERS`, mapping a member name
@@ -697,7 +695,7 @@ non-list `def` is a value binding — `tests/025`.)
   cross-machine hit; the differing-file Q11-bis case; non-data-closed
   stays local; unreachable member degrades; VM parity).
 - **M5 stage C — host-qualified domain distribution + store GC, CLOSING
-  M5** (docs/PLAN-m5-distribution.md "Host-qualified domain distribution" /
+  M5** (M5, "Host-qualified domain distribution" /
   "Store GC"). Two additive pieces; neither changes a byte of
   `src/domains.ml`'s `run_all`/`run_domain`.
 
