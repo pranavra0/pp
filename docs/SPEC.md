@@ -200,12 +200,14 @@ language has one scoping story, not three.
 top level is just an implicit module. Excel does not have a different
 reference model per worksheet region.
 
-**Value defs.** `(def x v)` with a non-list head is a **value binding**: the
-RHS is *evaluated when the definition executes* and `x` is bound to the
-result — never a nullary closure (the Phase-1 footgun, ROADMAP maturity §1).
-Evaluation does not force: `(def d (delay e))` binds the unforced thunk, and
-`(defnode x e)` is exactly `(def x (node e))` — the unforced node thunk.
-Scope follows LAW 4 with statement timing:
+**Value defs.** A definition that binds a *bare name* to an expression (AST
+`EDefValue`; the s-expression surface spells it `(def x v)` — a non-list
+head) is a **value binding**: the RHS is *evaluated when the definition
+executes* and `x` is bound to the result — never a nullary closure (the
+Phase-1 footgun, ROADMAP maturity §1). Evaluation does not force: a value
+def whose RHS is a `delay` form binds the unforced thunk, and a name-binding
+`defnode` is exactly a value def of the node thunk — `EDefValue (x, ENode e)`,
+however a surface spells it. Scope follows LAW 4 with statement timing:
 
 - **Blocks** (`do` bodies, multi-expression `fn`/`def` bodies, modules) are
   letrec*: every def in the block — function or value — is visible to the
@@ -385,8 +387,10 @@ backends (ROADMAP Phase 0 exit 4).
 
 ### [LAW 12] Quotation is total; the language is data
 
-Every form the reader accepts, `quote` can turn into a value, and
-quasiquote/unquote work over that structure. A Lisp whose `'(if a b c)`
+Every form a reader accepts — whichever surface it parses — `quote` can turn
+into a value, and quasiquote/unquote work over that structure. Quotation is
+defined against the AST (`Types.expr`), so every surface shares one
+quoted-data language. A Lisp whose quoted conditional (`'(if a b c)`)
 crashes is not homoiconic.
 
 *Grounding.* Metaprogramming (and the `defmacro` that replaces the cut
@@ -960,8 +964,10 @@ errors, the definition site of the annotation — LAW 30).
 *Grounding.* An error without a location is a riddle; the substrate for an OS
 does not answer riddles with stack-free strings.
 
-**Status: holds** — the reader emits `ELocated` for top-level forms and
-wraps `def`/`fn`/`defnode` bodies with their definition-site location, and
+**Status: holds** — emitting `ELocated` for every top-level form and
+wrapping `def`/`fn`/`defnode` bodies with their definition-site location is
+an obligation on *every* reader, identical across surfaces (the current
+s-expression reader satisfies it), and
 the shared top-level driver (both backends) appends the enclosing form's
 `file:line` to any runtime error whose message does not already carry a
 location — so arbitrary top-level expression errors report where they
@@ -1139,11 +1145,13 @@ meaningful without a phase that must see the whole (dynamic) graph.
 **Status: holds** — both backends enforce type annotations at force time;
 the tree-walker `check_type` mirrors the VM (`tests/004-type-test.pp`).
 `def`/`fn`/`defnode` bodies carry their definition-site location, so type
-errors cite the annotation site. Per-parameter annotations —
-`(def (f x : int) …)`, `(fn [x : int] …)` — are checked too (they used to
-parse and then be discarded): the reader desugars each into a located type
-check that runs ahead of the body, so both backends enforce the shared AST
-identically (`tests/026-param-types.sh`, fuzzer `stmt_param_typed_def`).
+errors cite the annotation site. Per-parameter annotations — however a
+surface spells them (s-expressions: `(def (f x : int) …)`, `(fn [x : int] …)`)
+— are checked too (they used to parse and then be discarded): a reader-level
+desugar, downstream of any surface's parser, rewrites each into a located
+type check (`ELocated`-wrapped `ETyped`) that runs ahead of the body, so
+both backends enforce the shared AST identically
+(`tests/026-param-types.sh`, fuzzer `stmt_param_typed_def`).
 
 **Test:** `(def (f x) : int "s")` forced ⇒ the same type error, citing the
 annotation site, in both backends; `(f "oops")` against
@@ -1198,7 +1206,7 @@ lets you say "evaluate this elsewhere and flow the result back." The moment
 location is syntax, every caller hard-codes topology and you have rebuilt the
 deployment-boundary blunt instrument inside the language.
 
-**Status: holds** for the negative half (no location surface exists in the
+**Status: holds** for the negative half (no location surface exists in any
 reader — verified absence). **The positive half now lands for local
 process-pool parallelism (M1 / Phase 3):** `--schedule
 serial|parallel:N|race:N` selects a result-transparent handler
@@ -1232,7 +1240,7 @@ automatic) is orthogonal to placement — it never runs during a scheduled
 force, only via its own CLI command — and is documented under LAW 30 and
 M5, "Store GC".
 
-**Test:** the reader rejects any placement form (unchanged). Phase 3's exit:
+**Test:** no reader accepts a placement form (unchanged). Phase 3's exit:
 the same 101-TU build under `--schedule parallel:N` produces a
 byte-identical desired-state hash and materialized tree to the serial run,
 with measured speedup (`tests/024`'s `p3-*` assertions); `--check` under a
@@ -1481,3 +1489,452 @@ extent), LAW 32 (gradual types), LAW 33 (config), LAW 35 (run-on-N-take-first
 as a handler, local process pool) — each exercised by `tests/*.pp` under
 `--diff` and/or the fuzzer, and each must stay green through the Phase 1
 build-engine work.
+
+---
+
+## Appendix B — The brace surface: token spec and lowering table (non-normative)
+
+> **This annex is non-normative.** It freezes M7's S0 deliverable
+> ([M7-SYNTAX.md](M7-SYNTAX.md)): the grammar of the brace/infix surface and
+> the exact s-expression form every brace construct reads to. It defines **no
+> new semantics** — every row lowers to a form the laws above already govern,
+> and those laws are stated against the AST (`Types.expr`), never against a
+> surface. The s-expression language is unchanged: it remains the AST's
+> notation and the macro layer's data language (`quote` yields sexpr data in
+> both surfaces).
+>
+> **The elegance criterion (frozen).** Reading a brace file and reading its
+> s-expression transpilation must yield the **identical `Types.expr`** — and
+> therefore identical LAW-20 keys. No renames: kebab-case identifiers
+> (`string-index`, `nil?`, `proc-alive?`, `run!`) survive verbatim. Because
+> `hash_expr` covers `ELocated (file, line)`, "identical `Types.expr`" has
+> two load-bearing corollaries:
+>
+> 1. the brace reader must attach `ELocated` at exactly the sites the
+>    s-expression reader does (§B.4), and
+> 2. a *migration* transpile (S2/S3) must preserve the source path and the
+>    line number of every location-carrying form nested inside hashed code —
+>    any `fn`/`def` inside a node body carries its definition line into the
+>    node key (e.g. the `link` node of `tests/024`, whose body contains
+>    `(fn (o) …)`) — or node keys change and the null-rebuild exit fails.
+>    The S2 formatter, not this grammar, owns that constraint; it is recorded
+>    here because the grammar was shaped to make it satisfiable (every brace
+>    form fits on the same line(s) as its sexpr spelling).
+
+### B.1 Tokens
+
+**Identifiers.** A maximal run of *name characters*. Name characters are the
+s-expression reader's symbol characters **minus `:`** — i.e. everything
+except whitespace, `, ( ) [ ] { } < ' `` ` `` " ; # ~` and `:`. So `-` `?`
+`!` `.` `/` `*` `+` `=` `>` `|` `_` and friends are all name characters:
+`string->number`, `nil?`, `proc-alive?`, `let*`, `run!`, `a-b` are each ONE
+identifier. (`:` is reassigned in braces to keywords, annotations, and cell
+literals; sexpr symbols may contain `:` — bare island URIs like `file:./lib`
+— but no *binding* in the tree uses one, and braces spell island URIs as
+strings — row L55.)
+
+**The whitespace rule (frozen, non-negotiable).** Infix operators require
+surrounding whitespace: `a - b` is subtraction, `a-b` is one identifier.
+Token identity is decided by maximal munch; whether a token *acts* as an
+infix operator is decided by position, never inside a token. `a ->b` is the
+identifier `->b` in operand position (a parse error), not an arrow. This one
+rule is what lets the entire stdlib migrate with zero renames (M7
+consequences 1–2). The `<`-family (`<`, `<=`) is lexed specially in braces
+exactly as in sexprs (`<` is not a name character) but obeys the same
+whitespace requirement for uniformity.
+
+**Reserved words.** The following are grammar in head/statement positions,
+not bindable names: `and` `assert` `config` `def` `defmacro` `delay` `do`
+`else` `fn` `force` `if` `import` `island` `let` `let*` `load` `load-module`
+`mod` `module` `needs` `node` `or` `perform` `quasiquote` `quote` `reconcile`
+`splice` `unquote` `with-caps` `with-config` `with-handler`, plus the
+literals `true` `false` `nil`. (No existing binding in stdlib/tests/demo
+collides — verified; S1's differential gate re-verifies mechanically.) An
+operator word (`and`, `or`, `mod`) or operator symbol (`+`, `-`, `<=`, …) in
+a **non-infix** position denotes its symbol: `foldl(+, 0, xs)` →
+`(foldl + 0 xs)`, `mod(a, b)` → `(mod a b)`. Special-form heads applied in
+call position parse as their special forms, exactly mirroring the sexpr
+reader's car-symbol dispatch.
+
+**Comments.** `#` to end of line. **`;` is NOT a comment** — it is the
+inline statement separator. This is the loudest single lexical difference
+from the s-expression surface (where `;` comments and `#` introduces `#{`):
+the S2 formatter must transpose comment markers, and `#` never opens a set
+literal in braces — sets are spelled with the call form `hash-set(…)` (L12).
+
+**Strings.** As in the sexpr reader: `"…"` with escapes `\n` `\t` `\\` `\"`
+(any other backslashed character is itself); literal newlines allowed.
+
+**Numbers.** As in the sexpr reader: a token starting with a digit — or with
+`-` *immediately* followed by a digit or `.`digit — is a number; `.` and
+exponents as today (`20.` is a float). `-5` is a literal when the sign is
+attached; `a - 5` is subtraction; `a -5` is two adjacent operands — a parse
+error, by design.
+
+**Keywords.** `:name` (`:` at token start) → `VKeyword`, as in sexprs.
+
+**Cell literals.** An identifier immediately followed by `:` immediately
+followed by a string literal — no whitespace anywhere: `file:"src/main.c"`,
+`env:"CC"`, `tree:"src"`. Exactly these three heads exist (rows L47–L49);
+any other `name:"…"` is a parse error (the space is reserved). World-reads
+get visual identity; the literal is authority-neutral — whether `file:"p"`
+returns plain bytes or a sealed value stays the grant's decision (LAW 39),
+because the lowering is the same read form either way.
+
+**Annotations.** `:` after a parameter or binding name (`x: int`) or after a
+parameter list (`def f(x): int`) — rows L24, L27–L31.
+
+**Separators.** Inside `{ … }` blocks and at top level, statements are
+separated by newline or `;`. The surface is **not** whitespace-sensitive (no
+indentation semantics — pp programs generate pp programs): a newline ends a
+statement only when it is syntactically complete. Inside an open `(` `[`
+`{`, or after an infix operator, `=`, `->`, `|>`, a comma, or a form head
+still awaiting its block, the statement continues across the newline. Commas
+separate call arguments, vector/map elements, binding groups, `needs` items,
+and handler pairs; a comma is never `unquote` (row L58 is).
+
+**Blocks vs map literals.** `{ … }` in *expression position* is always a map
+literal (L10). A block `{ … }` appears only immediately after one of the
+closed set of block-taking heads: `fn(…)` `def f(…)` `node` `do` `if`/`else`
+`let(…)` `let*(…)` `module` `quote` `quasiquote` `defmacro name(…)`
+`reconcile` `with-caps(…)` `with-config(…)` `with-handler(…)`. Sequencing in
+expression position is spelled `do { … }`. In an `if` condition the
+expression is parsed brace-free, Go-style: a top-level `{` terminates the
+condition (parenthesize a map literal used directly as a condition).
+
+### B.2 Precedence and associativity
+
+Every infix operator lowers to a **binary** application (or the `if`
+desugar). The operator set is exactly what the s-expression language already
+has as primitives/special forms — no new semantics, per M7's grammar-creep
+rule.
+
+| Level (tight → loose) | Operators | Associativity | Lowers to |
+|---|---|---|---|
+| 1 | call postfix `E(a, …)` | left (`f(x)(y)` → `((f x) y)`) | `(E a …)` |
+| 2 | `*` `/` `mod` | left | `(* l r)` `(/ l r)` `(mod l r)` |
+| 3 | `+` `-` | left | `(+ l r)` `(- l r)` |
+| 4 | `<` `>` `<=` `>=` `=` | none — chaining is a parse error | `(< l r)` etc. |
+| 5 | `and` | **right** | `(and l r)` ⇒ `(if l r false)` |
+| 6 | `or` | **right** | `(or l r)` ⇒ `(if l true r)` |
+| 7 | `\|>` | left | `x \|> f` → `(f x)`; `x \|> f(y, …)` → `(f x y …)` |
+| — | `->` | n/a | not an expression operator: key/value separator inside map literals (and `reconcile`) only |
+
+Notes, each load-bearing for hash preservation:
+
+- **There are no unary operators.** Negation is a signed literal or `0 - x`;
+  the primitives' n-ary spellings (`(+ a b c)`, chained `(< a b c)`,
+  variadic `=`) are reached by call syntax — `+(a, b, c)`, `<(a, b, c)`.
+  An infix chain `a + b + c` lowers left-nested to `(+ (+ a b) c)`, which is
+  a **different AST (and hash)** from `(+ a b c)`: the S2 printer must print
+  n-ary applications in call form, never as infix chains.
+- **`and`/`or` are right-associative deliberately**: the sexpr forms desugar
+  right-nested (`(and a b c)` ⇒ `(if a (if b c false) false)`), so a
+  right-associative infix chain `a and b and c` lowers to the *identical*
+  `EIf` tree. Variadic `and`/`or` therefore DO survive infix printing with
+  hash equality — the desugar erases the arity, unlike `+`.
+- **`|>` is pure reader-level rewriting** (lowest precedence, so
+  `x + 1 |> f` is `(f (+ x 1))`): a pipeline and its spelled-out application
+  are the same computation, hence the same key. The right-hand side must be
+  an identifier or a call form; anything else is a parse error.
+
+### B.3 Lowering table
+
+Each row gives the s-expression text a brace form reads as; both readers
+must then agree at the `Types.expr` level. Where the sexpr reader applies a
+reader-level desugar (`and`/`or` → `if`, `assert`, per-parameter type
+checks, the block rule), that desugar is a **shared post-pass** run
+identically downstream of both parsers (M7 consequence 3) — never
+duplicated. ⟦stmts⟧ denotes the block rule (`reader.ml block_body`): one
+statement → the statement itself; several → `(do stmts…)`; zero → `(do)` —
+including the block's duplicate-definition check (LAW 4).
+
+**Atoms and literals**
+
+| # | Brace form | Reads as |
+|---|---|---|
+| L1 | `42`, `-5` | `42`, `-5` |
+| L2 | `2.5`, `20.`, `1e3` | same float literal |
+| L3 | `"s\n"` | `"s\n"` (same escapes) |
+| L4 | `true` `false` `nil` | `true` `false` `nil` |
+| L5 | `:key` | `:key` |
+| L6 | `string-index`, `nil?`, `run!` | the same symbol, verbatim |
+| L7 | operator in non-infix position: `foldl(+, 0, xs)` | `(foldl + 0 xs)` |
+| L8 | `( E )` | `E` (grouping only; no AST node) |
+
+**Composite literals**
+
+| # | Brace form | Reads as |
+|---|---|---|
+| L9 | `[e1, e2, …]` | `(vector e1 e2 …)` |
+| L10 | `{ k1 -> v1, k2 -> v2, … }` | `(hash-map k1 v1 k2 v2 …)` |
+| L11 | `{}` (expression position) | `(hash-map)` |
+| L12 | *(no set literal — `#` is the comment character)* `hash-set(e, …)` | `(hash-set e …)` |
+
+**Operators** (see §B.2 for nesting)
+
+| # | Brace form | Reads as |
+|---|---|---|
+| L13 | `a + b`, `a - b`, `a * b` | `(+ a b)` `(- a b)` `(* a b)` |
+| L14 | `a / b`, `a mod b` | `(/ a b)` `(mod a b)` |
+| L15 | `a < b`, `a >= b`, `a = b`, … | `(< a b)` `(>= a b)` `(= a b)` … |
+| L16 | `a and b` | `(and a b)` — the shared desugar yields `(if a b false)` |
+| L17 | `a or b` | `(or a b)` — desugar `(if a true b)` |
+| L18 | `x \|> f`; `x \|> f(y)` | `(f x)`; `(f x y)` |
+
+**Application**
+
+| # | Brace form | Reads as |
+|---|---|---|
+| L19 | `f(a, b)`; `f()` | `(f a b)`; `(f)` |
+| L20 | `(fn(x) { x })(3)`; `f(x)(y)` | `((fn (x) x) 3)`; `((f x) y)` |
+
+**Bindings and functions**
+
+| # | Brace form | Reads as |
+|---|---|---|
+| L21 | `let x = E` (statement) | `(def x E)` — value binding, LAW 4 (`EDefValue`) |
+| L22 | *(a type annotation on `let x = E` is a parse error — sexpr value defs have no annotation slot; annotate via L24 or L30 instead)* | — |
+| L23 | `let (x = e1, y = e2) { body… }` | `(let [x e1 y e2] body…)` — mutual scope, LAW 1 (`ELet`) |
+| L24 | `let (x: int = e) { … }` | `(let [x : int e] …)` (`ETyped` binding) |
+| L25 | `let* (x = e1, y = e2) { body… }` | `(let* [x e1 y e2] body…)` (`ELetStar`) |
+| L26 | `fn(p, q) { body… }` | `(fn (p q) body…)` |
+| L27 | `fn(p: int) { … }` | `(fn (p : int) …)` — shared LAW-32 desugar |
+| L28 | `fn(p): int { … }` | `(fn (p) : int …)` |
+| L29 | `def f(p, q) { body… }` | `(def (f p q) body…)` |
+| L30 | `def f(p: int) { … }` | `(def (f p : int) …)` — shared LAW-32 desugar |
+| L31 | `def f(p): int { … }` | `(def (f p) : int …)` |
+
+**Nodes**
+
+| # | Brace form | Reads as |
+|---|---|---|
+| L32 | `node { E… }` (expression) | `(node ⟦E…⟧)` |
+| L33 | `node name { E… }` | `(defnode name ⟦E…⟧)` — ≡ `(def name (node ⟦E…⟧))`, LAW 4 |
+| L34 | `node f(p…) { body… }` | `(defnode (f p…) body…)` — typed params/return as L30/L31 |
+| L35 | `node f(p) needs I1, I2 { body… }` | `(defnode (f p) (with-caps C ⟦body…⟧))` where `C` is the single lowered item, or `(cap-compose I1′ I2′ …)` for several |
+
+`needs` items (L35) lower as: `fs.read(E)` →
+`(cap-restrict (current-capabilities) E :ro)`; `fs.write(E)` → `… :wo`;
+`fs.rw(E)` → `… :rw`; any other item is an ordinary expression passed
+through unchanged (it must evaluate to a capability — LAW 22b's ⊆ gate does
+the enforcing; the reader adds nothing). `fs.read`/`fs.write`/`fs.rw` are
+recognized only inside a `needs` clause (elsewhere `fs.read` is just an
+identifier). The M7 sketch's bare `proc` item is **not frozen**: no existing
+form projects a single capability kind out of the ambient set
+(`cap-restrict` is path-scoped, and a path-restricted `CapProcess` is
+unusable — `demo/agent.pp`'s own comment), so freezing it would require a
+new core projection primitive — a language change, out of M7's scope by the
+grammar-creep rule. Creation-time narrowing (M3 node capture) stays
+expressible by composition: `def f(x) { with-caps(E) { node { … } } }`
+→ `(def (f x) (with-caps E (node …)))`.
+
+**Control and sequencing**
+
+| # | Brace form | Reads as |
+|---|---|---|
+| L36 | `do { s… }` | `(do s…)` |
+| L37 | `if C { T… }` | `(if C ⟦T…⟧)` — else defaults to `nil`, LAW 9 |
+| L38 | `if C { T… } else { E… }` | `(if C ⟦T…⟧ ⟦E…⟧)` |
+| L39 | `if C1 { … } else if C2 { … } else { … }` | nested `(if C1 … (if C2 … …))` — there is no `cond`/`match` in the language; the chain **is** the spelling |
+| L40 | `force(E)`; `delay(E)` | `(force E)`; `(delay E)` |
+
+**Effects, handlers, capabilities, config**
+
+| # | Brace form | Reads as |
+|---|---|---|
+| L41 | `perform name(a, …)` | `(perform name a …)` — for every effect: `read-file` `write-file` `run` `run-dep` `http-get` `http-post` `log` `tree-observe` `materialize-file` `remove-file` `proc-spawn` `proc-alive?` `proc-stop` `proc-reap` `domain-state-get` `domain-state-put` |
+| L42 | `with-handler(n1 = h1, n2 = h2) { body… }` | `(with-handler [n1 h1 n2 h2] body…)` — a handler name may also be a keyword literal, as in sexprs |
+| L43 | `with-caps(E) { body… }` | `(with-caps E body…)` |
+| L44 | `with-config(E) { body… }` | `(with-config E body…)` — `E` is any expression, typically a map literal `{:k -> v}` |
+| L45 | `config(K)`; `config(K, D)` | `(config K)`; `(config K D)` — computed keys legal, LAW 33 |
+| L46 | `assert(C)`; `assert(C, M)` | `(assert C)`; `(assert C M)` — the shared desugar to `if`+`error`, with `at file:line` baked into the message (§B.4) |
+
+Capability values need no rows of their own: `current-capabilities()`,
+`cap-restrict(c, scope, :ro)`, `cap-compose(a, b)`, `cap-none()`,
+`capability?(c)` are ordinary calls (L19), as are every other primitive
+(`slurp`, `blob`, `blob-get`, `unseal`, `probe`, `register-probe`,
+`register-domain`, `fenced`, `argv`, `env-get`, `file-exists?`, `dir?`,
+`hash-string`, `hash-value`, `gensym`, …).
+
+**Cells** (world-reads get visual identity; string-literal argument only —
+a computed path uses the call form, e.g. `slurp(path(f))`)
+
+| # | Brace form | Reads as |
+|---|---|---|
+| L47 | `file:"P"` | `(slurp "P")` — a `file:` (or, under a `secret:` grant, `sealed:`) observation |
+| L48 | `env:"N"` | `(env-get "N")` — an `env:` observation |
+| L49 | `tree:"R"` | `(perform tree-observe "R")` — a `tree:` observation |
+| L50 | *(no literal for `stat:`/`probe:`/`argv:` cells)* `file-exists?("p")`, `dir?("p")`, `probe("n")`, `argv()` | the same calls — they observe predicates/registered probes, not path contents, so call form is the honest spelling |
+
+The M7 sketch's `glob:"src/*.c"` is **not frozen**: no glob-observing form
+exists in core (the manifest read that exists is `tree-observe`, L49), and
+minting one is new semantics — out of S0's scope by the same grammar-creep
+rule as `needs proc`.
+
+**Modules, loading, islands**
+
+| # | Brace form | Reads as |
+|---|---|---|
+| L51 | `module { forms… }` | `(module forms…)` |
+| L52 | `import(E)` | `(import E)` |
+| L53 | `load("P")` | `(load "P")` — literal string required, as in sexprs |
+| L54 | `load-module("P")` | `(load-module "P")` |
+| L55 | `island("URI")`; `island("URI", "PIN")` | `(island "URI" "PIN")` — braces spell URIs as strings; the sexpr reader's bare-symbol (`file:./lib`) and `<…>` island-literal lexes produce the same `EIsland`, so hashes agree. An unpinned island remains the LAW-24 hard error |
+
+**The quote bridge** (homoiconicity at the AST layer: these yield/consume
+s-expression *data*, in both surfaces)
+
+| # | Brace form | Reads as |
+|---|---|---|
+| L56 | `quote { F }` | `'F′` ≡ `(quote F′)`, where `F′` is `F`'s lowering — one form only |
+| L57 | `quasiquote { F }` | `` `F′ `` — quasiquote-mode read of the lowered form |
+| L58 | `unquote(E)` — legal only inside `quasiquote{}` | `,E` |
+| L59 | `splice(E)` — legal only inside `quasiquote{}` | `,@E` |
+| L60 | `defmacro name(p…) { s1; s2; … }` | `(defmacro (name p…) s1 s2 …)` — each body statement a separate form, producing exactly the application shape `macro.ml match_defmacro` recognizes (never an `EDo`-wrapped body) |
+
+L56/L57 are distinct on purpose: `'x` and `` `x `` read to different ASTs
+(an `EQuote` vs the quasiquote application that builds cons chains), both
+occur in real code, and both must round-trip with hash equality — so the
+brace surface names them separately. In quasiquote mode a brace form denotes
+the s-expression *data* of its lowering (atoms quoted, lists as `cons`
+chains, vectors/maps as `vector`/`hash-map` builds), exactly as the sexpr
+reader's quasiquote mode denotes its literal text.
+
+**Desired state**
+
+| # | Brace form | Reads as |
+|---|---|---|
+| L61 | `reconcile { k1 -> v1, … }` | `(hash-map k1 v1 …)` — identity sugar naming the final-value map (LAW 30); the reconciler consumes the program's *final value*, so `reconcile` adds no AST and no semantics |
+
+**Top level.** A brace file is a newline/`;`-separated statement sequence;
+each statement is one top-level form, `ELocated`-wrapped exactly as
+`Reader.read_string` wraps sexpr forms today.
+
+### B.4 Location threading (`ELocated` placement)
+
+For AST — hence hash and LAW-29 error-text — identity, the brace reader
+attaches `ELocated` at exactly the sexpr reader's sites:
+
+- every **top-level form**: `ELocated ((source, line-of-first-token), form)`;
+- **`def`/`defnode`/`fn`**: the line of the token after the head locates the
+  body (`ELocated (loc, body)`), the return annotation
+  (`ELocated (loc, ETyped (body, ty))`), and each per-parameter check
+  (`ELocated (loc, ETyped (ESymbol p, ty))` — LAW 32);
+- **value defs**: `EDefValue (x, ELocated (loc, rhs))`; value `defnode`:
+  `EDefValue (x, ELocated (loc, ENode rhs))`;
+- **`assert`**: the location is baked into the generated *message string*
+  (`… at file:line`), and a message-less `assert` renders its condition via
+  `quote_to_value`/`string_of_value` — i.e. in AST (s-expression) notation
+  in **both** surfaces. That string is part of the desugared expression and
+  therefore of every enclosing hash: the brace reader must reuse the same
+  renderer verbatim, and no later stage may re-render assert messages in
+  brace notation without re-keying every node containing one.
+
+### B.5 Law audit (M7 S0)
+
+**Touched — reworded to be surface-neutral; zero semantic change:**
+
+- **LAW 4** — "value defs" was defined by the sexpr shape ("`(def x v)` with
+  a non-list head"); now defined as binding a bare name to an expression
+  (AST `EDefValue`), with the sexpr spelling cited as the example, and the
+  `defnode`-value equivalence stated at the AST (`EDefValue (x, ENode e)`).
+- **LAW 12** — "every form the reader accepts" → every form *a* reader
+  accepts, with quotation stated as defined against the AST so all surfaces
+  share one quoted-data language.
+- **LAW 29** (status) — emitting `ELocated`/definition-site wrapping
+  restated as an obligation on every reader, not a property of the one
+  existing reader.
+- **LAW 32** (status) — per-parameter annotation checking attributed to the
+  shared reader-level desugar pass downstream of any parser; sexpr
+  spellings kept as examples.
+- **LAW 34** (status + test) — "no location surface exists in the reader" /
+  "the reader rejects any placement form" → *any* reader / *no* reader
+  accepts one.
+
+**Verified surface-neutral — unchanged:** LAWs 1–3, 5–11, 13–28, 30, 31,
+33, 35–39. Their statements quantify over AST forms, values, hashes,
+traces, capabilities, cells, or process behavior; s-expression text
+appearing in them is example programs (which remain valid — the sexpr
+surface is not deprecated by M7), not definitional dependence. LAW 24's
+island clause was checked specifically: it constrains `EIsland`'s inline
+pin (identity in the code hash), not any lexical spelling. LAW 22's
+"`(filesystem "/" :rw)` is an unbound symbol" is the application of an
+unbound name — the same error in either surface.
+
+### B.6 Fuzzer-coverage checklist (S0 exit criterion)
+
+Every construct the fuzzer's `full` grammar (`tools/fuzz.ml`) can emit, with
+its covering row(s):
+
+| Generator | Emits | Row(s) |
+|---|---|---|
+| `gen_int_lit` / `gen_float_lit` / `gen_str_lit` | int (incl. negative), float (incl. `20.`), string literals | L1–L3 |
+| `gen_int` | `+ - *` (2-ary and 3-ary), `mod`, `/`, `if`, `let`, user-fn calls, `string-length`, `string->number`∘`number->string`, `string-index` under `nil?`+`if`, `length`, `foldl` with `+` as a value, `car`, `vector-get` on `[…]`, `hash-map-get` on `{:k …}`, immediate `fn` application, `do` | L13–L14 (binary), L7 (n-ary `+`/`*` and operator-as-value in call form), L37–L38, L23, L19, L9–L10, L5, L20, L36 |
+| `gen_bool` | `true`/`false`, `< > <= >= =`, string `=`, `not`, `and`/`or`, `nil?`, `if` | L4, L15, L19, L16–L17, L37–L38 |
+| `gen_string` | `string-append`/`string-trim`/`number->string`/`string-sub`, `if` | L19, L37–L38 |
+| `gen_float` | float arithmetic, `if` | L13, L37–L38 |
+| `gen_list`/`gen_list_ne` | `nil`, `list`, `cons`, `range`, `map`/`filter` with `fn`, `take`, `cdr` | L4, L19, L26 |
+| `stmt_print` / `stmt_do_print` | `print`, `do` | L19, L36 |
+| `stmt_let_print` | multi-binding `let` | L23 |
+| `stmt_letstar_print` | `let*` | L25 |
+| `stmt_seq_let` | sibling-referencing `let` (divergence probe) | L23 |
+| `stmt_def_value` / `stmt_do_scoped_def` | `(def x e)` at top level and inside `do` | L21, L36 |
+| `stmt_def` / `stmt_def_rec` / `stmt_deep_rec` | function defs, arity 1–3, recursion | L29 |
+| `stmt_typed_let` | `(let [x : ty e] …)` | L24 |
+| `stmt_typed_def` | `(def (f p) : ty body)` | L31 |
+| `stmt_param_typed_def` | `(def (f p : ty) body)` | L30 |
+| `stmt_with_config` / `stmt_config_computed` | `with-config` with map literal + keyword keys, `config` with computed key and default | L44, L45, L10, L5 |
+| `stmt_module` / `stmt_module_sibling` | `(import (module …))` incl. non-def children and sibling refs | L51, L52 |
+| `stmt_load_module` / `stmt_big_map` / `load_stdlib_form` | `load-module`, `load` | L54, L53 |
+| `stmt_island` | `(import (island file:DIR "PIN"))` | L55 (string-URI spelling), L52 |
+| `stmt_perform` | `perform log` bare and in value position | L41 |
+| `stmt_with_handler` / `stmt_handler_leak` | `with-handler` with `fn` handler, tail-position bodies | L42, L26 |
+| `stmt_eq_list` | `(= E E)` on lists | L15 |
+| `stmt_quote_special` | `'(if 1 2 3)`, `'(let [x 1] x)` | L56 (+ L37, L23 inside the quote) |
+| `stmt_defmacro` | `defmacro` + macro call with `list`/`quote` body | L60, L19, L56 |
+
+Every generator maps to at least one row; no row was needed that this table
+could not name. Constructs in the tree but outside the fuzzer's grammar —
+`node`/`defnode`, `with-caps`, cells, `assert`, `island` bare-URI lexes,
+`fenced`/domains/probes, sealed reads — are covered by rows L32–L35,
+L43, L46–L50, L55, and the L19 call rule, so S1's sexpr→brace printer has a
+defined spelling for every form both grammars and the real tree can
+produce.
+
+### B.7 Judgment calls frozen by this annex
+
+Decisions the M7 sketch left open (or sketched un-implementably), recorded
+because later stages implement exactly what S0 froze:
+
+1. **`;` separates, `#` comments** — plan-mandated; flagged as the top
+   migration hazard (sexpr `;` comments become `#`; sexpr `#{…}` sets have
+   no brace literal, L12).
+2. **Expression-position `{…}` is always a map**; sequencing is `do { … }`.
+3. **`quasiquote { … }` exists alongside `quote { … }`** (L56/L57): the two
+   sexpr quote forms have different ASTs and hashes, so one brace spelling
+   could not cover both.
+4. **`needs proc` is not frozen** (no per-kind capability projection exists
+   in core); `needs` items are the three `fs.*` shorthands or ordinary
+   capability expressions, and the clause lowers to `with-caps` around the
+   node body (L35).
+5. **`glob:` is not frozen** (no core observing form); `tree:"R"` covers the
+   manifest-read case via `tree-observe` (L49).
+6. **Island URIs are strings in braces** (L55); the sexpr bare-symbol and
+   `<…>` lexes remain sexpr-only spellings of the same `EIsland`.
+7. **`let x = E` takes no type annotation** (L22) — the sexpr value-def form
+   it lowers to has no annotation slot; adding one would be new AST surface.
+8. **`:` is not a name character in braces** (it is in sexprs); no existing
+   binding uses one, and keywords/annotations/cell literals need it.
+9. **n-ary operator applications print as calls** (`+(a, b, c)`), because
+   infix is strictly binary and `(+ a b c)` ≠ `(+ (+ a b) c)` under LAW 20;
+   `and`/`or` are the deliberate exception (right-associative infix
+   reproduces the variadic desugar exactly — §B.2).
+10. **`reconcile { … }` is identity sugar** (L61): the reconciler already
+    consumes the program's final value, so the keyword names intent and
+    lowers to nothing.
+11. **Line/path preservation is a formatter obligation** (the annex
+    preamble's corollary 2):
+    node keys can embed `ELocated (file, line)` of nested `fn`/`def` forms,
+    so S2/S3 must transpile line-stably and in place for the null-rebuild
+    exit to be achievable.
