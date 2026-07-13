@@ -7,8 +7,12 @@
   (source_tree tests)
   (source_tree stdlib)
   (source_tree demo)
+  (source_tree examples)
+  build.pp
   scripts/run-tests.sh
-  src/main.exe)
+  src/main.exe
+  ; M7 S1: tests/054 drives the fuzzer's reader-roundtrip gate
+  tools/fuzz.exe)
  (action
   (run bash scripts/run-tests.sh src/main.exe)))
 

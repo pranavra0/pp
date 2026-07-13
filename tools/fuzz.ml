@@ -2,6 +2,14 @@
    backends (tree-walker `./pp f` and bytecode VM `./pp --bytecode f`), and
    asserts identical observable behavior (stdout; stderr when both succeed).
 
+   M7 S1: the suite is 2 readers x 2 backends — every generated program is
+   ALSO pushed through `pp --roundtrip-braces f`, which (in one process)
+   reads the sexpr AST, prints it as location-preserving brace text
+   (src/printer_braces.ml), re-reads that with the brace reader
+   (src/reader_braces.ml), and asserts structural AST equality AND LAW-20
+   `hash_expr` equality per top-level form. Any nonzero exit is a gating
+   MISMATCH (`roundtrip:*` signature), shrunk like any other.
+
    OCaml stdlib + unix only.  Build+run:  dune exec ./tools/fuzz.exe -- ARGS
    Fully deterministic given --seed: program i is generated from
    Random.full_init [| seed; i |], so any program can be regenerated with
@@ -1075,14 +1083,31 @@ let run_both (src : string) : outcome * outcome =
   let bc = run_backend ["--bytecode"] f in
   (tw, bc)
 
+(* M7 S1: the reader round-trip check (sexpr -> braces -> re-read; AST +
+   LAW-20 hash equality), run in-process by the interpreter itself.
+   [run_both] has already written the program file. *)
+let run_all (src : string) : outcome * outcome * outcome =
+  let (tw, bc) = run_both src in
+  let rt = run_backend ["--roundtrip-braces"] (Lazy.force prog_file) in
+  (tw, bc, rt)
+
+(* Full verdict: a round-trip failure ALWAYS gates (even where the two
+   backends agree, or agree on an error), so it maps to Mismatch. *)
+let judge_full (tw : outcome) (bc : outcome) (rt : outcome) : verdict =
+  match rt.status with
+  | `Exit 0 -> judge tw bc
+  | `Timeout -> Crash "crash:rt:timeout"
+  | `Signal s -> Crash (Printf.sprintf "crash:rt:signal-%d" s)
+  | _ -> Mismatch ("roundtrip:" ^ error_tag rt.err)
+
 let shrink (src : string) (signature : string) : string =
   let execs = ref 0 in
   let same_sig forms =
     if !execs >= !shrink_budget then false
     else begin
       incr execs;
-      let (tw, bc) = run_both (render_program forms) in
-      sig_of_verdict (judge tw bc) = Some signature
+      let (tw, bc, rt) = run_all (render_program forms) in
+      sig_of_verdict (judge_full tw bc rt) = Some signature
     end
   in
   let rec fixpoint forms =
@@ -1153,12 +1178,17 @@ let () =
      the error-path parity cases.  Reported so a run that generated no
      erroring programs is visible as such. *)
   let n_errpass = ref 0 in
+  (* M7 S1: round-trip accounting — every program is checked; failures are
+     gating mismatches with a `roundtrip:` signature. *)
+  let n_rt_checked = ref 0 and n_rt_fail = ref 0 in
   Printf.printf "pp-fuzz: grammar=%s seed=%d start=%d count=%d depth=%d timeout=%dms pp=%s\n%!"
     !grammar !seed !start_iter !count !max_depth !timeout_ms !pp_bin;
   for i = !start_iter to !start_iter + !count - 1 do
     let src = gen_program !grammar i in
-    let (tw, bc) = run_both src in
-    let v = judge tw bc in
+    let (tw, bc, rt) = run_all src in
+    incr n_rt_checked;
+    if rt.status <> `Exit 0 then incr n_rt_fail;
+    let v = judge_full tw bc rt in
     (match v with
      | Pass ->
          incr n_pass;
@@ -1193,7 +1223,10 @@ let () =
            write_file (Filename.concat dir (Printf.sprintf "%d.tw.out" i))
              (outcome_to_string tw);
            write_file (Filename.concat dir (Printf.sprintf "%d.bc.out" i))
-             (outcome_to_string bc)
+             (outcome_to_string bc);
+           if rt.status <> `Exit 0 then
+             write_file (Filename.concat dir (Printf.sprintf "%d.rt.out" i))
+               (outcome_to_string rt)
          end;
          (* shrink only the first exemplar of a signature; both-error is a
             soft class — shrink mismatches and crashes only *)
@@ -1214,6 +1247,8 @@ let () =
     !grammar !seed !count;
   Printf.printf "PASS       %d (of which %d matched-error)\nMISMATCH   %d\nBOTH-ERROR %d\nCRASH      %d\n"
     !n_pass !n_errpass !n_mismatch !n_both !n_crash;
+  Printf.printf "roundtrip  %d checked, %d failed (2 readers x 2 backends)\n"
+    !n_rt_checked !n_rt_fail;
   Printf.printf "distinct signatures: %d\n" (Hashtbl.length sigs);
   let sorted =
     Hashtbl.fold (fun s info acc -> (s, info) :: acc) sigs []

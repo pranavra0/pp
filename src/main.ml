@@ -43,6 +43,13 @@ let main () =
      token/keys/reply ceremony that flag also carries. *)
   let pin_file = ref None in               (* --pin-file PATH: preseed run_pins/probe_values before run_files *)
   let dump_pins_file = ref None in         (* --dump-pins PATH: write run_pins/probe_values after run_files *)
+  (* M7 S1: the brace-surface seams (docs/M7-SYNTAX.md, SPEC Appendix B).
+     `--emit-braces FILE` prints FILE's forms as location-preserving brace
+     text; `--roundtrip-braces FILE` asserts sexpr-read -> brace-print ->
+     brace-re-read gives structurally equal, LAW-20-hash-equal forms (the
+     fuzzer's per-program gate, tools/fuzz.ml). *)
+  let emit_braces_file = ref None in
+  let roundtrip_braces_file = ref None in
 
   let rec parse = function
     | "--" :: rest ->
@@ -122,6 +129,9 @@ let main () =
     (* ---- M6 stage B: the pin seam ---- *)
     | "--pin-file" :: path :: rest -> pin_file := Some path; parse rest
     | "--dump-pins" :: path :: rest -> dump_pins_file := Some path; parse rest
+    (* ---- M7 S1: brace-surface seams ---- *)
+    | "--emit-braces" :: f :: rest -> emit_braces_file := Some f; parse rest
+    | "--roundtrip-braces" :: f :: rest -> roundtrip_braces_file := Some f; parse rest
     | "--fenced-policy" :: policy :: rest ->
         (match policy with
          | "retry" -> fenced_policy := Runtime.Retry
@@ -175,6 +185,8 @@ let main () =
         Printf.printf "  pp gc [--gc-keep-epochs N] [--gc-grace-seconds S]  Explicit store GC (M5 stage C): mark-by-replay the last N reconcile/supervise epochs, sweep the rest\n";
         Printf.printf "  pp --pin-file <path> <file.pp>  Preseed Store.run_pins/Runtime.probe_values from a (pin ...)/(pin-probe ...) file before running (M6 stage B: the observation-pinning seam)\n";
         Printf.printf "  pp --dump-pins <path> <file.pp>  After running, write every run_pins/probe_values entry as (pin ...)/(pin-probe ...) lines to <path>\n";
+        Printf.printf "  pp --emit-braces <file.pp>  Print the file as brace-surface text (M7 S1; .ppb files run directly)\n";
+        Printf.printf "  pp --roundtrip-braces <file.pp>  Assert sexpr->braces->re-read AST + LAW-20 hash equality (the fuzz gate)\n";
         exit 0
     | "--once" :: rest -> parse rest  (* no-op: explicit one-shot *)
     | "--watch" :: rest -> watch := true; parse rest
@@ -187,6 +199,62 @@ let main () =
     | [] -> ()
   in
   parse args;
+
+  (* ---- M7 S1: brace-surface seams — each does its one thing and exits.
+     Both read the ORIGINAL (pre-macro-expansion) forms: surface identity is
+     a reader-level property, and LAW 20 keys hash the located AST these
+     produce. *)
+  let read_whole (path : string) : string =
+    let ch = open_in_bin path in
+    let s = really_input_string ch (in_channel_length ch) in
+    close_in ch; s
+  in
+  (match !emit_braces_file with
+   | Some f ->
+       if Reader_braces.file_uses_braces f then
+         failwith ("pp --emit-braces: " ^ f ^ " is already a brace file");
+       let forms = Reader.read_string ~source:f (read_whole f) in
+       (try print_string (Printer_braces.print_program ~source:f forms)
+        with Printer_braces.Unprintable msg ->
+          failwith ("pp --emit-braces: " ^ msg));
+       exit 0
+   | None -> ());
+  (match !roundtrip_braces_file with
+   | Some f ->
+       if Reader_braces.file_uses_braces f then
+         failwith ("pp --roundtrip-braces: " ^ f ^ " is already a brace file");
+       let forms = Reader.read_string ~source:f (read_whole f) in
+       let braces =
+         try Printer_braces.print_program ~source:f forms
+         with Printer_braces.Unprintable msg ->
+           failwith ("roundtrip: unprintable: " ^ msg)
+       in
+       let forms' =
+         try Reader_braces.read_string ~source:f braces
+         with Failure msg ->
+           Printf.eprintf "--- emitted brace text ---\n%s" braces;
+           failwith ("roundtrip: brace re-read failed: " ^ msg)
+       in
+       if List.length forms <> List.length forms' then begin
+         Printf.eprintf "--- emitted brace text ---\n%s" braces;
+         failwith (Printf.sprintf
+                     "roundtrip: form count diverged: %d sexpr vs %d brace"
+                     (List.length forms) (List.length forms'))
+       end;
+       List.iteri (fun i (a, b) ->
+         if a <> b then begin
+           Printf.eprintf "--- emitted brace text ---\n%s" braces;
+           failwith (Printf.sprintf "roundtrip: form %d is structurally unequal" i)
+         end;
+         let ha = Types.hash_expr a and hb = Types.hash_expr b in
+         if ha <> hb then begin
+           Printf.eprintf "--- emitted brace text ---\n%s" braces;
+           failwith (Printf.sprintf
+                       "roundtrip: form %d hash diverged: %s vs %s" i ha hb)
+         end)
+         (List.combine forms forms');
+       exit 0
+   | None -> ());
 
   (* M5 stage B (docs/PLAN-m5-distribution.md "Remote placement"): record
      this invocation's own file list / --bytecode / raw --grant specs so

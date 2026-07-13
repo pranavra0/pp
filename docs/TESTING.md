@@ -447,6 +447,20 @@ shrunk to a minimal repro, and written to a failure directory. Zero
 dependencies beyond the OCaml `unix` library. Fully deterministic: program *i*
 under seed *S* is always the same program (no `Random.self_init`).
 
+**M7 S1 — the suite is 2 readers × 2 backends.** Every generated program is
+additionally pushed through `pp --roundtrip-braces f`, which in one process
+reads the sexpr AST, prints it as location-preserving brace text
+(`src/printer_braces.ml`), re-reads that with the brace reader
+(`src/reader_braces.ml`), and asserts per-form structural AST equality AND
+LAW-20 `hash_expr` equality. Any nonzero exit is a gating MISMATCH
+(`roundtrip:*` signature; a `<iter>.rt.out` artifact is saved alongside the
+backend outcomes), shrunk like any other. The summary prints a
+`roundtrip N checked, M failed` line. `tests/054-brace-reader.sh` runs the
+brace reader's own oracle battery (a nontrivial `.ppb` under both backends,
+cross-surface `load`/islands, assert-desugar parity, `--emit-braces` on a
+real test file, a whole-tree `--roundtrip-braces` sweep) plus a 300-program
+full-grammar fuzz pass of this gate inside `dune runtest`.
+
 ```sh
 dune build                                              # builds bin/pp + the fuzzer
 dune exec ./tools/fuzz.exe -- --grammar core --count 2000

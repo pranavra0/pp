@@ -280,12 +280,15 @@ let resolve ~(uri : string) ~(pin : string option) : string =
             end
       end
 
-(* The module root inside a pinned tree. *)
+(* The module root inside a pinned tree. M7 S1: a brace-surface island may
+   ship entry.ppb instead; entry.pp wins when both exist. *)
 let entry_file (tree_dir : string) : string =
   let e = Filename.concat tree_dir "entry.pp" in
-  if not (Sys.file_exists e) then
-    failwith ("island: pinned tree has no entry.pp: " ^ tree_dir);
-  e
+  if Sys.file_exists e then e
+  else
+    let eb = Filename.concat tree_dir "entry.ppb" in
+    if Sys.file_exists eb then eb
+    else failwith ("island: pinned tree has no entry.pp: " ^ tree_dir)
 
 (* ---- Syntactic walk: every island form in an expression ---- *)
 
@@ -345,7 +348,7 @@ let update_file (path : string) : int * int =
   let ic = open_in_bin path in
   let original = really_input_string ic (in_channel_length ic) in
   close_in ic;
-  let exprs = Reader.read_string ~source:path original in
+  let exprs = Reader_braces.read_dispatch ~source:path ~path original in
   let forms =
     List.sort_uniq compare (List.concat_map islands_in exprs) in
   let text = ref original in
@@ -418,7 +421,7 @@ let print_pins (path : string) : unit =
   let ic = open_in_bin path in
   let source = really_input_string ic (in_channel_length ic) in
   close_in ic;
-  let exprs = Reader.read_string ~source:path source in
+  let exprs = Reader_braces.read_dispatch ~source:path ~path source in
   let forms = List.sort_uniq compare (List.concat_map islands_in exprs) in
   if forms = [] then Printf.printf "(no island forms in %s)\n" path
   else

@@ -318,4 +318,11 @@ else
   echo "FAIL 053-pin-observations"; fail=1
 fi
 
+echo "--- M7 S1: brace reader + location-preserving printer + roundtrip gate ---"
+if PP="$PP" FUZZ="${FUZZ:-tools/fuzz.exe}" bash tests/054-brace-reader.sh; then
+  echo "ok   054-brace-reader"
+else
+  echo "FAIL 054-brace-reader"; fail=1
+fi
+
 exit $fail

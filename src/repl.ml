@@ -47,7 +47,12 @@ let process_expr (e : expr) : value =
    time. *)
 let execute_string ?(source : string = "<?>") (input : string) : value list =
   init ();
-  let exprs = Macro.expand_toplevel_list (read_string ~source input) in
+  (* M7 S1: `.ppb` sources read with the brace reader (Reader_braces
+     dispatches on the extension; every other source is byte-for-byte the
+     sexpr reader as before). *)
+  let exprs =
+    Macro.expand_toplevel_list
+      (Reader_braces.read_dispatch ~source ~path:source input) in
   List.map process_expr exprs
 
 (* Tree-walker: execute a source file *)
@@ -60,7 +65,7 @@ let execute_file (path : string) : value list =
 (* Bytecode VM: compile and run *)
 let execute_string_bytecode ?(source : string = "<?>") (use_vm : bool) (input : string) : value list =
   if use_vm then begin
-    let exprs = read_string ~source input in
+    let exprs = Reader_braces.read_dispatch ~source ~path:source input in
     (* Vm.init () first: it calls Evaluator.init (), which resets the macro
        table and wires up Primitives' force/eval/apply refs that macro
        expansion's Evaluator.eval call needs — expansion must run AFTER
@@ -100,7 +105,7 @@ let execute_sources_bytecode (use_vm : bool) (sources : (string * string) list) 
   if use_vm then begin
     Vm.init ();
     List.concat_map (fun (source, input) ->
-      let exprs = read_string ~source input in
+      let exprs = Reader_braces.read_dispatch ~source ~path:source input in
       let expanded = Macro.expand_toplevel_list exprs in
       List.map (fun e ->
         with_toplevel_location e (fun () ->
@@ -111,7 +116,9 @@ let execute_sources_bytecode (use_vm : bool) (sources : (string * string) list) 
   end else begin
     init ();
     List.concat_map (fun (source, input) ->
-      let exprs = Macro.expand_toplevel_list (read_string ~source input) in
+      let exprs =
+        Macro.expand_toplevel_list
+          (Reader_braces.read_dispatch ~source ~path:source input) in
       List.map process_expr exprs)
       sources
   end

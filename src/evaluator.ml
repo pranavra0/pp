@@ -626,7 +626,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
                one shared macro table — Macro.ml's documented decision). *)
             let contents = Runtime.loader_read path in
             let exprs = !Primitives.expand_toplevel_ref
-                          (Reader.read_string ~source:path contents) in
+                          (Reader_braces.read_dispatch ~source:path ~path contents) in
             ignore (eval_expressions exprs env_ref);
             go rest
         | (ELoadModule path) :: rest ->
@@ -748,7 +748,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
          arm above. *)
       let contents = Runtime.loader_read path in
       let exprs = !Primitives.expand_toplevel_ref
-                    (Reader.read_string ~source:path contents) in
+                    (Reader_braces.read_dispatch ~source:path ~path contents) in
       let env_ref = ref env in
       k (eval_expressions exprs env_ref)
 
@@ -1029,7 +1029,10 @@ and has_fs_write (path : string) : bool =
    evaluator and EDo. *)
 and eval_module_file (path : string) : value =
   let source = Runtime.loader_read path in
-  let exprs = !Primitives.expand_toplevel_ref (Reader.read_string source) in
+  (* M7 S1: dispatch on [path]'s extension; the location label stays the
+     reader's "<?>" default, exactly as before. *)
+  let exprs = !Primitives.expand_toplevel_ref
+                (Reader_braces.read_dispatch ~path source) in
   let mod_ref = ref (Primitives.initial_env ()) in
   ignore (eval_expressions exprs mod_ref);
   VEnvMap (new_bindings ~base:(Primitives.initial_env ()).bindings (!mod_ref).bindings)
@@ -1076,7 +1079,7 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
              Reader.read_string call site. *)
           let contents = Runtime.loader_read path in
           let sub_exprs = !Primitives.expand_toplevel_ref
-                            (Reader.read_string ~source:path contents) in
+                            (Reader_braces.read_dispatch ~source:path ~path contents) in
           eval_expressions sub_exprs env
       | _ ->
           let result = force (eval e !env) in

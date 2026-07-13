@@ -465,7 +465,8 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
            sees these forms — Macro.ml is compiled after Vm.ml's
            dependencies (evaluator), so this is a direct call, not the
            Primitives-ref indirection evaluator.ml needs. *)
-        let exprs = Macro.expand_toplevel_list (Reader.read_string ~source:path contents) in
+        let exprs = Macro.expand_toplevel_list
+                      (Reader_braces.read_dispatch ~source:path ~path contents) in
         (* Compile and run ONE top-level form at a time (mirroring
            repl.ml's execute_file_bytecode for the outer file), each wrapped
            in ITS OWN location (LAW 29/D12): an error escaping a form here
@@ -553,7 +554,8 @@ and eval_module_from (path : string) (frames : frame list) : value =
     try Runtime.loader_read path
     with Sys_error msg -> failwith ("VM: cannot load module file: " ^ msg)
   in
-  let exprs = Macro.expand_toplevel_list (Reader.read_string source) in
+  (* M7 S1: dispatch on [path]'s extension; label stays the "<?>" default. *)
+  let exprs = Macro.expand_toplevel_list (Reader_braces.read_dispatch ~path source) in
   let prog = Compiler.compile_program exprs in
   let saved_globals = Hashtbl.copy globals in
   Hashtbl.clear globals;

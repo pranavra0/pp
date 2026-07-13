@@ -236,32 +236,14 @@ let expect_symbol ps =
 (* Blocks (do bodies, multi-expression fn/def/let bodies, modules) give every
    def whole-block letrec* scope, so one name defined twice in a block is
    incoherent. Function defs keep their pre-existing shadowing latitude; any
-   collision involving a VALUE def is rejected at read time. *)
+   collision involving a VALUE def is rejected at read time.
+   M7: the check itself lives in Desugar (shared with the brace reader). *)
 let check_block_defs ps (exprs : expr list) : expr list =
-  let name_of = function
-    | EDef (n, _, _) | EDefNode (n, _, _)
-    | ELocated (_, (EDef (n, _, _) | EDefNode (n, _, _))) -> Some (n, false)
-    | EDefValue (n, _) | ELocated (_, EDefValue (n, _)) -> Some (n, true)
-    | _ -> None
-  in
-  let seen : (string, bool) Hashtbl.t = Hashtbl.create 8 in
-  List.iter (fun e ->
-    match name_of e with
-    | None -> ()
-    | Some (n, is_val) ->
-        (match Hashtbl.find_opt seen n with
-         | Some was_val when is_val || was_val ->
-             parse_error ps ("duplicate definition in block: " ^ n)
-         | Some _ -> ()
-         | None -> Hashtbl.add seen n is_val))
-    exprs;
-  exprs
+  Desugar.check_block_defs ~err:(fun msg -> parse_error ps msg) exprs
 
 (* Assemble a body from the expressions of a block, validating its defs. *)
 let block_body ps (exprs : expr list) : expr =
-  match check_block_defs ps exprs with
-  | [b] -> b
-  | bs -> EDo bs
+  Desugar.block_body ~err:(fun msg -> parse_error ps msg) exprs
 
 (* Parse an expression *)
 let rec parse_expr ps : expr =
@@ -389,21 +371,11 @@ and parse_vector_param_list ps =
 (* Assemble a function's parameter names and body: each annotated parameter
    desugars into a located type check run ahead of the body — both backends
    compile/evaluate the shared desugared AST, so the checks are enforced
-   identically (LAW 32). An optional return annotation wraps the body. *)
+   identically (LAW 32). An optional return annotation wraps the body.
+   M7: the desugar lives in Desugar (shared with the brace reader). *)
 and assemble_fn_body locate (params : (string * expr option) list)
     (ret_ty : expr option) (body : expr) : string list * expr =
-  let names = List.map fst params in
-  let checks =
-    List.filter_map (fun (p, tyo) ->
-      match tyo with
-      | Some ty -> Some (locate (ETyped (ESymbol p, ty)))
-      | None -> None) params in
-  let body' = match ret_ty with
-    | Some ty -> locate (ETyped (body, ty))
-    | None -> locate body in
-  match checks with
-  | [] -> (names, body')
-  | _ -> (names, EDo (checks @ [body']))
+  Desugar.assemble_fn_body locate params ret_ty body
 
 (* (def name value)  or  (def (name params...) [: type] body...) *)
 and parse_def ps =
@@ -555,25 +527,13 @@ and parse_quote ps =
   ignore (parse_rest ps);
   EQuote e
 
-(* (and exprs...) — short-circuiting AND *)
+(* (and exprs...) — short-circuiting AND (shared desugar, M7) *)
 and parse_and ps =
-  let exprs = parse_rest ps in
-  let rec desugar = function
-    | [] -> ELiteral (VBool true)
-    | [e] -> e
-    | e :: rest -> EIf (e, desugar rest, ELiteral (VBool false))
-  in
-  desugar exprs
+  Desugar.desugar_and (parse_rest ps)
 
-(* (or exprs...) — short-circuiting OR *)
+(* (or exprs...) — short-circuiting OR (shared desugar, M7) *)
 and parse_or ps =
-  let exprs = parse_rest ps in
-  let rec desugar = function
-    | [] -> ELiteral (VBool false)
-    | [e] -> e
-    | e :: rest -> EIf (e, ELiteral (VBool true), desugar rest)
-  in
-  desugar exprs
+  Desugar.desugar_or (parse_rest ps)
 
 (* (force expr) *)
 and parse_force ps =
@@ -622,23 +582,15 @@ and parse_defnode ps =
 (* (assert cond [msg]) — a located runtime check: a false/nil condition
    raises `assertion failed: <form> at file:line` (or the custom message,
    location appended). Desugars to if+error so both backends enforce the
-   shared AST identically. *)
+   shared AST identically (shared desugar, M7). *)
 and parse_assert ps =
   let line = peek_line ps in
-  let loc_suffix = Printf.sprintf " at %s:%d" !current_file line in
   let cond = parse_expr ps in
   let msg_opt = match peek ps with
     | TokRParen -> None
     | _ -> Some (parse_expr ps) in
   ignore (parse_rest ps);
-  let msg_expr = match msg_opt with
-    | None ->
-        ELiteral (VString ("assertion failed: "
-                           ^ string_of_value (quote_to_value cond)
-                           ^ loc_suffix))
-    | Some m ->
-        EApply (ESymbol "string-append", [m; ELiteral (VString loc_suffix)]) in
-  EIf (cond, ELiteral VNil, EApply (ESymbol "error", [msg_expr]))
+  Desugar.desugar_assert ~file:!current_file ~line cond msg_opt
 
 (* (do exprs...) *)
 and parse_do ps =
