@@ -8,6 +8,9 @@
   (source_tree stdlib)
   (source_tree demo)
   (source_tree examples)
+  ; M7 S2: tests/055's whole-tree `pp fmt` round-trip sweep also covers the
+  ; manual's live-executed .pp examples
+  (source_tree docs/manual)
   build.pp
   scripts/run-tests.sh
   src/main.exe

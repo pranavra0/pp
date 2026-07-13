@@ -467,6 +467,24 @@ dune exec ./tools/fuzz.exe -- --grammar core --count 2000
 dune exec ./tools/fuzz.exe -- --grammar full --count 2000
 ```
 
+**M7 S2 — `pp fmt`, the lossless transpiler.** `pp fmt --to-braces`/
+`--to-sexpr <file> [-i]` (docs/M7-SYNTAX.md "S2") reads one surface, prints
+the other via the same location-preserving discipline as `--emit-braces`
+(`src/printer_braces.ml`; the new `src/printer_sexpr.ml` for the reverse
+direction), and additionally carries comments losslessly through a side
+channel (`src/comments.ml`) that never touches the AST both readers hand the
+evaluator — LAW-20 hashes ignore comments by construction, so hash equality
+alone can't catch a dropped one; comment COUNT and TEXT (mod the `;`/`#`
+delimiter and whitespace) are checked separately. `-i`/`--in-place` rewrites
+the file at its own path (never renaming it: hash preservation requires the
+location file to stay identical across both hops — this is the S3 migration
+vehicle). `tests/055-fmt.sh` covers a tricky-comments fixture each direction
+(trailing/standalone/comment-only/end-of-file comments, run-identically
+before and after), output determinism (`fmt` twice on the same input is
+byte-identical), and a whole-tree in-place round-trip sweep asserting every
+top-level form's `hash_expr` survives `to-braces` then `to-sexpr` — the two
+internal test seams `--compare-hash`/`--list-comments` exist only for this.
+
 The fuzzer shells out to the interpreter, defaulting to `bin/pp` (the symlink
 `dune build` targets). Run from the repo root, or pass `--pp PATH`.
 

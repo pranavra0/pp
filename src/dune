@@ -2,7 +2,7 @@
  (name main)
  (public_name pp)
  (modules version types hasher blobref codec paths cell runtime store journal gcroots desugar
-   reader reader_braces printer_braces
+   reader reader_braces printer_braces printer_sexpr comments
    capabilities process scheduler domain_prims fenced island primitives domains evaluator macro
    compiler stabilize vm repl token transport remote store_gc main)
  (libraries cryptokit dune-build-info)

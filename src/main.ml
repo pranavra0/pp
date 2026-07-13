@@ -50,6 +50,17 @@ let main () =
      fuzzer's per-program gate, tools/fuzz.ml). *)
   let emit_braces_file = ref None in
   let roundtrip_braces_file = ref None in
+  (* M7 S2: `pp fmt` — the lossless transpiler/formatter (docs/M7-SYNTAX.md
+     "S2 — pp fmt"). `--to-braces`/`--to-sexpr FILE [-i]` dispatch by FLAG,
+     never by extension (files keep their names through the S3 migration).
+     `--compare-hash`/`--list-comments` are internal test seams for
+     tests/055-fmt.sh (per-form LAW-20 hash comparison across two files;
+     dumping the comment side-channel for count/content checks) — not
+     documented in --help, mirroring --emit-braces/--roundtrip-braces's own
+     internal-tool tone. *)
+  let fmt_args = ref None in           (* (`ToBraces|`ToSexpr, file, in_place) *)
+  let compare_hash_args = ref None in  (* (file1, file2) *)
+  let list_comments_args = ref None in (* (`Sexpr|`Brace, file) *)
 
   let rec parse = function
     | "--" :: rest ->
@@ -132,6 +143,32 @@ let main () =
     (* ---- M7 S1: brace-surface seams ---- *)
     | "--emit-braces" :: f :: rest -> emit_braces_file := Some f; parse rest
     | "--roundtrip-braces" :: f :: rest -> roundtrip_braces_file := Some f; parse rest
+    (* ---- M7 S2: `pp fmt` seams ---- *)
+    | "fmt" :: rest ->
+        (* `fmt` owns the rest of argv itself (its own small flag set); it
+           does not recurse back into the general `parse` loop. *)
+        let to_braces = ref None in
+        let to_sexpr = ref None in
+        let in_place = ref false in
+        let rec parse_fmt = function
+          | "--to-braces" :: f :: more -> to_braces := Some f; parse_fmt more
+          | "--to-sexpr" :: f :: more -> to_sexpr := Some f; parse_fmt more
+          | ("-i" | "--in-place") :: more -> in_place := true; parse_fmt more
+          | [] -> ()
+          | a :: _ -> failwith ("pp fmt: unrecognized argument: " ^ a)
+        in
+        parse_fmt rest;
+        (match !to_braces, !to_sexpr with
+         | Some f, None -> fmt_args := Some (`ToBraces, f, !in_place)
+         | None, Some f -> fmt_args := Some (`ToSexpr, f, !in_place)
+         | Some _, Some _ | None, None ->
+             failwith "pp fmt: specify exactly one of --to-braces or --to-sexpr")
+    | "--compare-hash" :: f1 :: f2 :: rest ->
+        compare_hash_args := Some (f1, f2); parse rest
+    | "--list-comments" :: "sexpr" :: f :: rest ->
+        list_comments_args := Some (`Sexpr, f); parse rest
+    | "--list-comments" :: "brace" :: f :: rest ->
+        list_comments_args := Some (`Brace, f); parse rest
     | "--fenced-policy" :: policy :: rest ->
         (match policy with
          | "retry" -> fenced_policy := Runtime.Retry
@@ -187,6 +224,8 @@ let main () =
         Printf.printf "  pp --dump-pins <path> <file.pp>  After running, write every run_pins/probe_values entry as (pin ...)/(pin-probe ...) lines to <path>\n";
         Printf.printf "  pp --emit-braces <file.pp>  Print the file as brace-surface text (M7 S1; .ppb files run directly)\n";
         Printf.printf "  pp --roundtrip-braces <file.pp>  Assert sexpr->braces->re-read AST + LAW-20 hash equality (the fuzz gate)\n";
+        Printf.printf "  pp fmt --to-braces <file> [-i]  Transpile sexpr source to brace source, carrying comments (M7 S2; -i/--in-place rewrites the file, same path)\n";
+        Printf.printf "  pp fmt --to-sexpr <file> [-i]   Transpile brace source to sexpr source, carrying comments (M7 S2)\n";
         exit 0
     | "--once" :: rest -> parse rest  (* no-op: explicit one-shot *)
     | "--watch" :: rest -> watch := true; parse rest
@@ -253,6 +292,80 @@ let main () =
                        "roundtrip: form %d hash diverged: %s vs %s" i ha hb)
          end)
          (List.combine forms forms');
+       exit 0
+   | None -> ());
+
+  (* M7 S2: `pp fmt` — read one surface, print the other, carrying comments
+     via the Comments side channel (never touching the AST/eval path: the
+     comment scanners run over the raw source text independently of
+     whichever reader is invoked). *)
+  (match !fmt_args with
+   | Some (`ToBraces, f, in_place) ->
+       let src = read_whole f in
+       let forms = Reader.read_string ~source:f src in
+       let comments = Comments.scan_sexpr src in
+       let base =
+         try Printer_braces.print_program ~source:f forms
+         with Printer_braces.Unprintable msg ->
+           failwith ("pp fmt --to-braces: " ^ msg)
+       in
+       let out = Comments.splice comments ~delim:'#' base in
+       if in_place then begin
+         let oc = open_out f in output_string oc out; close_out oc
+       end else print_string out;
+       exit 0
+   | Some (`ToSexpr, f, in_place) ->
+       let src = read_whole f in
+       let forms = Reader_braces.read_string ~source:f src in
+       let comments = Comments.scan_brace src in
+       let base =
+         try Printer_sexpr.print_program ~source:f forms
+         with Printer_sexpr.Unprintable msg ->
+           failwith ("pp fmt --to-sexpr: " ^ msg)
+       in
+       let out = Comments.splice comments ~delim:';' base in
+       if in_place then begin
+         let oc = open_out f in output_string oc out; close_out oc
+       end else print_string out;
+       exit 0
+   | None -> ());
+  (* M7 S2 test seam: per-top-level-form LAW-20 hash comparison between two
+     sexpr files (tests/055-fmt.sh's round-trip-hash check). Both are read
+     with f1's path as the location label: LAW-20 hashes include the
+     `ELocated` file name, and the round-trip contract this checks
+     (docs/M7-SYNTAX.md S2) is specifically that transpiling IN PLACE (same
+     path throughout, per `-i`'s contract) preserves every hash — a
+     scratch second path is just where this test seam keeps the
+     "before" copy, not a real distinct source location. *)
+  (match !compare_hash_args with
+   | Some (f1, f2) ->
+       let forms1 = Reader.read_string ~source:f1 (read_whole f1) in
+       let forms2 = Reader.read_string ~source:f1 (read_whole f2) in
+       if List.length forms1 <> List.length forms2 then
+         failwith (Printf.sprintf
+                     "--compare-hash: form count diverged: %d (%s) vs %d (%s)"
+                     (List.length forms1) f1 (List.length forms2) f2);
+       List.iteri (fun i (a, b) ->
+         let ha = Types.hash_expr a and hb = Types.hash_expr b in
+         if ha <> hb then
+           failwith (Printf.sprintf
+                       "--compare-hash: form %d hash diverged: %s vs %s" i ha hb))
+         (List.combine forms1 forms2);
+       exit 0
+   | None -> ());
+  (* M7 S2 test seam: dump the comment side channel (one "LINE: TEXT" line
+     per comment, TEXT trimmed) so a shell test can diff count/content
+     across a transpilation, independent of the `;`/`#` delimiter. *)
+  (match !list_comments_args with
+   | Some (surface, f) ->
+       let src = read_whole f in
+       let comments = match surface with
+         | `Sexpr -> Comments.scan_sexpr src
+         | `Brace -> Comments.scan_brace src
+       in
+       List.iter (fun (c : Comments.t) ->
+         Printf.printf "%d: %s\n" c.line (String.trim c.text))
+         comments;
        exit 0
    | None -> ());
 

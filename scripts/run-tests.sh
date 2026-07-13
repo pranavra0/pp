@@ -325,4 +325,11 @@ else
   echo "FAIL 054-brace-reader"; fail=1
 fi
 
+echo "--- M7 S2: pp fmt (lossless comment-carrying transpilation, both directions) ---"
+if PP="$PP" bash tests/055-fmt.sh; then
+  echo "ok   055-fmt"
+else
+  echo "FAIL 055-fmt"; fail=1
+fi
+
 exit $fail
