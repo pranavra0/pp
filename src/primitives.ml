@@ -1086,6 +1086,40 @@ let () =
              v)
     | _ -> failwith "probe expects a probe name string");
 
+  (* ---- Phase 1b.4: collect-results (error-accumulation partition) ---- *)
+
+  (* `(collect-results items)` — partition a list of `[:ok, v]` / `[:err, e]`
+     results. Returns `[:ok, values]` if all succeeded, `[:err, errors]` if any
+     failed. Used by the `collect { }` reader sugar. *)
+  register "collect-results" (fun args ->
+    let rec force_list l =
+      match force_val l with
+      | VNil -> []
+      | VPair (h, t) -> force_val h :: force_list t
+      | _ -> failwith "collect-results expects a list"
+    in
+    match args with
+    | [arg] ->
+        let items = force_list arg in
+        let rec partition items oks errs =
+          match items with
+          | [] ->
+              if errs = [] then
+                VPair (VKeyword "ok",
+                  VPair (List.fold_right (fun a acc -> VPair (a, acc)) (List.rev oks) VNil, VNil))
+              else
+                VPair (VKeyword "err",
+                  VPair (List.fold_right (fun a acc -> VPair (a, acc)) (List.rev errs) VNil, VNil))
+          | VPair (VKeyword "ok", VPair (v, VNil)) :: rest ->
+              partition rest (v :: oks) errs
+          | VPair (VKeyword "err", VPair (e, VNil)) :: rest ->
+              partition rest oks (e :: errs)
+          | other :: _ ->
+              failwith ("collect-results: each item must be [:ok, v] or [:err, e], got "
+                        ^ string_of_value other)
+        in
+        partition items [] []
+    | _ -> failwith "collect-results expects one argument");
   (* ---- M4 sealed cells ---- *)
 
   (* `(unseal v)` — the one sanctioned way out of VSealed to VString (the

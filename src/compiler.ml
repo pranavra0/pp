@@ -556,46 +556,75 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       compile_sequential saved_frame bindings
 
   | EMatch (scrutinee, arms) ->
-      (* Lower to nested let+if chain and compile that *)
+      (* Lower to nested let+if chain and compile that.
+         Patterns are matched structurally: the condition checks shape and
+         literal/tag equality, and the then-branch binds pattern variables.
+         This mirrors Types.match_pattern used by the tree-walker. *)
       let tmp = "__match_" in
       let tmp_sym = ESymbol tmp in
       let car_of e = EApply (ESymbol "car", [e]) in
       let cdr_of e = EApply (ESymbol "cdr", [e]) in
+      let nth_cdr n e =
+        let rec loop n e = if n <= 0 then e else loop (n - 1) (cdr_of e) in
+        loop n e
+      in
+      let nth_car n e = car_of (nth_cdr n e) in
+      (* Conjunction as nested if (short-circuiting). *)
+      let rec conj = function
+        | [] -> ELiteral (VBool true)
+        | [c] -> c
+        | c :: cs -> EIf (c, conj cs, ELiteral (VBool false))
+      in
+      (* Condition expression for [pat] matched against [base]. *)
+      let rec pat_cond base pat =
+        match pat with
+        | PLiteral v -> EApply (ESymbol "=", [base; ELiteral v])
+        | PWildcard | PVariable _ -> ELiteral (VBool true)
+        | PTagged (tag, pats) ->
+            let tag_cond = EApply (ESymbol "=", [car_of base; ELiteral (VKeyword tag)]) in
+            let rest = cdr_of base in
+            let elem_conds =
+              List.mapi (fun i p ->
+                let non_nil = EApply (ESymbol "not", [EApply (ESymbol "nil?", [nth_cdr i rest])]) in
+                EIf (non_nil, pat_cond (nth_car i rest) p, ELiteral (VBool false))
+              ) pats in
+            conj (tag_cond :: elem_conds)
+        | PList (pats, rest_opt) ->
+            let rec walk i pats =
+              match pats with
+              | [] ->
+                  (match rest_opt with
+                   | None -> [EApply (ESymbol "nil?", [nth_cdr i base])]
+                   | Some _ -> [])
+              | p :: ps ->
+                  let non_nil = EApply (ESymbol "not", [EApply (ESymbol "nil?", [nth_cdr i base])]) in
+                  let elem_cond = pat_cond (nth_car i base) p in
+                  non_nil :: elem_cond :: walk (i + 1) ps
+            in
+            conj (walk 0 pats)
+      in
+      (* Bindings introduced by [pat] matched against [base]. *)
+      let rec pat_binds base pat =
+        match pat with
+        | PLiteral _ | PWildcard -> []
+        | PVariable name -> [(name, base)]
+        | PTagged (_, pats) ->
+            let rest = cdr_of base in
+            List.concat (List.mapi (fun i p -> pat_binds (nth_car i rest) p) pats)
+        | PList (pats, rest_opt) ->
+            let binds =
+              List.concat (List.mapi (fun i p -> pat_binds (nth_car i base) p) pats) in
+            match rest_opt with
+            | None -> binds
+            | Some r -> binds @ pat_binds (nth_cdr (List.length pats) base) r
+      in
       let rec lower_arms = function
         | [] -> EApply (ESymbol "error", [ELiteral (VString "match failure")])
-        | [(pat, body)] -> lower_pat pat body (lower_arms [])
         | (pat, body) :: rest ->
-            let cond = pat_cond pat in
-            let then_e = lower_pat_bind pat body in
+            let cond = pat_cond tmp_sym pat in
+            let binds = pat_binds tmp_sym pat in
+            let then_e = if binds = [] then body else ELet (binds, body) in
             EIf (cond, then_e, lower_arms rest)
-      and pat_cond pat =
-        match pat with
-        | PLiteral v -> EApply (ESymbol "=", [tmp_sym; ELiteral v])
-        | PWildcard | PVariable _ -> ELiteral (VBool true)
-        | PTagged (tag, _) -> EApply (ESymbol "=", [car_of tmp_sym; ELiteral (VKeyword tag)])
-        | PList _ -> ELiteral (VBool false)
-      and lower_pat_bind pat body =
-        match pat with
-        | PVariable name -> ELet ([name, tmp_sym], body)
-        | PTagged (_, [PVariable name]) ->
-            ELet ([name, car_of (cdr_of tmp_sym)], body)
-        | PTagged (_, pats) ->
-            let binds = List.mapi (fun i p ->
-              match p with
-              | PVariable n -> (n, car_of (nth_cdr i tmp_sym))
-              | _ -> ("_", ELiteral VNil)
-            ) pats in
-            let real_binds = List.filter (fun (n, _) -> n <> "_") binds in
-            if real_binds = [] then body
-            else ELet (real_binds, body)
-        | PList _ | PLiteral _ | PWildcard -> body
-      and lower_pat pat body fallback =
-        let cond = pat_cond pat in
-        let then_e = lower_pat_bind pat body in
-        EIf (cond, then_e, fallback)
-      and nth_cdr n e =
-        if n <= 0 then e
-        else cdr_of (nth_cdr (n - 1) e)
       in
       let lowered = ELet ([tmp, scrutinee], lower_arms arms) in
       compile_expr st lowered tail

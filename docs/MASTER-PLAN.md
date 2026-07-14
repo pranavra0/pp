@@ -18,6 +18,25 @@ This plan draws from:
 
 ---
 
+## Current state (as of 2026-07-14)
+
+Verified by running `dune runtest`, `pp`, `pp --bytecode`, and `pp --diff`
+against hand-written examples.
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| Phase 0 | Done | `docs/CONVENTIONS.md` and `AGENTS.md` style section exist. pp-leetcode workspace rewrites are out-of-repo. |
+| Phase 1 | Mostly done | 1.1–1.3, 1.5–1.7 implemented. 1.4 (f-strings) and 1.8 (call-spread `apply`) not yet implemented. |
+| Phase 1b | Complete | `try { }` / `<-` / `?` and `collect { }` with full error partitioning all implemented. |
+| Phase 2 | Partial | 2.3 (`with`), 2.4 (`fenced`), 2.5 (`$secret`/`unseal`) done. 2.1 (function clauses) not implemented. 2.2 (`@` attributes) parses but `@needs`/`@reads` passthrough. |
+| Phase 3 | In progress | `match` AST works in both backends for all listed pattern kinds (literal, variable, wildcard, list with spread, tagged). Compiler properly handles list patterns — no divergence. Map patterns and `for`/`while`/`:=` are stretch. Sexpr surface support for match patterns not yet implemented (round-trip sweep excludes match-using .pp files). |
+| Phase 4 | Not started | Resumable effects and TCO are stretch. |
+| Phase 5 | Not started | `pp lint` exists but does not cover all convention rules; no migration has been run. |
+
+**Next slice:** implement Phase 1.4 (f-string interpolation: `f"Hello, {name}!"`).
+
+---
+
 ## Phase dependency graph
 
 ```
@@ -43,7 +62,11 @@ and backend support. Phase 5 is tooling and migration.
 
 **What:** Canonicalize the naming/style rules. No code changes.
 
-**Deliverables:**
+**Status:** Items 0.1–0.9 are covered by `docs/CONVENTIONS.md`; item 0.13
+(style section in `AGENTS.md`) is done. Items 0.10–0.12 depend on the
+out-of-repo `workspace/` (pp-leetcode) and the manual build.
+
+**Deliverables:
 
 | # | Item | File |
 |---|------|------|
@@ -81,6 +104,9 @@ and backend support. Phase 5 is tooling and migration.
 
 **What:** Reader-level desugars in `reader_braces.ml` that lower to existing
 AST forms. Zero evaluator/compiler/VM changes. LAW-20 keys unchanged.
+
+**Status:** 1.1–1.3 and 1.5–1.7 are implemented and verified. 1.4 (f-strings)
+and 1.8 (call-spread `apply`) are not yet implemented.
 
 ### 1.1 — `[a, b, c]` list literal
 
@@ -204,6 +230,9 @@ argument list. It is not purely reader-level; it needs evaluator and VM support.
 **What:** Reader-level sugars for the five-tier error model. All lower to
 `match`-like chains over `[:ok, v]` / `[:err, e]` tagged lists.
 
+**Status:** `try { }`, `<-`, postfix `?`, and `collect { }` with full ok/err
+partitioning are all implemented and verified via differential testing.
+
 ### 1b.1 — `[:ok(v)]` / `[:err(e)]` tagged values
 
 Use the existing convention: a two-element list whose first element is `:ok`
@@ -278,6 +307,11 @@ May use a stdlib helper that the reader calls.
 
 **What:** Reader-level sugars that make pp's runtime patterns visible in
 source. Still reader-only, still zero AST changes (except where noted).
+
+**Status:** Unified `with { }` (2.3), `fenced { }` (2.4), and `$secret`/`unseal`
+(2.5) are done. Function clauses (2.1) are not implemented. `@` attributes
+(2.2) parse but `@needs`/`@reads` are passthrough/doc-only, not wired to
+capability narrowing.
 
 ### 2.1 — Function clauses (multiple `def`s, same name)
 
@@ -373,9 +407,13 @@ Already covered by Phase 1.7. Keep `unseal` as the primitive name.
 
 ## Phase 3 — AST Additions
 
-**What:** New AST nodes that need evaluator, compiler, and VM support.
-These change the language semantics (or at least the execution model) and must
-be identically supported in both backends.
+**Status:** `match` AST (`EMatch`) works in both backends for all listed pattern
+kinds: literal, variable, wildcard, tagged, and list (including spread with
+`...rest`). The compiler's recursive `pat_cond`/`pat_binds` lowering mirrors
+`Types.match_pattern`. Sexpr surface support for match patterns is not yet
+implemented, so match-using `.pp` files must be `.sh` test scripts rather than
+`.pp` files (the round-trip sweep would reject them). Map patterns and
+`for`/`while`/`:=` are stretch.
 
 ### 3.1 — `match` expression
 

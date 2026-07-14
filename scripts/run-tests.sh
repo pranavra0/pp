@@ -339,4 +339,16 @@ else
   echo "FAIL 056-defmacro-both-surfaces"; fail=1
 fi
 
+echo "--- Phase 3.1: match list patterns (differential) ---"
+if PP="$PP" bash tests/057-match-list-patterns.sh; then
+  echo "ok   057-match-list-patterns"
+else
+  echo "FAIL 057-match-list-patterns"; fail=1
+fi
+echo "--- Phase 1b.4: collect { } error partitioning (differential) ---"
+if PP="$PP" bash tests/058-collect.sh; then
+  echo "ok   058-collect"
+else
+  echo "FAIL 058-collect"; fail=1
+fi
 exit $fail

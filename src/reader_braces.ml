@@ -1346,8 +1346,7 @@ and lower_try_block (stmts : try_stmt list) : expr =
    Returns [:ok, values] if all succeeded, or [:err, errors] if any failed. *)
 and lower_collect_block (stmts : expr list) : expr =
   let results = EApply (ESymbol "list", stmts) in
-  (* For now, just collect into a list; full error partitioning deferred to stdlib *)
-  results
+  EApply (ESymbol "collect-results", [results])
 
 (* Parse match arms inside { } — each arm is `pattern => body` separated by newlines/; *)
 and parse_match_arms ps : (Types.pattern * expr) list =
@@ -1377,6 +1376,9 @@ and parse_pattern ps : Types.pattern =
   let k = cur ps in
   match k.t with
   | TName "_" -> advance ps; Types.PWildcard
+  | TName "true" -> advance ps; Types.PLiteral (VBool true)
+  | TName "false" -> advance ps; Types.PLiteral (VBool false)
+  | TName "nil" -> advance ps; Types.PLiteral VNil
   | TName n when n.[0] >= 'a' && n.[0] <= 'z' ->
       (* Lowercase name: variable pattern *)
       advance ps; Types.PVariable n
@@ -1385,9 +1387,6 @@ and parse_pattern ps : Types.pattern =
   | TFloat f -> advance ps; Types.PLiteral (VFloat f)
   | TString s -> advance ps; Types.PLiteral (VString s)
   | TKeyword kw -> advance ps; Types.PLiteral (VKeyword kw)
-  | TName "true" -> advance ps; Types.PLiteral (VBool true)
-  | TName "false" -> advance ps; Types.PLiteral (VBool false)
-  | TName "nil" -> advance ps; Types.PLiteral VNil
   | TLBracket ->
       (* List pattern: [p1, p2, ...rest] *)
       advance ps;
@@ -1395,16 +1394,28 @@ and parse_pattern ps : Types.pattern =
       if (cur ps).t = TRBracket then (advance ps; Types.PList ([], None))
       else begin
         let rec loop_pats acc =
-          let p = parse_pattern ps in
-          match (peek ps ~nl:true).t with
-          | TComma -> advance ps; skip_nl ps; loop_pats (p :: acc)
-          | TRBracket -> advance ps; List.rev (p :: acc)
-          | t -> parse_error ps ("expected ',' or ']', got " ^ string_of_btok t)
+          let k = cur ps in
+          match k.t with
+          | TName s when String.length s >= 3 && String.sub s 0 3 = "..." ->
+              (* Spread must be the last element; bind the remainder. *)
+              advance ps;
+              let rest_name = String.sub s 3 (String.length s - 3) in
+              if rest_name = "" then
+                parse_error ps "spread pattern '...' must be followed by a name or '_'";
+              let rest_pat = if rest_name = "_" then Types.PWildcard else Types.PVariable rest_name in
+              skip_nl ps;
+              expect ps ~nl:true TRBracket "']' after spread pattern";
+              (List.rev acc, Some rest_pat)
+          | _ ->
+              let p = parse_pattern ps in
+              skip_nl ps;
+              match (cur ps).t with
+              | TComma -> advance ps; skip_nl ps; loop_pats (p :: acc)
+              | TRBracket -> advance ps; (List.rev (p :: acc), None)
+              | t -> parse_error ps ("expected ',' or ']', got " ^ string_of_btok t)
         in
-        (* Check for ...rest spread at the end *)
-        let pats = loop_pats [] in
-        (* For now, just a list of patterns — spread support deferred *)
-        Types.PList (pats, None)
+        let pats, rest = loop_pats [] in
+        Types.PList (pats, rest)
       end
   | TLParen ->
       (* Tagged pattern: (:ok v) or just grouping *)
