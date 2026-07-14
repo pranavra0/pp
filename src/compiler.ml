@@ -559,11 +559,24 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       (* Lower to nested let+if chain and compile that.
          Patterns are matched structurally: the condition checks shape and
          literal/tag equality, and the then-branch binds pattern variables.
-         This mirrors Types.match_pattern used by the tree-walker. *)
+         This mirrors Types.match_pattern used by the tree-walker.
+
+         A5: the lowering below is ordinary generated code — EApply (ESymbol
+         name, ...) — which on the VM compiles to LOAD_GLOBAL name and so
+         resolves whatever the CURRENT global binding of `name` is. If user
+         code shadows car/cdr/=/nil?/not/error (e.g. `def car(x) { ... }`),
+         a naive lowering through the plain names would silently call the
+         user's redefinition instead of the true primitive, diverging from
+         the tree-walker (which matches structurally via
+         Types.match_pattern and cannot be shadowed). So every primitive the
+         lowering depends on is referenced via its NUL-prefixed unshadowable
+         alias (registered in Primitives; no pp identifier can contain a
+         NUL, so these can never be rebound) instead of the plain name. *)
+      let prim n = ESymbol ("\000" ^ n) in
       let tmp = "__match_" in
       let tmp_sym = ESymbol tmp in
-      let car_of e = EApply (ESymbol "car", [e]) in
-      let cdr_of e = EApply (ESymbol "cdr", [e]) in
+      let car_of e = EApply (prim "car", [e]) in
+      let cdr_of e = EApply (prim "cdr", [e]) in
       let nth_cdr n e =
         let rec loop n e = if n <= 0 then e else loop (n - 1) (cdr_of e) in
         loop n e
@@ -578,14 +591,14 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       (* Condition expression for [pat] matched against [base]. *)
       let rec pat_cond base pat =
         match pat with
-        | PLiteral v -> EApply (ESymbol "=", [base; ELiteral v])
+        | PLiteral v -> EApply (prim "=", [base; ELiteral v])
         | PWildcard | PVariable _ -> ELiteral (VBool true)
         | PTagged (tag, pats) ->
-            let tag_cond = EApply (ESymbol "=", [car_of base; ELiteral (VKeyword tag)]) in
+            let tag_cond = EApply (prim "=", [car_of base; ELiteral (VKeyword tag)]) in
             let rest = cdr_of base in
             let elem_conds =
               List.mapi (fun i p ->
-                let non_nil = EApply (ESymbol "not", [EApply (ESymbol "nil?", [nth_cdr i rest])]) in
+                let non_nil = EApply (prim "not", [EApply (prim "nil?", [nth_cdr i rest])]) in
                 EIf (non_nil, pat_cond (nth_car i rest) p, ELiteral (VBool false))
               ) pats in
             conj (tag_cond :: elem_conds)
@@ -594,10 +607,10 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
               match pats with
               | [] ->
                   (match rest_opt with
-                   | None -> [EApply (ESymbol "nil?", [nth_cdr i base])]
+                   | None -> [EApply (prim "nil?", [nth_cdr i base])]
                    | Some _ -> [])
               | p :: ps ->
-                  let non_nil = EApply (ESymbol "not", [EApply (ESymbol "nil?", [nth_cdr i base])]) in
+                  let non_nil = EApply (prim "not", [EApply (prim "nil?", [nth_cdr i base])]) in
                   let elem_cond = pat_cond (nth_car i base) p in
                   non_nil :: elem_cond :: walk (i + 1) ps
             in
@@ -619,7 +632,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
             | Some r -> binds @ pat_binds (nth_cdr (List.length pats) base) r
       in
       let rec lower_arms = function
-        | [] -> EApply (ESymbol "error", [ELiteral (VString "match failure")])
+        | [] -> EApply (prim "error", [ELiteral (VString "match failure")])
         | (pat, body) :: rest ->
             let cond = pat_cond tmp_sym pat in
             let binds = pat_binds tmp_sym pat in

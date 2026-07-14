@@ -1455,6 +1455,13 @@ and parse_if ps : expr =
   let cond = parse_expr ps { nl = false; cond = true } in
   let then_b = parse_block_body ps in
   let else_e =
+    (* A newline may legitimately separate `}` from `else` (§ the pragmatic
+       reformatter always joins them onto one line, but the parser must
+       accept the split form too). Peek past newlines; only actually
+       consume them if `else` is what follows — otherwise the newline is
+       left alone so it can still terminate this statement. *)
+    let save = ps.pos in
+    skip_nl ps;
     match (cur ps).t with
     | TName "else" ->
         advance ps;
@@ -1463,7 +1470,7 @@ and parse_if ps : expr =
          | TLBrace -> parse_block_body ps
          | t -> parse_error ps ("expected 'if' or '{' after else, got "
                                 ^ string_of_btok t))
-    | _ -> ELiteral VNil
+    | _ -> ps.pos <- save; ELiteral VNil
   in
   EIf (cond, then_b, else_e)
 
@@ -1514,7 +1521,17 @@ and parse_binding_group ps ~(allow_ty : bool) : (string * expr) list =
    Coverage: atoms, names (reserved words included), calls, the infix operator
    levels, grouping, list literals, maps, quote/quasiquote nesting, fn/def/if/
    let/let*/do/perform/with-caps/with-config/with-handler/module/import/force/
-   delay/config/load/load-module/island/assert/node and cell literals.
+   delay/config/load/load-module/island/assert/node and cell literals. A3
+   added: try { ... } (parse_qq_try_stmts/qq_lower_try_block, the same
+   nested let/if data lower_try_block builds as real nodes), match E { pat
+   => body; ... } (parse_qq_match_arms/parse_qq_pattern, the same arm/
+   pattern data quote_to_value's EMatch case builds — value_to_expr gained
+   a matching "match" case + value_to_pattern, since EMatch is a first-
+   class AST node with no prior quote_to_value inverse), postfix m[k]
+   index (parse_qq_postfix's TLBracket arm, same vector-get/hash-map-get
+   accessor choice as parse_postfix), and list-literal spread
+   `[a, ...rest]` (parse_qq_primary's TLBracket arm, same cons(a, rest)
+   shape build_spread_list builds).
 
    S5 ergonomics (was S1's deviation #2): `unquote(E)` is now legal in a
    let/let* BINDING NAME and a def's FUNCTION NAME (parse_qq_name_slot) —
@@ -1523,7 +1540,12 @@ and parse_binding_group ps ~(allow_ty : bool) : (string * expr) list =
    and a macro-generated def name (`def unquote(name)(x) { ... }`).
    splice(e) already worked in any list/argument/block position (parse_qq_*
    already routed every element through parse_qq, which dispatches splice at
-   parse_qq_head) — it needed no reader change, only exercising.
+   parse_qq_head) — it needed no reader change, only exercising. A3's match
+   arms are the one exception to "every element routes through parse_qq":
+   patterns are always literal (parse_qq_pattern, not parse_qq) — the same
+   judgment as parse_qq_name_slot's param-list restriction below, and an
+   unquote(...) in pattern position is a worded parse error, not silently
+   dropped.
 
    Still parse errors, deliberately NOT lifted (documented in SPEC.md
    Appendix B.7, not fuzzed, no existing/rewritten macro test needs them):
@@ -1542,7 +1564,14 @@ and parse_binding_group ps ~(allow_ty : bool) : (string * expr) list =
 and qq_nil : expr = EQuote (ELiteral VNil)
 
 and qq_chain (items : expr list) : expr =
-  List.fold_right (fun e acc -> EApply (ESymbol "cons", [e; acc])) items qq_nil
+  qq_chain_tail items qq_nil
+
+(* Like qq_chain, but the cons-chain ends in [tail] instead of qq_nil — the
+   list-literal SPREAD case (A3): `[a, ...rest]`'s data must be the SAME
+   `cons(a, rest)` shape the ordinary bracket-literal spread builds
+   (build_spread_list), not always nil-terminated. *)
+and qq_chain_tail (items : expr list) (tail : expr) : expr =
+  List.fold_right (fun e acc -> EApply (ESymbol "cons", [e; acc])) items tail
 
 and qq_sym (s : string) : expr = EQuote (ESymbol s)
 
@@ -1611,11 +1640,38 @@ and parse_qq_mul ps =
 and parse_qq_postfix ps =
   let e = ref (parse_qq_primary ps) in
   let rec loop () =
-    match (peek ps ~nl:true).t with
+    (* nl:false (A3 fix), not nl:true: a bare `(`/`[` that starts the NEXT
+       line must never be swallowed as THIS primary's postfix call/index —
+       exactly the hazard the normal grammar's parse_postfix avoids by
+       threading its caller's `c.nl` (statement/body positions pass
+       nl=false) instead of hardcoding transparency. A qq match arm's body
+       (`pat => body`) or a qq try statement's rhs sits in exactly such a
+       position: `v + 1` on one line followed by `[:err, e] => 0` on the
+       next must parse as two separate things, not `(v + 1)[...]`. *)
+    match (peek ps ~nl:false).t with
     | TLParen ->
         advance ps;
         let args = parse_qq_args ps in
         e := qq_chain (!e :: args);
+        loop ()
+    | TLBracket ->
+        (* A3: m[k] index — mirror parse_postfix's TLBracket arm (:431-445)
+           exactly, including its accessor choice: a SYNTACTICALLY literal
+           int index lowers to vector-get, anything else to hash-map-get.
+           In qq, a literal int index parses (via parse_qq_primary's TInt
+           case) to exactly `EQuote (ELiteral (VInt _))` — no other qq
+           shape produces that, so checking for it here is the same
+           decision the normal reader makes on the unwrapped `idx`. *)
+        advance ps;
+        skip_nl ps;
+        let idx = parse_qq ps in
+        expect ps ~nl:true TRBracket "']'";
+        let accessor =
+          match idx with
+          | EQuote (ELiteral (VInt _)) -> "vector-get"
+          | _ -> "hash-map-get"
+        in
+        e := qq_chain [qq_sym accessor; !e; idx];
         loop ()
     | _ -> ()
   in
@@ -1698,19 +1754,54 @@ and parse_qq_primary ps : expr =
   | TLBracket ->
       (* L9: [ ... ] is the list literal — lists are the default collection.
          The template must build the SAME value the equivalent code builds
-         (a cons-chain list, VNil-terminated), not a vector (A2). *)
+         (a cons-chain list, VNil-terminated), not a vector (A2). A3 adds
+         surface spread `[a, ...rest]`: mirrors parse_bracket_elems /
+         build_spread_list (:1209-1253) exactly, only routing every
+         element (and the spread target) through parse_qq instead of
+         parse_expr, so unquote/splice work in any position — including
+         `...unquote(xs)` to splice a REAL runtime list value as the tail,
+         the realistic use (a bare `...rest` quotes the symbol `rest`
+         itself, same as any other unlifted qq atom). *)
       advance ps;
       skip_nl ps;
       if (cur ps).t = TRBracket then (advance ps; qq_nil)
       else begin
         let rec loop acc =
-          let e = parse_qq ps in
-          match (peek ps ~nl:true).t with
-          | TComma -> advance ps; skip_nl ps; loop (e :: acc)
-          | TRBracket -> advance ps; List.rev (e :: acc)
-          | t -> parse_error ps ("expected ',' or ']', got " ^ string_of_btok t)
+          match (cur ps).t with
+          | TName s when String.length s >= 3 && String.sub s 0 3 = "..." ->
+              advance ps;
+              let target =
+                if String.length s > 3 then
+                  qq_sym (String.sub s 3 (String.length s - 3))
+                else
+                  parse_qq ps
+              in
+              (match (peek ps ~nl:true).t with
+               | TComma -> advance ps; skip_nl ps; loop (BSpread target :: acc)
+               | TRBracket -> advance ps; List.rev (BSpread target :: acc)
+               | t -> parse_error ps ("expected ',' or ']', got " ^ string_of_btok t))
+          | _ ->
+              let e = parse_qq ps in
+              (match (peek ps ~nl:true).t with
+               | TComma -> advance ps; skip_nl ps; loop (BElem e :: acc)
+               | TRBracket -> advance ps; List.rev (BElem e :: acc)
+               | t -> parse_error ps ("expected ',' or ']', got " ^ string_of_btok t))
         in
-        qq_chain (loop [])
+        let elems = loop [] in
+        let has_spread = List.exists (function BSpread _ -> true | _ -> false) elems in
+        if not has_spread then
+          qq_chain (List.map (function BElem e -> e | BSpread e -> e) elems)
+        else
+          let rec split acc = function
+            | [] -> (List.rev acc, qq_nil)
+            | BSpread e :: rest ->
+                if rest = [] then (List.rev acc, e)
+                else parse_error ps
+                       "spread '...' is only supported at the end of a list in quasiquote"
+            | BElem e :: rest -> split (e :: acc) rest
+          in
+          let (prefix, tail) = split [] elems in
+          qq_chain_tail prefix tail
       end
   | TLBrace ->
       advance ps;
@@ -1826,6 +1917,10 @@ and parse_qq_head ps (n : string) : expr =
       advance ps;
       let cond = parse_qq_cond ps in
       let then_b = parse_qq_block_one ps in
+      (* Same else-across-a-newline lookahead as parse_if: only consume the
+         newline(s) if `else` actually follows. *)
+      let save = ps.pos in
+      skip_nl ps;
       (match (cur ps).t with
        | TName "else" ->
            advance ps;
@@ -1838,7 +1933,44 @@ and parse_qq_head ps (n : string) : expr =
                 qq_chain [qq_sym "if"; cond; then_b; e]
             | t -> parse_error ps ("expected 'if' or '{' after else, got "
                                    ^ string_of_btok t))
-       | _ -> qq_chain [qq_sym "if"; cond; then_b])
+       | _ -> ps.pos <- save; qq_chain [qq_sym "if"; cond; then_b])
+  | "try" when next_t = TLBrace ->
+      (* A3: try { ... } — build the SAME nested let/if DATA shape
+         lower_try_block builds as real expr nodes (:1322-1342), just with
+         qq_chain/qq_sym instead of ELet/EIf/EApply, and every
+         bind/statement rhs routed through parse_qq (so unquote/splice
+         work in a try statement's expression position). fresh_try_var is
+         the SAME global counter the normal path uses (reset once per
+         top-level form, read_string's try_counter := 0) — sharing it here
+         keeps A1's determinism guarantee (a form's LAW-20 hash depends
+         only on the form, not on how many try blocks preceded it) intact
+         whether the try block was written directly or inside a
+         quasiquote template. *)
+      advance ps;
+      skip_nl ps;
+      let stmts = parse_qq_try_stmts ps in
+      qq_lower_try_block stmts
+  | "match" when starts_expr next_t ->
+      (* A3: match E { pat => body; ... } — build the SAME DATA shape
+         quote_to_value's OWN EMatch case builds (types.ml, `(match
+         scrutinee ((pat1 body1) ...))`, arm patterns encoded exactly as
+         quote_pattern does), so a macro-expanded template reconstructs a
+         real EMatch via the matching value_to_expr "match" case added
+         alongside this (A3 also had to add that inverse — it didn't
+         exist before, since EMatch is a first-class AST node, not sugar
+         over existing forms, unlike try/if/do). Patterns stay fully
+         literal (parse_qq_pattern) — no unquote in pattern position, same
+         judgment as parse_qq_name_slot's param-list restriction: no macro
+         test needs a computed pattern, and quote_pattern's tagged
+         encoding has no unquote convention of its own to lift. Arm bodies
+         and the scrutinee route through parse_qq, so unquote/splice work
+         there. *)
+      advance ps;
+      let scrutinee = parse_qq ps in
+      skip_nl ps;
+      expect ps ~nl:false TLBrace "'{'";
+      let arms = parse_qq_match_arms ps in
+      qq_chain [qq_sym "match"; scrutinee; arms]
   | ("let" | "let*") when next_t = TLParen ->
       advance ps; advance ps;
       skip_nl ps;
@@ -1935,6 +2067,204 @@ and parse_qq_head ps (n : string) : expr =
 and parse_qq_cond ps : expr =
   (* reuse the qq precedence chain; a top-level '{' simply stops it *)
   parse_qq ps
+
+(* A3: try { ... } inside quasiquote — parse_try_stmts's exact grammar
+   (:1259-1317), with every rhs/bare-expr routed through parse_qq instead
+   of parse_expr (unquote/splice work in a statement's expression
+   position; bind NAMES stay bare identifiers, same convention as
+   parse_qq_name_slot — no macro test needs a computed try-bind name). *)
+and parse_qq_try_stmts ps : try_stmt list =
+  expect ps ~nl:false TLBrace "'{'";
+  let rec skip_seps () =
+    match (cur ps).t with
+    | TNewline | TSemi -> advance ps; skip_seps ()
+    | _ -> ()
+  in
+  let rec loop acc =
+    skip_seps ();
+    let k = cur ps in
+    if k.t = TRBrace then (advance ps; List.rev acc)
+    else if k.t = TEOF then parse_error ps "unterminated try block in quasiquote"
+    else begin
+      match k.t with
+      | TName name when not k.glued && not (peek2 ps).glued && (peek2 ps).t = TName "<-" ->
+          advance ps;  (* consume name *)
+          advance ps;  (* consume <- *)
+          skip_nl ps;
+          let rhs = parse_qq ps in
+          loop (TryBind (name, rhs) :: acc)
+      | TName "let" ->
+          advance ps;  (* consume 'let' *)
+          (match (cur ps).t with
+           | TName name ->
+               advance ps;
+               if (cur ps).t = TName "=" then begin
+                 advance ps; skip_nl ps;
+                 let rhs = parse_qq ps in
+                 if (cur ps).t = TName "?" && (cur ps).glued then begin
+                   advance ps;  (* consume ? *)
+                   loop (TryBind (name, rhs) :: acc)
+                 end else
+                   parse_error ps
+                     "in try block, use `let name = expr?` or `name <- expr` to unwrap"
+               end else
+                 parse_error ps "expected `let name = expr?` in try block"
+           | _ ->
+               parse_error ps "expected variable name after `let` in try block")
+      | _ ->
+          let e = parse_qq ps in
+          (* bare `expr?` — same postfix-? unwrap sugar as the normal path,
+             built as DATA: `(let [g rhs] (if (= (car g) :ok) (car (cdr g)) g))`. *)
+          let e =
+            if (cur ps).t = TName "?" && (cur ps).glued then begin
+              advance ps;  (* consume ? *)
+              let tmp = fresh_try_var () in
+              let tmp_sym = qq_sym tmp in
+              let ok_kw = EQuote (ELiteral (VKeyword "ok")) in
+              qq_chain
+                [qq_sym "let"; EApply (ESymbol "vector", [qq_sym tmp; e]);
+                 qq_chain
+                   [qq_sym "if";
+                    qq_chain [qq_sym "="; qq_chain [qq_sym "car"; tmp_sym]; ok_kw];
+                    qq_chain [qq_sym "car"; qq_chain [qq_sym "cdr"; tmp_sym]];
+                    tmp_sym]]
+            end else e
+          in
+          loop (TryExpr e :: acc)
+    end
+  in
+  loop []
+
+(* A3: the qq analogue of lower_try_block (:1322-1342) — SAME nested
+   let/if structure, built as quoted DATA (qq_chain/qq_sym) instead of
+   literal ELet/EIf/EApply nodes, so `value_to_expr` (or the runtime
+   `quasiquote` builtin, for a non-macro use) reconstructs exactly what
+   the ordinary `try { ... }` parse produces. *)
+and qq_lower_try_block (stmts : try_stmt list) : expr =
+  let ok_kw = EQuote (ELiteral (VKeyword "ok")) in
+  let car_of e = qq_chain [qq_sym "car"; e] in
+  let cdr_of e = qq_chain [qq_sym "cdr"; e] in
+  let rec build = function
+    | [] -> ok_kw
+    | [TryExpr e] -> e
+    | TryExpr e :: rest -> qq_chain [qq_sym "do"; e; build rest]
+    | TryBind (name, rhs) :: rest ->
+        let tmp = fresh_try_var () in
+        let tmp_sym = qq_sym tmp in
+        let ok_branch =
+          qq_chain [qq_sym "let"; EApply (ESymbol "vector", [qq_sym name; car_of (cdr_of tmp_sym)]);
+                    build rest]
+        in
+        let err_branch = tmp_sym in
+        qq_chain [qq_sym "let"; EApply (ESymbol "vector", [qq_sym tmp; rhs]);
+                  qq_chain [qq_sym "if";
+                            qq_chain [qq_sym "="; car_of tmp_sym; ok_kw];
+                            ok_branch; err_branch]]
+  in
+  build stmts
+
+(* A3: a single pattern inside a qq `match` arm — parse_pattern's exact
+   grammar (:1375-1440), built as the quoted-DATA shape quote_pattern
+   produces for that pattern (types.ml :860-875: `_`/`(lit v)`/`(var
+   "name")`/`(list (pats...) rest)`/`(tagged "tag" pats...)`), so
+   value_to_pattern (its inverse, added alongside the "match" case in
+   value_to_expr) reconstructs the identical Types.pattern after macro
+   expansion. Deliberately NOT unquote-aware (see the "match" arm's
+   comment) — an unquote(...) here falls to the trailing parse_error,
+   worded to say so rather than a generic "expected pattern". *)
+and parse_qq_pattern ps : expr =
+  let k = cur ps in
+  match k.t with
+  | TName "_" -> advance ps; qq_sym "_"
+  | TName "true" -> advance ps; qq_chain [qq_sym "lit"; EQuote (ELiteral (VBool true))]
+  | TName "false" -> advance ps; qq_chain [qq_sym "lit"; EQuote (ELiteral (VBool false))]
+  | TName "nil" -> advance ps; qq_chain [qq_sym "lit"; EQuote (ELiteral VNil)]
+  | TName "unquote" ->
+      parse_error ps
+        "patterns are always literal inside quasiquote { ... }: unquote(...) \
+         is not supported in match-pattern position"
+  | TName n -> advance ps; qq_chain [qq_sym "var"; EQuote (ELiteral (VString n))]
+  | TInt i -> advance ps; qq_chain [qq_sym "lit"; EQuote (ELiteral (VInt i))]
+  | TFloat f -> advance ps; qq_chain [qq_sym "lit"; EQuote (ELiteral (VFloat f))]
+  | TString s -> advance ps; qq_chain [qq_sym "lit"; EQuote (ELiteral (VString s))]
+  | TKeyword kw -> advance ps; qq_chain [qq_sym "lit"; EQuote (ELiteral (VKeyword kw))]
+  | TLBracket ->
+      advance ps;
+      skip_nl ps;
+      if (cur ps).t = TRBracket then
+        (advance ps; qq_chain [qq_sym "list"; qq_nil; qq_nil])
+      else begin
+        let rec loop_pats acc =
+          let k = cur ps in
+          match k.t with
+          | TName s when String.length s >= 3 && String.sub s 0 3 = "..." ->
+              advance ps;
+              let rest_name = String.sub s 3 (String.length s - 3) in
+              if rest_name = "" then
+                parse_error ps "spread pattern '...' must be followed by a name or '_'";
+              let rest_pat =
+                if rest_name = "_" then qq_sym "_"
+                else qq_chain [qq_sym "var"; EQuote (ELiteral (VString rest_name))]
+              in
+              skip_nl ps;
+              expect ps ~nl:true TRBracket "']' after spread pattern";
+              (List.rev acc, rest_pat)
+          | _ ->
+              let p = parse_qq_pattern ps in
+              skip_nl ps;
+              (match (cur ps).t with
+               | TComma -> advance ps; skip_nl ps; loop_pats (p :: acc)
+               | TRBracket -> advance ps; (List.rev (p :: acc), qq_nil)
+               | t -> parse_error ps ("expected ',' or ']', got " ^ string_of_btok t))
+        in
+        let pats, rest = loop_pats [] in
+        qq_chain [qq_sym "list"; qq_chain pats; rest]
+      end
+  | TLParen ->
+      advance ps;
+      skip_nl ps;
+      (match (cur ps).t with
+       | TKeyword tag ->
+           advance ps;
+           let rec loop_pats acc =
+             if (cur ps).t = TRParen then (advance ps; List.rev acc)
+             else begin
+               let p = parse_qq_pattern ps in
+               loop_pats (p :: acc)
+             end
+           in
+           qq_chain (qq_sym "tagged" :: EQuote (ELiteral (VString tag)) :: loop_pats [])
+       | _ ->
+           let p = parse_qq_pattern ps in
+           expect ps ~nl:true TRParen "')'";
+           p)
+  | _ ->
+      parse_error ps ("expected pattern, got " ^ string_of_btok k.t)
+
+(* A3: match arms inside quasiquote — parse_match_arms's grammar
+   (:1352-1372), built as a qq list of (pattern body) 2-element arms,
+   exactly the shape quote_to_value's EMatch case builds for `arms`. *)
+and parse_qq_match_arms ps : expr =
+  let rec skip_seps () =
+    match (cur ps).t with
+    | TNewline | TSemi -> advance ps; skip_seps ()
+    | _ -> ()
+  in
+  let rec loop acc =
+    skip_seps ();
+    if (cur ps).t = TRBrace then (advance ps; qq_chain (List.rev acc))
+    else if (cur ps).t = TEOF then parse_error ps "unterminated match block in quasiquote"
+    else begin
+      let pat = parse_qq_pattern ps in
+      (match peek_infix ps ~nl:true ["=>"] with
+       | Some _ -> advance ps
+       | None -> parse_error ps "match arm must be `pattern => body`");
+      skip_nl ps;
+      let body = parse_qq ps in
+      loop (qq_chain [pat; body] :: acc)
+    end
+  in
+  loop []
 
 (* ---- Public API ---- *)
 

@@ -1224,4 +1224,27 @@ let () =
     incr gensym_counter;
     VSymbol (Printf.sprintf "%s~%d" prefix !gensym_counter));
 
+  (* A5: unshadowable aliases for the primitives the `match` lowering
+     (Compiler.EMatch) compiles its structural condition/binding code
+     down to. The lowering builds ordinary EApply (ESymbol "car"/"cdr"
+     /"="/"nil?"/"not"/"error", ...) nodes; on the VM those compile to
+     LOAD_GLOBAL, which resolves whatever is CURRENTLY bound to that
+     name — so user code that shadows e.g. `car` (`def car(x) { ... }`)
+     silently redirects match's internal machinery, and the VM diverges
+     from the tree-walker (which matches structurally via
+     Types.match_pattern and is immune to shadowing). Register each of
+     these under a NUL-prefixed name — no pp source can contain a NUL,
+     so no `def`/`let` can ever rebind it — pointing at the SAME builtin
+     value already registered under the plain name. Compiler.ml's match
+     lowering references the "\000"-prefixed name instead of the plain
+     one, so it always reaches the true primitive regardless of
+     shadowing. Mirrors [dead_slot] above (compiler.ml) as an
+     unshadowable-by-construction identifier. *)
+  List.iter (fun n ->
+    match lookup n with
+    | Some v -> Hashtbl.replace builtins ("\000" ^ n) v
+    | None -> failwith ("A5: expected primitive " ^ n ^ " to already be registered")
+  ) ["car"; "cdr"; "="; "nil?"; "not"; "error"]
+
+  ;
   ()

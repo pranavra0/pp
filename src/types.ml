@@ -1123,8 +1123,45 @@ and expr_of_list (items : value list) : expr =
   | [VSymbol "config"; k; d] -> EConfig (value_to_expr k, Some (value_to_expr d))
   | [VSymbol ":"; e; ty] -> ETyped (value_to_expr e, value_to_expr ty)
   | (VSymbol "do") :: rest -> EDo (List.map value_to_expr rest)
+  (* match, mirroring quote_to_value's EMatch encoding one-for-one (A3):
+     `(match scrutinee ((pat1 body1) (pat2 body2) ...))` — each arm a
+     2-element sublist, decoded by value_to_pattern (quote_pattern's
+     inverse). Needed so a quasiquote { match ... } template — A3's whole
+     point — actually reconstructs an EMatch after macro expansion, not a
+     bare `(match ...)` application (the generic fallback below). *)
+  | [VSymbol "match"; scrutinee; arms] ->
+      (match value_list_opt arms with
+       | Some arm_items ->
+           let arms' = List.map (fun item ->
+             match value_list_opt item with
+             | Some [pat_v; body_v] -> (value_to_pattern pat_v, value_to_expr body_v)
+             | _ -> failwith "value_to_expr: malformed match arm")
+             arm_items
+           in
+           EMatch (value_to_expr scrutinee, arms')
+       | None -> failwith "value_to_expr: malformed match arms list")
   | fn :: args -> EApply (value_to_expr fn, List.map value_to_expr args)
   | [] -> ELiteral VNil (* unreachable: [items] always comes from a VPair *)
+
+(* The inverse of quote_pattern: value -> pattern, one shape per case. *)
+and value_to_pattern (v : value) : pattern =
+  match v with
+  | VSymbol "_" -> PWildcard
+  | VPair (VSymbol "lit", VPair (lit, VNil)) -> PLiteral lit
+  | VPair (VSymbol "var", VPair (VString s, VNil)) -> PVariable s
+  | VPair (VSymbol "list", VPair (pats_v, VPair (rest_v, VNil))) ->
+      let pats = match value_list_opt pats_v with
+        | Some items -> List.map value_to_pattern items
+        | None -> failwith "value_to_expr: malformed list pattern"
+      in
+      let rest = match rest_v with VNil -> None | r -> Some (value_to_pattern r) in
+      PList (pats, rest)
+  | VPair (VSymbol "tagged", VPair (VString tag, pats_v)) ->
+      (match value_list_opt pats_v with
+       | Some items -> PTagged (tag, List.map value_to_pattern items)
+       | None -> failwith "value_to_expr: malformed tagged pattern")
+  | other -> failwith (Printf.sprintf
+      "value_to_expr: cannot convert %s to a pattern" (string_of_value other))
 
 (* Pattern matching: try to match a value against a pattern.
    Returns Some [(name, value); ...] on match, None on failure. *)
