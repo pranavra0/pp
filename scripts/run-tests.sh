@@ -426,4 +426,10 @@ if PP="$PP" bash tests/070-hash-injective-nearmiss.sh; then
 else
   echo "FAIL 070-hash-injective-nearmiss"; fail=1
 fi
+echo "--- kernel properties (A″2: injectivity, quote-rt, print-rt) suite ---"
+if PP="$PP" bash tests/071-kernel-props.sh; then
+  echo "ok   071-kernel-props"
+else
+  echo "FAIL 071-kernel-props"; fail=1
+fi
 exit $fail

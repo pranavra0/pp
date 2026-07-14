@@ -522,17 +522,29 @@ and print_pattern st (p : pattern) : unit =
         print_pattern st p
       ) pats;
       (match rest with
-       | Some r -> emit st ", ..."; print_pattern st r
+       | Some r ->
+           (* Only separate the spread from PRECEDING elements; a spread-only
+              pattern [...r] must not emit a leading comma ([, ...r] fails to
+              re-read — "expected pattern, got ,"). Caught by A″2 (tests/071). *)
+           if pats <> [] then emit st ", ";
+           emit st "..."; print_pattern st r
        | None -> ());
       emit st "]"
   | PTagged (tag, pats) ->
-      emit st "[:";
+      (* A tagged pattern's brace surface is (:tag p …) — parens, space-
+         separated — matching Reader_braces.parse_pattern's TLParen/TKeyword
+         arm. Printing it with brackets ([:tag …]) produced text the reader
+         re-parses as a LIST pattern whose head is the keyword literal :tag,
+         which then fails on the space before the next element: a broken
+         `pp fmt --to-braces` round-trip for every tagged match arm, caught by
+         A″2's printer round-trip property (pinned in tests/071). *)
+      emit st "(:";
       emit st tag;
       List.iter (fun p ->
         emit st " ";
         print_pattern st p
       ) pats;
-      emit st "]"
+      emit st ")"
 
 and print_apply st ~brk ~lvl fn args =
   ignore brk;

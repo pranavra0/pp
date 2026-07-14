@@ -389,7 +389,14 @@ let rec hash_expr (e : expr) : string =
   | ELoadModule path ->
       hash_concat ["load_module"; path]
   | EIsland (uri, pin) ->
-      hash_concat ["island"; uri; (match pin with Some p -> p | None -> "")]
+      (* Frame the pin option so an unpinned island (None) can never share a
+         key with one pinned to the empty string (Some ""): the raw-string
+         join `Some p -> p | None -> ""` conflated them, an A″1-class LAW-20
+         collision (island "u" "" and island "u" quote to distinct values —
+         VString "" vs VNil — yet hashed identically). Caught by A″2's
+         injectivity property; pinned in tests/071. *)
+      let pin_part = match pin with Some p -> hash_concat ["pin"; p] | None -> "nopin" in
+      hash_concat ["island"; uri; pin_part]
   | EWithConfig (map_expr, body) ->
       hash_concat ["with_config"; hash_expr map_expr; hash_expr body]
   | EConfig (key_expr, default) ->

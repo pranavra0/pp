@@ -186,6 +186,18 @@ let main () =
         (* MASTER-PLAN A′2: emit the surface tables as the SPEC-generated block;
            tests/067 diffs this against the block committed to docs/SPEC.md. *)
         print_string (Surface_tables.render_spec_tables ()); exit 0
+    | "--check-kernel-props" :: rest ->
+        (* MASTER-PLAN A″2: run the derived-generator kernel properties
+           (hash injectivity, quote round-trip, printer round-trip). tests/071
+           drives this with a fixed seed. Optional: --seed N, --count K. *)
+        let seed = ref 1 and count = ref 3000 in
+        let rec grab = function
+          | "--seed" :: n :: more -> seed := int_of_string n; grab more
+          | "--count" :: k :: more -> count := int_of_string k; grab more
+          | _ -> ()
+        in
+        grab rest;
+        if Kernel_props.run ~seed:!seed ~count:!count then exit 0 else exit 1
     | "--help" :: _ | "-h" :: _ ->
         Printf.printf "pp — lazy, pure-by-default, content-addressed Lisp\n";
         Printf.printf "Usage:\n";
