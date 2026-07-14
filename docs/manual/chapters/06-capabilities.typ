@@ -19,8 +19,9 @@ the effect, the missing access, and where the attempt was made.
 
 == Capabilities enter only at the root
 
-There is no expression that creates authority. You cannot write `(filesystem
-"/" :rw)` — `filesystem` is an unbound symbol, not a constructor. The sole mint
+There is no expression that creates authority. You cannot write
+`filesystem("/", :rw)` — `filesystem` is an unbound symbol, not a
+constructor. The sole mint
 is the command line: `--grant` hands the program a capability as it starts, and
 nothing inside the language can manufacture one. Grant the read above a covering
 filesystem capability and the same effect succeeds:
@@ -43,19 +44,19 @@ Pass `--grant` more than once to hold several capabilities at once.
 == User code narrows, never widens
 
 Code holds capabilities, passes them around, and attenuates them — but only
-ever downward. `(current-capabilities)` reifies the ambient authority as of the
+ever downward. `current-capabilities()` reifies the ambient authority as of the
 call; it is an observation of the ceiling every `perform` already checks
 against, not a mint. Two forms narrow it:
 
-- `(cap-restrict cap scope)` — restricts `cap` to a sub-scope, optionally to a
-  narrower mode, for example `(cap-restrict cap "src" :ro)`. Asking for a mode wider
+- `cap-restrict(cap, scope)` — restricts `cap` to a sub-scope, optionally to a
+  narrower mode, for example `cap-restrict(cap, "src", :ro)`. Asking for a mode wider
   than `cap` already grants at that scope is a `Capability_error`, never a
   silent widen.
-- `(cap-compose a b …)` — unions capabilities the code already holds; it can
+- `cap-compose(a, b, …)` — unions capabilities the code already holds; it can
   only ever produce authority already present in its arguments.
 
-`(with-caps cap-expr body)` then replaces the ambient authority with `cap-expr`
-for the extent of `body`. A subset check against the current ambient gates it.
+`with-caps(cap-expr) { body }` then replaces the ambient authority with
+`cap-expr` for the extent of `body`. A subset check against the current ambient gates it.
 So a narrowing composes even when some other binding still lexically holds a
 broader value. The narrowing is restored when `body` returns, tail-calls,
 or raises. There is deliberately no union-with-ambient form: the instant
@@ -105,7 +106,7 @@ invalidated, while their siblings keep hitting.
 
 Deriving from a secret inside a node — the length, above — produces ordinary
 data, because the derived value is no longer the secret. The one explicit way to
-turn a sealed value back into a plain string is `(unseal v)`; there is no
+turn a sealed value back into a plain string is `unseal(v)`; there is no
 implicit dataflow tainting. Unsealing is a deliberate, greppable boundary, so
 the confidentiality of a secret ends exactly where the program says it does. If
 a path is covered by both a `secret:` and an `fs:` grant, the ordinary

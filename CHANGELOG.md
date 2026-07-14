@@ -6,6 +6,23 @@ v0.2.0 predate this file and are reconstructed from history for context.
 
 ## [Unreleased] — v0.2.0
 
+- **M7: the brace surface — a second reader, the same language**
+  (docs/M7-SYNTAX.md). A brace/infix surface (`src/reader_braces.ml`) parses
+  to the identical `Types.expr` the s-expression reader always produced, so
+  LAW-20 keys — and therefore the store — cannot tell which reader produced
+  a program (proven: `build.pp` transpiled to braces null-rebuilds with 0
+  recomputes against a pre-migration store). `pp fmt --to-braces`/
+  `--to-sexpr` is the lossless, comment-carrying transpiler; the whole tree
+  (stdlib, `build.pp`, tests, examples, demo, the manual) was migrated
+  mechanically with it. `.pp` now defaults to braces; `.ppl` is the
+  s-expression form, kept forever as the macro/AST layer (`quote`,
+  `quasiquote`, `defmacro` still consume and produce it — homoiconicity
+  lives at the AST, the Elixir position). REPL/`-e`/`pp why`/`pp graph`
+  read and print braces. Docs (manual, README, SPEC law examples,
+  GLOSSARY) are converted to the brace surface; sexpr remains only where
+  it IS the point — quotation, macros, and AST-identity passages. **Zero
+  changes to the evaluator, VM, compiler, macro expander, store, codec,
+  hasher, traces, or capability semantics.**
 - **M6 stage A: the devops-complete demonstration + diagonal oracle**
   (docs/PLAN-m6-demo.md). `demo/deploy.pp` + `demo/agent.pp` +
   `demo/src/greeter.c` express the whole end-state — build a service from

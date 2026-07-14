@@ -10,7 +10,7 @@ completeness; you should not need to type them by hand.
 
 Flags compose the way you would expect: `--bytecode`, `--grant`, `--schedule`,
 and `--watch` all layer onto whichever run mode you pick. Anything after a bare
-`--` becomes the program's own argument vector, which you read with `(argv)`.
+`--` becomes the program's own argument vector, which you read with `argv()`.
 
 == Running programs
 
@@ -25,7 +25,7 @@ and `--watch` all layer onto whichever run mode you pick. Anything after a bare
   [`pp run <file>`], [Same as `pp <file>` — `run` is an explicit subcommand spelling.],
   [`pp -e '<expr>'`], [Evaluate one expression string and print each top-level value. Not compatible with `--diff`.],
   [`pp --once <file.pp>`], [Run once and exit. A no-op: this is already the default; the flag is for symmetry with `--watch`.],
-  [`pp -- <args…>`], [Everything after `--` becomes the program's argv, read via the `(argv)` builtin.],
+  [`pp -- <args…>`], [Everything after `--` becomes the program's argv, read via the `argv()` builtin.],
   [`pp --version`, `pp -v`], [Print the version and exit.],
   [`pp --help`, `pp -h`], [Print the usage summary and exit.],
 )
@@ -187,3 +187,8 @@ placement's pin wire).
   [`--pin-file <path> <file.pp>`], [Preseed the run's cell observations and probe values from a file of `(pin …)` / `(pin-probe …)` lines before the program runs, so it never observes its own disk for a pinned cell.],
   [`--dump-pins <path> <file.pp>`], [After the run, write every observed cell and probe value to `<path>` as `(pin …)` / `(pin-probe …)` lines. A probe value that is not plain data (code, a handle, a sealed secret) is skipped with a warning.],
 )
+
+The pin-file's `(pin …)` / `(pin-probe …)` lines are their own small wire
+format (`src/remote.ml`'s `parse_pin_line`), not pp source — they are not
+read by either pp reader, so they keep their fixed parenthesized shape
+regardless of the surface a program is written in.

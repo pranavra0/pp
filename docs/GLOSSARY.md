@@ -7,6 +7,12 @@ structure in [ARCHITECTURE.md](ARCHITECTURE.md).
 Terms marked *(planned)* do not exist in the code yet — see
 [STATUS.md](STATUS.md) for what is real today.
 
+Forms below are shown in `.pp`'s default brace surface. `.ppl` files (and
+macros, via `quote`/`quasiquote`/`defmacro`) use the s-expression AST form
+instead — the same forms, spelled `(node e)`, `(defnode x e)`, and so on; see
+[SPEC.md](SPEC.md) Appendix B for the complete brace↔s-expression lowering
+table.
+
 ### Core execution
 
 - **thunk** — a suspended computation. Created by `let` bindings, `delay`, and
@@ -36,12 +42,12 @@ Terms marked *(planned)* do not exist in the code yet — see
   keys ⇒ the same memoized thunk. Must include everything the computation
   depends on, or distinct computations collide (the D6/D17 bug class).
 - **node** — the unit of persistence and caching: a strict, content-addressed,
-  cacheable graph node. *Partly real:* `(node e)` is wired into `force` in **both
+  cacheable graph node. *Partly real:* `node { e }` is wired into `force` in **both
   backends** and caches across runs, keyed the LAW-20 way —
   `H(code-structure ‖ free-var value-hashes)`, whole-env and caps excluded
   (`node_key_of` / `vm_node_key`), with matching keys so the backends share the
-  store. `(defnode x e)` binds the node thunk of `e` (i.e. `(def x (node e))`);
-  applied `(defnode (f x) …)` is currently a named closure. Distinct from a
+  store. `node x { e }` binds the node thunk of `e` (i.e. `let x = node { e }`);
+  applied `node f(x) { … }` is currently a named closure. Distinct from a
   `let`/argument thunk.
 - **trace** — recorded during a node's evaluation: the `(cell, observed-hash)`
   pairs it read, its result hash, and an outcome. The store keys each node to a
@@ -59,7 +65,7 @@ Terms marked *(planned)* do not exist in the code yet — see
   and hits (`tests/016`). Cutoff for inline-nested nodes and push-mode
   dirty-propagation (reverse-edge graph) are Phase 2.
 - **store** — the persistent content-addressed store at `~/.pp/store`
-  (`objects/`, `traces/`), `store.ml`. **Live in both backends** for `(node e)`
+  (`objects/`, `traces/`), `store.ml`. **Live in both backends** for `node { e }`
   thunks (D7 closed).
 
 ### The outside world
@@ -78,8 +84,8 @@ Terms marked *(planned)* do not exist in the code yet — see
   `sealed:<path>` (a confidential read's bytes-hash — see **sealed cell**
   below). Planned: `glob:`, `domain:<name>:<sub>` (Q13 third-party domains).
 - **probe** *(real, M4)* — the sanctioned nondeterministic dependency (SPEC
-  LAW 37/38). `(register-probe name observe-fn read-cap)` (script-tier) then
-  `(probe name)` (anywhere): the observe-fn runs at most once per pass,
+  LAW 37/38). `register-probe(name, observe-fn, read-cap)` (script-tier) then
+  `probe(name)` (anywhere): the observe-fn runs at most once per pass,
   OUTSIDE the reading node's trace stack, under exactly `read-cap`; the
   reader records only a `probe:<name>` cell, capability-free at the read
   site. Never persisted (`Runtime.probe_values` is in-memory, cleared every
@@ -88,12 +94,12 @@ Terms marked *(planned)* do not exist in the code yet — see
   `--grant secret:<path>` mints `CapSecret`; a read covered by it and NOT by
   an fs grant returns `VSealed` instead of `VString` — redacted on print,
   excluded from the CAS, banned at the node boundary like a capability.
-  `(unseal v)` is the explicit, greppable way back to `VString`.
-- **`run` / process effect** — `(perform run CMD ARG…)` executes an external
+  `unseal(v)` is the explicit, greppable way back to `VString`.
+- **`run` / process effect** — `perform run(CMD, ARG…)` executes an external
   command under `--grant process`, returning `{"exit","out","err"}`. Inside a
   node: cwd = the node's sandbox, and the trace records `tool:` + `tree:`
   cells (`tests/017`).
-- **`run-dep` / depfile adapter** — `(perform run-dep DEPFILE CMD ARG…)`:
+- **`run-dep` / depfile adapter** — `perform run-dep(DEPFILE, CMD, ARG…)`:
   like `run`, but the tool's Makefile-style depfile refines the trace to the
   exact files read — granted deps as `file:` cells, system deps as `tool:`
   cells, no coarse `tree:` cells (`tests/022`).
@@ -105,7 +111,7 @@ Terms marked *(planned)* do not exist in the code yet — see
   program's root returns (build → `{path → blob-hash}`; services →
   `{proc → spec}`). Real today for the filesystem domain as
   `{relative-path → content}` where content is an inline string or a
-  `blob:<sha256>` CAS reference from `(blob S)`, consumed by
+  `blob:<sha256>` CAS reference from `blob(S)`, consumed by
   `pp --reconcile ROOT` (`tests/018`, `tests/023`), and for the process
   domain as `{service-name → spec}` consumed by `pp --supervise`
   (`tests/033`).
@@ -125,7 +131,7 @@ Terms marked *(planned)* do not exist in the code yet — see
   work and recovered by `--fenced-policy retry|abort|ask` (`tests/034`).
 - **domain** *(real, Q13)* — a slice of external state under single
   ownership (an output subtree, a process set, a third-party toy example
-  in `tests/046`), registered via `(register-domain {:name :namespace
+  in `tests/046`), registered via `register-domain({:name :namespace
   :observe :diff :apply :write-cap})`. A probe (LAW 37/38) is a domain
   with ⊥ write authority — one registry, `Runtime.domain_registry`, two
   hats.
@@ -153,7 +159,7 @@ Terms marked *(planned)* do not exist in the code yet — see
   code: narrow a capability's scope, or union two the code already holds.
 - **`CapNetwork` / `http-get` / `http-post`** *(real, M4)* — `CapNetwork
   {host; port option}` (`--grant net:<host>[:<port>]`, `host = "*"`
-  wildcards) authorizes `(perform http-get url)` / `(perform http-post url
+  wildcards) authorizes `perform http-get(url)` / `perform http-post(url,
   body)`, which fork `curl` (no new OCaml networking code) and return
   `{"status" INT "body" STRING}`. Banned inside node bodies — not
   convergent, not the declared-nondeterminism mechanism (that's **probe**).
@@ -174,7 +180,7 @@ Terms marked *(planned)* do not exist in the code yet — see
   is treated as semantic; the per-arg refinement in LAW 26 is *(planned)*.
 - **fenced effect** — a non-convergent, irreversible action (send email,
   charge card).  Barred from node bodies; surfaced as scripting-tier
-  `(fenced KIND SPEC-MAP)`; sequenced reconciler-only with an intent/done
+  `fenced(KIND, SPEC-MAP)`; sequenced reconciler-only with an intent/done
   journal and at-most-once-per-pass.  Unknown-status entries after a crash
   are resolved by `--fenced-policy retry|abort|ask`, never silent retry
   (LAW 31; `tests/034`).
@@ -191,7 +197,7 @@ Terms marked *(planned)* do not exist in the code yet — see
 - **module / `import`** — a block of code whose exports are a value you import.
 - **island** — a module that lives elsewhere (a local dir, a git repo),
   referenced by URI and pinned **inline** by the canonical content hash of
-  its source tree: `(island <github:owner/repo#ref> "64-hex-pin")`. The pin
+  its source tree: `island("github:owner/repo#ref", "64-hex-pin")`. The pin
   is part of the code hash, so a pinned island form is a *closed*
   expression — paste it anywhere and it denotes the same bytes — and an
   enclosing **node** is keyed on it (LAW 20). Resolution serves only the

@@ -21,8 +21,8 @@ authority — the `process` capability from the chapter on capabilities. The pla
 form is `run`; the one you build with is `run-dep`:
 
 ```
-(perform run-dep "greet.d" "cc" "-MD" "-MF" "greet.d" "-O0" "-c"
-  "/abs/src/greet.c" "-o" "greet.o")
+perform run-dep("greet.d", "cc", "-MD", "-MF", "greet.d", "-O0", "-c",
+  "/abs/src/greet.c", "-o", "greet.o")
 ```
 
 `run-dep` runs the command exactly like `run` — the first extra argument names a
@@ -32,7 +32,7 @@ command runs in the node's own sandbox directory, so relative outputs like
 value; you pull it into the store with `blob` and `slurp`:
 
 ```
-(blob (slurp "greet.o"))
+blob(slurp("greet.o"))
 ```
 
 `slurp` reads the sandbox file; `blob` writes its bytes into the
@@ -64,9 +64,9 @@ A node returns a `blob:` reference, not bytes. The program's final value is a
 map from output path to reference — the build tree you want on disk:
 
 ```
-{"greet.o" "blob:…"
- "main.o"  "blob:…"
- "prog"    "blob:…:x"}
+{"greet.o" -> "blob:…",
+ "main.o"  -> "blob:…",
+ "prog"    -> "blob:…:x"}
 ```
 
 The trailing `:x` marks an executable. You hand that map to the reconciler with

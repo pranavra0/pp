@@ -17,7 +17,7 @@ content-addressed parts:
   holds.
 - `traces/` — one file per node key, holding the set of traces recorded for
   that node (see below).
-- `blobs/` — raw bytes ingested by `(blob ...)`, named by their hash. The
+- `blobs/` — raw bytes ingested by `blob(…)`, named by their hash. The
   program above turned a file's contents into a `blob:` reference, and the bytes
   landed here.
 

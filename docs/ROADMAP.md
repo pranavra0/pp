@@ -4,9 +4,9 @@ Where pp is going, as falsifiable phases. For what works *today* see
 [STATUS.md](STATUS.md); for *why* the design is shaped this way (principles,
 the resolved open questions Q1–Q12, prior art, a worked example) see
 [DESIGN.md](DESIGN.md). This is the top-level plan doc: it carries the phases
-(3–4) and the maturity track as milestones M1–M6 — with dependencies, the
+(3–4) and the maturity track as milestones M1–M7 — with dependencies, the
 devops-complete end-state claim, and the diagonal oracle — and stays the phase
-ledger where exit-criteria bookkeeping lives. M1–M6 are all DONE; their record
+ledger where exit-criteria bookkeeping lives. M1–M7 are all DONE; their record
 lives here and in [STATUS.md](STATUS.md) / CHANGELOG.md.
 
 The thesis: build systems, package managers, provisioners, and orchestrators
@@ -141,7 +141,7 @@ the optimization that avoids re-walking all traces from root) are live with
 `tests/031` and `tests/032`. The process-domain reconciler is live with
 `pp --supervise` / `pp --watch --supervise`, start/stop/restart on spec-hash
 change, zombie reaping, and journal intent/done pairs (`tests/033`). Fenced
-effects (LAW 31) are live: `(fenced KIND SPEC)` in the scripting tier,
+effects (LAW 31) are live: `fenced(KIND, SPEC)` in the scripting tier,
 `--fenced-policy retry|abort|ask`, intent/done journal, and recovery of a
 killed mid-apply action without double-execution (`tests/034`).
 ---
@@ -212,9 +212,9 @@ speculative: every item below was hit in practice while building Phase 1.
 ### 1. Language ergonomics
 
 - ✅ **The `(def x v)` footgun — FIXED.** `def` with a non-list head is now a
-  *value binding*: the RHS is evaluated at definition time (unforced — a
-  `delay`/`node` RHS binds the thunk) and `(defnode x e)` binds the node
-  thunk of `e`. Blocks give defs letrec* scope with a
+  *value binding* (`let x = v` in the current brace surface) — the RHS is
+  evaluated at definition time (unforced — a `delay`/`node` RHS binds the
+  thunk) and `node x { e }` binds the node thunk of `e`. Blocks give defs letrec* scope with a
   `referenced before its definition` error for premature use and a read
   error for duplicate block defs; the top level stays sequential for value
   defs. Identical in both backends (SPEC LAW 4; `tests/025-def-value.sh`;
@@ -238,7 +238,7 @@ speculative: every item below was hit in practice while building Phase 1.
   the VM REPL keeps its globals across lines (it used to reset per line).
   Scriptable parts pinned by `tests/029-repl.sh`; editing verified by hand.
 - ✅ **Type annotations — CHECKED.** Per-parameter annotations
-  (`(def (f x : int) …)`, `(fn [x : int] …)`) now desugar in the reader into
+  (`def f(x: int) { … }`, `fn(x: int) { … }`) now desugar in the reader into
   located force-time checks ahead of the body, so both backends enforce them
   identically and errors cite the definition site (SPEC LAW 32;
   `tests/026-param-types.sh`; fuzzer `stmt_param_typed_def`).
@@ -256,15 +256,15 @@ mid-build. Landed since (all differential-tested, `tests/028`):
   and recorded as precise `stat:` trace cells (presence/kind, not contents),
   so a node that probed a path recomputes exactly when it appears/vanishes —
   including re-hitting an absence trace when the path is deleted again.
-- ✅ **argv/env access** — `(argv)` returns everything after `--` on the pp
-  command line (an `argv:` cell); `(env-get "NAME")` returns the variable or
+- ✅ **argv/env access** — `argv()` returns everything after `--` on the pp
+  command line (an `argv:` cell); `env-get("NAME")` returns the variable or
   nil (an `env:NAME` cell, absence included).
-- ✅ **Exit-code control** — `(exit N)` terminates with status N via a
+- ✅ **Exit-code control** — `exit(N)` terminates with status N via a
   dedicated exception: never memoized as a failing trace, never decorated.
 - ✅ **Assoc/map utilities** — `map-keys`/`map-vals`/`map-remove` primitives;
   `map-has?`/`map-merge` in `stdlib/map.pp`; `each`/`append`/`reverse`/
   `nth`/`drop`/`member?` added to `stdlib/list.pp`.
-- ✅ **`assert`** — a reader form: `(assert cond [msg])` raises
+- ✅ **`assert`** — a reader form: `assert(cond, [msg])` raises
   `assertion failed: <form> at file:line` (custom messages get the location
   appended), desugared to if+error so both backends enforce identically.
 
@@ -322,15 +322,15 @@ tarball alone).
 
 ### 5. Documentation site
 
-A Lua-style site is the *last* step, and its content should be executable:
-the Phase-1 exit criteria, the Lua build, and (post-Phase-2) a
-`--watch` demo are the pitch — runnable, not prose. SPEC/DESIGN/STATUS
-already carry the substance; the site is a rendering of them plus a
-tutorial that survives a beginner (§1's footguns are fixed).
-
-**Threshold.** A public site stops being aspirational when: Phase 2 is
-closed, ~~§1's footgun and error-message items are done~~ ✅, ~~§2's
-milestone holds (pp-written fixture tooling)~~ ✅, CI is green on Linux, and
-there is at least one tagged release a stranger can build from the tarball
-alone. §1 and §2 are complete; portability (§3) and releases (§4) are the
-remaining maturity blockers.
+✅ **Landed.** A Lua/Zig-style manual exists — `docs/manual/`, built by pp
+itself (`scripts/build-manual.sh` runs `docs/manual/build.pp`), with every
+code example a real `.pp` program executed during the build and its actual
+output embedded (never invented). `docs/manual/site/` (`index.html` +
+`pp-manual.pdf`) is the committed, rendered output. Its content is
+executable, as intended: the Phase-1 exit criteria, node/store/capability
+chapters, domains and the reconciler, and distribution across machines are
+all shown running, not described. M7 (the brace-surface migration) rewrote
+every chapter's examples and prose onto the surface `.pp` now defaults to,
+and the site is rebuilt as part of that milestone — see M7 in
+[STATUS.md](STATUS.md). What's left is upkeep, not launch: keep the manual
+in sync as the language grows, and eventually give it a public URL.

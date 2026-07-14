@@ -4,8 +4,8 @@
 
 This appendix gives the full detail the language chapter summarized. Each
 section covers one construct and shows it running. pp is a Lisp-1: functions and
-variables share one namespace, code is parenthesized lists, and evaluation is
-inner-first and strict — a form's arguments are values by the time it runs.
+variables share one namespace, and evaluation is inner-first and strict — a
+form's arguments are values by the time it runs.
 
 The special forms — the syntax the reader treats specially, rather than
 ordinary function calls — are: `if`, `do`, `let`, `let*`, `fn`, `def`,
@@ -18,8 +18,8 @@ level. Everything else is a function.
 == Value types
 
 Integers, floats, strings, the booleans `true` and `false`, `nil`, keywords
-(`:name`), and quoted symbols (`'name`) are the atoms. `print` shows strings
-quoted and prints one value per call.
+(`:name`), and quoted symbols (`quote { name }`) are the atoms. `print` shows
+strings quoted and prints one value per call.
 
 #example("ref-atoms")
 
@@ -35,7 +35,7 @@ integer remainder.
 
 #example("ref-arith")
 
-Comparisons are variadic and chain left to right — `(< 1 2 3)` means `1 < 2`
+Comparisons are variadic and chain left to right — `<(1, 2, 3)` means `1 < 2`
 and `2 < 3`.
 
 #example("ref-compare")
@@ -65,8 +65,8 @@ name may shadow itself.
 
 #example("ref-letstar")
 
-At the top level, `(def name value)` evaluates the value once and binds it;
-`(def (name args...) body)` defines a function.
+At the top level, `let name = value` evaluates the value once and binds it;
+`def name(args…) { body }` defines a function.
 
 #example("ref-def")
 
@@ -169,7 +169,7 @@ The core list operations are builtins and need no library: `list`, `cons`,
 
 `stdlib/list.pp` adds the higher-order functions — `foldl`, `foldr`, `filter`,
 `range`, `take`, `drop`, `reverse`, `length`, `nth`, `append`, `member?`, and
-`each`. A program loads it with `(load "stdlib/list.pp")`.
+`each`. A program loads it with `load("stdlib/list.pp")`.
 
 #example("ref-list-stdlib", sh: true)
 

@@ -49,8 +49,8 @@ review; resolutions to that review are marked **[R#]** inline.
 **Fate of plain `write-file` in user code.** It dies as a domain-write path.
 **Nodes may write only to sandbox-local scratch paths** (thrown away; only
 output blob hashes escape); **writes to any reconciled domain go exclusively
-through the reconciler.** pp remains a scripting Lisp for computation and
-observation; it stops being one for uncontrolled side-effecting writes. This is
+through the reconciler.** pp remains a general scripting language for computation
+and observation; it stops being one for uncontrolled side-effecting writes. This is
 the price of principle 5 being true rather than fiction. A `--unsafe-scripting`
 escape hatch may exist outside nodes for REPL ergonomics, explicitly outside
 the caching/determinism guarantees.
@@ -77,7 +77,7 @@ once, in `Runtime`, so the D8 path-prefix bug class cannot reappear at the cell
 layer. Two syntactically different paths naming the same inode are one cell.
 
 **Node (the cacheable computation).** A suspended strict computation created
-only at explicit boundaries: `(node e)`, `(defnode …)`, island imports. Not
+only at explicit boundaries: `node { e }`, `node name(…) { … }`, island imports. Not
 `let`/argument thunks (those are strict, Q1). An island's boundary is its
 *materialized content*, not its URI: the inline pin (the source tree's
 canonical hash) is part of the code hash, so an island-importing node keys
@@ -230,7 +230,7 @@ tool's own report).
 *Convergent* effects (write file, ensure process) are safely re-appliable —
 these are what nodes may do (in sandbox) and what the reconciler applies.
 *Fenced* effects (send email, charge card) are not convergent and **may not
-appear in node bodies at all**; the `(fenced KIND SPEC-MAP)` primitive raises
+appear in node bodies at all**; the `fenced(KIND, SPEC-MAP)` primitive raises
 an error if called inside a node.  The scripting tier registers fenced
 actions in `Runtime.fenced_actions`; the reconciler/supervisor drains them
 once per pass, after all convergent work.  The idempotency epoch is the
@@ -273,11 +273,11 @@ remains is `cap-restrict`/`cap-compose`, which only narrow or union what the
 code already holds. Capability values are sealed, unforgeable tokens.
 
 *In-language attenuation (M3).*
-`(current-capabilities)` observes the ambient ceiling as of the call (never a
+`current-capabilities()` observes the ambient ceiling as of the call (never a
 mint — it reifies exactly what every `perform` already checks against);
 `cap-restrict` gained an optional mode argument that only ever narrows
 (requesting a mode wider than the underlying capability holds at that scope is
-`Capability_error`); `(with-caps cap-expr body)` REPLACES the ambient with a
+`Capability_error`); `with-caps(cap-expr) { body }` REPLACES the ambient with a
 held, ⊆-checked value for `body`'s extent — checked against the CURRENT
 ambient, so a narrowing composes even when some other binding lexically
 retains a broader value. The prior `effect` capability-union form (rule `caps
@@ -331,16 +331,16 @@ overclaim. Adapton's from-scratch-consistency is a *spec to test against*.
   [child-keys], outcome, closure-read-set-hash, closure-cap-req}` (R9);
   `journal` (Q4). Concurrency: exclusive temp + rename; hash-named objects
   immutable ⇒ races benign. **Now wired into the tree-walker's `force`** for
-  `(node e)` thunks: objects are content-addressed by result hash and each key
+  `node { e }` thunks: objects are content-addressed by result hash and each key
   maps to a SET of verifying traces. The live traces are a subset of the target
   schema — `{outcome, result-hash, [(cell-id, observed-hash)]}` for file cells —
   with `child-keys`, `origin`, `closure-read-set-hash`, and `closure-cap-req`
   still to come. **Both backends are wired** (D7 closed): the VM compiles
-  `(node e)` to a `MAKE_NODE` opcode carrying the body AST + free-var descriptors
+  `node { e }` to a `MAKE_NODE` opcode carrying the body AST + free-var descriptors
   and forces it through the same store, computing a byte-identical key for
   data-valued free vars so the two backends share entries.
 - **Keying** per §2.1: `H(code-hash ‖ arg-value-hashes)`; code-hash resolves
-  free vars to value hashes. **Now live** for `(node e)`: the persistent key is
+  free vars to value hashes. **Now live** for `node { e }`: the persistent key is
   `H(code-structure ‖ free-var value-hashes)` (`node_key_of` + `free_vars`),
   with the whole-env hash and the capability set excluded — closing the two
   leaks this keystone names (unrelated-global rebind, grant widening; SPEC
@@ -487,10 +487,10 @@ converge-next-pass; single ownership. *Implemented* (`tests/018`).
 domain write caps are ungrantable to node code. (4) **laziness escape** — killed
 by Q1 strictness plus capturing the capability set at node creation.
 *Capture is now real (M3), not vacuous:* with
-`(with-caps cap-expr body)` landed, the ambient CAN change mid-process, so
+`with-caps(cap-expr) { body }` landed, the ambient CAN change mid-process, so
 "captured at creation" and "ambient at force" are now genuinely distinct and
 testable. `thunk.node_caps` is populated from `current_capabilities` at each
-`(node e)` occurrence's creation (both backends' construction sites); `force_node`
+`node { e }` occurrence's creation (both backends' construction sites); `force_node`
 uses the forcing thunk's `node_caps` — not live `current_capabilities` — for
 both the hit gate and the miss recompute's ambient. The differential test this
 makes possible for the first time: a node created under a narrowed `with-caps`
@@ -538,7 +538,7 @@ pin machinery above (`Store.run_pins`, `Remote.preseed_pins_from_file`/
 `--remote-node` ceremony (M5's cluster-member wiring). Stage B completes
 the same abstraction rather than adding a parallel one: `--pin-file`
 exposes the identical `preseed_pins_from_file` standalone, and a new
-`(pin-probe "NAME" <codec-value>)` line generalizes it to a probe's own
+`pin-probe("NAME", <codec-value>)` line generalizes it to a probe's own
 value (`Runtime.probe_values`, populated directly via `Hashtbl.replace`,
 short-circuiting the observe-fn — `probe_value_for` already consults
 `Runtime.probe_values` first, unconditionally, so no primitives.ml change
@@ -554,7 +554,7 @@ deliberately never needs (its desired state is a pure function of
 
 ### Q13 — The in-language reconciler-domain protocol. **A domain is an observe/diff/apply triple of pp functions running under core-enforced discipline; the reconciler and supervisor are no longer OCaml.**
 
-**Registration.** `(register-domain {:name :namespace :observe :diff :apply
+**Registration.** `register-domain({:name :namespace :observe :diff :apply
 :write-cap [:observe-cell]})` — an ordinary primitive, script-tier only (the
 `fenced`/`register-probe` trace_stack guard). `:write-cap` is consumed into
 `Runtime.domain_registry`, a core-side table, never re-exposed as a pp
@@ -594,7 +594,7 @@ so a store entry with an EMPTY read-set (`reads = []`) is sound: `Store.
 hit`'s trace-verification is vacuously true over an empty list, so a hit
 means exactly "same key ⇒ same plan," which is what a pure function's
 cache should mean. `src/domains.ml` calls `Store.hit`/`store_object`/
-`store_trace` directly rather than wiring a synthetic `(node …)` AST —
+`store_trace` directly rather than wiring a synthetic `node { … }` AST —
 there is no body to keep in sync with a node that doesn't exist, and the
 direct route gives the same key/store slot for free. `pp why` reports
 `domain <name>: plan <key>: hit|miss` exactly like a node.
@@ -612,7 +612,7 @@ reality. This is invisible corruption, not an error: a killed process
 looked "still alive" one call later, in-process, with no exception raised
 anywhere. The fix reuses an existing mechanism rather than adding one:
 `Domains.call_uncached` pushes a fresh, unique config-stack layer (a
-counter no real `(config …)` read would ever query) before each
+counter no real `config(…)` read would ever query) before each
 observe/apply call, which is folded into `make_thunk_ca`'s key and so
 guarantees a distinct key per call. `diff` is deliberately NOT given this
 treatment — its memoization IS the plan cache and must stay content-keyed.
@@ -787,21 +787,27 @@ that discipline lives in `src/domains.ml`, not in the domain's own code.
 `shared.h`, then after editing only `a.c`.
 
 ### Program (Phase-1 surface sketch, M3 attenuation notation)
-```clojure
-(defnode (compile src)                    ; key = H(compile-code, hash "src/a.c")
-  (with-caps (cap-compose (cap-restrict (current-capabilities) "src" :ro)
-                          (cap-restrict (current-capabilities) "toolchain" :ro))
-    (perform run "cc" ["-c" src "-o" (scratch ".o")] :inputs [src])))
-                                          ; sandbox + depfile refine the trace
-(defnode (link objs)                      ; key = H(link-code, [child result hashes])
-  (with-caps (cap-restrict (current-capabilities) "toolchain" :ro)
-    (perform run "cc" (concat ["-o" (scratch "app")] objs) :inputs objs)))
-(defnode (app)
-  (let [srcs (perform list-dir "src" "*.c")]   ; observes glob:src/*.c
-    (link (map compile srcs))))
-{"build/a.o" (compile "src/a.c")
- "build/b.o" (compile "src/b.c")
- "build/app" (app)}                       ; desired-state root: {path → blob-hash}
+```
+node compile(src) {                       # key = H(compile-code, hash "src/a.c")
+  with-caps(cap-compose(cap-restrict(current-capabilities(), "src", :ro),
+                        cap-restrict(current-capabilities(), "toolchain", :ro))) {
+    perform run("cc", ["-c", src, "-o", scratch(".o")], :inputs, [src])
+  }
+}
+                                           # sandbox + depfile refine the trace
+node link(objs) {                         # key = H(link-code, [child result hashes])
+  with-caps(cap-restrict(current-capabilities(), "toolchain", :ro)) {
+    perform run("cc", concat(["-o", scratch("app")], objs), :inputs, objs)
+  }
+}
+node app() {
+  let (srcs = perform list-dir("src", "*.c")) {   # observes glob:src/*.c
+    link(map(compile, srcs))
+  }
+}
+{"build/a.o" -> compile("src/a.c"),
+ "build/b.o" -> compile("src/b.c"),
+ "build/app" -> app()}                    # desired-state root: {path → blob-hash}
 ```
 The fs and toolchain grants arrive via `--grant` into the ambient set; user
 code only OBSERVES it (`current-capabilities`) and NARROWS it
@@ -809,7 +815,7 @@ code only OBSERVES it (`current-capabilities`) and NARROWS it
 `with-caps` here replaces the ambient for exactly the node body's extent, so
 `compile`'s narrowing to `src`+`toolchain` is what the node body actually runs
 under — not just a comment — and (per node capture, Q11) is fixed at THIS
-`(node e)` occurrence's creation, not re-derived from whatever is ambient
+`node { e }` occurrence's creation, not re-derived from whatever is ambient
 wherever the node is later forced. Children are forced before `link`'s key
 exists — call-by-value (Q1).
 

@@ -85,7 +85,7 @@ handler stack (D17) let distinct computations collide in `thunk_store` and
 return stale results. Both are fixed and pinned by `tests/009`.
 
 This in-memory dedup is the same idea as the **persistent** store, now live for
-`(node e)` (see "The persistent node cache" below): keyed soundly and written to
+`node { e }` (see "The persistent node cache" below): keyed soundly and written to
 `~/.pp/store` so cache hits survive across runs and machines
 ([ROADMAP.md](ROADMAP.md), DESIGN Q8).
 
@@ -143,7 +143,7 @@ refactor, since global mutable state can't be shared across worker processes.
 ## The persistent node cache (`store.ml`)
 
 The persistent CAS (`~/.pp/store/objects` + `traces`) is **wired into the
-tree-walker's `force`** for `(node e)` thunks. On a miss, `force` pushes a trace
+tree-walker's `force`** for `node { e }` thunks. On a miss, `force` pushes a trace
 frame, runs the node, and — because `slurp`/`read-file` call
 `Store.record_file_read` — collects the `(file-cell, content-hash)` reads it
 made; it then stores the result blob (keyed by result hash) and appends a trace
@@ -172,7 +172,7 @@ no inline-nested cutoff.
 
 ## Islands (`island.ml`, D2)
 
-`(island <uri> "64-hex-pin")` is a content-addressed module: the **inline
+`island("<uri>", "64-hex-pin")` is a content-addressed module: the **inline
 pin** is the canonical tree hash of the island's source, and — because
 `hash_expr` folds uri+pin — it is part of any enclosing node's LAW-20 key:
 island identity is structural, so there is no lockfile and no synthetic
@@ -204,7 +204,7 @@ governed by [THREAT-MODEL-islands.md](THREAT-MODEL-islands.md).
 | `src/capabilities.ml` | Capability scope checks (path-component-aware). |
 | `src/primitives.ml` | Built-in functions and the initial environment. |
 | `src/island.ml` | Islands (D2): URI parse (file/git/github), content-addressed cache + tamper verification, `--update` pin rewriter, `island-pins`, opt-in git fetch. |
-| `src/store.ml` | Persistent content-addressed store + verifying traces; wired into `force` for `(node e)` in both back ends. |
+| `src/store.ml` | Persistent content-addressed store + verifying traces; wired into `force` for `node { e }` in both back ends. |
 | `src/domain_prims.ml` | Q13 trusted mechanics: atomic `materialize-file`/`remove-file`, `tree-observe`, `proc-spawn`/`proc-alive?`/`proc-stop`/`proc-reap`, and `domain-state-get/put` (a generic per-domain KV store). Moved out of the deleted `reconciler.ml`/`supervisor.ml`; owns no policy. |
 | `src/domains.ml` | Q13 generic domain orchestration: the journal bracket, `observed_all` suspension, cap threading into observe/apply, plan caching (direct `Store` calls, no synthetic node), verify-after-write, and stratification. Domain-agnostic — replaces `reconciler.ml`/`supervisor.ml`'s driver logic; `stdlib/domain-fs.pp`/`domain-proc.pp` hold the fs/proc POLICY as pp source, then `main.ml` drains fenced actions. |
 | `src/fenced.ml` | Fenced-effect executor (Q3/LAW 31): registers scripting-tier actions, journals intent/done, resolves unknown-status entries by policy. |

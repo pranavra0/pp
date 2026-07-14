@@ -34,7 +34,7 @@ two shell suites:
   contains) a capability is `Capability_error` at the key
   (`node-cap-capture-direct`, `node-cap-capture-via-closure`); a node's result
   containing a capability, bare or embedded, is rejected before storage
-  (`node-cap-result-rejected`, `node-cap-result-embedded`); `(effect ...)` is
+  (`node-cap-result-rejected`, `node-cap-result-embedded`); `effect(...)` is
   now an ordinary unbound-symbol error (`effect-removed`).
 - `tests/010`–`tests/015` — the persistent node cache. These can't be `.pp`
   diffs: they run the interpreter several times *across processes*, mutating
@@ -94,7 +94,7 @@ two shell suites:
     a granted root stays a HIT (no coarse tree cell) while a dep the tool
     actually read — granted or system — re-runs on change; a missing
     depfile falls back to the coarse floor; VM included.
-  - **023** — blob-hash desired values: `(blob S)` refs and inline strings
+  - **023** — blob-hash desired values: `blob(S)` refs and inline strings
     coexist in one desired map; `rm -rf build/` + re-reconcile restores from
     the store with zero tool re-runs (exit criterion 4 at unit scale); a
     dangling blob ref is a hard error; VM included.
@@ -106,17 +106,17 @@ two shell suites:
     starts/stops services from a desired process map; `kill -9` restarts
     within one poll interval; config edits restart exactly the affected
     service; journal contains intent/done proc entries; both backends.
-  - **034** — fenced effects (LAW 31): `(fenced KIND SPEC)` errors inside a
+  - **034** — fenced effects (LAW 31): `fenced(KIND, SPEC)` errors inside a
     node body, is a no-op without a reconciler, executes once and journals
     intent/done under `--reconcile`, has VM parity, and recovers a killed
     mid-apply action without silent double-execution under
     `--fenced-policy retry` or aborts under `--fenced-policy abort`.
   - **029** — REPL (ROADMAP §1): paren-balanced multi-line continuation,
     defs persisting across lines in BOTH backends, promptless piped output,
-    `:why` toggling, `(exit N)` status control, deep-forced printing.
+    `:why` toggling, `exit(N)` status control, deep-forced printing.
     (Arrow keys / `~/.pp/history` need a pty; verified by hand.)
   - **028** — the stdlib (ROADMAP §2): value oracle for the string/number
-    primitives; `(argv)` from after `--`; `env-get` incl. absence; `(exit N)`
+    primitives; `argv()` from after `--`; `env-get` incl. absence; `exit(N)`
     exit-code control; `assert` failures naming the form and its file:line;
     `file-exists?`/`dir?` capability gating and `stat:` trace-cell semantics
     (created/deleted paths invalidate; an absence trace re-hits after
@@ -132,11 +132,11 @@ two shell suites:
     ill-typed calls raise the same located "type mismatch" on both backends
     (stderr byte-identical), unknown type names pass (gradual), vector param
     lists and return+param combinations enforce.
-  - **025** — `(def x v)` value-binding semantics (ROADMAP maturity §1): the
+  - **025** — `let x = v` value-binding semantics (ROADMAP maturity §1): the
     RHS evaluates at definition time (delay/node RHS binds the unforced
     thunk), blocks are letrec* with a `referenced before its definition`
     error and duplicate-def read errors, the top level is sequential,
-    `(defnode x e)` binds a node thunk that caches on force; both backends.
+    `node x { e }` binds a node thunk that caches on force; both backends.
   - **024** — the Phase-1 exit criteria on a generated 101-TU C project
     built by a real `build.pp`: null rebuild = 0 processes (<1s, journal-
     proven); touch = 0; one edit = exactly compile+link; restore from store
@@ -145,7 +145,7 @@ two shell suites:
     The fixture generator and drift mutations are pp programs
     (`tests/gen-cproject.pp`, `tests/mutate-cproject.pp` — the ROADMAP §2
     milestone); the pass/fail oracle stays shell. `build.pp` is written the
-    pairing-trap-safe way — `(map compile names)` (the non-forcing `map`
+    pairing-trap-safe way — `map(compile, names)` (the non-forcing `map`
     builtin) force-deep'd as a batch, THEN paired back up with `names` —
     per Phase 3's `p3-*` assertions (M1): the same cold build under
     `--schedule parallel:$(nproc)` produces the identical desired-state
@@ -161,7 +161,7 @@ two shell suites:
     64 parseable `exec` lines (`Journal.append`'s one-`write_substring`
     hardening); `race:8` hammering a single key with the trace-lock
     disabled (`PP_TRACE_LOCK=0`, an internal test-only escape hatch) still
-    yields a parseable trace and a correct subsequent hit; `(fenced ...)`
+    yields a parseable trace and a correct subsequent hit; `fenced(...)`
     inside a node body still raises under `parallel:4` and `race:3` (LAW
     31's negative half holds under every placement).
   - **036** — cell-id canonicalization (SPEC LAW 23, M2): a source tree
@@ -186,9 +186,9 @@ two shell suites:
     a data node beside it still hits; a legacy Marshal-era store (garbage
     bytes, no VERSION) is wiped and rebuilt, exit 0.
   - **039** — D22 VM global-scope holes (`.pp` differential): a bare
-    top-level `(do (def x ...) ...)` binds `x` block-local — referencing it
+    top-level `do { let x = ...; ... }` binds `x` block-local — referencing it
     after the `do` closes is an unbound-symbol error in both backends; a
-    `(module ...)` body's later children (a function def, a value def, and
+    `module { ... }` body's later children (a function def, a value def, and
     a bare statement) see EARLIER siblings, letrec*-style, exactly like the
     tree-walker's `env_acc` fold.
   - **040** — M3 in-language capability attenuation: the
@@ -217,17 +217,17 @@ two shell suites:
   - **042** — the LAW 20 exit criterion for `defmacro`
     (M3 exit 3): a `build.pp`-style program whose node body comes
     from expanding a macro; editing ONLY the macro's definition (the call
-    site `(build-step)` byte-identical) is a MISS that recomputes — proven
+    site `build-step()` byte-identical) is a MISS that recomputes — proven
     by the presence of the node's `log` output and by `pp why` reporting a
     hit only after that recompute — and reverting the definition HITS again
     with no recompute; both backends. Also pins the macro-in-node-body rule:
-    a `defmacro` textually inside a `(node ...)` body is never specially
+    a `defmacro` textually inside a `node { ... }` body is never specially
     recognized (only a true top-level form registers a macro), so it fails
     as an ordinary "unbound symbol: defmacro" in both backends, byte-
     identically. Isolated `$HOME`, like `tests/011`/`040`.
   - **043** — M4 probes (M4; SPEC LAW 37/38): a
     file-backed counter as the observe-fn, so its value is controllable; a
-    node reading `(probe name)` re-forces exactly when the counter changes
+    node reading `probe(name)` re-forces exactly when the counter changes
     and hits (no recompute) when it doesn't, across four separate `pp`
     invocations (cold/unchanged/changed/reverted, mirroring `tests/010`'s
     shape) — both backends. Also: a recursive `~/.pp/store` scan (excluding
@@ -243,7 +243,7 @@ two shell suites:
     polling (`Runtime.observed_all` → `Store.observe_cell`) already detects
     a changed probe cell and re-evaluates exactly the dependent node.
   - **044** — M4 sealed cells (SPEC LAW 39): `--grant secret:<path>` reads
-    redact on print (`#<sealed>`) and round-trip through `(unseal v)`; a
+    redact on print (`#<sealed>`) and round-trip through `unseal(v)`; a
     recursive store scan (the WHOLE store, `blobs/` included this time —
     a sealed read must never call `store_blob`) finds no secret bytes after
     a program that only reads, and separately one that unseals at script
@@ -256,7 +256,7 @@ two shell suites:
   - **045** — M4 network: gated cleanly on `curl` and `python3` both being
     present (a tiny stdlib `http.server`-based loopback fixture, no real
     network). No `net:` grant, or a grant for a different host, denies
-    `(perform http-get/http-post ...)`; a covering grant (exact host, or a
+    `perform http-get/http-post(...)`; a covering grant (exact host, or a
     `net:*` wildcard) allows it against the local server, both backends;
     `http-post`'s body actually reaches the server (echoed back); `perform
     http-get` inside a node body errors and never touches the network; a
@@ -277,7 +277,7 @@ two shell suites:
     LAW 30 generalized); verify-after-write failure surfaced for a
     deliberately-registered domain whose `apply` is a no-op (a real
     `Capability_error`-free divergence the core must still catch); fenced-
-    after-domains ordering (a `(fenced ...)` action registered alongside
+    after-domains ordering (a `fenced(...)` action registered alongside
     the domain runs, and its journal `intent fenced` line lands AFTER the
     domain's own `done` line); VM parity. `tests/018-reconcile.sh` and
     `tests/033-process-reconciler.sh` (unchanged, byte-for-byte, across
@@ -380,7 +380,7 @@ two shell suites:
     m5-distribution.md "Exit tests" 1–5 are otherwise covered: 1/2/3/5 by
     047/048, 4 by 050). Two genuinely separate `$HOME`s exercise the
     by-hash desired-value seam stage C adds: a dispatcher `--publish-object`s
-    a host-qualified value (including a `(blob ...)` reference alongside
+    a host-qualified value (including a `blob(...)` reference alongside
     inline content) into a shared local-dir root; a member, a SEPARATE
     `$HOME`, `--desired-object`s it by hash and converges only its own
     slice — the blob's actual BYTES cross (byte-identical to the source),
@@ -406,7 +406,7 @@ two shell suites:
   - **053** — M6 stage B: the observation-pinning seam (M6,
     "Stage B — the pin seam"). `demo/volatile-deploy.pp` is a deliberately
     ADVERSARIAL program, separate from 052's demo, that folds
-    `(probe "replica-count")` directly into its returned desired state.
+    `probe("replica-count")` directly into its returned desired state.
     Unpinned control: two `--publish-object` runs with different
     metrics-file content publish two DIFFERENT hashes (the probe is
     genuinely volatile, not a strawman). `--dump-pins` from one canonical

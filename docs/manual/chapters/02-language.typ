@@ -2,17 +2,17 @@
 
 = The language in brief
 
-This chapter is enough pp to read the rest of the manual. pp is a Lisp: code is
-parenthesized lists, evaluated inner-first, and functions and variables share
-one namespace (a Lisp-1). The language reference appendix has the full detail of
-every form. Here is the working subset.
+This chapter is enough pp to read the rest of the manual. pp is a Lisp-1:
+functions and variables share one namespace, and evaluation is inner-first and
+strict. The language reference appendix has the full detail of every form.
+Here is the working subset.
 
 == Values
 
 pp has the atoms you expect: integers and floats, strings, the booleans `true`
-and `false`, `nil`, keywords like `:host`, and quoted symbols like `'name`.
-Arithmetic and comparison are variadic. `if` is an expression: it returns a
-value.
+and `false`, `nil`, keywords like `:host`, and quoted symbols like
+`quote { name }`. Arithmetic and comparison are variadic. `if` is an
+expression: it returns a value.
 
 #example("hello")
 

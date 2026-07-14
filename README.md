@@ -63,79 +63,79 @@ pp                    # REPL
 pp file.pp            # run a file
 pp --bytecode file.pp # run via the bytecode VM instead of the tree-walker
 pp --diff file.pp     # run both back ends, fail if their results differ
-pp -e '(+ 1 2)'       # evaluate one expression
+pp -e '1 + 2'         # evaluate one expression
 ```
 
 Run the tests with `dune runtest` (see [docs/TESTING.md](docs/TESTING.md)).
 
 ## A tour
 
-pp is a Lisp-1: functions and variables share one namespace.
+pp is a Lisp-1: functions and variables share one namespace. Code is braces
+and infix on the surface (`.pp`); it reads to the identical s-expression AST
+(`.ppl`) pp has always used internally — that AST notation is still there,
+forever, as the macro layer's data language (see "Two syntaxes" below).
 
-```clojure
-;; values
-42 3.14 "hello" true false nil :keyword 'symbol
+```
+# values
+42; 3.14; "hello"; true; false; nil; :keyword; quote { symbol }
 
-;; arithmetic and comparison (variadic)
-(+ 1 2 3)                 ; 6
-(if (> 5 0) "pos" "neg")  ; "pos"
+# arithmetic and comparison (variadic)
++(1, 2, 3)                          # 6
+if 5 > 0 { "pos" } else { "neg" }   # "pos"
 
-;; bindings are MUTUAL: every binding sees every other, position-free.
-(let [y (+ x 1)
-      x 1]
-  y)                      ; 2  — y sees x though x is written second
+# bindings are MUTUAL: every binding sees every other, position-free.
+let (y = x + 1, x = 1) { y }        # 2  — y sees x though x is written second
 
-;; let* is explicit sequential sugar
-(let* [x 1
-       x (+ x 1)]
-  x)                      ; 2
+# let* is explicit sequential sugar
+let* (x = 1, x = x + 1) { x }       # 2
 
-;; functions
-(def (square x) (* x x))
-(square 7)                ; 49
-((fn (x) (* x x)) 7)      ; 49
+# functions
+def square(x) { x * x }
+square(7)                # 49
+(fn(x) { x * x })(7)     # 49
 
-;; value bindings: (def x v) evaluates v at definition time, binds the value
-(def answer (* 6 7))
-answer                    ; 42
+# value bindings: `let x = v` evaluates v at definition time, binds the value
+let answer = 6 * 7
+answer                   # 42
 
-;; parameter and return type annotations are checked when the body runs
-(def (inc n : int) : int (+ n 1))
-(inc "oops")              ; type mismatch: expected int, got "oops" at …
+# parameter and return type annotations are checked when the body runs
+def inc(n: int): int { n + 1 }
+inc("oops")              # type mismatch: expected int, got "oops" at …
 
-;; do sequences effects and returns the last value
-(do (print "a") (print "b") 42)
+# do sequences effects and returns the last value
+do { print("a"); print("b"); 42 }
 ```
 
 ### Laziness
 
 `delay` builds an unforced thunk; `force` runs it, and the result is memoized.
 
-```clojure
-(let [t (delay (do (print "working...") (* 100 200)))]
-  (print (force t))     ; prints "working..." then 20000
-  (print (force t)))    ; prints 20000 — no recompute
+```
+let (t = delay(do { print("working...") ; 100 * 200 })) {
+  print(force(t))     # prints "working..." then 20000
+  print(force(t))     # prints 20000 — no recompute
+}
 ```
 
 Identical thunks with the same inputs, environment, and capabilities are the
 *same* thunk: computed once, shared everywhere. Wrapping a computation in
-`(node e)` extends this *across runs*: its result is cached in `~/.pp/store` and
-reused by a later process, while a **verifying trace** records the files it read
-so a cache hit is re-checked against the world and never serves stale data.
+`node { e }` extends this *across runs*: its result is cached in `~/.pp/store`
+and reused by a later process, while a **verifying trace** records the files
+it read so a cache hit is re-checked against the world and never serves stale
+data.
 
 ### Effects and capabilities
 
 Side effects go through `perform`; capabilities are the authority to run them,
 and they enter only via `--grant` on the command line.
 
-```clojure
-;; perform dispatches to the ambient handler
-(with-handler [ask (fn (q) 42)]
-  (perform ask "the answer?"))     ; 42
+```
+# perform dispatches to the ambient handler
+with-handler(ask = fn(q) { 42 }) { perform ask("the answer?") }   # 42
 
-;; reading a file requires a granted filesystem capability:
-;;   pp --grant fs:/etc:ro read-hostname.pp
-(print (perform read-file "/etc/hostname"))
+# reading a file requires a granted filesystem capability:
+#   pp --grant fs:/etc:ro read-hostname.pp
+print(perform read-file("/etc/hostname"))
 ```
 
 User code cannot *construct* a capability — only narrow one it already holds
@@ -146,14 +146,15 @@ with `cap-restrict` / `cap-compose`. Authority is a ceiling, checked at every
 
 A module is a block of code whose exports are a value you `import`.
 
-```clojure
-(let [m (module (def (double x) (* x 2)))]
-  (import m)
-  (double 21))          ; 42
+```
+let (m = module { def double(x) { x * 2 } }) {
+  import(m)
+  double(21)          # 42
+}
 ```
 
-`(load "stdlib/list.pp")` merges a file into the current scope;
-`(load-module "f.pp")` loads it isolated and returns its exports. **Islands** —
+`load("stdlib/list.pp")` merges a file into the current scope;
+`load-module("f.pp")` loads it isolated and returns its exports. **Islands** —
 modules pinned by content hash and inlined into the code — resolve from a
 `file:`, `git:`, or URL source; `pp --update` derives a pin and writes it into
 the source, and the pinned tree is content-addressed so it resolves
@@ -164,13 +165,20 @@ reproducibly (see D2 in [docs/STATUS.md](docs/STATUS.md)).
 Annotations are optional and checked at force time; config is ambient,
 dynamically-scoped data (distinct from capabilities, which are authority).
 
-```clojure
-(def (square x : int) : int (* x x))
-(square 7)                            ; 49
-
-(with-config {:host "db1"}
-  (config :host))                     ; "db1"
 ```
+def square(x: int): int { x * x }
+square(7)                                 # 49
+
+with-config({:host -> "db1"}) { config(:host) }   # "db1"
+```
+
+### Two syntaxes, one language
+
+`.pp` is braces; `.ppl` is the s-expression form the brace reader lowers to
+(`(def (square x) (* x x))` for the `square` above) — the AST as text, kept
+forever as the macro layer's data language (`quote`/`quasiquote`/`defmacro`
+consume and produce it). Migrating a file between the two changes not one
+`LAW-20` hash: the store cannot tell which surface produced a program.
 
 ## Two back ends
 

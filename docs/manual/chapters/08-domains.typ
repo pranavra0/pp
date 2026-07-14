@@ -104,7 +104,7 @@ Convergence covers only idempotent change: applying a desired state twice is the
 same as applying it once. Some actions are not like that, such as sending an
 email or charging a card. Those may not appear in a node at all. A node is
 cache-replayable and must never carry an irreversible action. The scripting form
-`(fenced KIND SPEC)` registers such an action for the reconciler to run after
+`fenced(KIND, SPEC)` registers such an action for the reconciler to run after
 all convergent work, at most once per pass. It carries an intent/done journal.
 So a crash mid-action is recovered by policy
 (`--fenced-policy retry | abort | ask`) rather than by a silent retry that might

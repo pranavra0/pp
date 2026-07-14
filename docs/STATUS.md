@@ -23,7 +23,7 @@ authority gates hits transitively — `tests/024`); `pp` builds itself via
 `build.pp` (`scripts/build-self.sh`); and **Lua 5.4.7** builds, caches,
 cuts off, and restores the same way (`scripts/build-lua.sh`).
 
-The machinery: `(node e)` results + verifying traces persist to
+The machinery: `node { e }` results + verifying traces persist to
 `~/.pp/store`, shared byte-identically by both backends for data-keyed nodes
 (D7). Identity is LAW-20 (`H(code ‖ free-var value-hashes)` — env, caps,
 config, handlers all excluded); validity is the trace — `file:`, `config:`,
@@ -47,7 +47,7 @@ the same results as pull mode. **The process-domain reconciler is live:**
 service-name → spec, starts/stops/restarts services on spec-hash change,
 reaps zombie children, and restarts a `kill -9`'d service within one poll
 interval (`tests/033`). **Fenced effects (LAW 31) are live:**
-`(fenced KIND SPEC)` in the scripting tier, `--fenced-policy retry|abort|ask`,
+`fenced(KIND, SPEC)` in the scripting tier, `--fenced-policy retry|abort|ask`,
 an intent/done journal, and recovery of a killed mid-apply action without
 silent double-execution (`tests/034`). **Phase 3 (M1) process-pool
 parallelism is live:** `--schedule serial|parallel:N|race:N` forks worker
@@ -80,12 +80,17 @@ non-list `def` is a value binding — `tests/025`.)
 
 ## What actually works
 
-- **Reader** — full s-expr syntax; mutual `let` and sequential `let*`,
-  `and`/`or` (desugared to `if`), `def`/`fn`/`do` — `(def x v)` with a
+- **Reader** — two readers, one AST (M7): a brace/infix surface (`.pp`,
+  default) and the original s-expr surface (`.ppl`, the AST as text forever
+  — what macros author/consume), both parsing to the identical `Types.expr`
+  with matching LAW-20 keys (SPEC Appendix B; `pp fmt --to-braces`/
+  `--to-sexpr` transpiles between them losslessly, comments included).
+  Mutual `let` and sequential `let*`, `and`/`or` (desugared to `if`),
+  `def`/`fn`/`do` — `let x = v` (brace) / `(def x v)` (sexpr) with a
   non-list head is a **value binding** (letrec* scope in blocks with a
   `referenced before its definition` error, sequential at top level;
-  duplicate defs in one block are read errors; `(defnode x e)` binds the
-  node thunk of `e` — SPEC LAW 4, `tests/025`),
+  duplicate defs in one block are read errors; `node x { e }` / `(defnode x
+  e)` binds the node thunk of `e` — SPEC LAW 4, `tests/025`),
   `with-caps`/`perform`/`with-handler` (the `effect` capability-union form is
   REMOVED — M3, a widening backdoor the instant capability values exist),
   `module`/`import`/`load`/`load-module`,
@@ -110,7 +115,7 @@ non-list `def` is a value binding — `tests/025`.)
 - **In-memory content-addressed dedup — tree-walker only.** O(1)-incremental
   env hashes. Real, in-memory, single-run, one backend. Now sound (D6/D17
   fixed).
-- **Persistent node store — both backends.** `(node e)` marks a thunk
+- **Persistent node store — both backends.** `node { e }` marks a thunk
   persistent; `force` (tree-walker) and the `FORCE`/`vm_force` path (VM) consult
   `~/.pp/store` (objects keyed by result hash, `traces/<node-key>` holding a SET
   of traces). Cross-process caching works: a second run of a pure node returns
@@ -142,7 +147,7 @@ non-list `def` is a value binding — `tests/025`.)
   parent's trace transitively subsumes nested reads. On a hit the store
   re-observes each recorded cell and serves the result only if every hash still
   matches — otherwise it recomputes. This fixes the staleness bug where
-  `(node (slurp path))` returned the old contents after the file changed. Pinned
+  `node { slurp(path) }` returned the old contents after the file changed. Pinned
   by `tests/010-node-cache-trace.sh`.
 - **Hash-equality cutoff at node granularity (LAW 21).** Because traces verify
   by content hash, a mtime-only `touch` rebuilds nothing (exit criterion 2);
@@ -154,7 +159,7 @@ non-list `def` is a value binding — `tests/025`.)
   pull mode; the reverse-edge graph is now live for push `stabilize`
   (`tests/032`), while inline-nested cutoff remains future work. Pinned by
   `tests/016-cutoff.sh`, both backends.
-- **Config and handler trace cells (LAW 33/26).** `(config k)` inside a node
+- **Config and handler trace cells (LAW 33/26).** `config(k)` inside a node
   records a `config:<k>` cell (absence is a distinct observation); every
   `perform` records a `handler:<effect>` cell whose observed hash is the
   intercepting handler's value hash, or a builtin marker when none intercepts.
@@ -180,11 +185,11 @@ non-list `def` is a value binding — `tests/025`.)
   **not** cached (authority is not identity — LAW 15), so a later authorized run
   still hits. Pinned by `tests/013-node-hit-capability.sh`.
 - **In-language capability attenuation (M3).**
-  `(current-capabilities)` reifies the ambient set (never a mint);
+  `current-capabilities()` reifies the ambient set (never a mint);
   `cap-restrict` gained an optional `fs_mode` argument (`:ro`/`:rw`/`:wo`,
   matching `--grant`'s names) that only ever narrows — requesting a mode wider
   than the underlying capability holds at that scope is `Capability_error`;
-  `(with-caps cap-expr body)` REPLACES the ambient with exactly the (⊆-checked,
+  `with-caps(cap-expr) { body }` REPLACES the ambient with exactly the (⊆-checked,
   against the CURRENT ambient) requested value for `body`'s dynamic extent, in
   both backends, exception- and tail-safe (the VM's `WITH_CAPS` opcode runs the
   body via a nested call under a real OCaml exception handler, unlike the flat
@@ -196,7 +201,7 @@ non-list `def` is a value binding — `tests/025`.)
   computation (`node_key_of`/`vm_node_key`); a node's RESULT containing a
   capability is rejected before it can be stored (`run_node_body`). **Node
   capture is now real**, not vacuous: `thunk.node_caps` is populated from the
-  ambient at EACH `(node e)` occurrence's creation (ENode eval / VM
+  ambient at EACH `node { e }` occurrence's creation (ENode eval / VM
   `MAKE_NODE`), and `force_node`'s hit gate plus the miss recompute's ambient
   both use the forcing thunk's `node_caps` — "the caller's capabilities"
   (LAW 23b) is now defined as capture-at-creation, collapsing to the old
@@ -217,7 +222,8 @@ non-list `def` is a value binding — `tests/025`.)
   check.
 - **`defmacro` (M3, D10's promise).** A macro is a function from
   syntax-as-values to syntax-as-values: `(defmacro (name params...)
-  body...)` receives its argument FORMS already converted by
+  body...)` (sexpr AST) / `defmacro name(params…) { body… }` (brace)
+  receives its argument FORMS already converted by
   `quote_to_value` (the total base, D10/D19), runs its body through the
   tree-walker (LAW 36: expansion is backend-independent by construction,
   since it happens before either backend is even chosen), and the result
@@ -229,7 +235,7 @@ non-list `def` is a value binding — `tests/025`.)
   body comes from a macro call is keyed on the EXPANDED code, and an edit to
   only the macro's definition (same call sites) re-keys it
   (`tests/042-defmacro-rekey.sh`, the M3 exit-3 criterion). Not a
-  reader special form: `(defmacro ...)` parses as an ordinary application
+  reader special form: `defmacro(...)` parses as an ordinary application
   (reader.ml's own fallthrough for an unrecognized car symbol), so the
   `.ppc`/compiler paths never need to know macros exist. Scope: macros are
   recognized ONLY at the true top level of a file/REPL input (sequential,
@@ -240,14 +246,14 @@ non-list `def` is a value binding — `tests/025`.)
   ask): a `defmacro` there is simply left alone by the expander and fails
   as an ordinary unbound-symbol error at eval/compile time, in both
   backends identically (`tests/042`). Hygiene is NOT automatic (not
-  required by M3): `(gensym ["prefix"])` produces a fresh symbol using `~`
+  required by M3): `gensym(["prefix"])` produces a fresh symbol using `~`
   as the marker character — genuinely unwritable by the reader
   (`is_symbol_char` excludes it, and no lexer rule claims it either, so a
   bare `~` is a lex error), reset every run for LAW 20 stability. Fuzzer
   arm `stmt_defmacro` (full grammar); differential test `tests/041-defmacro.pp`
-  (control-flow macro, gensym-hygiene, a macro building a `(node ...)` form,
+  (control-flow macro, gensym-hygiene, a macro building a `node { ... }` form,
   nested macro use, a macro-generated `def`, macro redefinition).
-- **`run` process effect + per-node sandbox (D13).** `(perform run cmd args…)`
+- **`run` process effect + per-node sandbox (D13).** `perform run(cmd, args…)`
   in both backends: requires `--grant process` (denial raises
   `Capability_error`, never cached), returns `{"exit" int, "out" str,
   "err" str}`. Inside a node the child runs with the node's lazily-created
@@ -259,7 +265,7 @@ non-list `def` is a value binding — `tests/025`.)
   any change to the tool or under a granted tree re-runs the node, including
   reads pp never saw. Hit authority: `tree:` needs the fs grant, `tool:` needs
   the process grant. Pinned by `tests/017-run-effect.sh`.
-- **Q13 — the in-language reconciler-domain protocol (M4, Q13).** `(register-domain {:name :namespace :observe :diff :apply
+- **Q13 — the in-language reconciler-domain protocol (M4, Q13).** `register-domain({:name :namespace :observe :diff :apply
   :write-cap [:observe-cell]})` — script-tier, consumes `:write-cap` into
   `Runtime.domain_registry` (ONE registry; `register-probe` is now sugar
   for the ⊥-write-authority case). `observe : () -> value` runs fresh
@@ -311,7 +317,7 @@ non-list `def` is a value binding — `tests/025`.)
   desired state that observed its own domain is refused. Both backends.
   Pinned by `tests/018-reconcile.sh`, UNCHANGED byte-for-byte across the
   Q13 migration. Desired contents may be inline strings or CAS
-  references: `(blob S)` ingests bytes into `blobs/` and returns
+  references: `blob(S)` ingests bytes into `blobs/` and returns
   `blob:<sha256>`; the domain's diff (`stdlib/domain-fs.pp`) compares by
   hash without loading bytes and materializes from the store — `rm -rf
   build/` + re-reconcile restores the tree with zero tool re-runs when
@@ -339,7 +345,7 @@ non-list `def` is a value binding — `tests/025`.)
   is refused (LAW 30 stratification). Both backends. Pinned by
   `tests/033-process-reconciler.sh`, UNCHANGED byte-for-byte across the
   Q13 migration.
-- **Fenced effects (LAW 31).** `(fenced KIND SPEC)` is a scripting-tier
+- **Fenced effects (LAW 31).** `fenced(KIND, SPEC)` is a scripting-tier
   primitive that registers a non-convergent action (e.g., send email, charge
   card) for reconciler sequencing.  It raises an error if used inside a node
   body.  Under `--reconcile` or `--supervise`, actions are executed once per
@@ -441,13 +447,13 @@ non-list `def` is a value binding — `tests/025`.)
   101-TU build under `--schedule parallel:N` is 4-5x faster than serial
   from cold with byte-identical desired-state hash and tree
   (`tests/024`'s `p3-*` assertions); `race:3`/N-writer/same-key-no-lock
-  stress and `(fenced ...)` still raising inside a node under every policy
+  stress and `fenced(...)` still raising inside a node under every policy
   are `tests/038`. The `Runtime` global-mutable-state refactor M1
   originally called for is **not** on this critical path — `fork()`
   inherits all ambient state (handler closures, capabilities, config,
   thunk_store) byte-identically via COW, so M1 ships with fork workers and
   documents the state inventory as M5's design item instead (Wall B, M1).
-- **Depfile adapter (Q2 refinement).** `(perform run-dep DEPFILE CMD ARG…)`
+- **Depfile adapter (Q2 refinement).** `perform run-dep(DEPFILE, CMD, ARG…)`
   runs the tool, then parses its Makefile-style depfile: granted deps become
   precise `file:` cells (Q11-pinned + CAS-ingested), out-of-grant (system)
   deps become `tool:` cells, and no coarse `tree:` cells are recorded — so
@@ -475,10 +481,10 @@ non-list `def` is a value binding — `tests/025`.)
   `cache.ml` deleted; the value/trace store (`store.ml`) supersedes it and is
   now live in the tree-walker.
 - **Probes (LAW 37/38, M4).**
-  `(register-probe name observe-fn read-cap)` (script-tier, `Runtime.
+  `register-probe(name, observe-fn, read-cap)` (script-tier, `Runtime.
   domain_registry` — unified with Q13's `register-domain` in stage 2: a
   probe is now sugar for the ⊥-write-authority case, `:diff`/`:apply =
-  None`, one registry not two) and `(probe name)` (inside or outside
+  None`, one registry not two) and `probe(name)` (inside or outside
   nodes) are the one
   sanctioned nondeterministic dependency: the observe-fn runs at most once
   per pass, OUTSIDE the reading node's trace stack (`trace_stack` saved to
@@ -492,14 +498,14 @@ non-list `def` is a value binding — `tests/025`.)
   `Store.run_pins`; nothing a probe returns is ever written to
   `~/.pp/store`. An unregistered probe name is a hard error; a probe never
   read never fires. `Cell.Probe`/`Store.observe_cell`'s `probe:` arm
-  re-evaluate the SAME cached-per-pass value a live `(probe name)` read
+  re-evaluate the SAME cached-per-pass value a live `probe(name)` read
   would (`Runtime.probe_observer` hook, mirroring `proc_observer`), so a
   node's cached trace and a fresh read can never disagree. Both backends
   (ordinary primitives — the VM shares `Primitives.builtins`). Pinned by
   `tests/043-probes.sh`.
 - **M4 stage 1 — sealed cells (LAW 39).** `--grant secret:<path>` mints
-  `CapSecret {path}` (canonicalized at mint like fs grants). `slurp`/`(perform
-  read-file ...)` now dispatch on GRANT coverage (`Process.read_dispatch`,
+  `CapSecret {path}` (canonicalized at mint like fs grants). `slurp`/`perform
+  read-file(...)` now dispatch on GRANT coverage (`Process.read_dispatch`,
   shared by both primitives): covered by `CapFilesystem` (with or without
   ALSO `CapSecret`) → ordinary `VString`, unchanged; covered by `CapSecret`
   and NOT `CapFilesystem` → a new value kind `VSealed`, read via
@@ -515,7 +521,7 @@ non-list `def` is a value binding — `tests/025`.)
   contains_sealed` disambiguates). `cell_authorized_for` requires a covering
   `CapSecret` grant to serve a `sealed:` hit (LAW 23b/23c fall out: a narrow
   caller cannot launder a cached secret through an aggregator; `pp why`
-  redacts it). `(unseal v)` is the one explicit, greppable way to `VString`
+  redacts it). `unseal(v)` is the one explicit, greppable way to `VString`
   — no dataflow tainting beyond it, by design. A recursive scan of
   `~/.pp/store` after a program that reads (and, separately, one that
   unseals only at script tier) finds no secret bytes. Pinned by
@@ -523,7 +529,7 @@ non-list `def` is a value binding — `tests/025`.)
 - **M4 stage 1 — network.** `CapNetwork` is now `{host; port option}` (a
   shape change from the earlier bare `{protocol}`); `--grant
   net:<host>[:<port>]` mints it (`host = "*"` wildcards, an unspecified port
-  is unrestricted). `(perform http-get url)` / `(perform http-post url
+  is unrestricted). `perform http-get(url)` / `perform http-post(url,
   body)` fork `curl` (`Process.http_request` — zero new OCaml
   networking/TLS surface, E6) but are authorized against `CapNetwork`
   host[:port], never `CapProcess` (granularity: "may read this host" ≠
@@ -537,6 +543,36 @@ non-list `def` is a value binding — `tests/025`.)
   exists), so the CapNetwork shape change needed no fuzzer update — noted
   rather than silently skipped. Pinned by `tests/045-network.sh` (skips
   cleanly without `curl`/`python3`).
+- **M7 — the brace surface: a second reader, the same language (COMPLETE)**
+  (docs/M7-SYNTAX.md). LAW-20 keys computations on expanded form, so surface
+  syntax was never part of a program's identity — M7 exploits this directly:
+  `src/reader_braces.ml` (S1) parses braces/infix to the identical
+  `Types.expr` the s-expr reader (`reader.ml`) always produced, with
+  `ELocated` threaded at the same sites (byte-identical LAW-29 error text);
+  the fuzzer grew a sexpr↔brace printer and asserts print→re-read AST *and*
+  LAW-20 hash equality for both grammars (2 readers × 2 backends). `pp fmt
+  --to-braces`/`--to-sexpr` (S2, `src/main.ml`) is the lossless
+  (comments-included) transpiler and migration vehicle. S3 transpiled the
+  whole tree — stdlib, `build.pp`, all 16 `tests/*.pp` programs, examples,
+  demo, and the manual's executed examples — mechanically, with
+  `build-self.sh`/`build-lua.sh` **null-rebuilding with 0 recomputes**
+  against a store populated pre-migration (the elegance criterion, proven
+  not asserted) and `dune runtest` green throughout. S4 flipped the
+  default: braces are `.pp`, s-expr is `.ppl` (`tests/054-brace-reader.sh`,
+  `tests/055-fmt.sh`; REPL/`-e` read braces; `pp why`/errors/`pp graph`
+  print braces via the S2 printer; `tests/027`/`tests/029` re-pinned). S5
+  re-authored `tests/041-defmacro.pp` in braces via `quote{}`/`unquote()`
+  (`tests/041-defmacro.ppl` keeps the sexpr original;
+  `tests/056-defmacro-both-surfaces.sh` gates both authored either way) and
+  rewrote the manual's macro chapter around the Elixir framing —
+  homoiconicity lives at the AST layer, not the surface; `quote { … }` is
+  the bridge into s-expr data. S6 swept the manual chapters, README, SPEC
+  law examples, and GLOSSARY onto the brace surface (sexpr kept, labeled,
+  only where it IS the point — quotation/macro/AST-identity passages) and
+  rebuilt `docs/manual/site/`. **Zero changes to the evaluator, VM,
+  compiler, macro expander, store, codec, hasher, traces, or capability
+  semantics** — `git diff` on all of `src/*.ml` outside `reader_braces.ml`/
+  `main.ml`'s new `fmt` dispatch is empty for this milestone.
 - **M6 stage A — the devops-complete demonstration (ALL-LIBRARY)**
   (M6). `demo/deploy.pp` (a pure `{host -> {domain ->
   desired}}` dispatcher: builds a C service once via `run-dep`, renders
@@ -579,7 +615,7 @@ non-list `def` is a value binding — `tests/025`.)
   probe value `Codec.encode_value` can't encode — logged, mirrors how a
   node's own result treats non-data). `demo/volatile-deploy.pp` is a
   DELIBERATELY adversarial program separate from the stage-A demo: it
-  folds `(probe "replica-count")` directly into its returned desired
+  folds `probe("replica-count")` directly into its returned desired
   state, so (unpinned) its published hash tracks a metrics file's CURRENT
   content — proven genuinely volatile by two unpinned publishes with
   different file content producing different hashes. `--pin-file` on that
@@ -663,7 +699,7 @@ non-list `def` is a value binding — `tests/025`.)
   `Transport.serve_hit`/`recv_hit` pair, re-hash-verified same as every
   other synced artifact — extended (in `remote.ml`, not `transport.ml`) to
   also ship "blob:" refs embedded in a node's RESULT value (the
-  `(blob (slurp ...))` compile-output pattern; `blob`/`blob-get` are
+  `blob(slurp(...))` compile-output pattern; `blob`/`blob-get` are
   deliberately untraced, so `Transport.decide`'s `tr_reads`-derived
   blob_hashes alone miss them). Q11-bis pre-seeding is unbypassable by
   construction: `Store.run_pins`/`read_file_cell`/`observe_cell` already

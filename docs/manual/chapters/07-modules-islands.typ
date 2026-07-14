@@ -10,8 +10,8 @@ machines by pinning it to a content hash.
 
 == Modules
 
-`(module …)` evaluates its body in a fresh scope and produces a value carrying
-the names it defined. `(import m)` forces that value and merges those names into
+`module { … }` evaluates its body in a fresh scope and produces a value carrying
+the names it defined. `import(m)` forces that value and merges those names into
 the current scope:
 
 #example("mod-module")
@@ -26,9 +26,9 @@ conditionally — it is an ordinary value until the moment you pull its names in
 Two forms bring a file's definitions into a program, and they differ in whether
 the file gets its own scope:
 
-- `(load "f.pp")` evaluates the file's forms in the current scope — its
+- `load("f.pp")` evaluates the file's forms in the current scope — its
   definitions merge in directly, as if you had typed them here.
-- `(load-module "f.pp")` evaluates the file isolated, in its own fresh scope,
+- `load-module("f.pp")` evaluates the file isolated, in its own fresh scope,
   and returns its exports as a module value — which you then `import`. The
   file's internal scope never leaks into yours.
 
@@ -49,8 +49,8 @@ a URL — referenced by URI and pinned inline by the content hash of its source
 tree:
 
 ```
-(island file:./lib "e5d7b0f8…")
-(island github:owner/repo#main "a1b2c3…")
+island("file:./lib", "e5d7b0f8…")
+island("github:owner/repo#main", "a1b2c3…")
 ```
 
 The pin is part of the code. Because it folds into the expression's hash,

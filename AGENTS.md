@@ -1,8 +1,10 @@
 # AGENTS.md
 
-pp is a content-addressed, capability-scoped Lisp in OCaml, with two back ends
-(a tree-walking interpreter and a bytecode VM) that must produce identical
-output.
+pp is a content-addressed, capability-scoped language in OCaml — brace/infix
+surface syntax by default (`.pp`), with a Lisp-family s-expression AST still
+underneath and fully supported (`.ppl`; it's what macros author/consume) —
+with two back ends (a tree-walking interpreter and a bytecode VM) that must
+produce identical output.
 
 ## Build, run, test
 
@@ -32,7 +34,7 @@ If direnv isn't active, prefix commands with `opam exec --` and use `bin/pp` or
   cache hits. If you touch hashing (`types.ml`) or thunk keys (`evaluator.ml`),
   keep `tests/009` passing.
 - **The persistent node cache is validated by traces, not just the key.**
-  `(node e)` writes results + verifying traces to `~/.pp/store` in **both
+  `node { e }` writes results + verifying traces to `~/.pp/store` in **both
   backends** (the VM via `MAKE_NODE`/`vm_node_key`/`force_node_thunk`). A hit
   re-checks the cells the node recorded — `file:`, `config:`, `handler:`,
   `tool:`, `tree:`, `stat:`, `env:`, `argv:` — and the caller's authority
