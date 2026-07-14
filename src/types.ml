@@ -70,7 +70,12 @@ and expr =
   | EConfig of expr * expr option  (* (config key [default]) — read config *)
   | ETyped of expr * expr          (* (the-expr : type) — type annotation *)
   | ELocated of (string * int) * expr  (* source-located expression *)
-  | EMatch of expr * (pattern * expr) list  (* match expr { pat => body; ... } *)
+  | EMatch of expr * (pattern * expr option * expr) list
+      (* match expr { pat [if guard] => body; ... }; the middle field is an
+         optional guard (C3) — Some cond means the arm fires only when cond is
+         truthy under the pattern's bindings, else control falls to the next
+         arm. A None guard hashes/quotes exactly as the pre-C3 2-tuple arm did,
+         so guardless matches keep their LAW-20 keys. *)
 
 (* ---- Values — the runtime representation ---- *)
 
@@ -406,8 +411,10 @@ let rec hash_expr (e : expr) : string =
   | ELocated ((file, line), e) ->
       hash_concat ["located"; file; string_of_int line; hash_expr e]
   | EMatch (scrutinee, arms) ->
-      let arm_hashes = List.map (fun (p, body) ->
-        hash_concat ["arm"; hash_pattern p; hash_expr body]
+      let arm_hashes = List.map (fun (p, guard, body) ->
+        match guard with
+        | None -> hash_concat ["arm"; hash_pattern p; hash_expr body]
+        | Some g -> hash_concat ["arm-guard"; hash_pattern p; hash_expr g; hash_expr body]
       ) arms in
       hash_concat ("match" :: hash_expr scrutinee :: arm_hashes)
 
@@ -700,12 +707,13 @@ let free_vars (e : expr) : SS.t =
               List.fold_left (fun a p -> SS.union a (pat_vars p)) SS.empty pats
           | PLiteral _ | PWildcard -> SS.empty
         in
-        let arm_bound = List.fold_left (fun a (p, _) ->
+        let arm_bound = List.fold_left (fun a (p, _, _) ->
           SS.union a (pat_vars p)) SS.empty arms in
         let bound' = SS.union arm_bound bound in
         let scrut_fv = fv bound scrutinee in
-        let arms_fv = List.fold_left (fun a (p, body) ->
-          SS.union a (fv bound' body)) SS.empty arms in
+        let arms_fv = List.fold_left (fun a (_, guard, body) ->
+          let gfv = match guard with Some g -> fv bound' g | None -> SS.empty in
+          SS.union a (SS.union gfv (fv bound' body))) SS.empty arms in
         SS.union scrut_fv arms_fv
   in
   fv SS.empty e
@@ -878,9 +886,16 @@ let rec quote_to_value (e : expr) : value =
   | ELocated (_, e) ->
       quote_to_value e
   | EMatch (scrutinee, arms) ->
-      let q_arms = List.fold_right (fun (p, body) acc ->
+      let q_arms = List.fold_right (fun (p, guard, body) acc ->
         let q_pat = quote_pattern p in
-        VPair (VPair (q_pat, VPair (quote_to_value body, VNil)), acc)
+        (* Guardless arm quotes to the pre-C3 2-list (pat body); a guarded arm
+           to a 3-list (pat guard body). value_to_expr splits on length. *)
+        let q_arm = match guard with
+          | None -> VPair (q_pat, VPair (quote_to_value body, VNil))
+          | Some g ->
+              VPair (q_pat, VPair (quote_to_value g, VPair (quote_to_value body, VNil)))
+        in
+        VPair (q_arm, acc)
       ) arms VNil in
       VPair (VSymbol "match",
         VPair (quote_to_value scrutinee, VPair (q_arms, VNil)))
@@ -1162,7 +1177,10 @@ and expr_of_list (items : value list) : expr =
        | Some arm_items ->
            let arms' = List.map (fun item ->
              match value_list_opt item with
-             | Some [pat_v; body_v] -> (value_to_pattern pat_v, value_to_expr body_v)
+             | Some [pat_v; body_v] ->
+                 (value_to_pattern pat_v, None, value_to_expr body_v)
+             | Some [pat_v; guard_v; body_v] ->
+                 (value_to_pattern pat_v, Some (value_to_expr guard_v), value_to_expr body_v)
              | _ -> failwith "value_to_expr: malformed match arm")
              arm_items
            in

@@ -496,9 +496,12 @@ let rec print_expr st ~brk ?(lvl = lvl_any) (e : expr) : unit =
       emit st "match ";
       print_expr st ~brk:false scrutinee;
       emit st " { ";
-      List.iteri (fun i (p, body) ->
+      List.iteri (fun i (p, guard, body) ->
         if i > 0 then emit st "; ";
         print_pattern st p;
+        (match guard with
+         | Some g -> emit st " if "; print_expr st ~brk:false g
+         | None -> ());
         emit st " => ";
         print_expr st ~brk:true body
       ) arms;

@@ -466,6 +466,28 @@ let () =
   register "list" (fun args ->
     List.fold_right (fun a acc -> VPair (a, acc)) args VNil);  (* lazy *)
 
+  (* (apply f seg1 seg2 … segN) — C2's call-spread target. Each seg is a proper
+     list; apply concatenates them (in order) and calls f with the combined
+     elements. The reader lowers `f(a, ...rest, b)` to
+     `apply(f, list(a), rest, list(b))`, so a spread anywhere in an argument
+     list becomes one apply. Only the list SPINES are forced (to splice them);
+     elements pass through unforced, exactly as `cons`/`list` do, so a spread of
+     unforced node thunks stays unforced — same discipline as `map`. Dispatch to
+     the callee (tree-walker vs VM closure vs builtin) reuses [call_with_args],
+     so both backends run it identically. *)
+  register "apply" (fun args ->
+    match args with
+    | f :: segs ->
+        let fn = force_val f in
+        let rec splice l = match force_val l with
+          | VNil -> []
+          | VPair (a, d) -> a :: splice d
+          | other -> failwith ("apply expects proper lists as its argument \
+                                segments, got " ^ string_of_value other)
+        in
+        call_with_args fn (List.concat_map splice segs)
+    | [] -> failwith "apply expects a function and at least one argument segment");
+
   (* (map f lst) — Phase 3 / Wall A's missing batch fan-out point
      (docs/PLAN-phase3-parallel.md). Applies [f] to each element via the
      apply hook and conses the results WITHOUT forcing them: `(map compile
@@ -812,6 +834,19 @@ let () =
     | [VInt n] -> VString (string_of_int n)
     | [VFloat f] -> VString (string_of_float f)
     | _ -> failwith "number->string expects a number");
+
+  (* (->string v) — C1's generic display conversion, the target of every
+     f-string hole. A string renders as ITSELF (no surrounding quotes — the
+     whole point of interpolation); every other value renders via
+     string_of_value (numbers plain, sealed values redacted to #<sealed>, lists
+     as `(a b …)`). Deep-forces so nested thunks render, like `print`. *)
+  register "->string" (fun args ->
+    match args with
+    | [a] ->
+        (match force_deep a with
+         | VString s -> VString s
+         | v -> VString (string_of_value v))
+    | _ -> failwith "->string expects exactly one argument");
 
   register "string->number" (fun args ->
     match force_args args with
@@ -1259,7 +1294,7 @@ let () =
     match lookup n with
     | Some v -> Hashtbl.replace builtins ("\000" ^ n) v
     | None -> failwith ("A5: expected primitive " ^ n ^ " to already be registered")
-  ) ["car"; "cdr"; "="; "nil?"; "not"; "error"]
+  ) ["car"; "cdr"; "="; "nil?"; "not"; "error"; "pair?"]
 
   ;
   ()

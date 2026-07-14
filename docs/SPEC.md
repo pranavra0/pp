@@ -1736,6 +1736,7 @@ including the block's duplicate-definition check (LAW 4).
 | # | Brace form | Reads as |
 |---|---|---|
 | L19 | `f(a, b)`; `f()` | `(f a b)`; `(f)` |
+| L19a | `f(a, …rest, b)` (call spread; C2) | `(apply f (list a) rest (list b))` — a `…` anywhere in a call's argument list groups consecutive plain args into `list(…)` segments, each spread its own segment; the `apply` primitive concatenates the segments and calls `f`. A spread-free call keeps the plain L19 shape (hash-preserving). A compound spread target uses the spaced `… E` form (as in list literals). |
 | L20 | `(fn(x) { x })(3)`; `f(x)(y)` | `((fn (x) x) 3)`; `((f x) y)` |
 
 **Bindings and functions**
@@ -1790,7 +1791,9 @@ expressible by composition: `def f(x) { with-caps(E) { node { … } } }`
 | L36 | `do { s… }` | `(do s…)` |
 | L37 | `if C { T… }` | `(if C ⟦T…⟧)` — else defaults to `nil`, LAW 9 |
 | L38 | `if C { T… } else { E… }` | `(if C ⟦T…⟧ ⟦E…⟧)` |
-| L39 | `if C1 { … } else if C2 { … } else { … }` | nested `(if C1 … (if C2 … …))` — there is no `cond`/`match` in the language; the chain **is** the spelling |
+| L39 | `if C1 { … } else if C2 { … } else { … }` | nested `(if C1 … (if C2 … …))` — there is no `cond`; a flat `else if` chain, or `match` on the scrutinee with guards, is the spelling |
+| L39a | `match E { p1 => b1; p2 if g => b2; … }` | `(match E (p1 b1) (p2 if g b2) …)` (`EMatch`). Patterns: literals, variables (bind), `_`, `[a, b, …rest]` (list, with spread), `(:tag p…)` (tagged). **Guards (C3):** `p if g => b` — the arm fires only when `p` matches AND `g` (evaluated under `p`'s bindings; only `nil`/`false` are falsy) is truthy, else control falls to the next arm; a guardless arm hashes identically to the pre-guard 2-tuple. First match wins; no match is a runtime error. The compiler's structural condition uses unshadowable primitives (LAW A5) and cons-guards every `car`/`cdr`, so a list/tagged pattern against a non-pair scalar falls through instead of erroring. **Sexpr surface (C4):** the s-expression reader/printer read and write this exact `(match …)` form (patterns `_`/literal/symbol/`(list …[. rest])`/`(tagged tag …)`, a guarded arm `(pat if guard body)`), so match files round-trip through `pp fmt`. |
+| L39b | `f"…{E}…"` (f-string; C1) | `(string-append lit0 (->string E1) lit1 …)` — the `f` prefix is glued to the quote; `{E}` holes take arbitrary expressions and lower through the generic `->string`; `{{`/`}}` are literal braces; a single part (`f"abc"` or `f"{x}"`) is emitted bare, so `f"abc"` ≡ `"abc"`. Ordinary `"…"` strings never interpolate. One-way desugar (no AST node); hash-preserved through `pp fmt`. |
 | L40 | `force(E)`; `delay(E)` | `(force E)`; `(delay E)` |
 
 **Effects, handlers, capabilities, config**

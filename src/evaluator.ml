@@ -798,11 +798,17 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       let v = force (eval scrutinee env) in
       let rec try_arms = function
         | [] -> failwith "match failure"
-        | (pat, body) :: rest ->
+        | (pat, guard, body) :: rest ->
             (match Types.match_pattern v pat with
              | Some binds ->
                  let env' = List.fold_left (fun e (n, v) -> Types.extend_env e n v) env binds in
-                 eval_tail body env' k
+                 (* A guard is evaluated under the arm's bindings; a falsy guard
+                    falls through to the next arm (C3). Only nil/false are falsy. *)
+                 let fires = match guard with
+                   | None -> true
+                   | Some g -> (match force (eval g env') with VBool false | VNil -> false | _ -> true)
+                 in
+                 if fires then eval_tail body env' k else try_arms rest
              | None -> try_arms rest)
       in
       try_arms arms

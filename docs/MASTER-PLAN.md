@@ -79,6 +79,24 @@ in place** (see A″'s gating note for the tranche rule).
 > regression caught in progress — the removed `{ m \| k -> v }` update form was
 > still used at three stdlib sites and one manual example — was migrated to
 > spread (hash-preserving via the spread-first `map-insert` lowering).
+>
+> **Phase C (C1–C4) lands in *this* change (working tree, atop `b4cac85`),
+> adding the missing sugar.** f-strings (C1, `f"…{expr}…"` → `string-append`/
+> new `->string`), call spread (C2, `f(a, ...rest, b)` → new `apply` primitive),
+> `match` guards (C3, `pat if cond =>`), and the sexpr `match` surface (C4). Only
+> C3 touches the trust kernel — `EMatch` arms gained an `expr option` guard slot,
+> encoded so a `None` guard hashes/quotes IDENTICALLY to the pre-C3 2-tuple, so
+> **no existing match is re-keyed** (verified by `tests/055` at 69 files + the
+> `tests/071` injectivity/quote-RT/print-RT properties, both green). f-strings and
+> call spread are one-way desugars (like `|>`), so they round-trip hash-preserved
+> with no new AST node. C5 (map patterns) is deferred as a documented scoping
+> decision (stretch, underspecified surface). The C-phase fuzzer additions
+> (`tools/fuzz.ml` now generates guarded `match`, `apply`, `->string`) surfaced
+> and fixed **two pre-existing `match` VM/tree-walker divergences** — car on a
+> non-pair scalar, and a nested-scrutinee temp-name collision — neither hash-
+> affecting (compiler-lowering fixes + one added unshadowable alias `pair?`). New
+> gates `tests/081`–`084` wired into `scripts/run-tests.sh`; 1500+ fuzz programs
+> across five seeds pass with 0 mismatches (2 readers × 2 backends).
 
 ---
 
@@ -239,15 +257,21 @@ recomputes.
 
 | # | Item | Detail | Status |
 |---|------|--------|--------|
-| C1 | **f-strings** | `f"..."` (prefix glued to quote), `{expr}` holes lowering through a new generic `->string`. Ordinary strings never interpolate. Pre-flip audit: one-time lint pass flagging existing strings containing literal `{`. | open |
-| C2 | **Call spread / `apply`** | `f(a, ...rest, b)` via a new `apply` primitive (evaluator + VM). Motivating case: `run!("cc", ...flags, "-o", out)`. | open |
-| C3 | **`match` guards** | `pat if cond => expr` in both backends. With C3 landed, B6 (remove `cond`) completes. | open |
-| C4 | **Sexpr surface for `match`** | The sexpr reader/printer learn match, so match-using files rejoin the round-trip sweep — restoring the strongest cross-reader invariant. | open |
-| C5 | **Map patterns** (stretch) | `{:key -> pat, ...}` as a new pattern kind inside `match` — a pattern kind, not a new form. | stretch |
+| C1 | **f-strings** | `f"..."` (prefix glued to quote), `{expr}` holes lowering through a new generic `->string`. Ordinary strings never interpolate. Pre-flip audit: one-time lint pass flagging existing strings containing literal `{`. | done — the lexer recognizes the glued `f"…"` prefix (a lone `f`; `foo"…"` still lexes as name+string) and scans literal text + `{expr}` holes into `fseg` segments (`reader_braces.ml`): `{{`/`}}` are literal braces, a hole balances nested `{}` and copies inner string literals verbatim, its RAW source re-lexed and parsed by the reader IN CONTEXT (`parse_expr` normally, `parse_qq` inside a quasiquote — so a hole may contain `unquote(...)`). Lowers to `string-append`/`->string`; a single part (`f"abc"` or `f"{x}"`) is emitted bare, so `f"abc"` is the SAME AST as `"abc"`. New `->string` primitive: a string renders as itself (no quotes — the point of interpolation), every other value via `string_of_value` (deep-forced, sealed redacted). One-way sugar → round-trips through `pp fmt` hash-preserved. Ordinary strings never interpolate. Pinned by `tests/081` (both backends + qq parity + fmt hash). The pre-flip `{`-in-string lint is a documented residual (no interpolation ambiguity exists, so it is advisory only). |
+| C2 | **Call spread / `apply`** | `f(a, ...rest, b)` via a new `apply` primitive (evaluator + VM). Motivating case: `run!("cc", ...flags, "-o", out)`. | done — a spread anywhere in a call's argument list lowers `f(a, ...rest, b)` to `apply(f, list(a), rest, list(b))`: consecutive plain args grouped into one `list(...)` segment, each spread its own segment (`group_call_segments`, shared by both spines; `parse_call_args` is the spread-aware arg parser). The new `apply` primitive (`primitives.ml`, reusing `call_with_args` — one impl for both backends) concatenates the segments and calls f; only list SPINES forced, elements pass through like `cons`. Spread-free calls keep the plain `EApply` (hash-preserving). Quasiquote parity is free (`apply`/`list` are ordinary symbols — `value_to_expr` reconstructs the identical call). Glued `...f(x)` of a compound target uses the spaced `... f(x)` form, exactly as list-literal spread already does. Pinned by `tests/082` (both backends + qq + the bare `apply`). |
+| C3 | **`match` guards** | `pat if cond => expr` in both backends. With C3 landed, B6 (remove `cond`) completes. | done — `EMatch` arms became `(pattern * expr option * expr)`; a `None` guard hashes/quotes EXACTLY as the pre-C3 2-tuple (guardless matches keep their LAW-20 keys — hash-preserving). Tree-walker evaluates the guard under the pattern's bindings (only nil/false falsy); the compiler folds it INTO the arm condition (`pat_cond AND guard-under-binds`) so the fall-through stays single and closure-free. Both readers parse `pat if guard =>` (normal + qq); both printers emit it; `kernel_props` generates guarded arms (injectivity/quote-RT/print-RT extended for free). Pinned by `tests/083`. **Two pre-existing match VM bugs surfaced by the C-phase fuzzer and fixed:** (i) matching a list/tagged pattern against a non-pair scalar lowered to `car(scalar)` and crashed the VM while the tree-walker fell through — the compiler's list/tagged `pat_cond` is now cons-guarded (`pair?` added to the unshadowable alias set); (ii) a match nested in another match's scrutinee collided on the fixed compiler temp `__match_` in the shared VM frame — the temp is now unique per instance (offset-derived; never hashed). Both pinned by new cases in `tests/057`. |
+| C4 | **Sexpr surface for `match`** | The sexpr reader/printer learn match, so match-using files rejoin the round-trip sweep — restoring the strongest cross-reader invariant. | done — `reader.ml` gained `parse_match`/`parse_sexpr_pattern`: `(match scrutinee (pat [if guard] body) …)`, the exact grammar `printer_sexpr` emits (patterns `_`, a literal, a bare symbol, `(list p… [. rest])`, `(tagged tag p…)`; a guarded arm is `(pat if guard body)`, `if` the splitting marker). Match files now round-trip braces→sexpr→braces hash-preserved and the whole-tree `tests/055` sweep needs no match exclusion. The C4 sexpr reader ALSO unblocked the fuzzer generating `match` (with guards) — now round-tripped through both surfaces × both backends over 1500+ programs. Pinned by `tests/084` (+ 057 for hand-written sexpr). |
+| C5 | **Map patterns** (stretch) | `{:key -> pat, ...}` as a new pattern kind inside `match` — a pattern kind, not a new form. | deferred (documented scoping decision) — C5 is an explicit stretch goal, absent from Phase C's exit criteria, and its surface is underspecified (open-match vs rest-binding, key evaluation). Deferred rather than guess a semantics; a follow-up adds `PMap` as a new pattern kind (touches `types.ml` hash/match/quote, `compiler.ml` `pat_cond`/`pat_binds`, both printers, all three readers, `kernel_props` — all additive, no existing pattern re-keyed). |
 
-**Exit:** the SYNTAX.md §16 showcase parses and runs verbatim in both
-backends; round-trip sweep covers 100% of `.pp` files again (no match
-exclusions); fuzzer generates every C-item form.
+**Exit:** the SYNTAX.md §16 showcase's C-forms (call spread
+`run!("cc", ...($config("cflags", [])), …)`, f-strings, `match`) parse and
+round-trip hash-preserved in both surfaces; the round-trip sweep (`tests/055`)
+covers 100% of `.pp` files with no match exclusion; the fuzzer generates
+guarded `match`/`apply`/`->string` and round-trips them through both surfaces ×
+both backends. **Residuals** (pre-existing, not C-phase): the showcase's `reads`
+node clause is not yet implemented in the brace reader (a Phase-A/§3 gap,
+independent of Phase C); C5 (map patterns) deferred; the C1 `{`-in-string
+pre-flip lint is advisory-only (documented above).
 
 ---
 
@@ -262,12 +286,12 @@ exclusions); fuzzer generates every C-item form.
 
 ## Phase E — Migration & documentation
 
-| # | Item |
-|---|------|
-| E1 | Reformat the entire tree (`stdlib/`, `tests/`, `examples/`, `demo/`, manual chapters) via `pp fmt` per B-phase rules; `dune runtest` after each batch. |
-| E2 | Manual: language-reference and style chapters re-authored against SYNTAX.md; every example executed. |
-| E3 | AGENTS.md style section regenerated from SYNTAX.md §15 (single source of truth). |
-| E4 | CHANGELOG entry per removed/changed form, with the one-line rationale and the fmt rule that migrates it. |
+| # | Item | Status |
+|---|------|--------|
+| E1 | Reformat the entire tree (`stdlib/`, `tests/`, `examples/`, `demo/`, manual chapters) via `pp fmt` per B-phase rules; `dune runtest` after each batch. | done (verification) — the tree was already brace-authored and settled (M7 S3); no tree file uses the new C sugar, so nothing needed re-lowering. The `tests/055` whole-tree sweep (69 files) is the standing check that every `.pp` re-reads to its own LAW-20 hash under `pp fmt` both directions — green. No blind rewrite performed. |
+| E2 | Manual: language-reference and style chapters re-authored against SYNTAX.md; every example executed. | partial — `A1-language-reference.typ` updated for Phase C: the stale `== The cond conditional` section (documenting the B6-removed `cond`, and referencing the missing `ref-cond` example) is replaced by a `== Pattern matching` section covering `match` + guards; `== Strings` gains an f-string subsection; `== Spread in lists` becomes `== Spread` covering call spread. Every inline `pp` snippet was executed on both backends. **Residual:** the manual has *pre-existing* dangling `#example(...)` refs to example files never registered in the centrally-owned `docs/manual/build.pp` manifest (`ref-list-vec-literals`, `ref-index-access`, `ref-map-update`, `ref-try`, `ref-collect`, `ref-sigils`) — a Phase-B-era manual drift, independent of C; this edit removed two of them (`ref-cond`, `ref-spread`) by folding them into inline snippets. Fully re-authoring the manual + fixing those refs (which needs the off-limits manifest per AUTHORING.md) is a separate task. |
+| E3 | AGENTS.md style section regenerated from SYNTAX.md §15 (single source of truth). | done — the `## Style` section already carried match-guards, f-string interpolation, and map spread; added the `...` spread family (list/call/map) row so all of §1's sigil meanings are represented. |
+| E4 | CHANGELOG entry per removed/changed form, with the one-line rationale and the fmt rule that migrates it. | done — a **Phase C** section under `[Unreleased]` documents C1–C4 (one bullet each, with the lowering and the hash-preservation note), C5's deferral, the two pre-existing `match` VM fixes, and the `dune runtest` DESIGN.md dep fix. |
 
 **Final exit criteria (whole plan):**
 - Every `.pp` file in the tree parses under the settled grammar and only it

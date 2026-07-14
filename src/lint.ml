@@ -76,7 +76,9 @@ let rec has_effect (e : expr) : bool =
   | EWithCaps (_, body) -> has_effect body
   | EMatch (scrutinee, arms) ->
       has_effect scrutinee
-      || List.exists (fun (_, body) -> has_effect body) arms
+      || List.exists (fun (_, guard, body) ->
+           (match guard with Some g -> has_effect g | None -> false)
+           || has_effect body) arms
   | _ -> false
 
 (* ---- B12: tagged-value convention helpers ---- *)
@@ -110,7 +112,7 @@ let is_definitely_bare (e : expr) : bool =
 let rec branch_tails (e : expr) : expr list =
   match strip e with
   | EIf (_, t, f) -> branch_tails t @ branch_tails f
-  | EMatch (_, arms) -> List.concat_map (fun (_, b) -> branch_tails b) arms
+  | EMatch (_, arms) -> List.concat_map (fun (_, _, b) -> branch_tails b) arms
   | ELet (_, b) | ELetStar (_, b) -> branch_tails b
   | EDo es -> (match List.rev es with last :: _ -> branch_tails last | [] -> [])
   | other -> [other]
@@ -295,7 +297,9 @@ let rec check_expr ?(line=0) file (e : expr) : unit =
 
   | EMatch (scrutinee, arms) ->
       check_expr ~line file scrutinee;
-      List.iter (fun (_, body) -> check_expr ~line file body) arms
+      List.iter (fun (_, guard, body) ->
+        (match guard with Some g -> check_expr ~line file g | None -> ());
+        check_expr ~line file body) arms
 
   | EModule exprs ->
       List.iter (check_expr ~line file) exprs

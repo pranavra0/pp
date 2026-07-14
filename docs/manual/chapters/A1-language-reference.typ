@@ -250,6 +250,36 @@ trimming, and conversion to and from numbers.
 
 #example("ref-string-stdlib", sh: true)
 
+=== Interpolation (f-strings)
+
+Interpolation requires the `f` prefix glued to the opening quote. `{expr}`
+holes take arbitrary expressions and lower through the generic `->string`
+conversion; the rest of the string is literal text. Ordinary `"..."` strings
+never interpolate, so `"{x}"` is three literal characters — JSON fragments,
+shell snippets, and generated code are safe by default.
+
+#table(
+  columns: (auto, 1fr),
+  inset: (x: 6pt, y: 4pt),
+  align: (left, left),
+  stroke: (x: none, y: 0.5pt + luma(220)),
+  table.header([*Form*], [*Meaning*]),
+  [`f"a{e}b"`], [`string-append("a", ->string(e), "b")`],
+  [`f"{e}"`], [`->string(e)` — coerces any value to its string form],
+  [`f"{{"` / `f"}}"`], [A literal `{` / `}` — doubling escapes the brace],
+  [`"{x}"`], [Three literal characters — an ordinary string never interpolates],
+)
+
+```pp
+let name = "world"
+let n = 3
+print(f"Hello, {name}! Built {n} targets.")
+```
+
+`->string` renders a string as itself (no quotes) and every other value in its
+display form. f-strings desugar to `string-append`/`->string` with no dedicated
+AST node, so they round-trip through `pp fmt` with the hash preserved.
+
 == Type predicates
 
 Each predicate forces its argument and tests its shape. The full set is
@@ -258,11 +288,13 @@ Each predicate forces its argument and tests its shape. The full set is
 
 #example("ref-predicates")
 
-== The cond conditional
+== Pattern matching
 
-`cond` is a multi-way conditional that lowers to nested `if` expressions.
-Each arm pairs a test with a result separated by `=>`. The last arm should
-use `true` as its test to serve as the else clause.
+`match` is the one pattern-dispatch form (there is no `cond` and there are no
+function clauses). It tries each arm's pattern against the scrutinee in order;
+the first that matches wins, and a scrutinee that matches no arm is a runtime
+error. Patterns are literals, variables (which bind), the wildcard `_`, list
+patterns with spread (`[a, ...rest]`), and tagged patterns (`[:ok, v]`).
 
 #table(
   columns: (auto, 1fr),
@@ -270,16 +302,38 @@ use `true` as its test to serve as the else clause.
   align: (left, left),
   stroke: (x: none, y: 0.5pt + luma(220)),
   table.header([*Form*], [*Meaning*]),
-  [`cond { t1 => r1; t2 => r2 }`], [Nested `if`: `if t1 { r1 } else { if t2 { r2 } }`],
-  [`cond { ...; true => r }`], [Else clause: the `true` arm acts as the final branch],
+  [`match e { p => r }`], [Bind `p`'s variables and evaluate `r` on the first matching arm],
+  [`p if cond => r`], [*Guard:* the arm fires only when `p` matches AND `cond` (evaluated under `p`'s bindings) is truthy, else control falls to the next arm],
+  [`[a, b, ...rest] => r`], [List pattern with spread — `a`, `b`, and the remainder `rest`],
+  [`[:ok, v] => r`], [Tagged pattern — a two-element list headed by a keyword],
+  [`_ => r`], [Wildcard — matches anything without binding],
 )
 
-#example("ref-cond")
+```pp
+def classify(n) {
+  match n {
+    x if x < 0 => "negative"
+    0          => "zero"
+    x if x > 100 => "large"
+    _          => "small"
+  }
+}
+```
 
-== Spread in lists
+Guards subsume the multi-way conditional: a `match` on the scrutinized value
+with guarded arms replaces what a `cond` chain would have spelled. Both
+backends agree on every pattern kind, and the lowering uses unshadowable
+internal primitives — redefining `car` or `=` cannot change match semantics.
+The s-expression surface reads and writes the same form
+(`(match e (p body) (p if guard body) ...)`), so match files round-trip
+through `pp fmt`.
 
-The `...` prefix splices a collection into a list or vector literal. Spread is
-only allowed as the last element.
+== Spread
+
+The `...` prefix is one concept in three places: list/vector construction, map
+update and merge (the Maps section above), and call arguments. In a list or
+vector literal it splices a collection in; in a call it splices arguments into
+the call, so a spread may appear anywhere in the argument list.
 
 #table(
   columns: (auto, 1fr),
@@ -289,10 +343,16 @@ only allowed as the last element.
   table.header([*Form*], [*Meaning*]),
   [`[a, ...rest]`], [`cons(a, rest)`],
   [`vec[a, ...rest]`], [`cons(a, rest)` in vector context],
-  [`[a, b, ...more]`], [`cons(a, cons(b, more))`],
+  [`f(a, ...rest, b)`], [Call spread: `apply(f, list(a), rest, list(b))` — a spread may appear anywhere in the arguments],
 )
 
-#example("ref-spread")
+```pp
+let flags = ["-O2", "-Wall"]
+run!("cc", ...flags, "-c", src, "-o", obj)
+```
+
+A spread whose target is a compound expression uses the spaced form
+(`... expr`), matching the list-literal spelling.
 
 == Observation sigils
 

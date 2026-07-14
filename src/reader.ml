@@ -316,6 +316,7 @@ and parse_special_form ps car_sym =
   | "island" -> parse_island ps
   | "with-config" -> parse_with_config ps
   | "config" -> parse_config ps
+  | "match" -> parse_match ps
   | "assert" -> parse_assert ps
   | _ ->
       (* Regular function call: (fn-name arg ...) *)
@@ -712,6 +713,75 @@ and parse_config ps =
     | _ -> Some (parse_expr ps) in
   advance ps;  (* consume ) *)
   EConfig (key_expr, default_opt)
+
+(* (match scrutinee (pat [if guard] body) ...) — C4: the sexpr surface for
+   match, the exact grammar Printer_sexpr emits so match-using files round-trip
+   through --to-sexpr (they were the last exclusion in the tests/055 sweep).
+   Patterns are `_`, a literal, a bare symbol (variable), `(list p... [. rest])`
+   or `(tagged tag p...)` — Printer_sexpr.print_pattern's inverse. *)
+and parse_match ps =
+  let scrutinee = parse_expr ps in
+  let rec arms acc =
+    match peek ps with
+    | TokRParen -> advance ps; List.rev acc
+    | TokLParen ->
+        advance ps;  (* the arm's '(' *)
+        let pat = parse_sexpr_pattern ps in
+        let guard = match peek ps with
+          | TokSymbol "if" -> advance ps; Some (parse_expr ps)
+          | _ -> None
+        in
+        let body = parse_expr ps in
+        (match peek ps with
+         | TokRParen -> advance ps
+         | _ -> parse_error ps "match arm must be (pattern [if guard] body)");
+        arms ((pat, guard, body) :: acc)
+    | _ -> parse_error ps "match arm must be a parenthesized (pattern [if guard] body)"
+  in
+  EMatch (scrutinee, arms [])
+
+(* Printer_sexpr.print_pattern's inverse (dotted rest is a bare `.` symbol —
+   this reader lexes `.` as an ordinary symbol, never TokDot). *)
+and parse_sexpr_pattern ps : pattern =
+  match peek ps with
+  | TokSymbol "_" -> advance ps; PWildcard
+  | TokSymbol "nil" -> advance ps; PLiteral VNil
+  | TokSymbol "true" -> advance ps; PLiteral (VBool true)
+  | TokSymbol "false" -> advance ps; PLiteral (VBool false)
+  | TokSymbol s -> advance ps; PVariable s
+  | TokNumber n -> advance ps; PLiteral (VInt n)
+  | TokFloat f -> advance ps; PLiteral (VFloat f)
+  | TokString s -> advance ps; PLiteral (VString s)
+  | TokKeyword k -> advance ps; PLiteral (VKeyword k)
+  | TokLParen ->
+      advance ps;
+      (match peek ps with
+       | TokSymbol "list" ->
+           advance ps;
+           let rec elems acc =
+             match peek ps with
+             | TokRParen -> advance ps; (List.rev acc, None)
+             | TokSymbol "." ->
+                 advance ps;
+                 let r = parse_sexpr_pattern ps in
+                 (match peek ps with
+                  | TokRParen -> advance ps
+                  | _ -> parse_error ps "expected ')' after dotted rest pattern");
+                 (List.rev acc, Some r)
+             | _ -> let p = parse_sexpr_pattern ps in elems (p :: acc)
+           in
+           let pats, rest = elems [] in PList (pats, rest)
+       | TokSymbol "tagged" ->
+           advance ps;
+           let tag = expect_symbol ps in
+           let rec elems acc =
+             match peek ps with
+             | TokRParen -> advance ps; List.rev acc
+             | _ -> let p = parse_sexpr_pattern ps in elems (p :: acc)
+           in
+           PTagged (tag, elems [])
+       | _ -> parse_error ps "pattern list must be (list ...) or (tagged ...)")
+  | t -> parse_error ps ("unexpected token in pattern: " ^ string_of_token t)
 
 (* (vector e1 e2 ...) — already inside a [ ... ] parsed as EApply *)
 and parse_vector ps =

@@ -6,6 +6,62 @@ v0.2.0 predate this file and are reconstructed from history for context.
 
 ## [Unreleased] — v0.2.0
 
+- **Phase C: the missing sugar — additions** (docs/MASTER-PLAN.md Phase C;
+  SYNTAX.md is the settled target). Each addition reads like what it does and
+  reuses an existing sigil meaning.
+  - **C1 — f-strings.** `f"Hello, {name}! Value: {x + 1}."` — the `f` prefix is
+    glued to the quote (a lone `f`; `foo"…"` still lexes as name + string).
+    `{expr}` holes take arbitrary expressions and lower through a new generic
+    `->string` primitive; `{{`/`}}` are literal braces; a hole balances nested
+    `{}` and copies inner string literals verbatim, and its raw source is
+    re-parsed by the reader **in context** (so a hole inside `quasiquote{}` may
+    contain `unquote(…)`). Lowers to `string-append`/`->string`; a single part
+    (`f"abc"` or `f"{x}"`) is emitted bare, so `f"abc"` is the **same AST** as
+    `"abc"`. Ordinary `"…"` strings never interpolate — `"{x}"` is three literal
+    characters, so JSON/shell/codegen fragments are safe by default. `->string`:
+    a string renders as itself (no quotes), every other value via the display
+    form (deep-forced; sealed values redacted). One-way desugar (no AST node), so
+    round-trips through `pp fmt` hash-preserved. `tests/081`.
+  - **C2 — call spread / `apply`.** `f(a, ...rest, b)` — a `...` anywhere in a
+    call's argument list — lowers to `apply(f, list(a), rest, list(b))`
+    (consecutive plain args grouped into one `list(…)` segment, each spread its
+    own). The new `apply` primitive (both backends, via the existing
+    `call_with_args`) concatenates the segments and calls `f`; only list spines
+    are forced, elements pass through like `cons`. Spread-free calls keep the
+    plain application (hash-preserving). Quasiquote parity is free (`apply`/`list`
+    are ordinary symbols). Motivating case: `run!("cc", ...flags, "-o", out)`.
+    `tests/082`.
+  - **C3 — `match` guards.** `pat if cond => expr` — the arm fires only when the
+    pattern matches **and** the guard (evaluated under the pattern's bindings;
+    only `nil`/`false` falsy) is truthy, else control falls to the next arm.
+    `EMatch` arms gained an optional guard slot, encoded so a guardless arm
+    hashes and quotes **identically** to before — **no existing match is
+    re-keyed**. The tree-walker evaluates the guard structurally; the compiler
+    folds it into the arm condition (`pat_cond AND guard`), keeping the
+    fall-through single and closure-free. Both readers, both printers, and the
+    kernel-property generators handle it. `tests/083`. Two **pre-existing**
+    `match` VM/tree-walker divergences were surfaced by the C-phase fuzzer and
+    fixed: (i) a list/tagged pattern against a non-pair scalar lowered to
+    `car(scalar)` and crashed the VM (the compiler now cons-guards every
+    `car`/`cdr`; `pair?` joined the unshadowable match aliases); (ii) a match
+    nested in another match's scrutinee collided on the fixed compiler temp
+    `__match_` in the shared VM frame (the temp is now unique per instance).
+    Neither is hash-affecting. `tests/057`.
+  - **C4 — sexpr surface for `match`.** The s-expression reader/printer now read
+    and write `(match scrutinee (pat [if guard] body) …)` — patterns `_`, a
+    literal, a bare symbol, `(list p… [. rest])`, `(tagged tag p…)`; a guarded
+    arm is `(pat if guard body)`. Match files round-trip braces→sexpr→braces
+    hash-preserved, so the whole-tree `pp fmt` sweep (`tests/055`) needs no match
+    exclusion, and the fuzzer now generates `match` (with guards) and round-trips
+    it through both surfaces. `tests/084`.
+  - **C5 — map patterns:** deferred (documented scoping decision — an explicit
+    stretch goal, absent from Phase C's exit criteria, with an underspecified
+    surface).
+  - **Test infra:** `dune runtest` gained `docs/DESIGN.md` as a dependency, so
+    `tests/074` (adversarial-worlds, which checks each observation head against a
+    DESIGN §4 honest-edge entry) no longer fails on a stale sandbox copy — it
+    passed run directly but failed under the dune sandbox.
+
 - **Phase B: settle the surface — removals and migrations** (docs/MASTER-PLAN.md
   Phase B; SYNTAX.md is the settled target). One form per concept; every sigil
   one meaning. Landed so far:

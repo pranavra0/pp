@@ -235,7 +235,8 @@ let rec expand_expr (loc : (string * int) option) (e : expr) : expr =
   | ETyped (e, ty) -> ETyped (expand_expr loc e, ty)
   | EMatch (scrutinee, arms) ->
       EMatch (expand_expr loc scrutinee,
-              List.map (fun (p, body) -> (p, expand_expr loc body)) arms)
+              List.map (fun (p, guard, body) ->
+                (p, Option.map (expand_expr loc) guard, expand_expr loc body)) arms)
 
 (* The shared top-level driver hook: every call site that turns a fresh
    `Reader.read_string` result into a list a backend is about to eval/compile

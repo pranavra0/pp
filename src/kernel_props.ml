@@ -530,7 +530,8 @@ and gen_expr_of_tag ~(mode : mode) (st : rng) (depth : int) (tag : expr_tag) : e
   | Et_located -> ELocated ((gen_string ~mode st, ri st 1000), e ())
   | Et_match ->
       let arms =
-        List.init (1 + small st) (fun _ -> (gen_pattern ~mode st d, e ())) in
+        List.init (1 + small st) (fun _ ->
+          (gen_pattern ~mode st d, (if rb st then Some (e ()) else None), e ())) in
       EMatch (e (), arms)
 
 (* Strip source locations so a printed-then-reparsed expr (which the reader
@@ -562,7 +563,7 @@ let rec strip_loc (e : expr) : expr =
   | EWithConfig (m, b) -> EWithConfig (strip_loc m, strip_loc b)
   | EConfig (k, d) -> EConfig (strip_loc k, Option.map strip_loc d)
   | ETyped (x, t) -> ETyped (strip_loc x, strip_loc t)
-  | EMatch (s, arms) -> EMatch (strip_loc s, List.map (fun (p, b) -> (p, strip_loc b)) arms)
+  | EMatch (s, arms) -> EMatch (strip_loc s, List.map (fun (p, g, b) -> (p, Option.map strip_loc g, strip_loc b)) arms)
 
 (* Immediate sub-expressions.  Exhaustive by construction (RATCHET): a new
    constructor carrying sub-exprs must be threaded here, which keeps the
@@ -584,7 +585,8 @@ let sub_exprs (e : expr) : expr list =
   | EConfig (k, d) -> k :: (match d with Some x -> [x] | None -> [])
   | ETyped (x, t) -> [x; t]
   | ELocated (_, x) -> [x]
-  | EMatch (s, arms) -> s :: List.map snd arms
+  | EMatch (s, arms) ->
+      s :: List.concat_map (fun (_, g, b) -> (match g with Some x -> [x] | None -> []) @ [b]) arms
 
 type surface_kind = Sexpr | Braces
 
@@ -645,7 +647,7 @@ let rec dbg (e : expr) : string =
   | EConfig (k, d) -> Printf.sprintf "(config %s %s)" (dbg k) (match d with Some x -> dbg x | None -> "-")
   | ETyped (x, t) -> Printf.sprintf "(: %s %s)" (dbg x) (dbg t)
   | ELocated ((f, ln), x) -> Printf.sprintf "@%s:%d%s" f ln (dbg x)
-  | EMatch (s, arms) -> Printf.sprintf "(match %s %s)" (dbg s) (l (List.map (fun (p, b) -> dbg_pat p ^ "=>" ^ dbg b) arms))
+  | EMatch (s, arms) -> Printf.sprintf "(match %s %s)" (dbg s) (l (List.map (fun (p, g, b) -> dbg_pat p ^ (match g with Some x -> " if " ^ dbg x | None -> "") ^ "=>" ^ dbg b) arms))
 
 let debug = try Sys.getenv "KP_DEBUG" = "1" with Not_found -> false
 
@@ -863,9 +865,12 @@ let near_miss_pairs : (expr * expr) list =
     (ESymbol "", EApply (ESymbol "", []));
     (* list pattern [a b] vs [ab] (the hash_pattern delimiter-free join) *)
     (EMatch (ESymbol "x",
-             [ (PList ([PVariable "a"; PVariable "b"], None), ESymbol "a") ]),
+             [ (PList ([PVariable "a"; PVariable "b"], None), None, ESymbol "a") ]),
      EMatch (ESymbol "x",
-             [ (PList ([PVariable "ab"], None), ESymbol "a") ]));
+             [ (PList ([PVariable "ab"], None), None, ESymbol "a") ]));
+    (* guardless vs guarded arm on the same pattern must not collide (C3) *)
+    (EMatch (ESymbol "x", [ (PVariable "a", None, ESymbol "a") ]),
+     EMatch (ESymbol "x", [ (PVariable "a", Some (ESymbol "a"), ESymbol "a") ]));
     (* let binding name/value framing: {a: 1} vs a binding named "a:1" region *)
     (ELet ([("a", ELiteral (VInt 1))], ESymbol "a"),
      ELet ([("a:1", ELiteral (VInt 1))], ESymbol "a")) ]

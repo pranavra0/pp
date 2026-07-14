@@ -81,6 +81,7 @@ pp code follows [docs/SYNTAX.md](docs/SYNTAX.md) — §1 (the sigil table and th
 - **Naming:** Functions are verb-led (`longest-palindrome`, not `expand-around-centre`). Values are full words (`max-len`, not `ml`). Inner helpers name the step (`scan`, not `loop`).
 - **Comments:** Why, not what. Library files get a header listing every export.
 - **Data:** `[...]` for lists (the default collection), `vec[...]` for vectors, `{k -> v}` for maps, `{...m, k -> v}` for update/merge. `:` keys are special-form clause grammar only — data maps always use `->`.
+- **Spread (`...`):** one concept in three places — list construction (`[head, ...tail]`), call arguments (`run!("cc", ...flags, "-o", out)`), and map update/merge. A compound spread target uses the spaced `... expr` form.
 - **World observations:** `$file(...)`, `$env(...)`, `$glob(...)`, `$probe(...)`, `$secret(...)`, `$config(...)` are the only way to read the world; bare `slurp`/`env-get` are linted.
 - **Error handling:** produce `[:ok, v]` / `[:err, e]`; consume with `try { a <- f(); ... }` (short-circuit) or `|> collect` (accumulate all errors). Never `car` a result. There is no postfix `?`.
 - **Dispatch:** `match` (with guards) is the one pattern-dispatch form. No `cond`, no function clauses.

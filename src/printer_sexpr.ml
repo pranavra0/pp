@@ -362,9 +362,15 @@ let rec print_expr st (e : expr) : unit =
   | EMatch (scrutinee, arms) ->
       emit st "(match ";
       print_expr st scrutinee;
-      List.iter (fun (p, body) ->
+      List.iter (fun (p, guard, body) ->
         emit st " (";
         print_pattern st p;
+        (* Guarded arm: `(pat if guard body)`; guardless: `(pat body)`. The
+           `if` marker (a bare symbol, never a valid body on its own) is how
+           Reader.parse_match splits the two, mirroring the brace `pat if c`. *)
+        (match guard with
+         | Some g -> emit st " if "; print_expr st g
+         | None -> ());
         emit st " ";
         print_expr st body;
         emit st ")"

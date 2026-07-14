@@ -25,12 +25,19 @@ open Types
 
 (* ---- Tokens ---- *)
 
+(* An f-string is lexed into ordered segments: literal text and interpolation
+   holes (C1). A hole carries its RAW source text, re-lexed and parsed by the
+   reader (in whichever context the f-string appears — normal or quasiquote) so
+   a hole is an arbitrary expression, not a restricted sub-grammar. *)
+type fseg = FLit of string | FHole of string
+
 type btok =
   | TLParen | TRParen
   | TLBracket | TRBracket
   | TLBrace | TRBrace
   | TComma | TSemi | TNewline
   | TString of string
+  | TFString of fseg list    (* f"…{expr}…" — interpolated string (C1) *)
   | TInt of int
   | TFloat of float
   | TName of string          (* identifiers AND operator spellings (+ - |> ->) *)
@@ -44,6 +51,7 @@ let string_of_btok = function
   | TLBrace -> "{" | TRBrace -> "}"
   | TComma -> "," | TSemi -> ";" | TNewline -> "newline"
   | TString s -> Printf.sprintf "\"%s\"" (String.escaped s)
+  | TFString _ -> "f-string"
   | TInt n -> string_of_int n
   | TFloat f -> string_of_float f
   | TName s -> s
@@ -110,6 +118,86 @@ let lex ~(file : string) (input : string) : tok list =
           loop ()
     in
     loop ()
+  in
+  (* f-string body (C1): the f-prefixed quote. Scans literal text and {expr}
+     holes into [fseg] segments. Doubled braces are literal braces; a hole runs
+     until its MATCHING close brace (nested braces balanced, and string literals
+     inside a hole copied verbatim so their braces/quotes do not confuse the
+     balance). The hole raw source is re-parsed later by the reader in context.
+     Same escape set as ordinary strings. Assumes f and the opening quote are
+     current. *)
+  let read_fstring start start_line =
+    advance ();  (* 'f' *)
+    advance ();  (* opening quote *)
+    let segs = ref [] in
+    let lit = Buffer.create 16 in
+    let flush_lit () =
+      if Buffer.length lit > 0 then begin
+        segs := FLit (Buffer.contents lit) :: !segs; Buffer.clear lit
+      end
+    in
+    let rec loop () =
+      match peek () with
+      | None -> lex_error start_line "unterminated f-string"
+      | Some '"' -> advance (); flush_lit ()
+      | Some '\\' ->
+          advance ();
+          (match peek () with
+           | Some 'n' -> advance (); Buffer.add_char lit '\n'; loop ()
+           | Some 't' -> advance (); Buffer.add_char lit '\t'; loop ()
+           | Some '\\' -> advance (); Buffer.add_char lit '\\'; loop ()
+           | Some '"' -> advance (); Buffer.add_char lit '"'; loop ()
+           | Some c -> advance (); Buffer.add_char lit c; loop ()
+           | None -> lex_error start_line "unterminated escape in f-string")
+      | Some '{' when peek_at 1 = Some '{' ->
+          advance (); advance (); Buffer.add_char lit '{'; loop ()
+      | Some '}' when peek_at 1 = Some '}' ->
+          advance (); advance (); Buffer.add_char lit '}'; loop ()
+      | Some '}' ->
+          lex_error start_line
+            "unmatched '}' in f-string (use '}}' for a literal brace)"
+      | Some '{' ->
+          advance ();  (* consume the opening '{' *)
+          flush_lit ();
+          let hbuf = Buffer.create 16 in
+          let rec hole depth =
+            match peek () with
+            | None -> lex_error start_line "unterminated interpolation in f-string"
+            | Some '}' when depth = 0 -> advance ()
+            | Some '}' -> Buffer.add_char hbuf '}'; advance (); hole (depth - 1)
+            | Some '{' -> Buffer.add_char hbuf '{'; advance (); hole (depth + 1)
+            | Some '"' ->
+                (* copy a nested string literal verbatim *)
+                Buffer.add_char hbuf '"'; advance ();
+                let rec str () =
+                  match peek () with
+                  | None -> lex_error start_line
+                              "unterminated string inside f-string interpolation"
+                  | Some '\\' ->
+                      Buffer.add_char hbuf '\\'; advance ();
+                      (match peek () with
+                       | Some c -> Buffer.add_char hbuf c; advance (); str ()
+                       | None -> lex_error start_line "unterminated escape")
+                  | Some '"' -> Buffer.add_char hbuf '"'; advance ()
+                  | Some c -> Buffer.add_char hbuf c; advance (); str ()
+                in
+                str (); hole depth
+            | Some c ->
+                if c = '\n' then incr line;
+                Buffer.add_char hbuf c; advance (); hole depth
+          in
+          hole 0;
+          let src = Buffer.contents hbuf in
+          if String.trim src = "" then
+            lex_error start_line "empty interpolation {} in f-string";
+          segs := FHole src :: !segs;
+          loop ()
+      | Some c ->
+          if c = '\n' then incr line;
+          advance (); Buffer.add_char lit c; loop ()
+    in
+    loop ();
+    add_at start start_line (TFString (List.rev !segs))
   in
   (* Numbers: mirrors the sexpr reader's read_number exactly (same consumed
      character set, same int/float split on '.'). *)
@@ -207,6 +295,10 @@ let lex ~(file : string) (input : string) : tok list =
              add_at start start_line (TName name));
         run ()
     | Some c when is_digit c -> read_number start start_line; run ()
+    | Some 'f' when peek_at 1 = Some '"' ->
+        (* C1: `f"…"` — the f-prefix is a lone `f` glued to the quote. A longer
+           name like `foo"…"` still lexes as TName "foo" then TString. *)
+        read_fstring start start_line; run ()
     | Some c when is_name_char c ->
         let name = read_name () in
         add_at start start_line (TName name);
@@ -267,6 +359,10 @@ let free_ctx = { nl = true; cond = false }
    fields here, so `climb_*` below exists once and a form added to the spine
    exists in both contexts by construction — A3's CI head-coverage rule becomes
    a backstop rather than the mechanism. *)
+(* Bracket/argument spread element (used by list literals and, since C2, by
+   call-argument lists). Defined here so [spine] below can reference it. *)
+type bracket_elem = BElem of expr | BSpread of expr
+
 type spine = {
   s_infix_nl   : bool;                          (* nl for infix-operator peeks *)
   s_postfix_nl : bool;                          (* nl for the `(`/`[` postfix peek *)
@@ -275,10 +371,10 @@ type spine = {
   s_or         : expr -> expr -> expr;          (* short-circuit `or` *)
   s_and        : expr -> expr -> expr;          (* short-circuit `and` *)
   s_pipe       : (ps -> expr -> expr -> expr) option;  (* None ⇒ `|>` illegal here *)
-  s_argv       : ps -> expr list;               (* `(a, …)` argument list *)
+  s_argv       : ps -> bracket_elem list;       (* `(a, …)` argument list, spread-aware (C2) *)
   s_index      : ps -> expr;                    (* the `[…]` index expression *)
   s_int_index  : expr -> bool;                  (* is the index a literal int? (vector-get) *)
-  s_call       : expr -> expr list -> expr;     (* build `E(args…)` *)
+  s_call       : expr -> bracket_elem list -> expr;  (* build `E(args…)`, lowering spread through `apply` (C2) *)
   s_get        : string -> expr -> expr -> expr;(* build `E[idx]` via [accessor] *)
 }
 
@@ -346,8 +442,6 @@ let peek_infix ps ~nl (ops : string list) : string option =
       else Some s
   | _ -> None
 
-(* Bracket spread support *)
-type bracket_elem = BElem of expr | BSpread of expr
 (* Map-literal entry: a spread `...m` or a `k -> v` pair (B3) *)
 type map_entry = MSpread of expr | MPair of expr * expr
 (* Counter for fresh temp variables in try-block lowering *)
@@ -365,6 +459,22 @@ type try_stmt = TryBind of string * expr | TryExpr of expr
    string; quasiquote builds `'sym` vs `'(quote :kw)` data). *)
 type hname = HName of string | HKeyword of string
 
+
+(* C2 call-spread helpers. [group_call_segments] collapses a bracket-element
+   list into ordered segments: each maximal run of plain args becomes one
+   `Run, each spread its own `Spread — the shape both spines render into an
+   `apply(f, seg…)` call (segments are concatenated by the `apply` primitive). *)
+let has_spread_elem = List.exists (function BSpread _ -> true | _ -> false)
+
+let group_call_segments (elems : bracket_elem list)
+    : [ `Run of expr list | `Spread of expr ] list =
+  let flush cur out = if cur = [] then out else `Run (List.rev cur) :: out in
+  let rec go cur out = function
+    | [] -> List.rev (flush cur out)
+    | BElem e :: rest -> go (e :: cur) out rest
+    | BSpread s :: rest -> go [] (`Spread s :: flush cur out) rest
+  in
+  go [] [] elems
 
 let rec parse_expr ps (c : ctx) : expr =
   climb_pipe (normal_spine c) ps
@@ -386,10 +496,22 @@ and normal_spine (c : ctx) : spine = {
     | EApply (f, args) -> EApply (f, left :: args)
     | _ -> parse_error ps
              "the right-hand side of |> must be an identifier or a call form");
-  s_argv       = (fun ps -> parse_arglist ps ~elem:(fun ps -> parse_expr ps free_ctx));
+  s_argv       = (fun ps -> parse_call_args ps ~elem:(fun ps -> parse_expr ps free_ctx));
   s_index      = (fun ps -> parse_expr ps free_ctx);
   s_int_index  = (function ELiteral (VInt _) -> true | _ -> false);
-  s_call       = (fun e args -> EApply (e, args));
+  s_call       = (fun e elems ->
+    (* C2: a spread anywhere in the argument list lowers `f(a, ...rest, b)` to
+       `apply(f, list(a), rest, list(b))` — consecutive plain args grouped into
+       one `list(...)` segment, each spread its own segment; the `apply`
+       primitive concatenates the segments and calls f. Spread-free calls keep
+       the ordinary `EApply(f, args)` shape (hash-preserving). *)
+    if has_spread_elem elems then
+      EApply (ESymbol "apply",
+              e :: List.map (function
+                     | `Run es -> EApply (ESymbol "list", es)
+                     | `Spread s -> s)
+                     (group_call_segments elems))
+    else EApply (e, List.map (function BElem x -> x | BSpread x -> x) elems));
   s_get        = (fun acc l r -> EApply (ESymbol acc, [l; r]));
 }
 
@@ -527,6 +649,66 @@ and parse_arglist ps ~(elem : ps -> expr) : expr list =
 
 and parse_args ps : expr list = parse_arglist ps ~elem:(fun ps -> parse_expr ps free_ctx)
 
+(* Re-lex and parse an f-string hole's raw source into one expression, using
+   the context's own [parse] (parse_expr for normal, parse_qq inside a
+   quasiquote — so a hole may itself contain `unquote(...)`). Must consume the
+   whole hole. *)
+and fstring_hole_expr ~(file : string) (src : string) ~(parse : ps -> expr) : expr =
+  let toks = lex ~file src in
+  let hps = { toks = Array.of_list toks; pos = 0; file } in
+  let e = parse hps in
+  skip_nl hps;
+  (match (cur hps).t with
+   | TEOF -> ()
+   | t -> failwith (Printf.sprintf
+            "unexpected %s after an f-string interpolation expression at %s"
+            (string_of_btok t) file));
+  e
+
+(* Lower f-string segments (C1): each non-empty literal → a string literal,
+   each hole → `->string(<hole>)`; join with `string-append`. A single part
+   (one literal `f"abc"`, or one hole `f"{x}"`) is emitted bare (no wrapper),
+   so `f"abc"` is byte-for-byte the same AST as `"abc"`. The [lit]/[hole]/
+   [append] builders differ per context (AST vs quoted qq data). *)
+and lower_fstring ~(lit : string -> expr) ~(hole : string -> expr)
+    ~(append : expr list -> expr) (segs : fseg list) : expr =
+  let parts = List.filter_map (function
+    | FLit "" -> None
+    | FLit s -> Some (lit s)
+    | FHole src -> Some (hole src)) segs in
+  match parts with
+  | [] -> lit ""
+  | [one] -> one
+  | many -> append many
+
+(* Spread-aware call-argument list (C2): like [parse_arglist] but a `...x`
+   element is captured as a [BSpread] rather than parsed as a bogus symbol.
+   `...rest` (glued) takes its target from the token suffix; a bare `...`
+   parses the following expression, mirroring [parse_bracket_elems]. *)
+and parse_call_args ps ~(elem : ps -> expr) : bracket_elem list =
+  skip_nl ps;
+  if (cur ps).t = TRParen then (advance ps; [])
+  else begin
+    let rec loop acc =
+      let item =
+        match (cur ps).t with
+        | TName s when String.length s >= 3 && String.sub s 0 3 = "..." ->
+            advance ps;
+            let target =
+              if String.length s > 3 then ESymbol (String.sub s 3 (String.length s - 3))
+              else elem ps
+            in
+            BSpread target
+        | _ -> BElem (elem ps)
+      in
+      match (peek ps ~nl:true).t with
+      | TComma -> advance ps; skip_nl ps; loop (item :: acc)
+      | TRParen -> advance ps; List.rev (item :: acc)
+      | t -> parse_error ps ("expected ',' or ')', got " ^ string_of_btok t)
+    in
+    loop []
+  end
+
 (* Shared `with-handler(name = value, …)` pair parser (A′5). The pair syntax —
    a symbol/keyword name, `=`, a value, comma-separated, up to `)` — is
    identical in both readers; only the value parser and the built shape differ,
@@ -575,6 +757,14 @@ and parse_primary ps c : expr =
   | TInt n -> advance ps; ELiteral (VInt n)
   | TFloat f -> advance ps; ELiteral (VFloat f)
   | TString s -> advance ps; ELiteral (VString s)
+  | TFString segs ->
+      advance ps;
+      lower_fstring segs
+        ~lit:(fun s -> ELiteral (VString s))
+        ~hole:(fun src -> EApply (ESymbol "->string",
+                 [fstring_hole_expr ~file:ps.file src
+                    ~parse:(fun hps -> parse_expr hps free_ctx)]))
+        ~append:(fun parts -> EApply (ESymbol "string-append", parts))
   | TKeyword kw -> advance ps; ELiteral (VKeyword kw)
   | TLParen ->
       (* L8: grouping only; no AST node *)
@@ -1348,7 +1538,7 @@ and lower_try_block (stmts : try_stmt list) : expr =
   build stmts
 
 (* Parse match arms inside { } — each arm is `pattern => body` separated by newlines/; *)
-and parse_match_arms ps : (Types.pattern * expr) list =
+and parse_match_arms ps : (Types.pattern * expr option * expr) list =
   let rec skip_seps () =
     match (cur ps).t with
     | TNewline | TSemi -> advance ps; skip_seps ()
@@ -1360,12 +1550,21 @@ and parse_match_arms ps : (Types.pattern * expr) list =
     else if (cur ps).t = TEOF then parse_error ps "unterminated match block"
     else begin
       let pat = parse_pattern ps in
+      (* C3: an optional `if <guard>` sits between the pattern and `=>`; the
+         guard is parsed brace-free (cond) like an `if` condition, stopping at
+         the `=>` arrow (not a spine infix, so parse_expr leaves it alone). *)
+      let guard =
+        match (peek ps ~nl:true).t with
+        | TName "if" -> advance ps; skip_nl ps;
+                        Some (parse_expr ps { nl = false; cond = true })
+        | _ -> None
+      in
       (match peek_infix ps ~nl:true ["=>"] with
        | Some _ -> advance ps
-       | None -> parse_error ps "match arm must be `pattern => body`");
+       | None -> parse_error ps "match arm must be `pattern [if guard] => body`");
       skip_nl ps;
       let body = parse_expr ps { nl = false; cond = false } in
-      loop ((pat, body) :: acc)
+      loop ((pat, guard, body) :: acc)
     end
   in
   loop []
@@ -1618,10 +1817,21 @@ and qq_spine () : spine = {
   s_or         = (fun l r -> qq_chain [qq_sym "or"; l; r]);
   s_and        = (fun l r -> qq_chain [qq_sym "and"; l; r]);
   s_pipe       = None;
-  s_argv       = (fun ps -> parse_arglist ps ~elem:parse_qq);
+  s_argv       = (fun ps -> parse_call_args ps ~elem:parse_qq);
   s_index      = parse_qq;
   s_int_index  = (function EQuote (ELiteral (VInt _)) -> true | _ -> false);
-  s_call       = (fun e args -> qq_chain (e :: args));
+  s_call       = (fun e elems ->
+    (* C2 in quasiquote: build the SAME `(apply f (list …) rest …)` data the
+       normal reader lowers to, in quoted form — `apply`/`list` are ordinary
+       symbols, so value_to_expr reconstructs the identical EApply after macro
+       expansion (parity is free, no special reflection case). *)
+    if has_spread_elem elems then
+      qq_chain (qq_sym "apply" :: e ::
+                List.map (function
+                  | `Run es -> qq_chain (qq_sym "list" :: es)
+                  | `Spread s -> s)
+                  (group_call_segments elems))
+    else qq_chain (e :: List.map (function BElem x -> x | BSpread x -> x) elems));
   s_get        = (fun acc l r -> qq_chain [qq_sym acc; l; r]);
 }
 
@@ -1669,6 +1879,13 @@ and parse_qq_primary ps : expr =
   | TInt n -> advance ps; EQuote (ELiteral (VInt n))
   | TFloat f -> advance ps; EQuote (ELiteral (VFloat f))
   | TString s -> advance ps; EQuote (ELiteral (VString s))
+  | TFString segs ->
+      advance ps;
+      lower_fstring segs
+        ~lit:(fun s -> EQuote (ELiteral (VString s)))
+        ~hole:(fun src -> qq_chain [qq_sym "->string";
+                 fstring_hole_expr ~file:ps.file src ~parse:parse_qq])
+        ~append:(fun parts -> qq_chain (qq_sym "string-append" :: parts))
   | TKeyword kw -> advance ps; EQuote (ELiteral (VKeyword kw))
   | TLParen ->
       (* grouping (L8): no data node of its own *)
@@ -2158,12 +2375,24 @@ and parse_qq_match_arms ps : expr =
     else if (cur ps).t = TEOF then parse_error ps "unterminated match block in quasiquote"
     else begin
       let pat = parse_qq_pattern ps in
+      (* C3: optional `if guard` before `=>`, built as the 3-element arm
+         (pat guard body) quote_to_value's EMatch case emits for a guarded arm
+         (a guardless arm stays the 2-element (pat body)). *)
+      let guard =
+        match (peek ps ~nl:true).t with
+        | TName "if" -> advance ps; skip_nl ps; Some (parse_qq ps)
+        | _ -> None
+      in
       (match peek_infix ps ~nl:true ["=>"] with
        | Some _ -> advance ps
-       | None -> parse_error ps "match arm must be `pattern => body`");
+       | None -> parse_error ps "match arm must be `pattern [if guard] => body`");
       skip_nl ps;
       let body = parse_qq ps in
-      loop (qq_chain [pat; body] :: acc)
+      let arm = match guard with
+        | None -> qq_chain [pat; body]
+        | Some g -> qq_chain [pat; g; body]
+      in
+      loop (arm :: acc)
     end
   in
   loop []

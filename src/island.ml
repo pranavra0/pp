@@ -319,7 +319,8 @@ let rec islands_in (e : expr) : (string * string option) list =
   | EConfig (k, d) ->
       islands_in k @ (match d with Some d -> islands_in d | None -> [])
   | EMatch (scrutinee, arms) ->
-      islands_in scrutinee @ List.concat_map (fun (_, body) -> islands_in body) arms
+      islands_in scrutinee @ List.concat_map (fun (_, guard, body) ->
+        (match guard with Some g -> islands_in g | None -> []) @ islands_in body) arms
 
 (* ---- `pp --update`: rewrite inline pins in a source file ----
 

@@ -486,4 +486,32 @@ if PP="$PP" bash tests/080-phase-b-lints.sh; then
 else
   echo "FAIL 080-phase-b-lints"; fail=1
 fi
+
+echo "--- C1 f-strings suite ---"
+if PP="$PP" bash tests/081-fstrings.sh; then
+  echo "ok   081-fstrings"
+else
+  echo "FAIL 081-fstrings"; fail=1
+fi
+
+echo "--- C2 call-spread suite ---"
+if PP="$PP" bash tests/082-call-spread.sh; then
+  echo "ok   082-call-spread"
+else
+  echo "FAIL 082-call-spread"; fail=1
+fi
+
+echo "--- C3 match-guards suite ---"
+if PP="$PP" bash tests/083-match-guards.sh; then
+  echo "ok   083-match-guards"
+else
+  echo "FAIL 083-match-guards"; fail=1
+fi
+
+echo "--- C4 sexpr match surface suite ---"
+if PP="$PP" bash tests/084-match-sexpr-surface.sh; then
+  echo "ok   084-match-sexpr-surface"
+else
+  echo "FAIL 084-match-sexpr-surface"; fail=1
+fi
 exit $fail
