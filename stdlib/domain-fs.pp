@@ -9,7 +9,7 @@
 # `register-fs-domain` with ROOT and a write-cap already narrowed via
 # `cap-restrict`.
 #
-# observe = (perform tree-observe root)   -> {relpath -> content-hash}
+# observe = perform tree-observe(root)   -> {relpath -> content-hash}
 # desired = {relpath -> content}  (content: an inline string, or a
 # "blob:<sha256>" / "blob:<sha256>:x" CAS reference from the
 # `blob` primitive — :x materializes with the executable bit)

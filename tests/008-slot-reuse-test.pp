@@ -14,7 +14,7 @@
 # truncate).
 
 print("=== nested let in let* binding, captured by a closure ===")
-# x2's RHS contains a nested let; x2 is then captured by (fn (x3) x2).
+# x2's RHS contains a nested let; x2 is then captured by fn(x3) { x2 }.
 # Correct answer: -1  (VM used to print 0 = the inner let's x5).
 print("a =>", let* (x1 = 31, x2 = let (x5 = 0) { x5 } - 1) {
   (

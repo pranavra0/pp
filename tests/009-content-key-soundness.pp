@@ -16,7 +16,7 @@
 # code but different captures hash identically, so an enclosing
 # let-thunk collides.
 #
-# D17 — the key omits handler_stack entirely. The same (perform ...)
+# D17 — the key omits handler_stack entirely. The same `perform ...`
 # thunk forced under two different handlers collides.
 #
 # In both cases the VM (which does not share thunk_store) is correct, so
@@ -26,7 +26,7 @@
 print("=== D6: closure capture must be part of the key ===")
 # make returns a closure capturing x; run wraps its call in a let-thunk.
 # run's param `c` binds a closure whose hash ignores the capture, so the
-# two calls share an env_hash and the (let [r (c)] r) thunk collides.
+# two calls share an env_hash and the `let (r = c()) { r }` thunk collides.
 def make(x) { fn() { x } }
 def run(c) { let (r = c()) { r } }
 print("d6a =>", run(make(1)))  # expect 1
@@ -34,7 +34,7 @@ print("d6b =>", run(make(2)))  # expect 2  (tree-walker currently prints 1)
 
 print("")
 print("=== D17: installed handler must be part of the key ===")
-# The (perform ask 0) thunk is identical across both calls; only the
+# The `perform ask(0)` thunk is identical across both calls; only the
 # ambient handler differs, and the handler is absent from the key.
 def ask-run() { let (r = perform ask(0)) { r } }
 with-handler(ask = fn(n) { 1 }) { print("d17a =>", ask-run()) }  # expect 1

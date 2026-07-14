@@ -51,7 +51,7 @@ def greeter-build-node(greeter-c) {
 # (parallel/remote placement can force every host's render concurrently
 # alongside the build above).
 #
-# `(unseal (slurp key))` happens INSIDE this node — the node's RESULT is
+# `unseal(slurp(key))` happens INSIDE this node — the node's RESULT is
 # a plain string (unseal already converted it, so the sealed-result ban
 # never fires) — but the render never returns the raw secret BYTES
 # themselves, only `hash-string` of them: a rotation-sensitive
