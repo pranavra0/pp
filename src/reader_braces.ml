@@ -1506,13 +1506,13 @@ and parse_binding_group ps ~(allow_ty : bool) : (string * expr) list =
 (* ---- Quasiquote mode (L57–L59) ----
 
    A brace form denotes the s-expression DATA of its lowering: atoms quoted,
-   lists as cons chains, vectors/maps as vector/hash-map builds — exactly the
-   AST reader.ml's parse_qq_* emit for the equivalent sexpr text. unquote(E)/
-   splice(E) escape to a normally-parsed E. Desugars (and/or/assert/...) never
-   apply here: quoted data is data.
+   `[ ... ]` list literals as cons chains (L9 — the same VNil-terminated value
+   the equivalent code builds, NOT a vector; see A2), maps as hash-map builds.
+   unquote(E)/splice(E) escape to a normally-parsed E. Desugars
+   (and/or/assert/...) never apply here: quoted data is data.
 
    Coverage: atoms, names (reserved words included), calls, the infix operator
-   levels, grouping, vectors, maps, quote/quasiquote nesting, fn/def/if/
+   levels, grouping, list literals, maps, quote/quasiquote nesting, fn/def/if/
    let/let*/do/perform/with-caps/with-config/with-handler/module/import/force/
    delay/config/load/load-module/island/assert/node and cell literals.
 
@@ -1696,9 +1696,12 @@ and parse_qq_primary ps : expr =
       expect ps ~nl:true TRParen "')'";
       e
   | TLBracket ->
+      (* L9: [ ... ] is the list literal — lists are the default collection.
+         The template must build the SAME value the equivalent code builds
+         (a cons-chain list, VNil-terminated), not a vector (A2). *)
       advance ps;
       skip_nl ps;
-      if (cur ps).t = TRBracket then (advance ps; EApply (ESymbol "vector", []))
+      if (cur ps).t = TRBracket then (advance ps; qq_nil)
       else begin
         let rec loop acc =
           let e = parse_qq ps in
@@ -1707,7 +1710,7 @@ and parse_qq_primary ps : expr =
           | TRBracket -> advance ps; List.rev (e :: acc)
           | t -> parse_error ps ("expected ',' or ']', got " ^ string_of_btok t)
         in
-        EApply (ESymbol "vector", loop [])
+        qq_chain (loop [])
       end
   | TLBrace ->
       advance ps;

@@ -357,4 +357,9 @@ if PP="$PP" bash tests/059-try-determinism.sh; then
 else
   echo "FAIL 059-try-determinism"; fail=1
 fi
+if PP="$PP" bash tests/060-qq-list-parity.sh; then
+  echo "ok   060-qq-list-parity"
+else
+  echo "FAIL 060-qq-list-parity"; fail=1
+fi
 exit $fail

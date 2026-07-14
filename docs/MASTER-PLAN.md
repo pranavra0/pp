@@ -21,7 +21,8 @@ item is open, or before A″'s kernel properties and ratchet mechanisms are
 in place** (see A″'s gating note for the tranche rule).
 
 > **Status pinning.** Status below is as of branch
-> `pragmatic-suffix-conventions` @ `2f817c8`, 2026-07-14. Any edit to a
+> `pragmatic-suffix-conventions` @ `460d783`, 2026-07-14, plus the A2 fix
+> living in the working tree (uncommitted). Any edit to a
 > status entry must update this pin. A status table that doesn't name its
 > ref is a defect (this bit a reviewer once already).
 
@@ -51,7 +52,7 @@ make existing behavior honest. No new surface.
 | # | Item | Detail | Status |
 |---|------|--------|--------|
 | A1 | **Deterministic `try` lowering** | `try_counter` (`reader_braces.ml:319`) is a global ref never reset per parse, so `__try_N` temp names — and therefore LAW-20 hashes — depend on what was parsed earlier in the process. Derive temp names from position (or reset per top-level form), and add a test that parses the same file twice in different orders and asserts identical `hash_expr`. | done |
-| A2 | **Quasiquote/list divergence** | Inside `quasiquote {}`, `[...]` still lowers to `vector` while ordinary code lowers to `list` — a macro template builds a different value than the code it generates. Align the quasiquote path with L9 (list). | open |
+| A2 | **Quasiquote/list divergence** | Inside `quasiquote {}`, `[...]` still lowers to `vector` while ordinary code lowers to `list` — a macro template builds a different value than the code it generates. Align the quasiquote path with L9 (list). | done — `parse_qq_primary`'s `[...]` arm now builds a `qq_chain` cons list (VNil-terminated), matching sexpr `parse_qq_list` and L9; template value now `=` the literal's value on both backends. Pinned by `tests/060-qq-list-parity.sh`. |
 | A3 | **Quasiquote coverage of new sugar** | None of `try`/`match`/`$KIND`/`m[k]`/spread parse inside `quasiquote {}`. Implement each (or document as a B.7 exclusion with rationale). Add the CI rule: every new `parse_head` arm appears in `parse_qq_head` or in B.7. For table-driven forms (`$` heads, `with` clauses, grant sugar) parity comes free from A′1/A′5; this item covers the block forms (`try`/`match`/spread/`m[k]`). | open |
 | A4 | **`else`-newline misparse** | `parse_if` doesn't `skip_nl` before checking `else`, so `}\nelse {` silently parses as no-else + stray symbol + map literal. Fix in the **parser** (accept newline before `else`); `pp fmt` normalizes to `} else {`. | open |
 | A5 | **Match lowering shadowing hazard** | The compiler lowers `match` via `EApply(ESymbol "car"/"="/"nil?"/"not"/...)` — user code shadowing those names diverges the VM from the tree-walker (which matches structurally). Route the lowering through unshadowable internal primitives; add a fuzz case that shadows `car` inside a match arm. | open |
