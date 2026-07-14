@@ -301,6 +301,23 @@ let expect ps ~nl (t : btok) (what : string) =
   if k.t = t then advance ps
   else parse_error ps (Printf.sprintf "expected %s, got %s" what (string_of_btok k.t))
 
+(* Interpret an observation-head lowering template (Surface_tables.tmpl) into
+   real AST nodes for the normal reader. The quasiquote reader has its own
+   interpreter (interp_head_qq) walking the SAME template into quoted
+   list-building data, so both stay in lockstep. [args] are the user-supplied
+   argument expressions, already arity-checked. *)
+let rec interp_head_normal (args : expr list) (t : Surface_tables.tmpl) : expr =
+  match t with
+  | Surface_tables.Prim s -> ESymbol s
+  | Surface_tables.Arg i -> List.nth args i
+  | Surface_tables.App (fn :: rest) ->
+      EApply (interp_head_normal args fn, List.map (interp_head_normal args) rest)
+  | Surface_tables.App [] -> assert false
+  | Surface_tables.If (c, th, el) ->
+      EIf (interp_head_normal args c,
+           interp_head_normal args th,
+           interp_head_normal args el)
+
 (* An infix-operator occurrence: a TName in [ops], with whitespace on BOTH
    sides (§B.1's frozen rule; `a ->b` is the identifier `->b`, and `(a)+ b`
    is not an application of '+'). *)
@@ -511,53 +528,25 @@ and parse_primary ps c : expr =
   | TName "false" -> advance ps; ELiteral (VBool false)
   | TName "nil" -> advance ps; ELiteral VNil
   | TName n when String.length n > 0 && n.[0] = '$' ->
-      (* $file("path"), $env("VAR"[,"default"]), $glob("pattern"),
-         $probe("name"), $secret("path") — observation sigils *)
+      (* $KIND(args...) — observation sigils, table-driven (Surface_tables).
+         Every head parses its arguments as an ordinary expression list (A6),
+         so a computed path such as $file(build <> "/out") works; per-head
+         string-literal restrictions no longer exist. An unknown $foo is left
+         as the bare symbol (postfix application still applies to it). *)
       let kind = String.sub n 1 (String.length n - 1) in
       advance ps;
-      (match kind with
-       | "file" ->
-           advance ps;
-           (match (peek ps ~nl:true).t with
-            | TString p -> advance ps; expect ps ~nl:true TRParen "')'";
-              EApply (ESymbol "slurp", [ELiteral (VString p)])
-            | t -> parse_error ps ("$file expects a string path, got " ^ string_of_btok t))
-       | "env" ->
-           advance ps;
-           skip_nl ps;
-           (match (peek ps ~nl:true).t with
-            | TString name ->
-                advance ps;
-                (match (peek ps ~nl:true).t with
-                 | TComma ->
-                     advance ps; skip_nl ps;
-                     let d = parse_expr ps free_ctx in
-                     expect ps ~nl:true TRParen "')'";
-                     let v = EApply (ESymbol "env-get", [ELiteral (VString name)]) in
-                     EIf (EApply (ESymbol "nil?", [v]), d, v)
-                 | TRParen -> advance ps;
-                     EApply (ESymbol "env-get", [ELiteral (VString name)])
-                 | t -> parse_error ps ("expected ',' or ')', got " ^ string_of_btok t))
-            | t -> parse_error ps ("$env expects a string name, got " ^ string_of_btok t))
-       | "glob" ->
-           advance ps;
-           (match (peek ps ~nl:true).t with
-            | TString p -> advance ps; expect ps ~nl:true TRParen "')'";
-              EApply (ESymbol "list-dir", [ELiteral (VString p)])
-            | t -> parse_error ps ("$glob expects a string pattern, got " ^ string_of_btok t))
-       | "probe" ->
-           advance ps;
-           (match (peek ps ~nl:true).t with
-            | TString name -> advance ps; expect ps ~nl:true TRParen "')'";
-              EApply (ESymbol "probe", [ELiteral (VString name)])
-            | t -> parse_error ps ("$probe expects a string name, got " ^ string_of_btok t))
-       | "secret" ->
-           advance ps;
-           (match (peek ps ~nl:true).t with
-            | TString p -> advance ps; expect ps ~nl:true TRParen "')'";
-              EApply (ESymbol "slurp", [ELiteral (VString p)])
-            | t -> parse_error ps ("$secret expects a string path, got " ^ string_of_btok t))
-       | _ -> ESymbol n)
+      (match Surface_tables.find_head kind with
+       | None ->
+           parse_error ps
+             (Printf.sprintf "unknown observation head $%s; %s"
+                kind (Surface_tables.known_heads_message ()))
+       | Some spec ->
+           expect ps ~nl:true TLParen (Printf.sprintf "'(' after $%s" kind);
+           let args = parse_args ps in
+           let n = List.length args in
+           (match Surface_tables.check_arity spec n with
+            | Ok () -> interp_head_normal args (spec.Surface_tables.tmpl n)
+            | Error msg -> parse_error ps msg))
   | TName n -> parse_head ps c n
 
 (* { k1 -> v1, k2 -> v2, ... } -> (hash-map k1 v1 k2 v2 ...)
@@ -774,10 +763,15 @@ and parse_head ps c (n : string) : expr =
              match needs with
              | None -> body
              | Some items ->
+                 (* Dotted grant descriptors are table-driven sugar
+                    (Surface_tables.grant_sugar); `needs` itself stays
+                    value-open — any other expression passes through to
+                    cap-compose unchanged (A′3). *)
                  let lower_item = function
-                   | EApply (ESymbol "fs.read", [e]) -> needs_restrict e "ro"
-                   | EApply (ESymbol "fs.write", [e]) -> needs_restrict e "wo"
-                   | EApply (ESymbol "fs.rw", [e]) -> needs_restrict e "rw"
+                   | EApply (ESymbol d, [e]) as orig ->
+                       (match Surface_tables.find_grant_sugar d with
+                        | Some g -> needs_restrict e g.Surface_tables.restrict_mode
+                        | None -> orig)
                    | e -> e
                  in
                  let lowered = List.map lower_item items in
@@ -892,18 +886,27 @@ and parse_head ps c (n : string) : expr =
         if (cur ps).t = TRBrace then (advance ps; (caps_opt, config_opt, List.rev handlers))
         else if (cur ps).t = TEOF then parse_error ps "unterminated with block"
         else begin
-          match (cur ps).t with
-          | TName "caps" when (peek2 ps).t = TColon ->
+          (* Clause keyword set is table-driven (Surface_tables.with_clauses):
+             the "caps"/"config"/"handler" strings live only in that table. *)
+          let clause_of =
+            match (cur ps).t with
+            | TName kw -> Surface_tables.find_with_clause kw
+            | _ -> None
+          in
+          match clause_of with
+          | Some ({ wrapper = Surface_tables.WCaps; _ } as cl) when (peek2 ps).t = TColon ->
               advance ps; advance ps; skip_nl ps;
               let cap = parse_expr ps { nl = false; cond = false } in
-              if caps_opt <> None then parse_error ps "duplicate caps: clause in with block";
+              if caps_opt <> None then
+                parse_error ps ("duplicate " ^ cl.Surface_tables.clause ^ ": clause in with block");
               parse_clauses (Some cap) config_opt handlers
-          | TName "config" when (peek2 ps).t = TColon ->
+          | Some ({ wrapper = Surface_tables.WConfig; _ } as cl) when (peek2 ps).t = TColon ->
               advance ps; advance ps; skip_nl ps;
               let m = parse_expr ps { nl = false; cond = false } in
-              if config_opt <> None then parse_error ps "duplicate config: clause in with block";
+              if config_opt <> None then
+                parse_error ps ("duplicate " ^ cl.Surface_tables.clause ^ ": clause in with block");
               parse_clauses caps_opt (Some m) handlers
-          | TName "handler" ->
+          | Some { wrapper = Surface_tables.WHandlers; _ } ->
               advance ps;
               let hname =
                 match (cur ps).t with
@@ -917,7 +920,10 @@ and parse_head ps c (n : string) : expr =
               advance ps; skip_nl ps;
               let h = parse_expr ps { nl = false; cond = false } in
               parse_clauses caps_opt config_opt ((hname, h) :: handlers)
-          | t -> parse_error ps ("expected caps:, config:, or handler in with block, got " ^ string_of_btok t)
+          | _ ->
+              parse_error ps
+                (Surface_tables.with_clauses_message ()
+                 ^ ", got " ^ string_of_btok (cur ps).t)
         end
       in
       let (caps_opt, config_opt, handlers) = parse_clauses None None [] in
@@ -1575,6 +1581,21 @@ and qq_chain_tail (items : expr list) (tail : expr) : expr =
 
 and qq_sym (s : string) : expr = EQuote (ESymbol s)
 
+(* Quasiquote counterpart of interp_head_normal: the SAME Surface_tables.tmpl,
+   walked into quoted list-building data instead of AST nodes. An application
+   `App [f; a; b]` becomes the cons-chain `(f a b)` (qq_chain), and `If` becomes
+   `(if c t e)` — exactly the data shapes the normal lowering's EApply/EIf
+   reconstruct after macro expansion, so a `$file(...)` written inside a
+   quasiquote template builds a value `=` to the one the bare form lowers to. *)
+and interp_head_qq (args : expr list) (t : Surface_tables.tmpl) : expr =
+  match t with
+  | Surface_tables.Prim s -> qq_sym s
+  | Surface_tables.Arg i -> List.nth args i
+  | Surface_tables.App ts -> qq_chain (List.map (interp_head_qq args) ts)
+  | Surface_tables.If (c, th, el) ->
+      qq_chain [qq_sym "if"; interp_head_qq args c;
+                interp_head_qq args th; interp_head_qq args el]
+
 and parse_qq ps : expr =
   parse_qq_pipe ps
 
@@ -2059,6 +2080,22 @@ and parse_qq_head ps (n : string) : expr =
       parse_qq_primary ps
   | ("defmacro" | "needs") ->
       parse_error ps (n ^ " is not representable inside quasiquote { ... }")
+  | _ when String.length n > 0 && n.[0] = '$'
+           && (match Surface_tables.find_head (String.sub n 1 (String.length n - 1)) with
+               | Some h -> h.Surface_tables.qq_legal | None -> false) ->
+      (* $KIND(args) inside quasiquote — A′1 parity. Same table, same template,
+         args routed through parse_qq so unquote/splice work in argument
+         position; the built value equals what the bare form lowers to. *)
+      let kind = String.sub n 1 (String.length n - 1) in
+      let spec = match Surface_tables.find_head kind with
+        | Some h -> h | None -> assert false in
+      advance ps;
+      expect ps ~nl:true TLParen (Printf.sprintf "'(' after $%s" kind);
+      let args = parse_qq_args ps in
+      let cnt = List.length args in
+      (match Surface_tables.check_arity spec cnt with
+       | Ok () -> interp_head_qq args (spec.Surface_tables.tmpl cnt)
+       | Error msg -> parse_error ps msg)
   | _ ->
       advance ps;
       EQuote (ESymbol n)

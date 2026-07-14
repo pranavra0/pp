@@ -385,4 +385,22 @@ if PP="$PP" bash tests/063-match-shadow.sh; then
 else
   echo "FAIL 063-match-shadow"; fail=1
 fi
+echo "--- A7(i): L9 vector-on-bracket-literal lint sweep ---"
+if PP="$PP" bash tests/064-l9-vector-sweep.sh; then
+  echo "ok   064-l9-vector-sweep"
+else
+  echo "FAIL 064-l9-vector-sweep"; fail=1
+fi
+echo "--- A7(iii): try{} <- rebind shadows (differential) ---"
+if PP="$PP" bash tests/065-try-rebind-shadow.sh; then
+  echo "ok   065-try-rebind-shadow"
+else
+  echo "FAIL 065-try-rebind-shadow"; fail=1
+fi
+echo "--- A6/A′1: table-driven \$KIND observation heads (differential) ---"
+if PP="$PP" bash tests/066-dollar-heads.sh; then
+  echo "ok   066-dollar-heads"
+else
+  echo "FAIL 066-dollar-heads"; fail=1
+fi
 exit $fail

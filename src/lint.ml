@@ -162,6 +162,23 @@ let rec check_expr ?(line=0) file (e : expr) : unit =
       check_expr ~line file body
 
   | EApply (fn, args) -> (
+      (* L9 sweep (SPEC A7): `[…]` reads as a list, not a vector, so
+         vector-get/vector-length applied directly to a bracket literal is a
+         leftover from the vector era and is now a type error at runtime. Flag
+         it statically. A bracket literal lowers to `(list …)`; peel any
+         ELocated wrapper the reader attached. *)
+      let peel = function ELocated (_, e') -> e' | e -> e in
+      (match fn, args with
+       | ESymbol (("vector-get" | "vector-length") as op), (first :: _) ->
+           (match peel first with
+            | EApply (ESymbol "list", _) ->
+                warn file line
+                  (Printf.sprintf
+                     "%s applied to a bracket literal `[…]`, which is a list \
+                      (L9), not a vector — use `nth`/`length`, or build a \
+                      vector with `vector(…)`" op)
+            | _ -> ())
+       | _ -> ());
       match fn with
       | ESymbol "if" ->
           (* 5. if not(nil?(x)) → if x *)

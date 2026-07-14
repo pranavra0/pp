@@ -221,6 +221,19 @@ however a surface spells it. Scope follows LAW 4 with statement timing:
   (function defs still late-bind, so top-level mutual recursion between
   functions is unaffected).
 
+**Exception — `try {}` `<-` bindings are sequential, and rebinding shadows.**
+A `try {}` block is *not* a letrec* scope. Its `<-` bindings execute top to
+bottom, each visible only to statements *after* it (a `<-` rhs sees earlier
+binds, never later ones — there is no mutual visibility to poison), and
+because the block lowers to nested `let`s, **binding the same name twice is
+allowed**: the second `<-` shadows the first for the statements that follow,
+exactly as re-`let`-ing a name in nested lets would. This is the one place
+LAW 4's "duplicate definition in block is a read error" does not apply —
+`try` statements are sequential lets, not a letrec* block of `def`s. Pinned
+by a differential test that rebinds a `<-` name twice and observes the later
+uses see the shadowing value on both backends
+(`tests/065-try-rebind-shadow.sh`).
+
 **Status: partial** — top-level and `do`-block `def`s are mutually recursive
 in both backends (they share a mutable global scope), and value defs behave
 identically in both backends including the letrec* poison error
@@ -1543,7 +1556,13 @@ strings — row L55.)
 surrounding whitespace: `a - b` is subtraction, `a-b` is one identifier.
 Token identity is decided by maximal munch; whether a token *acts* as an
 infix operator is decided by position, never inside a token. `a ->b` is the
-identifier `->b` in operand position (a parse error), not an arrow. This one
+identifier `->b` in operand position (a parse error), not an arrow. The `->`
+token is the sharpest case of this rule, and it is load-bearing for the
+type-conversion naming convention: glued, `string->number` is a single
+identifier (a conversion primitive — likewise `number->string`); with
+whitespace on both sides, `k -> v` is the map/reconcile arrow (L10). The two
+never collide because the glue rule alone distinguishes them — `string ->
+number` (spaces) would instead be the arrow between two operands. This one
 rule is what lets the entire stdlib migrate with zero renames (M7
 consequences 1–2). The `<`-family (`<`, `<=`) is lexed specially in braces
 exactly as in sexprs (`<` is not a name character) but obeys the same
@@ -1672,10 +1691,23 @@ including the block's duplicate-definition check (LAW 4).
 
 | # | Brace form | Reads as |
 |---|---|---|
-| L9 | `[e1, e2, …]` | `(vector e1 e2 …)` |
+| L9 | `[e1, e2, …]` | `(list e1 e2 …)` — **revised** (see note) |
 | L10 | `{ k1 -> v1, k2 -> v2, … }` | `(hash-map k1 v1 k2 v2 …)` |
 | L11 | `{}` (expression position) | `(hash-map)` |
 | L12 | *(no set literal — `#` is the comment character)* `hash-set(e, …)` | `(hash-set e …)` |
+
+> **L9 is a revision, not sugar.** `[…]` originally read as `(vector …)`; it
+> now reads as `(list …)` — the default collection is a cons-list. This is a
+> **semantic, hash-affecting** change, *not* a surface convenience: a bracket
+> literal now evaluates to a different runtime value (a `VPair` cons-chain, not
+> a `VVector`), so its LAW-20 content hash changed and the golden store had to
+> be regenerated — that regeneration commit is the receipt that the change is
+> real, not cosmetic. Two consequences follow and are checked mechanically:
+> (1) the quasiquote path was realigned so a `[…]` template builds the same
+> cons-list value the equivalent code builds (A2, `tests/060-qq-list-parity.sh`);
+> (2) `pp check` sweeps for `vector-get`/`vector-length` applied directly to a
+> bracket literal — a leftover from the vector era that is now a type error —
+> and flags it (`tests/064-l9-vector-sweep.sh`).
 
 **Operators** (see §B.2 for nesting)
 
