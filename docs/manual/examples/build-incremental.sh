@@ -21,7 +21,7 @@ int main(void) { greet(); return 0; }
 EOF
 
 # --- the build: one node per translation unit, then a link node ---
-# compile: run-dep records the EXACT files cc read (the .d depfile), then blob
+# compile: run-dep! records the EXACT files cc read (the .d depfile), then blob
 # ingests the .o into the store. link: write each object into the node's
 # sandbox, link them, blob the result. The program's value is the desired
 # build tree: {relpath -> blob-ref}, ":x" marking the executable.
@@ -33,7 +33,7 @@ def zip2(a, b) {
 }
 def compile(name) {
   node {
-    perform run-dep(string-append(name, ".d"), "cc", "-MD", "-MF", string-append(name, ".d"), "-O0", "-c", string-append("$HOME/src/", name, ".c"), "-o", string-append(name, ".o"))
+    perform run-dep!(string-append(name, ".d"), "cc", "-MD", "-MF", string-append(name, ".d"), "-O0", "-c", string-append("$HOME/src/", name, ".c"), "-o", string-append(name, ".o"))
     blob(slurp(string-append(name, ".o")))
   }
 }
@@ -44,7 +44,7 @@ fn(o) { perform write-file(string-append(car(o), ".o"), blob-get(cdr(o))) }, obj
     do {
       perform write-file("link.d", "prog: ")
       do {
-        perform run-dep("link.d", "sh", "-c", "cc -o prog greet.o main.o")
+        perform run-dep!("link.d", "sh", "-c", "cc -o prog greet.o main.o")
         blob(slurp("prog")) } } }) }
 let (names = list("greet", "main"), objs = zip2(names, force-deep(map(compile, names))), prog = link(objs)) {
   foldl2(

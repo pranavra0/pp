@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# tests/058 — Differential test for collect { } error partitioning (Phase 1b.4).
-# Tests the `collect-results` builtin via the `collect { }` reader sugar.
+# tests/058 — Differential test for `collect` error partitioning.
+# B2: `collect` is now a plain FUNCTION used in pipelines (the renamed
+# `collect-results` primitive); the `collect { }` reader block form is removed.
+# `collect(items)` partitions a list of [:ok, v]/[:err, e] — [:ok, values] if
+# all succeeded, [:err, errors] if any failed. The validation counterpart to
+# `try`'s short-circuit.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -25,38 +29,37 @@ run_both() {
   fi
 }
 
+# All ok — as a direct call.
 cat > "$TMP/all-ok.pp" <<'EOF'
-let a = [:ok, 1]
-let b = [:ok, "hi"]
-let c = [:ok, [:nested, :val]]
-let result = collect { a; b; c }
-print(result)
+let items = [[:ok, 1], [:ok, "hi"], [:ok, [:nested, :val]]]
+print(collect(items))
 EOF
 run_both "collect-all-ok" "$TMP/all-ok.pp" '(:ok (1 "hi" (:nested :val)))'
 
+# One error short-circuits into the [:err, errors] arm — via a pipeline.
 cat > "$TMP/one-err.pp" <<'EOF'
-let a = [:ok, 1]
-let b = [:err, "boom"]
-let c = [:ok, 2]
-let result = collect { a; b; c }
-print(result)
+print([[:ok, 1], [:err, "boom"], [:ok, 2]] |> collect)
 EOF
-run_both "collect-one-err" "$TMP/one-err.pp" '(:err ("boom"))'
+run_both "collect-one-err-pipeline" "$TMP/one-err.pp" '(:err ("boom"))'
 
+# All errors are accumulated (validation, not short-circuit).
 cat > "$TMP/all-err.pp" <<'EOF'
-let a = [:err, "first"]
-let b = [:err, "second"]
-let c = [:err, "third"]
-let result = collect { a; b; c }
-print(result)
+print([[:err, "first"], [:err, "second"], [:err, "third"]] |> collect)
 EOF
 run_both "collect-all-err" "$TMP/all-err.pp" '(:err ("first" "second" "third"))'
 
+# Empty list.
 cat > "$TMP/empty.pp" <<'EOF'
-let result = collect {  }
-print(result)
+print(collect([]))
 EOF
 run_both "collect-empty" "$TMP/empty.pp" '(:ok nil)'
+
+# The `collect { }` block form is gone: `collect` is an ordinary identifier.
+cat > "$TMP/ident.pp" <<'EOF'
+let collect = 42
+print(collect)
+EOF
+run_both "collect-is-ordinary-identifier" "$TMP/ident.pp" '42'
 
 rm -rf "$TMP"
 exit $fail

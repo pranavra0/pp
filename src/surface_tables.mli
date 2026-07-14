@@ -16,6 +16,7 @@ type tmpl =
   | App of tmpl list
   | If of tmpl * tmpl * tmpl
   | Perform of string * tmpl list      (* (perform EFFECT args…) — a traced observation *)
+  | Config of tmpl * tmpl option       (* (config KEY [DEFAULT]) — a scoped config read *)
 
 type obs_head = {
   head : string;
@@ -56,6 +57,13 @@ type grant_sugar = {
 
 val grant_sugar : grant_sugar list
 val find_grant_sugar : string -> grant_sugar option
+
+(* ---- observation-exclusivity primitives (B4) -------------------------- *)
+
+(* The bare world-read primitives the `$` family wraps, each paired with the
+   `$` head to suggest instead. `pp lint` (B4) flags a bare use outside stdlib. *)
+val observation_primitives : (string * string) list
+val observation_primitive : string -> string option
 
 (* ---- SPEC rendering (A′2) --------------------------------------------- *)
 

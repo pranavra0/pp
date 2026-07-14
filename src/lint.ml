@@ -79,6 +79,61 @@ let rec has_effect (e : expr) : bool =
       || List.exists (fun (_, body) -> has_effect body) arms
   | _ -> false
 
+(* ---- B12: tagged-value convention helpers ---- *)
+
+(** The keyword tag of a tagged-list literal `[:tag, …]` (which lowers to
+    `(list :tag …)`), if [e] is one. *)
+let tagged_tag (e : expr) : string option =
+  match strip e with
+  | EApply (ESymbol "list", (tagk :: _)) ->
+      (match strip tagk with ELiteral (VKeyword k) -> Some k | _ -> None)
+  | _ -> None
+
+let is_err_result (e : expr) : bool = tagged_tag e = Some "err"
+
+(** A branch value that is *definitely* a bare (non-result) value: a number,
+    string, or bool literal, or a vector/map/plain-list literal. Deliberately
+    conservative — keywords (possible sentinels), calls, `if`s, and symbols
+    have unknown shape and are NOT treated as bare, to avoid false positives. *)
+let is_definitely_bare (e : expr) : bool =
+  match strip e with
+  | ELiteral (VInt _ | VFloat _ | VString _ | VBool _) -> true
+  | EApply (ESymbol "vector", _) -> true
+  | EApply (ESymbol "hash-map", _) -> true
+  | EApply (ESymbol "list", _) -> tagged_tag e = None
+  | _ -> false
+
+(** Collect the tail (result) expression of every branch of a conditional /
+    match / block, recursing through nested `if`s (else-if chains), `let`
+    bodies, and `do` blocks so an `if/else if/else` chain yields one tail per
+    arm. *)
+let rec branch_tails (e : expr) : expr list =
+  match strip e with
+  | EIf (_, t, f) -> branch_tails t @ branch_tails f
+  | EMatch (_, arms) -> List.concat_map (fun (_, b) -> branch_tails b) arms
+  | ELet (_, b) | ELetStar (_, b) -> branch_tails b
+  | EDo es -> (match List.rev es with last :: _ -> branch_tails last | [] -> [])
+  | other -> [other]
+
+(** B12(1): a function body that returns `[:err, _]` on one branch and a bare
+    value on another mixes result and non-result shapes — flag it. *)
+let check_result_shape file line (body : expr) : unit =
+  let tails = branch_tails body in
+  if List.exists is_err_result tails && List.exists is_definitely_bare tails then
+    warn file line
+      "inconsistent result shape: one branch returns [:err, _] but another \
+       returns a bare value — return [:ok, v] on the success branch (SYNTAX §2)"
+
+(** B11: an identifier containing '.' (a dot-method-call trap or stray dotted
+    name). Grant descriptors (the dotted `fs` shorthands) lower away before
+    lint sees the AST, so any surviving dotted ESymbol is a real violation. *)
+let check_dot_identifier file line (s : string) : unit =
+  if String.contains s '.' then
+    warn file line
+      (Printf.sprintf
+         "identifier `%s` contains '.' — there is no dot-method call; use `|>` \
+          (a '.' is allowed only inside a `needs` grant descriptor)" s)
+
 (** Does [e] represent a single-binding let (a let ladder rung)? *)
 let is_single_let (e : expr) : bool =
   match strip e with
@@ -137,6 +192,7 @@ let rec check_expr ?(line=0) file (e : expr) : unit =
 
   | EDef (name, _params, body) ->
       check_naming file line name body;
+      check_result_shape file line body;
       check_expr ~line file body
 
   | EDefValue (name, rhs) ->
@@ -179,6 +235,18 @@ let rec check_expr ?(line=0) file (e : expr) : unit =
                       vector with `vector(…)`" op)
             | _ -> ())
        | _ -> ());
+      (* B12(2): `car`/`cdr` (or `first`/`rest`) applied to a tagged result
+         literal `[:ok, _]`/`[:err, _]` — destructure results with `match` or
+         `<-`, never by position (SYNTAX §15). *)
+      (match fn, args with
+       | ESymbol (("car" | "cdr" | "first" | "rest") as op), [arg]
+         when tagged_tag arg <> None ->
+           warn file line
+             (Printf.sprintf
+                "`%s` applied to a tagged result `[:%s, …]` — destructure a \
+                 result with `match` or `<-`, never `car`/`cdr` (SYNTAX §15)"
+                op (match tagged_tag arg with Some t -> t | None -> "?"))
+       | _ -> ());
       match fn with
       | ESymbol "if" ->
           (* 5. if not(nil?(x)) → if x *)
@@ -197,6 +265,7 @@ let rec check_expr ?(line=0) file (e : expr) : unit =
           List.iter (check_expr ~line file) args)
 
   | EFn (_, body) ->
+      check_result_shape file line body;
       check_expr ~line file body
 
   | EDo exprs ->
@@ -255,7 +324,59 @@ let rec check_expr ?(line=0) file (e : expr) : unit =
       check_expr ~line file e;
       check_expr ~line file t
 
-  | ELiteral _ | ESymbol _ | ELoad _ | ELoadModule _ | EIsland (_, _) -> ()
+  | ESymbol s ->
+      check_dot_identifier file line s   (* B11 *)
+
+  | ELiteral _ | ELoad _ | ELoadModule _ | EIsland (_, _) -> ()
+
+(* ---- B4: observation-exclusivity (a PRE-lowering token scan) ---- *)
+
+(** Does [path] live under a `stdlib/` directory? The `$` family lowers to the
+    bare primitives, and stdlib is where those primitives are legitimately
+    used, so the exclusivity check is suppressed there. *)
+let is_stdlib_path (path : string) : bool =
+  let re_has sub =
+    let ls = String.length sub and lp = String.length path in
+    let rec go i = i + ls <= lp && (String.sub path i ls = sub || go (i + 1)) in
+    go 0
+  in
+  re_has "stdlib/" || re_has "/stdlib"
+
+(** B4: warn on a bare world-read primitive (`slurp`, `env-get`, `probe`,
+    `config`, `perform tree-observe`) used outside `stdlib/`, pointing at the
+    `$` head. This MUST run pre-lowering: after lowering, `$file` and a bare
+    `slurp` are the identical AST, so the distinction only exists in the token
+    stream. The primitive set is derived from [Surface_tables] (single source).
+    A primitive is flagged when it is a call head (next token `(`) or a
+    performed effect (previous token `perform`); `config:` (a `with` clause,
+    next token `:`) is therefore not flagged. *)
+let check_observation_exclusivity file (src : string) : unit =
+  if is_stdlib_path file then ()
+  else
+    let toks =
+      try Array.of_list (Reader_braces.lex ~file src) with _ -> [||]
+    in
+    let n = Array.length toks in
+    Array.iteri (fun i (tk : Reader_braces.tok) ->
+      match tk.Reader_braces.t with
+      | Reader_braces.TName name ->
+          (match Surface_tables.observation_primitive name with
+           | None -> ()
+           | Some suggestion ->
+               let next_is_lparen =
+                 i + 1 < n && toks.(i + 1).Reader_braces.t = Reader_braces.TLParen
+               in
+               let prev_is_perform =
+                 i > 0 &&
+                 (match toks.(i - 1).Reader_braces.t with
+                  | Reader_braces.TName "perform" -> true | _ -> false)
+               in
+               if next_is_lparen || prev_is_perform then
+                 warn file tk.Reader_braces.tline
+                   (Printf.sprintf
+                      "bare `%s` reads the world directly — use `%s` (world \
+                       observations go through the $ family; B4)" name suggestion))
+      | _ -> ()) toks
 
 (* ---- Public API ---- *)
 
@@ -267,6 +388,8 @@ let lint_file (path : string) : unit =
   let len = in_channel_length ch in
   let src = really_input_string ch len in
   close_in ch;
+  (* B4: pre-lowering token scan (before the reader lowers $file -> slurp). *)
+  check_observation_exclusivity path src;
   (* Parse *)
   let forms =
     try Reader_braces.read_string ~source:path src

@@ -51,7 +51,7 @@ let record_tool_cell (resolved : string) : unit =
   | None -> ()
 
 (* The coarse-cell soundness floor (Q2): one whole-tree hash per fs-read
-   grant. Used by plain `run` and as run-dep's fallback when the tool
+   grant. Used by plain `run` and as run-dep!'s fallback when the tool
    produced no depfile. *)
 let record_tree_cells () : unit =
   List.iter (function
@@ -135,7 +135,7 @@ let run_effect (args : value list) : value =
 
 (* ---- Depfile adapter (Q2 refinement) ----
 
-   (perform run-dep DEPFILE CMD ARG...) — like `run`, but after the exec the
+   (perform run-dep! DEPFILE CMD ARG...) — like `run`, but after the exec the
    Makefile-style depfile the tool wrote (`cc -MD -MF` and friends) is parsed
    and the EXACT files the tool read become the trace cells:
      granted dep      → precise `file:` cell (via read_file_cell, so it is
@@ -144,7 +144,7 @@ let run_effect (args : value list) : value =
    and NO coarse `tree:` cells are recorded — the refinement that shrinks the
    trace below the Q2 soundness floor. A missing/unreadable depfile falls
    back to the coarse floor. The adapter trusts the tool's report; that trust
-   is per-tool and explicit (you chose run-dep). *)
+   is per-tool and explicit (you chose run-dep!). *)
 
 (* "target: dep dep \\\n dep" → the dep paths. Line continuations become
    spaces; everything through the first ':' is the target and is dropped. *)
@@ -187,16 +187,16 @@ let run_dep_effect (args : value list) : value =
   match args with
   | VString depfile :: (VString _ :: _ as cmd_args) ->
       if not (has_process_cap ()) then
-        raise (Capability_error "capability error: no process authority for run-dep");
+        raise (Capability_error "capability error: no process authority for run-dep!");
       let argv = List.map (function
         | VString s -> s
-        | v -> failwith ("run-dep expects string arguments, got " ^ string_of_value v))
+        | v -> failwith ("run-dep! expects string arguments, got " ^ string_of_value v))
         cmd_args
       in
       let cmd = List.hd argv in
       let resolved = match resolve_cmd cmd with
         | Some p -> p
-        | None -> failwith ("run-dep: command not found: " ^ cmd)
+        | None -> failwith ("run-dep!: command not found: " ^ cmd)
       in
       record_tool_cell resolved;
       let (code, out, err) = exec argv in
@@ -212,7 +212,7 @@ let run_dep_effect (args : value list) : value =
       VMap [ (VString "exit", VInt code);
              (VString "out",  VString out);
              (VString "err",  VString err) ]
-  | _ -> failwith "run-dep expects a depfile path, a command, and arguments"
+  | _ -> failwith "run-dep! expects a depfile path, a command, and arguments"
 
 (* ---- write-file with the LAW 18 node/scripting split ----
    Shared by both backends' builtin write-file. Inside a node: a relative

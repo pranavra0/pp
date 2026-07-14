@@ -32,7 +32,7 @@ and `runtime:file:` cells re-observed on every
 hit, with hits gated on the caller's authority over the transitive read
 closure (LAW 23b) and failures memoized as failing traces (LAW 28). Reads
 are snapshot-consistent per run (CAS ingest + pins, Q11). Tools run via
-`run`/`run-dep` under `--grant process` in per-node sandboxes, traced by the
+`run`/`run-dep!` under `--grant process` in per-node sandboxes, traced by the
 coarse tree floor or refined by depfiles (Q2). The journaled, atomic,
 verified, single-writer filesystem reconciler materializes desired-state
 maps (inline or `blob:` CAS refs) under `pp --reconcile` (Q4/LAW 30), and
@@ -453,7 +453,7 @@ non-list `def` is a value binding — `tests/025`.)
   inherits all ambient state (handler closures, capabilities, config,
   thunk_store) byte-identically via COW, so M1 ships with fork workers and
   documents the state inventory as M5's design item instead (Wall B, M1).
-- **Depfile adapter (Q2 refinement).** `perform run-dep(DEPFILE, CMD, ARG…)`
+- **Depfile adapter (Q2 refinement).** `perform run-dep!(DEPFILE, CMD, ARG…)`
   runs the tool, then parses its Makefile-style depfile: granted deps become
   precise `file:` cells (Q11-pinned + CAS-ingested), out-of-grant (system)
   deps become `tool:` cells, and no coarse `tree:` cells are recorded — so
@@ -575,7 +575,7 @@ non-list `def` is a value binding — `tests/025`.)
   `main.ml`'s new `fmt` dispatch is empty for this milestone.
 - **M6 stage A — the devops-complete demonstration (ALL-LIBRARY)**
   (M6). `demo/deploy.pp` (a pure `{host -> {domain ->
-  desired}}` dispatcher: builds a C service once via `run-dep`, renders
+  desired}}` dispatcher: builds a C service once via `run-dep!`, renders
   each host's config in a node that `unseal`s that host's `secret:` key
   and emits only `hash-string` of it), `demo/agent.pp` (byte-identical
   per host: registers the fs + proc domains under its own `fs:rw` +

@@ -1608,13 +1608,13 @@ error, by design.
 
 **Keywords.** `:name` (`:` at token start) → `VKeyword`, as in sexprs.
 
-**Cell literals.** An identifier immediately followed by `:` immediately
-followed by a string literal — no whitespace anywhere: `file:"src/main.c"`,
-`env:"CC"`, `tree:"src"`. Exactly these three heads exist (rows L47–L49);
-any other `name:"…"` is a parse error (the space is reserved). World-reads
-get visual identity; the literal is authority-neutral — whether `file:"p"`
-returns plain bytes or a sealed value stays the grant's decision (LAW 39),
-because the lowering is the same read form either way.
+**Cell literals — removed (B1).** The fused `file:"P"` / `env:"N"` /
+`tree:"R"` token is no longer part of the language. A single-string token
+cannot spell a default (`$env("CC", "gcc")`) or a computed path, and an
+observation is an operation, not a literal (DESIGN §6). World-reads are the
+`$` family exclusively (§B.8; rows L47–L49 amended). An identifier followed
+immediately by `:` is now only an annotation colon (`x: ty`); `name:"…"`
+does not lex as a cell.
 
 **Annotations.** `:` after a parameter or binding name (`x: int`) or after a
 parameter list (`def f(x): int`) — rows L24, L27–L31.
@@ -1703,6 +1703,7 @@ including the block's duplicate-definition check (LAW 4).
 |---|---|---|
 | L9 | `[e1, e2, …]` | `(list e1 e2 …)` — **revised** (see note) |
 | L10 | `{ k1 -> v1, k2 -> v2, … }` | `(hash-map k1 v1 k2 v2 …)` |
+| L10a | `{ …m, k -> v, … }` (spread; B3) | fold: `(map-merge (hash-map) m)` for each `…spread`, `(map-insert acc k v)` for each pair, left to right — multiple spreads merge, rightmost wins. The spread-free literal keeps its `(hash-map …)` shape (hash-preserving). Replaces the removed `{ base \| k -> v }` update form. |
 | L11 | `{}` (expression position) | `(hash-map)` |
 | L12 | *(no set literal — `#` is the comment character)* `hash-set(e, …)` | `(hash-set e …)` |
 
@@ -1796,7 +1797,7 @@ expressible by composition: `def f(x) { with-caps(E) { node { … } } }`
 
 | # | Brace form | Reads as |
 |---|---|---|
-| L41 | `perform name(a, …)` | `(perform name a …)` — for every effect: `read-file` `write-file` `run` `run-dep` `http-get` `http-post` `log` `tree-observe` `materialize-file` `remove-file` `proc-spawn` `proc-alive?` `proc-stop` `proc-reap` `domain-state-get` `domain-state-put` |
+| L41 | `perform name(a, …)` | `(perform name a …)` — for every effect: `read-file` `write-file` `run` `run-dep!` `http-get` `http-post` `log` `tree-observe` `materialize-file` `remove-file` `proc-spawn` `proc-alive?` `proc-stop` `proc-reap` `domain-state-get` `domain-state-put` (B10 renamed the depfile effect `run-dep` → `run-dep!`; `!` marks the effect) |
 | L42 | `with-handler(n1 = h1, n2 = h2) { body… }` | `(with-handler [n1 h1 n2 h2] body…)` — a handler name may also be a keyword literal, as in sexprs |
 | L43 | `with-caps(E) { body… }` | `(with-caps E body…)` |
 | L44 | `with-config(E) { body… }` | `(with-config E body…)` — `E` is any expression, typically a map literal `{:k -> v}` |
@@ -1810,15 +1811,17 @@ Capability values need no rows of their own: `current-capabilities()`,
 `register-domain`, `fenced`, `argv`, `env-get`, `file-exists?`, `dir?`,
 `hash-string`, `hash-value`, `gensym`, …).
 
-**Cells** (world-reads get visual identity; string-literal argument only —
-a computed path uses the call form, e.g. `slurp(path(f))`)
+**Cells** (world-reads are the `$` family — the one observation surface; the
+head set and lowerings are the generated table in §B.8. B1 removed the fused
+cell-literal tokens `file:"P"`/`env:"N"`/`tree:"R"`, which could not spell a
+default or a computed path.)
 
 | # | Brace form | Reads as |
 |---|---|---|
-| L47 | `file:"P"` | `(slurp "P")` — a `file:` (or, under a `secret:` grant, `sealed:`) observation |
-| L48 | `env:"N"` | `(env-get "N")` — an `env:` observation |
-| L49 | `tree:"R"` | `(perform tree-observe "R")` — a `tree:` observation |
-| L50 | *(no literal for `stat:`/`probe:`/`argv:` cells)* `file-exists?("p")`, `dir?("p")`, `probe("n")`, `argv()` | the same calls — they observe predicates/registered probes, not path contents, so call form is the honest spelling |
+| L47 | `$file(P)` | `(slurp P)` — a `file:` (or, under a `secret:` grant, `sealed:`) observation |
+| L48 | `$env(N[, default])` | `(env-get N)` — an `env:` observation |
+| L49 | `$glob(R)` | `(perform tree-observe R)` — a `tree:` observation |
+| L50 | *(no `$` head for `stat:` cells)* `file-exists?("p")`, `dir?("p")` | predicate observations keep the call form — they observe predicates, not path contents |
 
 The M7 sketch's `glob:"src/*.c"` is **not frozen**: no glob-observing form
 exists in core (the manifest read that exists is `tree-observe`, L49), and
@@ -2002,9 +2005,13 @@ because later stages implement exactly what S0 froze:
     deliberately: `defmacro` and `needs` templates, *named* node
     definitions (`node name { … }` / `node f(p) { … }`; the bare node
     *expression* `node { E }` is representable), computed *parameter*
-    names, and type annotations (an `ETyped` is not plain quoted-symbol
+    names, type annotations (an `ETyped` is not plain quoted-symbol
     data, so representing one would need a new data convention, not a
-    parser rule). **Workaround for all of these:** build the form as data
+    parser rule), and **map spread `{ …m, k -> v }`** (B3): a quasiquote
+    map is built eagerly (`quasiquote_walk` does not descend into a `VMap`),
+    so a spread's `map-merge` would run before unquotes are substituted —
+    plain `{ k -> v }` literals are representable, spread is not.
+    **Workaround for all of these:** build the form as data
     with ordinary `list`/`cons`/`quote{}` calls — `list(quote { defnode },
     …)` etc. — exactly what macro bodies could always return; and a
     block-vs-map ambiguity inside a template is resolved the same way as
@@ -2033,6 +2040,7 @@ not edit between the markers by hand.
 | `$glob` | 1 | yes | `(perform tree-observe $1)` | $glob(path) — observe a directory tree (records a tree: cell) |
 | `$probe` | 1 | yes | `(probe $1)` | $probe(name) — read an observer-written volatile probe cell |
 | `$secret` | 1 | yes | `(slurp $1)` | $secret(path) — read a sealed (confidential) file |
+| `$config` | 1..2 | yes | `(config $1 $2)` | $config(key[, default]) — read a scoped config value (records a config: cell); the optional default is used when the key is unset |
 
 #### `with { }` clauses
 
@@ -2040,7 +2048,7 @@ not edit between the markers by hand.
 |---|---|---|
 | `caps:` | `with-caps` | caps: C — run the body with capability set C |
 | `config:` | `with-config` | config: M — run the body with ambient config map M |
-| `handler NAME:` | `with-handler` | handler NAME: fn — install one effect handler (B9 will move to handlers: { :name -> fn, ... }) |
+| `handlers:` | `with-handler` | handlers: { :name -> fn, ... } — install a map of effect handlers |
 
 #### Grant-descriptor sugar (inside `needs`)
 

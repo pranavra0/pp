@@ -22,19 +22,17 @@ fail=0
 # Known, PRE-EXISTING qq gaps — not part of A3's mandate (try/match/m[k]/
 # list-spread), so not implemented here. Each is a real parse_head arm with
 # no parse_qq_head counterpart today:
-#   cond     — cascading test => result chain (lowers to nested EIf, like
-#              if/else, but never lifted to qq)
-#   collect  — collect { expr; ... } (lowers to collect-results(list(...)))
 #   fenced   — fenced :kind { ... } (lowers to perform("fenced", ...))
-#   with     — with { caps: C, config: M, handler H: ... } { body } combo
+#   with     — with { caps: C, config: M, handlers: M } { body } combo
 #              sugar (the PRIMITIVE forms with-caps/with-config/with-handler
 #              it desugars to already have qq arms; this convenience
 #              wrapper itself does not)
 #   vec      — vec[...] vector literal with spread (only the bracket LIST
 #              literal `[...]` got A2/A3 qq parity, not `vec[...]`)
+# (B6 removed `cond` and B2 removed `collect` from parse_head — both dropped.)
 # A future fix that lifts one of these should DELETE it from this list —
 # the extraction below will then find it covered and the assertion holds.
-EXCLUDED="cond collect fenced with vec"
+EXCLUDED="fenced with vec"
 
 extract() {
   # $1: start line, $2: end line (inclusive) of the function body to scan.

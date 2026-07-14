@@ -70,7 +70,7 @@ def proc-forget!(name, known) {
   filter(
 fn(n) { not(n = name) }, known)
 }
-# ---- observe: reap once per pass, then {name -> spec | :stopped} ----
+# ---- observe: reap once per pass, then { ...acc, name -> spec } per live proc ----
 
 def proc-observe-one(name) {
   let (st = perform domain-state-get(proc-state-key(name))) {
@@ -85,7 +85,7 @@ def proc-observe() {
   foldl(
 fn(acc, name) {
     let (v = proc-observe-one(name)) {
-      if nil?(v) { acc } else { { acc | name -> v } }
+      if nil?(v) { acc } else { { ...acc, name -> v } }
     }
   }, {}, proc-known-names())
 }
@@ -158,7 +158,7 @@ def proc-apply-item(known, item) {
       proc-forget!(name, known)
     } else {
       if kind = "restart" { proc-stop-current!(name) }
-      let (spec = item[:spec], pid = perform proc-spawn({ spec | :name -> name })) {
+      let (spec = item[:spec], pid = perform proc-spawn({ ...spec, :name -> name })) {
         proc-remember!(name, pid, spec, known)
       }
     } } }

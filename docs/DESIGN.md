@@ -243,7 +243,7 @@ system paths it reads. Different machines observe different toolchain cells →
 different traces in the key's trace SET (R9).
 
 *Resolution (implemented).* The floor and the refinement are live: plain
-`run` records `tool:<binary>` + one `tree:<root>` per fs-read grant; `run-dep`
+`run` records `tool:<binary>` + one `tree:<root>` per fs-read grant; `run-dep!`
 parses the tool's Makefile-style depfile and records precise `file:` cells for
 granted deps and `tool:<path>` cells for out-of-grant (system) deps, with no
 tree cells (`tests/022`). The aggregate `toolchain:cc` closure cell is
@@ -795,6 +795,18 @@ that discipline lives in `src/domains.ml`, not in the domain's own code.
   assumption: the observer writing the probe is trusted; the adversary here is
   nondeterminism, not a confused deputy. Blast radius: a stale probe value
   forces a re-observe, never a wrong cached result.
+- **E12 Scoped config reads (`$config`).** `$config(key[, default])` observes an
+  ambient config *value* installed by an enclosing `with { config: … }` extent
+  (LAW 33), not a filesystem resource. A config *key* is not a resource locator,
+  so — exactly as with `$env` (E10) — there is no path-traversal or
+  spelled-inside/resolves-outside confused-deputy surface to defeat with an
+  adversarial fixture; A″5 records it as a trust assumption instead. Trust
+  assumption: the code that installs the config extent is trusted (config is set
+  by the program itself via `with-config`, not by an outside party). Blast
+  radius: whatever the enclosing extent sets. Containment: a `$config` read
+  enters the trace as a `config:<key>` cell (the ambient config is out of the
+  node key; only the read keys are, LAW 33), so a changed value re-keys its
+  observers and can never silently reuse a stale result.
 
 ---
 

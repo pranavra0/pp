@@ -168,7 +168,7 @@ log!(f"building {src}")
 `!` means "performs an effect" — exactly that, never "uncached" or
 "scripting-tier." The convention survives only if it is exceptionless, so
 every effect wrapper in stdlib and the manual carries it (`run-dep!`, not
-`run-dep`). Pure functions are suffix-free; `?` marks predicates; `->` in a
+`run-dep!`). Pure functions are suffix-free; `?` marks predicates; `->` in a
 name marks a conversion (`->string` is the generic one).
 
 ---

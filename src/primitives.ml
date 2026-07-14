@@ -942,6 +942,19 @@ let () =
          | _ -> failwith "map-insert expects a map, a key, and a value")
     | _ -> failwith "map-insert expects a map, a key, and a value");
 
+  (* map-merge(a, b) — a with every binding of b inserted; b wins on collision.
+     The lowering target for map spread `{ ...a, ...b }` (B3). Keys in a VMap
+     are already forced values, so structural comparison is exact. *)
+  register "map-merge" (fun args ->
+    match args with
+    | [a; b] ->
+        (match force_val a, force_val b with
+         | VMap akvs, VMap bkvs ->
+             let b_has k = List.exists (fun (k', _) -> k' = k) bkvs in
+             VMap (bkvs @ List.filter (fun (k, _) -> not (b_has k)) akvs)
+         | _ -> failwith "map-merge expects two maps")
+    | _ -> failwith "map-merge expects two maps");
+
   (* ---- read-string: parse string to value (for pp compiler) ---- *)
 
   register "read-string" (fun args ->
@@ -1086,17 +1099,19 @@ let () =
              v)
     | _ -> failwith "probe expects a probe name string");
 
-  (* ---- Phase 1b.4: collect-results (error-accumulation partition) ---- *)
+  (* ---- collect: applicative/validation error-accumulation partition ---- *)
 
-  (* `(collect-results items)` — partition a list of `[:ok, v]` / `[:err, e]`
-     results. Returns `[:ok, values]` if all succeeded, `[:err, errors]` if any
-     failed. Used by the `collect { }` reader sugar. *)
-  register "collect-results" (fun args ->
+  (* `collect(items)` — partition a list of `[:ok, v]` / `[:err, e]` results.
+     Returns `[:ok, values]` if all succeeded, `[:err, errors]` if any failed.
+     A plain function used in pipelines (`srcs |> map(f) |> collect`, B2); the
+     validation counterpart to `try`'s short-circuit monad. Was the
+     `collect-results` primitive behind the removed `collect { }` reader sugar. *)
+  register "collect" (fun args ->
     let rec force_list l =
       match force_val l with
       | VNil -> []
       | VPair (h, t) -> force_val h :: force_list t
-      | _ -> failwith "collect-results expects a list"
+      | _ -> failwith "collect expects a list"
     in
     match args with
     | [arg] ->
@@ -1115,11 +1130,11 @@ let () =
           | VPair (VKeyword "err", VPair (e, VNil)) :: rest ->
               partition rest oks (e :: errs)
           | other :: _ ->
-              failwith ("collect-results: each item must be [:ok, v] or [:err, e], got "
+              failwith ("collect: each item must be [:ok, v] or [:err, e], got "
                         ^ string_of_value other)
         in
         partition items [] []
-    | _ -> failwith "collect-results expects one argument");
+    | _ -> failwith "collect expects one argument");
   (* ---- M4 sealed cells ---- *)
 
   (* `(unseal v)` — the one sanctioned way out of VSealed to VString (the

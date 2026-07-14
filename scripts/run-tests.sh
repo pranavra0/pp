@@ -456,4 +456,34 @@ if PP="$PP" bash tests/072-law-pins.sh; then
 else
   echo "FAIL 072-law-pins"; fail=1
 fi
+echo "--- Phase B: surface removals ---"
+if PP="$PP" bash tests/076-phase-b-removals.sh; then
+  echo "ok   076-phase-b-removals"
+else
+  echo "FAIL 076-phase-b-removals"; fail=1
+fi
+echo "--- Phase B: map spread (B3) ---"
+if PP="$PP" bash tests/077-map-spread.sh; then
+  echo "ok   077-map-spread"
+else
+  echo "FAIL 077-map-spread"; fail=1
+fi
+echo "--- Phase B: \$config head (B5) ---"
+if PP="$PP" bash tests/078-config-head.sh; then
+  echo "ok   078-config-head"
+else
+  echo "FAIL 078-config-head"; fail=1
+fi
+echo "--- Phase B: with{} handlers map (B9) ---"
+if PP="$PP" bash tests/079-with-handlers.sh; then
+  echo "ok   079-with-handlers"
+else
+  echo "FAIL 079-with-handlers"; fail=1
+fi
+echo "--- Phase B: lints (B4/B11/B12) ---"
+if PP="$PP" bash tests/080-phase-b-lints.sh; then
+  echo "ok   080-phase-b-lints"
+else
+  echo "FAIL 080-phase-b-lints"; fail=1
+fi
 exit $fail

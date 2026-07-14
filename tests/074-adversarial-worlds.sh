@@ -28,9 +28,10 @@ bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
 # DESIGN.md — a dangling justification is a red build.
 design_edge() {  # head -> edge id, or empty
   case "$1" in
-    env)   echo "E10" ;;
-    probe) echo "E11" ;;
-    *)     echo "" ;;
+    env)    echo "E10" ;;
+    probe)  echo "E11" ;;
+    config) echo "E12" ;;
+    *)      echo "" ;;
   esac
 }
 

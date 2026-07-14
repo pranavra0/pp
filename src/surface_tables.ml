@@ -42,6 +42,10 @@ type tmpl =
        effect, not a plain call: $glob records a `tree:` cell via the
        [tree-observe] effect (the same lowering the `tree:` literal uses), which
        a bare application to a primitive symbol cannot express. *)
+  | Config of tmpl * tmpl option
+    (* (config KEY [DEFAULT]) — a scoped config read (records a `config:` cell).
+       $config lowers to the EConfig AST node, not a plain call (B5): the read
+       is a distinct special form, like [Perform]. *)
 
 type obs_head = {
   head : string;               (* the sigil name, without the leading '$' *)
@@ -74,6 +78,13 @@ let obs_heads : obs_head list = [
   { head = "secret"; min_args = 1; max_args = 1; qq_legal = true;
     doc = "$secret(path) — read a sealed (confidential) file";
     tmpl = (fun _ -> App [Prim "slurp"; Arg 0]) };
+  { head = "config"; min_args = 1; max_args = 2; qq_legal = true;
+    doc = "$config(key[, default]) — read a scoped config value (records a \
+           config: cell); the optional default is used when the key is unset";
+    tmpl = (fun n -> match n with
+      | 1 -> Config (Arg 0, None)
+      | 2 -> Config (Arg 0, Some (Arg 1))
+      | _ -> assert false (* arity guaranteed by min/max_args *)) };
 ]
 
 let find_head (name : string) : obs_head option =
@@ -103,20 +114,19 @@ let check_arity (h : obs_head) (n : int) : (unit, string) result =
    greppable in exactly one place. *)
 type with_wrapper = WCaps | WConfig | WHandlers
 
-(* [colon] records the current (pre-B9) surface: caps/config take a `KEY: expr`
-   clause; the handler clause is the two-token `handler NAME: fn` form and so is
-   recognized by keyword alone here. B9 regularizes handlers to a `handlers:`
-   map clause — at which point this row flips to colon=true and renames. *)
+(* Every clause is a `KEY: value` clause ([colon] = true for all three since
+   B9). `handlers:` takes a map literal `{ :name -> fn, ... }` — the reader
+   extracts its `:name -> fn` pairs into the handler install (the regularized
+   form replacing the old two-token `handler NAME: fn` key). *)
 type with_clause = { clause : string; wrapper : with_wrapper; colon : bool; wdoc : string }
 
 let with_clauses : with_clause list = [
-  { clause = "caps";    wrapper = WCaps;    colon = true;
+  { clause = "caps";     wrapper = WCaps;     colon = true;
     wdoc = "caps: C — run the body with capability set C" };
-  { clause = "config";  wrapper = WConfig;  colon = true;
+  { clause = "config";   wrapper = WConfig;   colon = true;
     wdoc = "config: M — run the body with ambient config map M" };
-  { clause = "handler"; wrapper = WHandlers; colon = false;
-    wdoc = "handler NAME: fn — install one effect handler (B9 will move to \
-            handlers: { :name -> fn, ... })" };
+  { clause = "handlers"; wrapper = WHandlers; colon = true;
+    wdoc = "handlers: { :name -> fn, ... } — install a map of effect handlers" };
 ]
 
 let find_with_clause (name : string) : with_clause option =
@@ -144,6 +154,25 @@ let grant_sugar : grant_sugar list = [
 let find_grant_sugar (name : string) : grant_sugar option =
   List.find_opt (fun g -> g.descriptor = name) grant_sugar
 
+(* ---- observation-exclusivity primitives (B4) ------------------------- *)
+
+(* The bare world-read primitives the `$` family wraps, each paired with the
+   `$` head that should be used instead. `pp lint`'s observation-exclusivity
+   check (B4) flags a bare use of one of these outside `stdlib/`, pointing at
+   its head. One list, next to [obs_heads], so the lint set can never drift
+   from the family. `tree-observe` is a perform effect (behind `$glob`); the
+   rest are plain primitives. Note the family's own tmpl helpers (e.g. `nil?`
+   in `$env`'s lowering) are NOT reads and are deliberately absent. *)
+let observation_primitives : (string * string) list =
+  [ "slurp",        "$file (or $secret for a sealed read)";
+    "env-get",      "$env";
+    "probe",        "$probe";
+    "config",       "$config";
+    "tree-observe", "$glob" ]
+
+let observation_primitive (name : string) : string option =
+  List.assoc_opt name observation_primitives
+
 (* ---- SPEC rendering (MASTER-PLAN A′2) --------------------------------- *)
 
 (* The tables above are the ONLY hand-authored copy of these closed sets. SPEC
@@ -165,6 +194,10 @@ let rec render_tmpl : tmpl -> string = function
         (render_tmpl c) (render_tmpl t) (render_tmpl e)
   | Perform (eff, ts) ->
       "(perform " ^ eff ^ " " ^ String.concat " " (List.map render_tmpl ts) ^ ")"
+  | Config (k, d) ->
+      (match d with
+       | Some d -> Printf.sprintf "(config %s %s)" (render_tmpl k) (render_tmpl d)
+       | None -> Printf.sprintf "(config %s)" (render_tmpl k))
 
 let render_arity (h : obs_head) : string =
   if h.min_args = h.max_args then string_of_int h.min_args
@@ -234,7 +267,7 @@ let surface_decision : Cell.t -> surface_story = function
   | Cell.Sealed _      -> Surfaced "secret"
   | Cell.Stat _        -> Whitelisted "file predicates read via file-exists?/dir? \
                                        (no sigil; a future $stat is undecided)"
-  | Cell.Config _      -> Whitelisted "config read via config(key); $config sugar lands in B5"
+  | Cell.Config _      -> Surfaced "config"
   | Cell.RuntimeFile _ -> RuntimeRecorded "loader read under interpreter authority (Q6)"
   | Cell.Tool _        -> RuntimeRecorded "the binary a run resolved to, recorded by run (D13)"
   | Cell.Argv          -> RuntimeRecorded "the program argument-list cell, read via argv"

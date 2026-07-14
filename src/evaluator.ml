@@ -949,8 +949,9 @@ and perform_builtin_effect (name : string) (args : value list) : value =
          (process.ml). *)
       Process.run_effect args
 
-  | "run-dep" ->
-      (* Q2 refinement: run + depfile → precise cells, no coarse tree cells. *)
+  | "run-dep!" ->
+      (* Q2 refinement: run + depfile → precise cells, no coarse tree cells.
+         B10: `!`-suffixed — the effect name carries the effect marker. *)
       Process.run_dep_effect args
 
   | "http-get" ->

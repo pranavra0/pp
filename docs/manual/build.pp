@@ -3,7 +3,7 @@
 #
 # Two dogfood claims, both falsifiable:
 # 1. The manual is a pp build graph. Typst is invoked as hermetic tool NODES
-# (the run-dep + blob idiom that builds Lua and the M6 greeter); typst's
+# (the run-dep! + blob idiom that builds Lua and the M6 greeter); typst's
 # --deps depfile refines each node's trace to the exact source files it
 # read, so an unchanged manual runs the typesetter ZERO times.
 # 2. Every code example is executed BY pp during the build, and its real
@@ -123,13 +123,13 @@ def run-one(manual-dir, pp-bin, spec) {
 # ---- typst as hermetic tool nodes -------------------------------------------
 def render-pdf(src) {
   node {
-    perform run-dep("pdf.d", "typst", "compile", "--deps", "pdf.d", "--deps-format", "make", src, "pp-manual.pdf")
+    perform run-dep!("pdf.d", "typst", "compile", "--deps", "pdf.d", "--deps-format", "make", src, "pp-manual.pdf")
     blob(slurp("pp-manual.pdf"))
   }
 }
 def render-html(src) {
   node {
-    perform run-dep("html.d", "typst", "compile", "--features", "html", "--format", "html", "--deps", "html.d", "--deps-format", "make", src, "index.html")
+    perform run-dep!("html.d", "typst", "compile", "--features", "html", "--format", "html", "--deps", "html.d", "--deps-format", "make", src, "index.html")
     blob(slurp("index.html"))
   }
 }

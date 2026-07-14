@@ -18,14 +18,14 @@ without re-running a single tool.
 
 Running a tool is a side effect, so it goes through `perform`, and it needs
 authority — the `process` capability from the chapter on capabilities. The plain
-form is `run`; the one you build with is `run-dep`:
+form is `run`; the one you build with is `run-dep!`:
 
 ```
-perform run-dep("greet.d", "cc", "-MD", "-MF", "greet.d", "-O0", "-c",
+perform run-dep!("greet.d", "cc", "-MD", "-MF", "greet.d", "-O0", "-c",
   "/abs/src/greet.c", "-o", "greet.o")
 ```
 
-`run-dep` runs the command exactly like `run` — the first extra argument names a
+`run-dep!` runs the command exactly like `run` — the first extra argument names a
 Makefile-style depfile the tool is told to write (`cc -MD -MF greet.d`). The
 command runs in the node's own sandbox directory, so relative outputs like
 `greet.o` land in scratch that no other node can see. That output is not yet a
@@ -46,7 +46,7 @@ once and shared by every later run.
 A node records which cells it read, and re-runs only when one of them changes.
 The question is what a `cc` invocation reads. The conservative answer — the
 whole source tree — would recompile everything on any edit. That is what
-`run-dep` avoids. After the command exits, pp parses the depfile the tool wrote.
+`run-dep!` avoids. After the command exits, pp parses the depfile the tool wrote.
 It refines the node's trace to exactly the files the compiler actually
 opened. `greet.c` includes `greet.h`, so `greet.o`'s node depends on those two
 files and nothing else. `main.c` includes the same header, so it depends on
@@ -56,7 +56,7 @@ That refinement is the whole basis of incrementality below: editing `greet.c`
 touches `greet.o`'s trace but not `main.o`'s, so only `greet.o` is rebuilt. A
 tool that writes no depfile falls back to the coarse whole-tree dependency —
 sound, just less precise. The trust is explicit and per-call: you chose
-`run-dep`.
+`run-dep!`.
 
 == Blobs and materialization
 

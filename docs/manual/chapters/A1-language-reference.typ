@@ -342,8 +342,11 @@ binding succeeded).
 
 == Collecting results
 
-`collect { e1; e2; e3 }` evaluates each expression and collects the results
-into a list for batch processing.
+`collect` is a plain function used in pipelines: it partitions a list of
+`[:ok, v]` / `[:err, e]` results, returning `[:ok, values]` if every element
+succeeded or `[:err, errors]` if any failed. It is the validation counterpart
+to `try` — where `try` short-circuits at the first error, `collect` runs
+everything and accumulates. There is no `collect { }` block form.
 
 #table(
   columns: (auto, 1fr),
@@ -351,7 +354,7 @@ into a list for batch processing.
   align: (left, left),
   stroke: (x: none, y: 0.5pt + luma(220)),
   table.header([*Form*], [*Meaning*]),
-  [`collect { e1; e2 }`], [`(list e1 e2)` — collect results into a list],
+  [`srcs |> map(f) |> collect`], [`[:ok, [v…]]` if all ok, else `[:err, [e…]]`],
 )
 
 #example("ref-collect")

@@ -99,7 +99,7 @@ table.
   command under `--grant process`, returning `{"exit","out","err"}`. Inside a
   node: cwd = the node's sandbox, and the trace records `tool:` + `tree:`
   cells (`tests/017`).
-- **`run-dep` / depfile adapter** — `perform run-dep(DEPFILE, CMD, ARG…)`:
+- **`run-dep!` / depfile adapter** — `perform run-dep!(DEPFILE, CMD, ARG…)`:
   like `run`, but the tool's Makefile-style depfile refines the trace to the
   exact files read — granted deps as `file:` cells, system deps as `tool:`
   cells, no coarse `tree:` cells (`tests/022`).
