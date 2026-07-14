@@ -16,12 +16,11 @@ def link-objects(objects, target) {
 
 # The build is just an expression
 def build-project(src-dir, build-dir) {
-  let (obj1 = delay(compile-file("main.c", "main.o"))) {
-    let (obj2 = delay(compile-file("utils.c", "utils.o"))) {
-      let (binary = delay(link-objects(list(force(obj1), force(obj2)), "myapp"))) {
-        force(binary)
-      }
-    }
-  } }
+  let (obj1 = delay(compile-file("main.c", "main.o")),
+       obj2 = delay(compile-file("utils.c", "utils.o")),
+       binary = delay(link-objects(list(force(obj1), force(obj2)), "myapp"))) {
+    force(binary)
+  }
+}
 # Run the build
 build-project("./src", "./build")
