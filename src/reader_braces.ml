@@ -271,6 +271,31 @@ type ctx = { nl : bool; cond : bool }
 
 let free_ctx = { nl = true; cond = false }
 
+(* A′5: one precedence-climbing spine, two contexts. The normal reader and the
+   `quasiquote{}` reader parse the SAME 7-level operator grammar (pipe/or/and/
+   cmp/add/mul, then call/index postfix); they differ only in (i) what each
+   binary/short-circuit/postfix combination *builds* — normal makes AST nodes,
+   qq makes quoted list-building data — and (ii) newline significance (normal
+   threads its caller's `c.nl`; qq peeks infix transparently but its postfix
+   must NOT swallow a next-line `(`/`[`, the A3 fix). Both are captured as
+   fields here, so `climb_*` below exists once and a form added to the spine
+   exists in both contexts by construction — A3's CI head-coverage rule becomes
+   a backstop rather than the mechanism. *)
+type spine = {
+  s_infix_nl   : bool;                          (* nl for infix-operator peeks *)
+  s_postfix_nl : bool;                          (* nl for the `(`/`[` postfix peek *)
+  s_leaf       : ps -> expr;                    (* primary parser (below postfix) *)
+  s_bin        : string -> expr -> expr -> expr;(* cmp/add/mul combiner *)
+  s_or         : expr -> expr -> expr;          (* short-circuit `or` *)
+  s_and        : expr -> expr -> expr;          (* short-circuit `and` *)
+  s_pipe       : (ps -> expr -> expr -> expr) option;  (* None ⇒ `|>` illegal here *)
+  s_argv       : ps -> expr list;               (* `(a, …)` argument list *)
+  s_index      : ps -> expr;                    (* the `[…]` index expression *)
+  s_int_index  : expr -> bool;                  (* is the index a literal int? (vector-get) *)
+  s_call       : expr -> expr list -> expr;     (* build `E(args…)` *)
+  s_get        : string -> expr -> expr -> expr;(* build `E[idx]` via [accessor] *)
+}
+
 let err_block ps msg = parse_error ps msg
 
 (* The reserved words that are grammar, not bindable names (§B.1). Kept for
@@ -349,77 +374,98 @@ type hname = HName of string | HKeyword of string
 
 
 let rec parse_expr ps (c : ctx) : expr =
-  parse_pipe ps c
+  climb_pipe (normal_spine c) ps
+
+(* The normal reader's spine ops. Infix and postfix peeks both use the caller's
+   `c.nl` (statement/body positions pass nl=false, so a trailing newline ends
+   the expression); combinations build AST nodes; `|>` is a reader-level rewrite
+   (identifier ⇒ 1-arg call; call form ⇒ prepend). *)
+and normal_spine (c : ctx) : spine = {
+  s_infix_nl   = c.nl;
+  s_postfix_nl = c.nl;
+  s_leaf       = (fun ps -> parse_primary ps c);
+  s_bin        = (fun op l r -> EApply (ESymbol op, [l; r]));
+  s_or         = (fun l r -> EIf (l, ELiteral (VBool true), r));
+  s_and        = (fun l r -> EIf (l, r, ELiteral (VBool false)));
+  s_pipe       = Some (fun ps left rhs ->
+    match rhs with
+    | ESymbol _ -> EApply (rhs, [left])
+    | EApply (f, args) -> EApply (f, left :: args)
+    | _ -> parse_error ps
+             "the right-hand side of |> must be an identifier or a call form");
+  s_argv       = (fun ps -> parse_arglist ps ~elem:(fun ps -> parse_expr ps free_ctx));
+  s_index      = (fun ps -> parse_expr ps free_ctx);
+  s_int_index  = (function ELiteral (VInt _) -> true | _ -> false);
+  s_call       = (fun e args -> EApply (e, args));
+  s_get        = (fun acc l r -> EApply (ESymbol acc, [l; r]));
+}
 
 (* level 7: |> — loosest; left-associative; pure reader-level rewriting *)
-and parse_pipe ps c =
-  let left = ref (parse_or_level ps c) in
+and climb_pipe sp ps =
+  let left = ref (climb_or sp ps) in
   let rec loop () =
-    match peek_infix ps ~nl:c.nl ["|>"] with
+    match peek_infix ps ~nl:sp.s_infix_nl ["|>"] with
     | Some _ ->
-        advance ps;
-        skip_nl ps;
-        let rhs = parse_or_level ps { c with nl = c.nl } in
-        (match rhs with
-         | ESymbol _ -> left := EApply (rhs, [!left])
-         | EApply (f, args) -> left := EApply (f, !left :: args)
-         | _ ->
-             parse_error ps
-               "the right-hand side of |> must be an identifier or a call form");
-        loop ()
+        (match sp.s_pipe with
+         | None -> parse_error ps "|> is not representable inside quasiquote { ... }"
+         | Some mk ->
+             advance ps;
+             skip_nl ps;
+             let rhs = climb_or sp ps in
+             left := mk ps !left rhs;
+             loop ())
     | None -> ()
   in
   loop ();
   !left
 
 (* level 6: or — right-associative (reproduces the variadic desugar) *)
-and parse_or_level ps c =
-  let left = parse_and_level ps c in
-  match peek_infix ps ~nl:c.nl ["or"] with
+and climb_or sp ps =
+  let left = climb_and sp ps in
+  match peek_infix ps ~nl:sp.s_infix_nl ["or"] with
   | Some _ ->
-      advance ps;
-      skip_nl ps;
-      let right = parse_or_level ps c in
-      EIf (left, ELiteral (VBool true), right)
+      advance ps; skip_nl ps;
+      let right = climb_or sp ps in
+      sp.s_or left right
   | None -> left
 
 (* level 5: and — right-associative *)
-and parse_and_level ps c =
-  let left = parse_cmp ps c in
-  match peek_infix ps ~nl:c.nl ["and"] with
+and climb_and sp ps =
+  let left = climb_cmp sp ps in
+  match peek_infix ps ~nl:sp.s_infix_nl ["and"] with
   | Some _ ->
-      advance ps;
-      skip_nl ps;
-      let right = parse_and_level ps c in
-      EIf (left, right, ELiteral (VBool false))
+      advance ps; skip_nl ps;
+      let right = climb_and sp ps in
+      sp.s_and left right
   | None -> left
 
-(* level 4: comparisons — non-associative; chaining is a parse error *)
-and parse_cmp ps c =
-  let left = parse_add ps c in
-  match peek_infix ps ~nl:c.nl infix_cmp with
+(* level 4: comparisons — non-associative; chaining is a parse error. (Folding
+   the two spines closed a drift: the qq copy lacked this check, so a chained
+   `a < b < c` inside quasiquote{} died with a confusing downstream "expected
+   ',' or ')'" instead of this message. Both now reject it the same way.) *)
+and climb_cmp sp ps =
+  let left = climb_add sp ps in
+  match peek_infix ps ~nl:sp.s_infix_nl infix_cmp with
   | Some op ->
-      advance ps;
-      skip_nl ps;
-      let right = parse_add ps c in
-      (match peek_infix ps ~nl:c.nl infix_cmp with
+      advance ps; skip_nl ps;
+      let right = climb_add sp ps in
+      (match peek_infix ps ~nl:sp.s_infix_nl infix_cmp with
        | Some _ ->
            parse_error ps
              "comparison operators do not chain (use the call form, e.g. <(a, b, c))"
        | None -> ());
-      EApply (ESymbol op, [left; right])
+      sp.s_bin op left right
   | None -> left
 
 (* level 3: + - — left-associative, strictly binary *)
-and parse_add ps c =
-  let left = ref (parse_mul ps c) in
+and climb_add sp ps =
+  let left = ref (climb_mul sp ps) in
   let rec loop () =
-    match peek_infix ps ~nl:c.nl infix_add with
+    match peek_infix ps ~nl:sp.s_infix_nl infix_add with
     | Some op ->
-        advance ps;
-        skip_nl ps;
-        let right = parse_mul ps c in
-        left := EApply (ESymbol op, [!left; right]);
+        advance ps; skip_nl ps;
+        let right = climb_mul sp ps in
+        left := sp.s_bin op !left right;
         loop ()
     | None -> ()
   in
@@ -427,56 +473,57 @@ and parse_add ps c =
   !left
 
 (* level 2: * / mod *)
-and parse_mul ps c =
-  let left = ref (parse_postfix ps c) in
+and climb_mul sp ps =
+  let left = ref (climb_postfix sp ps) in
   let rec loop () =
-    match peek_infix ps ~nl:c.nl infix_mul with
+    match peek_infix ps ~nl:sp.s_infix_nl infix_mul with
     | Some op ->
-        advance ps;
-        skip_nl ps;
-        let right = parse_postfix ps c in
-        left := EApply (ESymbol op, [!left; right]);
+        advance ps; skip_nl ps;
+        let right = climb_postfix sp ps in
+        left := sp.s_bin op !left right;
         loop ()
     | None -> ()
   in
   loop ();
   !left
 
-(* level 1: call postfix E(a, ...) and index postfix E[k] — left-associative *)
-and parse_postfix ps c =
-  let e = ref (parse_primary ps c) in
+(* level 1: call postfix E(a, ...) and index postfix E[k] — left-associative.
+   The index accessor is chosen by [s_int_index]: a syntactically literal int
+   index is `vector-get`, anything else `hash-map-get` (L10). *)
+and climb_postfix sp ps =
+  let e = ref (sp.s_leaf ps) in
   let rec loop () =
-    match (peek ps ~nl:c.nl).t with
+    match (peek ps ~nl:sp.s_postfix_nl).t with
     | TLParen ->
         advance ps;
-        let args = parse_args ps in
-        e := EApply (!e, args);
+        let args = sp.s_argv ps in
+        e := sp.s_call !e args;
         loop ()
     | TLBracket ->
-        (* L10: expr[index] — map or vector access *)
         advance ps;
         skip_nl ps;
-        let idx = parse_expr ps free_ctx in
+        let idx = sp.s_index ps in
         expect ps ~nl:true TRBracket "']'";
-        let accessor =
-          match idx with
-          | ELiteral (VInt _) -> "vector-get"
-          | _ -> "hash-map-get"
-        in
-        e := EApply (ESymbol accessor, [!e; idx]);
+        let accessor = if sp.s_int_index idx then "vector-get" else "hash-map-get" in
+        e := sp.s_get accessor !e idx;
         loop ()
     | _ -> ()
   in
   loop ();
   !e
 
-(* comma-separated expressions up to ')' (consumed) *)
-and parse_args ps : expr list =
+(* Thin wrapper kept for the few external callers (parameter/return-type
+   annotations) that parse at exactly the postfix level. *)
+and parse_postfix ps c = climb_postfix (normal_spine c) ps
+
+(* comma-separated expressions up to ')' (consumed); [elem] parses one element
+   (a normal expression or a qq datum), shared by both readers' argument lists. *)
+and parse_arglist ps ~(elem : ps -> expr) : expr list =
   skip_nl ps;
   if (cur ps).t = TRParen then (advance ps; [])
   else begin
     let rec loop acc =
-      let e = parse_expr ps free_ctx in
+      let e = elem ps in
       match (peek ps ~nl:true).t with
       | TComma -> advance ps; skip_nl ps; loop (e :: acc)
       | TRParen -> advance ps; List.rev (e :: acc)
@@ -484,6 +531,8 @@ and parse_args ps : expr list =
     in
     loop []
   end
+
+and parse_args ps : expr list = parse_arglist ps ~elem:(fun ps -> parse_expr ps free_ctx)
 
 (* Shared `with-handler(name = value, …)` pair parser (A′5). The pair syntax —
    a symbol/keyword name, `=`, a value, comma-separated, up to `)` — is
@@ -1624,120 +1673,35 @@ and interp_head_qq (args : expr list) (t : Surface_tables.tmpl) : expr =
                 interp_head_qq args th; interp_head_qq args el]
 
 and parse_qq ps : expr =
-  parse_qq_pipe ps
+  climb_pipe (qq_spine ()) ps
 
-and parse_qq_pipe ps =
-  let left = parse_qq_or ps in
-  match peek_infix ps ~nl:true ["|>"] with
-  | Some _ -> parse_error ps "|> is not representable inside quasiquote { ... }"
-  | None -> left
+(* The quasiquote reader's spine ops (see [spine] / [climb_*]). Combinations
+   build quoted list-building data (`qq_chain`/`qq_sym`) instead of AST nodes;
+   `|>` is illegal (not representable as data); infix peeks are transparent to
+   newlines (nl=true) but the postfix peek is NOT (nl=false, the A3 fix): a
+   bare `(`/`[` opening the NEXT line must never be swallowed as this primary's
+   postfix call/index — a qq match-arm body or try-statement rhs sits in
+   exactly such a position (`v + 1` on one line, `[:err, e] => 0` on the next
+   must parse as two things). The int-index test matches `EQuote (ELiteral
+   (VInt _))` — the only qq shape a literal int index parses to — so the
+   vector-get/hash-map-get choice is the same decision the normal reader makes
+   on its unwrapped index. *)
+and qq_spine () : spine = {
+  s_infix_nl   = true;
+  s_postfix_nl = false;
+  s_leaf       = parse_qq_primary;
+  s_bin        = (fun op l r -> qq_chain [qq_sym op; l; r]);
+  s_or         = (fun l r -> qq_chain [qq_sym "or"; l; r]);
+  s_and        = (fun l r -> qq_chain [qq_sym "and"; l; r]);
+  s_pipe       = None;
+  s_argv       = (fun ps -> parse_arglist ps ~elem:parse_qq);
+  s_index      = parse_qq;
+  s_int_index  = (function EQuote (ELiteral (VInt _)) -> true | _ -> false);
+  s_call       = (fun e args -> qq_chain (e :: args));
+  s_get        = (fun acc l r -> qq_chain [qq_sym acc; l; r]);
+}
 
-and parse_qq_or ps =
-  let left = parse_qq_and ps in
-  match peek_infix ps ~nl:true ["or"] with
-  | Some _ ->
-      advance ps; skip_nl ps;
-      let right = parse_qq_or ps in
-      qq_chain [qq_sym "or"; left; right]
-  | None -> left
-
-and parse_qq_and ps =
-  let left = parse_qq_cmp ps in
-  match peek_infix ps ~nl:true ["and"] with
-  | Some _ ->
-      advance ps; skip_nl ps;
-      let right = parse_qq_and ps in
-      qq_chain [qq_sym "and"; left; right]
-  | None -> left
-
-and parse_qq_cmp ps =
-  let left = parse_qq_add ps in
-  match peek_infix ps ~nl:true infix_cmp with
-  | Some op ->
-      advance ps; skip_nl ps;
-      let right = parse_qq_add ps in
-      qq_chain [qq_sym op; left; right]
-  | None -> left
-
-and parse_qq_add ps =
-  let left = ref (parse_qq_mul ps) in
-  let rec loop () =
-    match peek_infix ps ~nl:true infix_add with
-    | Some op ->
-        advance ps; skip_nl ps;
-        let right = parse_qq_mul ps in
-        left := qq_chain [qq_sym op; !left; right];
-        loop ()
-    | None -> ()
-  in
-  loop (); !left
-
-and parse_qq_mul ps =
-  let left = ref (parse_qq_postfix ps) in
-  let rec loop () =
-    match peek_infix ps ~nl:true infix_mul with
-    | Some op ->
-        advance ps; skip_nl ps;
-        let right = parse_qq_postfix ps in
-        left := qq_chain [qq_sym op; !left; right];
-        loop ()
-    | None -> ()
-  in
-  loop (); !left
-
-and parse_qq_postfix ps =
-  let e = ref (parse_qq_primary ps) in
-  let rec loop () =
-    (* nl:false (A3 fix), not nl:true: a bare `(`/`[` that starts the NEXT
-       line must never be swallowed as THIS primary's postfix call/index —
-       exactly the hazard the normal grammar's parse_postfix avoids by
-       threading its caller's `c.nl` (statement/body positions pass
-       nl=false) instead of hardcoding transparency. A qq match arm's body
-       (`pat => body`) or a qq try statement's rhs sits in exactly such a
-       position: `v + 1` on one line followed by `[:err, e] => 0` on the
-       next must parse as two separate things, not `(v + 1)[...]`. *)
-    match (peek ps ~nl:false).t with
-    | TLParen ->
-        advance ps;
-        let args = parse_qq_args ps in
-        e := qq_chain (!e :: args);
-        loop ()
-    | TLBracket ->
-        (* A3: m[k] index — mirror parse_postfix's TLBracket arm (:431-445)
-           exactly, including its accessor choice: a SYNTACTICALLY literal
-           int index lowers to vector-get, anything else to hash-map-get.
-           In qq, a literal int index parses (via parse_qq_primary's TInt
-           case) to exactly `EQuote (ELiteral (VInt _))` — no other qq
-           shape produces that, so checking for it here is the same
-           decision the normal reader makes on the unwrapped `idx`. *)
-        advance ps;
-        skip_nl ps;
-        let idx = parse_qq ps in
-        expect ps ~nl:true TRBracket "']'";
-        let accessor =
-          match idx with
-          | EQuote (ELiteral (VInt _)) -> "vector-get"
-          | _ -> "hash-map-get"
-        in
-        e := qq_chain [qq_sym accessor; !e; idx];
-        loop ()
-    | _ -> ()
-  in
-  loop (); !e
-
-and parse_qq_args ps : expr list =
-  skip_nl ps;
-  if (cur ps).t = TRParen then (advance ps; [])
-  else begin
-    let rec loop acc =
-      let e = parse_qq ps in
-      match (peek ps ~nl:true).t with
-      | TComma -> advance ps; skip_nl ps; loop (e :: acc)
-      | TRParen -> advance ps; List.rev (e :: acc)
-      | t -> parse_error ps ("expected ',' or ')', got " ^ string_of_btok t)
-    in
-    loop []
-  end
+and parse_qq_args ps : expr list = parse_arglist ps ~elem:parse_qq
 
 (* a block in quasiquote data position: 1 stmt -> itself; else (do ...) *)
 and parse_qq_block_one ps : expr =
