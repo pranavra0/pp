@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# pins: LAW-21
 # LAW 21 / Phase-1 exit criteria 2 & 5 — cutoff at node granularity.
 #
 #   Criterion 2: touching an input (mtime change, no content change) rebuilds

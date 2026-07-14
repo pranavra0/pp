@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# pins: LAW-26 LAW-33 LAW-20
 # LAW 33 / LAW 26: config and the handler stack are OBSERVATIONS, not identity.
 #
 # The node key must cover code + free-var value hashes ONLY (LAW 20). Config

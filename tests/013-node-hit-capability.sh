@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# pins: LAW-23
 # Regression: a cache hit is gated on the caller's authority over the trace's
 # transitive read closure (LAW 23b) — the PUB = f(SECRET) laundering defense.
 #

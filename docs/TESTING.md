@@ -90,7 +90,7 @@ two shell suites:
     two nodes is invisible — both observe the pinned snapshot, whose bytes
     land in `blobs/<sha256>`; the snapshot holds at every tier; pp's own
     `write-file` advances it; VM included.
-  - **022** — Q2 depfile adapter: with `run-dep`, an unrelated change under
+  - **022** — Q2 depfile adapter: with `run-dep!`, an unrelated change under
     a granted root stays a HIT (no coarse tree cell) while a dep the tool
     actually read — granted or system — re-runs on change; a missing
     depfile falls back to the coarse floor; VM included.

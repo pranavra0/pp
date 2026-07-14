@@ -27,6 +27,15 @@ type env = {
   bindings : (string * value) list;
 }
 
+
+(* ---- Patterns for match expressions ---- *)
+and pattern =
+  | PLiteral of value       (* 42, "hello", true, nil *)
+  | PVariable of string     (* x — matches anything, binds *)
+  | PWildcard               (* _ — matches anything, no bind *)
+  | PList of pattern list * pattern option  (* [a, b, ...rest] *)
+  | PTagged of string * pattern list  (* [:ok, v] or [:err, e] *)
+
 (* ---- Expressions — the AST produced by the reader ---- *)
 
 and expr =
@@ -61,6 +70,12 @@ and expr =
   | EConfig of expr * expr option  (* (config key [default]) — read config *)
   | ETyped of expr * expr          (* (the-expr : type) — type annotation *)
   | ELocated of (string * int) * expr  (* source-located expression *)
+  | EMatch of expr * (pattern * expr option * expr) list
+      (* match expr { pat [if guard] => body; ... }; the middle field is an
+         optional guard (C3) — Some cond means the arm fires only when cond is
+         truthy under the pattern's bindings, else control falls to the next
+         arm. A None guard hashes/quotes exactly as the pre-C3 2-tuple arm did,
+         so guardless matches keep their LAW-20 keys. *)
 
 (* ---- Values — the runtime representation ---- *)
 
@@ -283,8 +298,25 @@ let hex_encode (s : string) : string =
 let hash_string (s : string) : string =
   hex_encode (Cryptokit.hash_string (Cryptokit.Hash.sha256 ()) s)
 
+(* Injective framing (A″1). Each part is emitted as its byte length in decimal,
+   a ':', then the part's bytes — so the pre-hash string can be parsed back to
+   the exact part list (read digits to ':', then read that many bytes, repeat).
+   Distinct part LISTS therefore map to distinct pre-hash strings even when a
+   part itself contains ':' (user paths, symbol names, tags) or is empty. The
+   old `String.concat ":"` was ambiguous the instant any part held a ':' — the
+   LAW-20 collision class where two distinct ASTs share one content key and pp
+   serves a wrong cached result. Every hash builder below funnels through here
+   (and through no other join), so injectivity is a single-site property that
+   A″2's generated-AST property test guards forever. Changing this framing is
+   hash-affecting across the whole store — see the golden fixture regeneration
+   receipt (tests/fixtures/store-v1). *)
 let hash_concat (parts : string list) : string =
-  hash_string (String.concat ":" parts)
+  let buf = Buffer.create 64 in
+  List.iter (fun p ->
+    Buffer.add_string buf (string_of_int (String.length p));
+    Buffer.add_char buf ':';
+    Buffer.add_string buf p) parts;
+  hash_string (Buffer.contents buf)
 
 (* THE canonical float spelling — bit-exact via %h (so two doubles that differ
    anywhere in their bits hash and encode differently; string_of_float's ~12
@@ -362,7 +394,14 @@ let rec hash_expr (e : expr) : string =
   | ELoadModule path ->
       hash_concat ["load_module"; path]
   | EIsland (uri, pin) ->
-      hash_concat ["island"; uri; (match pin with Some p -> p | None -> "")]
+      (* Frame the pin option so an unpinned island (None) can never share a
+         key with one pinned to the empty string (Some ""): the raw-string
+         join `Some p -> p | None -> ""` conflated them, an A″1-class LAW-20
+         collision (island "u" "" and island "u" quote to distinct values —
+         VString "" vs VNil — yet hashed identically). Caught by A″2's
+         injectivity property; pinned in tests/071. *)
+      let pin_part = match pin with Some p -> hash_concat ["pin"; p] | None -> "nopin" in
+      hash_concat ["island"; uri; pin_part]
   | EWithConfig (map_expr, body) ->
       hash_concat ["with_config"; hash_expr map_expr; hash_expr body]
   | EConfig (key_expr, default) ->
@@ -371,6 +410,30 @@ let rec hash_expr (e : expr) : string =
       hash_concat ["typed"; hash_expr e; hash_expr ty]
   | ELocated ((file, line), e) ->
       hash_concat ["located"; file; string_of_int line; hash_expr e]
+  | EMatch (scrutinee, arms) ->
+      let arm_hashes = List.map (fun (p, guard, body) ->
+        match guard with
+        | None -> hash_concat ["arm"; hash_pattern p; hash_expr body]
+        | Some g -> hash_concat ["arm-guard"; hash_pattern p; hash_expr g; hash_expr body]
+      ) arms in
+      hash_concat ("match" :: hash_expr scrutinee :: arm_hashes)
+
+and hash_pattern (p : pattern) : string =
+  match p with
+  | PLiteral v -> hash_concat ["p_lit"; hash_value v]
+  | PVariable s -> hash_concat ["p_var"; s]
+  | PWildcard -> "p_wild"
+  | PList (pats, rest) ->
+      (* Frame the sub-pattern list through hash_concat rather than a
+         delimiter-free `String.concat ""`: the latter was injective only by
+         the accident that every sub-hash is exactly 64 chars, so [ab] and [a;b]
+         could alias the moment that invariant slipped (A″1). *)
+      let ph = hash_concat (List.map hash_pattern pats) in
+      let rh = match rest with Some r -> hash_pattern r | None -> "nil" in
+      hash_concat ["p_list"; ph; rh]
+  | PTagged (tag, pats) ->
+      let ph = hash_concat (List.map hash_pattern pats) in
+      hash_concat ["p_tagged"; tag; ph]
 
 and hash_value (v : value) : string =
   (* Frames already being hashed (physical identity): a closure captured in a
@@ -634,6 +697,24 @@ let free_vars (e : expr) : SS.t =
         SS.union (fv bound k) (match d with Some e -> fv bound e | None -> SS.empty)
     | ETyped (e, _) -> fv bound e
     | ELocated (_, e) -> fv bound e
+    | EMatch (scrutinee, arms) ->
+        let rec pat_vars p = match p with
+          | PVariable s -> SS.singleton s
+          | PList (pats, rest) ->
+              let pv = List.fold_left (fun a p -> SS.union a (pat_vars p)) SS.empty pats in
+              (match rest with Some r -> SS.union pv (pat_vars r) | None -> pv)
+          | PTagged (_, pats) ->
+              List.fold_left (fun a p -> SS.union a (pat_vars p)) SS.empty pats
+          | PLiteral _ | PWildcard -> SS.empty
+        in
+        let arm_bound = List.fold_left (fun a (p, _, _) ->
+          SS.union a (pat_vars p)) SS.empty arms in
+        let bound' = SS.union arm_bound bound in
+        let scrut_fv = fv bound scrutinee in
+        let arms_fv = List.fold_left (fun a (_, guard, body) ->
+          let gfv = match guard with Some g -> fv bound' g | None -> SS.empty in
+          SS.union a (SS.union gfv (fv bound' body))) SS.empty arms in
+        SS.union scrut_fv arms_fv
   in
   fv SS.empty e
 
@@ -645,7 +726,7 @@ let free_vars (e : expr) : SS.t =
 (* Incremental hash: hash("env", parent_hash, binding_name, hash_of_value).
    O(1) in the size of the env chain. *)
 let env_extend_hash (parent_hash : string) (name : string) (v_hash : string) : string =
-  hash_string (String.concat ":" ["env"; parent_hash; name; v_hash])
+  hash_concat ["env"; parent_hash; name; v_hash]
 
 (* Extend an environment with one binding.
    Creates a new env node with a fresh ID and an incrementally-computed hash. *)
@@ -660,9 +741,9 @@ let extend_env (env : env) (name : string) (v : value) : env =
 let hash_bindings_flat (bindings : (string * value) list) : string =
   let sorted = List.sort (fun (a,_) (b,_) -> String.compare a b) bindings in
   let parts = List.map (fun (name, v) ->
-    String.concat ":" ["env_binding"; name; hash_value v]
+    hash_concat ["env_binding"; name; hash_value v]
   ) sorted in
-  hash_string (String.concat ":" ("env_flat" :: parts))
+  hash_concat ("env_flat" :: parts)
 
 (* Build an environment from a flat list of bindings (for initial env).
    Assigns a fresh ID and computes a deterministic hash. *)
@@ -804,6 +885,37 @@ let rec quote_to_value (e : expr) : value =
         VPair (quote_to_value e, VPair (quote_to_value ty, VNil)))
   | ELocated (_, e) ->
       quote_to_value e
+  | EMatch (scrutinee, arms) ->
+      let q_arms = List.fold_right (fun (p, guard, body) acc ->
+        let q_pat = quote_pattern p in
+        (* Guardless arm quotes to the pre-C3 2-list (pat body); a guarded arm
+           to a 3-list (pat guard body). value_to_expr splits on length. *)
+        let q_arm = match guard with
+          | None -> VPair (q_pat, VPair (quote_to_value body, VNil))
+          | Some g ->
+              VPair (q_pat, VPair (quote_to_value g, VPair (quote_to_value body, VNil)))
+        in
+        VPair (q_arm, acc)
+      ) arms VNil in
+      VPair (VSymbol "match",
+        VPair (quote_to_value scrutinee, VPair (q_arms, VNil)))
+
+and quote_pattern (p : pattern) : value =
+  match p with
+  | PLiteral v -> VPair (VSymbol "lit", VPair (v, VNil))
+  | PVariable s -> VPair (VSymbol "var", VPair (VString s, VNil))
+  | PWildcard -> VSymbol "_"
+  | PList (pats, rest) ->
+      let q_pats = List.map quote_pattern pats in
+      let q_rest = match rest with Some r -> quote_pattern r | None -> VNil in
+      VPair (VSymbol "list",
+        VPair (List.fold_right (fun p acc -> VPair (p, acc)) q_pats VNil,
+               VPair (q_rest, VNil)))
+  | PTagged (tag, pats) ->
+      let q_pats = List.map quote_pattern pats in
+      VPair (VSymbol "tagged",
+        VPair (VString tag,
+               List.fold_right (fun p acc -> VPair (p, acc)) q_pats VNil))
 
 (* =================================================================== *)
 (*  Pretty-print a value for the REPL                                   *)
@@ -1054,5 +1166,88 @@ and expr_of_list (items : value list) : expr =
   | [VSymbol "config"; k; d] -> EConfig (value_to_expr k, Some (value_to_expr d))
   | [VSymbol ":"; e; ty] -> ETyped (value_to_expr e, value_to_expr ty)
   | (VSymbol "do") :: rest -> EDo (List.map value_to_expr rest)
+  (* match, mirroring quote_to_value's EMatch encoding one-for-one (A3):
+     `(match scrutinee ((pat1 body1) (pat2 body2) ...))` — each arm a
+     2-element sublist, decoded by value_to_pattern (quote_pattern's
+     inverse). Needed so a quasiquote { match ... } template — A3's whole
+     point — actually reconstructs an EMatch after macro expansion, not a
+     bare `(match ...)` application (the generic fallback below). *)
+  | [VSymbol "match"; scrutinee; arms] ->
+      (match value_list_opt arms with
+       | Some arm_items ->
+           let arms' = List.map (fun item ->
+             match value_list_opt item with
+             | Some [pat_v; body_v] ->
+                 (value_to_pattern pat_v, None, value_to_expr body_v)
+             | Some [pat_v; guard_v; body_v] ->
+                 (value_to_pattern pat_v, Some (value_to_expr guard_v), value_to_expr body_v)
+             | _ -> failwith "value_to_expr: malformed match arm")
+             arm_items
+           in
+           EMatch (value_to_expr scrutinee, arms')
+       | None -> failwith "value_to_expr: malformed match arms list")
   | fn :: args -> EApply (value_to_expr fn, List.map value_to_expr args)
   | [] -> ELiteral VNil (* unreachable: [items] always comes from a VPair *)
+
+(* The inverse of quote_pattern: value -> pattern, one shape per case. *)
+and value_to_pattern (v : value) : pattern =
+  match v with
+  | VSymbol "_" -> PWildcard
+  | VPair (VSymbol "lit", VPair (lit, VNil)) -> PLiteral lit
+  | VPair (VSymbol "var", VPair (VString s, VNil)) -> PVariable s
+  | VPair (VSymbol "list", VPair (pats_v, VPair (rest_v, VNil))) ->
+      let pats = match value_list_opt pats_v with
+        | Some items -> List.map value_to_pattern items
+        | None -> failwith "value_to_expr: malformed list pattern"
+      in
+      let rest = match rest_v with VNil -> None | r -> Some (value_to_pattern r) in
+      PList (pats, rest)
+  | VPair (VSymbol "tagged", VPair (VString tag, pats_v)) ->
+      (match value_list_opt pats_v with
+       | Some items -> PTagged (tag, List.map value_to_pattern items)
+       | None -> failwith "value_to_expr: malformed tagged pattern")
+  | other -> failwith (Printf.sprintf
+      "value_to_expr: cannot convert %s to a pattern" (string_of_value other))
+
+(* Pattern matching: try to match a value against a pattern.
+   Returns Some [(name, value); ...] on match, None on failure. *)
+let rec match_pattern (v : value) (p : pattern) : (string * value) list option =
+  match p with
+  | PWildcard -> Some []
+  | PVariable name -> Some [(name, v)]
+  | PLiteral lit -> if v = lit then Some [] else None
+  | PList (pats, rest) ->
+      let rec match_list v pats rest =
+        match pats, v with
+        | [], _ ->
+            (match rest with
+             | Some r -> match_pattern v r
+             | None -> if v = VNil then Some [] else None)
+        | p :: ps, VPair (h, t) ->
+            (match match_pattern h p with
+             | Some b1 ->
+                 (match match_list t ps rest with
+                  | Some b2 -> Some (b1 @ b2)
+                  | None -> None)
+             | None -> None)
+        | _ :: _, _ -> None
+      in
+      match_list v pats rest
+  | PTagged (tag, pats) ->
+      match v with
+      | VPair (VKeyword kw, rest) when kw = tag ->
+          let rec match_tagged rest pats =
+            match pats, rest with
+            | [], VNil -> Some []
+            | [], _ -> Some []
+            | p :: ps, VPair (h, t) ->
+                (match match_pattern h p with
+                 | Some b1 ->
+                     (match match_tagged t ps with
+                      | Some b2 -> Some (b1 @ b2)
+                      | None -> None)
+                 | None -> None)
+            | _ :: _, _ -> None
+          in
+          match_tagged rest pats
+      | _ -> None

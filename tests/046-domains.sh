@@ -86,7 +86,7 @@ fn(item) {
   }, hash-map-get(plan, :items))
 }
 def register-kv-domain() {
-  register-domain({:name -> "kv", :namespace -> [string-append("file:", "$dir"), string-append("tree:", "$dir")], :observe -> (
+  register-domain({:name -> "kv", :namespace -> vec[string-append("file:", "$dir"), string-append("tree:", "$dir")], :observe -> (
 
 
 fn() { perform tree-observe("$dir") }), :diff -> kv-diff, :apply -> kv-apply, :write-cap -> cap-restrict(current-capabilities(), "$dir", :wo)})
@@ -182,7 +182,7 @@ KV4="$TMP/kv4"
 { kv_domain_source "$KV4"
   cat <<EOF
 def register-broken-kv-domain() {
-  register-domain({:name -> "kv", :namespace -> [string-append("file:", "$KV4"), string-append("tree:", "$KV4")], :observe -> (
+  register-domain({:name -> "kv", :namespace -> vec[string-append("file:", "$KV4"), string-append("tree:", "$KV4")], :observe -> (
 
 
 fn() { perform tree-observe("$KV4") }), :diff -> kv-diff, :apply -> (

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Q2 refinement: the depfile adapter — precise cells below the coarse floor.
 #
-#   (perform run-dep DEPFILE CMD ARG...) runs like `run`, then parses the
+#   (perform run-dep! DEPFILE CMD ARG...) runs like `run`, then parses the
 #   Makefile-style depfile the tool wrote (cc -MD -MF style) and records the
 #   EXACT files the tool read:
 #     - a dep covered by an fs-read grant  → a precise `file:` cell
@@ -42,7 +42,7 @@ printf 'SYS1\n' > "$OTHER/sys.txt"
 cat > "$TMP/c.pp" <<EOF
 perform log(force(node {
   perform log("COMPUTE")
-  perform run-dep("out.d", "sh", "-c", "cat $SRC/h1.txt $SRC/src1.txt $OTHER/sys.txt > out.txt; printf 'out.txt: $SRC/h1.txt $SRC/src1.txt $OTHER/sys.txt\\n' > out.d")
+  perform run-dep!("out.d", "sh", "-c", "cat $SRC/h1.txt $SRC/src1.txt $OTHER/sys.txt > out.txt; printf 'out.txt: $SRC/h1.txt $SRC/src1.txt $OTHER/sys.txt\\n' > out.d")
   slurp("out.txt")
 }))
 EOF
@@ -79,7 +79,7 @@ cat > "$TMP/nodep.pp" <<EOF
 perform log(force(node {
   perform log("COMPUTE")
   do {
-    perform run-dep("missing.d", "sh", "-c", "cat $SRC/h1.txt > out.txt")
+    perform run-dep!("missing.d", "sh", "-c", "cat $SRC/h1.txt > out.txt")
     slurp("out.txt")
   }
 }))

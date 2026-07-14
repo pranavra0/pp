@@ -492,15 +492,74 @@ let rec print_expr st ~brk ?(lvl = lvl_any) (e : expr) : unit =
        | Some d -> emit st ", "; print_expr st ~brk:true d
        | None -> ());
       emit st ")"
+  | EMatch (scrutinee, arms) ->
+      emit st "match ";
+      print_expr st ~brk:false scrutinee;
+      emit st " { ";
+      List.iteri (fun i (p, guard, body) ->
+        if i > 0 then emit st "; ";
+        print_pattern st p;
+        (match guard with
+         | Some g -> emit st " if "; print_expr st ~brk:false g
+         | None -> ());
+        emit st " => ";
+        print_expr st ~brk:true body
+      ) arms;
+      emit st " }"
   | ETyped _ ->
       unpr "a bare type annotation has no surface spelling (in either surface)"
   | EApply (fn, args) -> print_apply st ~brk ~lvl fn args
 
+
+and print_pattern st (p : pattern) : unit =
+  match p with
+  | PLiteral v -> emit st (literal v)
+  | PVariable s ->
+      if not (name_ok s) then unpr "pattern variable %s has no brace spelling" s;
+      emit st s
+  | PWildcard -> emit st "_"
+  | PList (pats, rest) ->
+      emit st "[";
+      List.iteri (fun i p ->
+        if i > 0 then emit st ", ";
+        print_pattern st p
+      ) pats;
+      (match rest with
+       | Some r ->
+           (* Only separate the spread from PRECEDING elements; a spread-only
+              pattern [...r] must not emit a leading comma ([, ...r] fails to
+              re-read — "expected pattern, got ,"). Caught by A″2 (tests/071). *)
+           if pats <> [] then emit st ", ";
+           emit st "..."; print_pattern st r
+       | None -> ());
+      emit st "]"
+  | PTagged (tag, pats) ->
+      (* A tagged pattern's brace surface is (:tag p …) — parens, space-
+         separated — matching Reader_braces.parse_pattern's TLParen/TKeyword
+         arm. Printing it with brackets ([:tag …]) produced text the reader
+         re-parses as a LIST pattern whose head is the keyword literal :tag,
+         which then fails on the space before the next element: a broken
+         `pp fmt --to-braces` round-trip for every tagged match arm, caught by
+         A″2's printer round-trip property (pinned in tests/071). *)
+      emit st "(:";
+      emit st tag;
+      List.iter (fun p ->
+        emit st " ";
+        print_pattern st p
+      ) pats;
+      emit st ")"
+
 and print_apply st ~brk ~lvl fn args =
   ignore brk;
   match fn, args with
-  | ESymbol "vector", elems ->
+  | ESymbol "list", elems ->
       emit st "[";
+      List.iteri (fun i e ->
+        if i > 0 then (emit st ","; sep_before st " " e);
+        print_expr st ~brk:true e) elems;
+      emit st "]"
+  | ESymbol "vector", elems ->
+      emit st "vec[";
       List.iteri (fun i e ->
         if i > 0 then (emit st ","; sep_before st " " e);
         print_expr st ~brk:true e) elems;

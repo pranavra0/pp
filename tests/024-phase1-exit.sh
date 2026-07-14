@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ROADMAP Phase-1 exit criteria, run for real on a generated 100-TU C project
-# built by a real build.pp (nodes + run-dep + blobs + reconcile).
+# built by a real build.pp (nodes + run-dep! + blobs + reconcile).
 #
 #   1. Null rebuild executes ZERO external processes (the journal proves it)
 #      and completes in <1s.
@@ -66,7 +66,7 @@ def zip2(lst1, lst2) {
     cons(cons(car(lst1), car(lst2)), zip2(cdr(lst1), cdr(lst2))) } }
 def compile(name) {
   node {
-    perform run-dep(string-append(name, ".d"), "cc", "-MD", "-MF", string-append(name, ".d"), "-O0", "-c", string-append("$SRC/", string-append(name, ".c")), "-o", string-append(name, ".o"))
+    perform run-dep!(string-append(name, ".d"), "cc", "-MD", "-MF", string-append(name, ".d"), "-O0", "-c", string-append("$SRC/", string-append(name, ".c")), "-o", string-append(name, ".o"))
     blob(slurp(string-append(name, ".o")))
   }
 }
@@ -78,7 +78,7 @@ fn(o) { perform write-file(string-append(car(o), ".o"), blob-get(cdr(o))) }, obj
     do {
       perform write-file("link.d", "prog: ")
       do {
-        perform run-dep("link.d", "sh", "-c", string-append("cc -o prog ", foldl2(
+        perform run-dep!("link.d", "sh", "-c", string-append("cc -o prog ", foldl2(
 fn(acc, o) { string-append(acc, string-append(car(o), ".o ")) }, "", objs)))
         blob(slurp("prog"))
       }

@@ -70,7 +70,7 @@ bootstrap; path-component-aware capability checks; sound content-addressed key
 **✅ EXIT CRITERIA MET** — verified by running, not prose:
 
 - **1–5 and 7** on a generated **101-TU C project** built by a real
-  `build.pp` (nodes + `run-dep` + blobs + reconcile), every claim proven by
+  `build.pp` (nodes + `run-dep!` + blobs + reconcile), every claim proven by
   journal exec counts (`tests/024-phase1-exit.sh`, in `dune runtest`):
   null rebuild = 0 processes in ~130ms; mtime-only touch = 0 recompiles;
   one `f5.c` edit = exactly 1 compile + 1 link; `rm -rf build/` = restored

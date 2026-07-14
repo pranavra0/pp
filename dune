@@ -11,6 +11,14 @@
   ; M7 S2: tests/055's whole-tree `pp fmt` round-trip sweep also covers the
   ; manual's live-executed .pp examples
   (source_tree docs/manual)
+  ; A′2: tests/067 diffs SPEC's generated surface-tables block against
+  ; `pp --dump-surface-tables`, so the SPEC file must be a runtest dep.
+  docs/SPEC.md
+  ; A″5: tests/074 checks each observation head has an adversarial fixture or
+  ; a DESIGN §4 honest-edge entry, so DESIGN.md must be a runtest dep too —
+  ; without it the sandbox served a stale/absent copy and env/probe/config
+  ; (the §4-edge heads) failed under `dune runtest` while passing directly.
+  docs/DESIGN.md
   build.pp
   scripts/run-tests.sh
   src/main.exe

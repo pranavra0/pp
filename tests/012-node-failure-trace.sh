@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# pins: LAW-28
 # Regression: a node failure is a value with a trace (LAW 28), and a raising
 # thunk is not left `Evaluating` (D16).
 #

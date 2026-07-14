@@ -555,6 +555,137 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       let saved_frame = match st.cenv with [] -> [] | f :: _ -> f in
       compile_sequential saved_frame bindings
 
+  | EMatch (scrutinee, arms) ->
+      (* Lower to nested let+if chain and compile that.
+         Patterns are matched structurally: the condition checks shape and
+         literal/tag equality, and the then-branch binds pattern variables.
+         This mirrors Types.match_pattern used by the tree-walker.
+
+         A5: the lowering below is ordinary generated code — EApply (ESymbol
+         name, ...) — which on the VM compiles to LOAD_GLOBAL name and so
+         resolves whatever the CURRENT global binding of `name` is. If user
+         code shadows car/cdr/=/nil?/not/error (e.g. `def car(x) { ... }`),
+         a naive lowering through the plain names would silently call the
+         user's redefinition instead of the true primitive, diverging from
+         the tree-walker (which matches structurally via
+         Types.match_pattern and cannot be shadowed). So every primitive the
+         lowering depends on is referenced via its NUL-prefixed unshadowable
+         alias (registered in Primitives; no pp identifier can contain a
+         NUL, so these can never be rebound) instead of the plain name. *)
+      let prim n = ESymbol ("\000" ^ n) in
+      (* The scrutinee is bound to a temp before the arm chain reads it. This
+         name MUST be unique per match instance: a nested match (e.g. one in
+         another match's scrutinee expression) shares the SAME VM frame, and a
+         second binding of a fixed `__match_` there resolved/stored into a
+         colliding slot, so the outer scrutinee read a clobbered value — a VM/
+         tree-walker divergence (the tree-walker binds in a real lexical env and
+         is immune). Deriving the suffix from the current code offset makes it
+         unique and deterministic; it is NUL-prefixed so no `def`/`let` can
+         rebind it, and it never appears in a LAW-20 hash (the hash is over the
+         EMatch AST in types.ml, not this lowering). *)
+      let tmp = "\000match_" ^ string_of_int (current_offset st) in
+      let tmp_sym = ESymbol tmp in
+      let car_of e = EApply (prim "car", [e]) in
+      let cdr_of e = EApply (prim "cdr", [e]) in
+      let nth_cdr n e =
+        let rec loop n e = if n <= 0 then e else loop (n - 1) (cdr_of e) in
+        loop n e
+      in
+      let nth_car n e = car_of (nth_cdr n e) in
+      (* Conjunction as nested if (short-circuiting). *)
+      let rec conj = function
+        | [] -> ELiteral (VBool true)
+        | [c] -> c
+        | c :: cs -> EIf (c, conj cs, ELiteral (VBool false))
+      in
+      (* "e is a cons cell" (VPair only, not nil, not a scalar). `pair?` is
+         true for VPair OR nil, so AND it with `not(nil?)`. Guards every `car`/
+         `cdr` the list/tagged conditions perform: without it, matching a list
+         or tagged pattern against a non-pair scalar (e.g. `match 42 { [:ok, v]
+         => … }`) lowered to `car(42)`, which crashes on the VM while the
+         tree-walker's structural match_pattern simply falls through — a
+         backend divergence. Short-circuiting `conj` places the guard before
+         the car/cdr it protects. *)
+      let is_cons e =
+        EIf (EApply (prim "pair?", [e]),
+             EApply (prim "not", [EApply (prim "nil?", [e])]),
+             ELiteral (VBool false))
+      in
+      (* Condition expression for [pat] matched against [base]. *)
+      let rec pat_cond base pat =
+        match pat with
+        | PLiteral v -> EApply (prim "=", [base; ELiteral v])
+        | PWildcard | PVariable _ -> ELiteral (VBool true)
+        | PTagged (tag, pats) ->
+            (* base must be a cons before car(base)/cdr(base) are taken. *)
+            let base_cons = is_cons base in
+            let tag_cond = EApply (prim "=", [car_of base; ELiteral (VKeyword tag)]) in
+            let rest = cdr_of base in
+            let elem_conds =
+              List.mapi (fun i p ->
+                let present = is_cons (nth_cdr i rest) in
+                EIf (present, pat_cond (nth_car i rest) p, ELiteral (VBool false))
+              ) pats in
+            conj (base_cons :: tag_cond :: elem_conds)
+        | PList (pats, rest_opt) ->
+            let rec walk i pats =
+              match pats with
+              | [] ->
+                  (match rest_opt with
+                   | None -> [EApply (prim "nil?", [nth_cdr i base])]
+                   | Some _ -> [])
+              | p :: ps ->
+                  let present = is_cons (nth_cdr i base) in
+                  let elem_cond = pat_cond (nth_car i base) p in
+                  present :: elem_cond :: walk (i + 1) ps
+            in
+            conj (walk 0 pats)
+      in
+      (* Bindings introduced by [pat] matched against [base]. *)
+      let rec pat_binds base pat =
+        match pat with
+        | PLiteral _ | PWildcard -> []
+        | PVariable name -> [(name, base)]
+        | PTagged (_, pats) ->
+            let rest = cdr_of base in
+            List.concat (List.mapi (fun i p -> pat_binds (nth_car i rest) p) pats)
+        | PList (pats, rest_opt) ->
+            let binds =
+              List.concat (List.mapi (fun i p -> pat_binds (nth_car i base) p) pats) in
+            match rest_opt with
+            | None -> binds
+            | Some r -> binds @ pat_binds (nth_cdr (List.length pats) base) r
+      in
+      let rec lower_arms = function
+        | [] -> EApply (prim "error", [ELiteral (VString "match failure")])
+        | (pat, None, body) :: rest ->
+            let cond = pat_cond tmp_sym pat in
+            let binds = pat_binds tmp_sym pat in
+            let then_e = if binds = [] then body else ELet (binds, body) in
+            EIf (cond, then_e, lower_arms rest)
+        | (pat, Some guard, body) :: rest ->
+            (* C3: a guarded arm fires only when the pattern matches AND the
+               guard is truthy under the pattern's bindings; otherwise control
+               falls to the remaining arms. Fold the guard INTO the arm
+               condition — `pat_cond AND (guard under binds)` — so the structure
+               is exactly a guardless arm's (fall-through `lower_arms rest`
+               appears once, no continuation closure, no 2^guards blowup). The
+               pattern bindings are pure `car`/`cdr` accessors on the scrutinee,
+               so recomputing them for the guard-condition and again for the
+               body is a re-derivation with no double side effect. (An earlier
+               nullary-closure fall-through diverged from the tree-walker on the
+               VM when guarded matches nested — the closure captured frames
+               across the shared `__match_` slot.) *)
+            let cond = pat_cond tmp_sym pat in
+            let binds = pat_binds tmp_sym pat in
+            let guard_under_binds = if binds = [] then guard else ELet (binds, guard) in
+            let full_cond = EIf (cond, guard_under_binds, ELiteral (VBool false)) in
+            let then_e = if binds = [] then body else ELet (binds, body) in
+            EIf (full_cond, then_e, lower_arms rest)
+      in
+      let lowered = ELet ([tmp, scrutinee], lower_arms arms) in
+      compile_expr st lowered tail
+
 (* ---- Compile a program ---- *)
 
 let compile_program (exprs : expr list) : bytecode =

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# pins: LAW-39
 # M4 sealed cells (docs/PLAN-m4-cells.md "Sealed cells"; SPEC LAW 39).
 #
 # `--grant secret:<path>` mints CapSecret. A read covered by CapSecret and

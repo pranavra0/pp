@@ -339,4 +339,179 @@ else
   echo "FAIL 056-defmacro-both-surfaces"; fail=1
 fi
 
+echo "--- Phase 3.1: match list patterns (differential) ---"
+if PP="$PP" bash tests/057-match-list-patterns.sh; then
+  echo "ok   057-match-list-patterns"
+else
+  echo "FAIL 057-match-list-patterns"; fail=1
+fi
+echo "--- Phase 1b.4: collect { } error partitioning (differential) ---"
+if PP="$PP" bash tests/058-collect.sh; then
+  echo "ok   058-collect"
+else
+  echo "FAIL 058-collect"; fail=1
+fi
+echo "--- A1: deterministic try lowering (LAW-20 hash independent of parse order) ---"
+if PP="$PP" bash tests/059-try-determinism.sh; then
+  echo "ok   059-try-determinism"
+else
+  echo "FAIL 059-try-determinism"; fail=1
+fi
+if PP="$PP" bash tests/060-qq-list-parity.sh; then
+  echo "ok   060-qq-list-parity"
+else
+  echo "FAIL 060-qq-list-parity"; fail=1
+fi
+echo "--- A3: quasiquote coverage of try/match/index/spread (differential + parity) ---"
+if PP="$PP" bash tests/061-qq-sugar-coverage.sh; then
+  echo "ok   061-qq-sugar-coverage"
+else
+  echo "FAIL 061-qq-sugar-coverage"; fail=1
+fi
+if PP="$PP" bash tests/061b-qq-head-coverage.sh; then
+  echo "ok   061b-qq-head-coverage"
+else
+  echo "FAIL 061b-qq-head-coverage"; fail=1
+fi
+echo "--- A4: else-newline misparse (differential) ---"
+if PP="$PP" bash tests/062-else-newline.sh; then
+  echo "ok   062-else-newline"
+else
+  echo "FAIL 062-else-newline"; fail=1
+fi
+echo "--- A5: match lowering unshadowable primitives (differential) ---"
+if PP="$PP" bash tests/063-match-shadow.sh; then
+  echo "ok   063-match-shadow"
+else
+  echo "FAIL 063-match-shadow"; fail=1
+fi
+echo "--- A7(i): L9 vector-on-bracket-literal lint sweep ---"
+if PP="$PP" bash tests/064-l9-vector-sweep.sh; then
+  echo "ok   064-l9-vector-sweep"
+else
+  echo "FAIL 064-l9-vector-sweep"; fail=1
+fi
+echo "--- A7(iii): try{} <- rebind shadows (differential) ---"
+if PP="$PP" bash tests/065-try-rebind-shadow.sh; then
+  echo "ok   065-try-rebind-shadow"
+else
+  echo "FAIL 065-try-rebind-shadow"; fail=1
+fi
+echo "--- A6/A′1: table-driven \$KIND observation heads (differential) ---"
+if PP="$PP" bash tests/066-dollar-heads.sh; then
+  echo "ok   066-dollar-heads"
+else
+  echo "FAIL 066-dollar-heads"; fail=1
+fi
+echo "--- A′2: surface-tables SPEC drift + single-source grep ---"
+if PP="$PP" bash tests/067-surface-tables-drift.sh; then
+  echo "ok   067-surface-tables-drift"
+else
+  echo "FAIL 067-surface-tables-drift"; fail=1
+fi
+echo "--- A′3: needs value-openness (named/composed/sugar grants, differential) ---"
+if PP="$PP" bash tests/068-needs-value-open.sh; then
+  echo "ok   068-needs-value-open"
+else
+  echo "FAIL 068-needs-value-open"; fail=1
+fi
+echo "--- A′5: one with-handler pair parser, two contexts (differential) ---"
+if PP="$PP" bash tests/069-handler-pair-dedup.sh; then
+  echo "ok   069-handler-pair-dedup"
+else
+  echo "FAIL 069-handler-pair-dedup"; fail=1
+fi
+if PP="$PP" bash tests/070-hash-injective-nearmiss.sh; then
+  echo "ok   070-hash-injective-nearmiss"
+else
+  echo "FAIL 070-hash-injective-nearmiss"; fail=1
+fi
+echo "--- kernel properties (A″2: injectivity, quote-rt, print-rt) suite ---"
+if PP="$PP" bash tests/071-kernel-props.sh; then
+  echo "ok   071-kernel-props"
+else
+  echo "FAIL 071-kernel-props"; fail=1
+fi
+echo "--- capability algebra properties (A″6) suite ---"
+if PP="$PP" bash tests/075-cap-props.sh; then
+  echo "ok   075-cap-props"
+else
+  echo "FAIL 075-cap-props"; fail=1
+fi
+echo "--- A″4: crash-injection at the durability seam ---"
+if PP="$PP" bash tests/073-crash-injection.sh; then
+  echo "ok   073-crash-injection"
+else
+  echo "FAIL 073-crash-injection"; fail=1
+fi
+echo "--- A″5: adversarial world suite (per user-observable head) ---"
+if PP="$PP" bash tests/074-adversarial-worlds.sh; then
+  echo "ok   074-adversarial-worlds"
+else
+  echo "FAIL 074-adversarial-worlds"; fail=1
+fi
+echo "--- A″3: SPEC law-linkage (holds ⇒ pinned) ---"
+if PP="$PP" bash tests/072-law-pins.sh; then
+  echo "ok   072-law-pins"
+else
+  echo "FAIL 072-law-pins"; fail=1
+fi
+echo "--- Phase B: surface removals ---"
+if PP="$PP" bash tests/076-phase-b-removals.sh; then
+  echo "ok   076-phase-b-removals"
+else
+  echo "FAIL 076-phase-b-removals"; fail=1
+fi
+echo "--- Phase B: map spread (B3) ---"
+if PP="$PP" bash tests/077-map-spread.sh; then
+  echo "ok   077-map-spread"
+else
+  echo "FAIL 077-map-spread"; fail=1
+fi
+echo "--- Phase B: \$config head (B5) ---"
+if PP="$PP" bash tests/078-config-head.sh; then
+  echo "ok   078-config-head"
+else
+  echo "FAIL 078-config-head"; fail=1
+fi
+echo "--- Phase B: with{} handlers map (B9) ---"
+if PP="$PP" bash tests/079-with-handlers.sh; then
+  echo "ok   079-with-handlers"
+else
+  echo "FAIL 079-with-handlers"; fail=1
+fi
+echo "--- Phase B: lints (B4/B11/B12) ---"
+if PP="$PP" bash tests/080-phase-b-lints.sh; then
+  echo "ok   080-phase-b-lints"
+else
+  echo "FAIL 080-phase-b-lints"; fail=1
+fi
+
+echo "--- C1 f-strings suite ---"
+if PP="$PP" bash tests/081-fstrings.sh; then
+  echo "ok   081-fstrings"
+else
+  echo "FAIL 081-fstrings"; fail=1
+fi
+
+echo "--- C2 call-spread suite ---"
+if PP="$PP" bash tests/082-call-spread.sh; then
+  echo "ok   082-call-spread"
+else
+  echo "FAIL 082-call-spread"; fail=1
+fi
+
+echo "--- C3 match-guards suite ---"
+if PP="$PP" bash tests/083-match-guards.sh; then
+  echo "ok   083-match-guards"
+else
+  echo "FAIL 083-match-guards"; fail=1
+fi
+
+echo "--- C4 sexpr match surface suite ---"
+if PP="$PP" bash tests/084-match-sexpr-surface.sh; then
+  echo "ok   084-match-sexpr-surface"
+else
+  echo "FAIL 084-match-sexpr-surface"; fail=1
+fi
 exit $fail

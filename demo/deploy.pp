@@ -34,14 +34,14 @@ load("stdlib/list.pp")
 def zip2(a, b) {
   if nil?(a) { nil } else { cons(cons(car(a), car(b)), zip2(cdr(a), cdr(b))) }
 }
-# Build the greeter binary — ONE node, shared by every host. `run-dep`
+# Build the greeter binary — ONE node, shared by every host. `run-dep!`
 # compiles+links greeter.c straight to an executable (a single
 # translation unit needs no separate link step); `blob` ingests the
 # result into the CAS so every host materializes the exact same bytes
 # from the exact same ref — one compile, byte-identical binaries.
 def greeter-build-node(greeter-c) {
   node {
-    perform run-dep("greeter.d", "cc", "-O2", "-MD", "-MF", "greeter.d", greeter-c, "-o", "greeter")
+    perform run-dep!("greeter.d", "cc", "-O2", "-MD", "-MF", "greeter.d", greeter-c, "-o", "greeter")
     blob(slurp("greeter"))
   }
 }

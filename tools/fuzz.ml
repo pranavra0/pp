@@ -215,7 +215,32 @@ let rec gen_int env d : sx =
         let env' = { env with vars = { vname = x; vty = TInt; vne = false } :: env.vars } in
         S [S [A "fn"; S [A x]; gen_int env' (d - 1)]; gen_int env (d - 1)]);
       1, (fun () -> S [A "do"; gen_int env (d - 1); gen_int env (d - 1)]);
+      2, (fun () -> gen_match TInt env d);
+      (if env.stdlib then 1 else 0), (fun () ->
+        (* C2: (apply + <nonempty int list>) — apply concatenates the one
+           segment and calls +, returning an int. Round-trips through braces
+           as apply(+, …). *)
+        S [A "apply"; A "+"; gen_list_ne env (d - 1)]);
     ]
+
+(* C3/C4: a total, well-typed `(match <scrut> arm…)` producing type [ty].
+   Every arm body is generated at [ty]; the scrutinee is an int so patterns are
+   int literals / variables / `_` (never a list pattern against a scalar), and a
+   final `_` arm guarantees no match-failure. Exercises guards (`pat if cond`)
+   and — because the whole program is emitted as sexpr and also round-tripped
+   through braces — the C4 sexpr match reader and both printers. *)
+and gen_match ty env d : sx =
+  let gen e dd = match ty with
+    | TInt -> gen_int e dd | TStr -> gen_string e dd | TBool -> gen_bool e dd
+    | TFloat -> gen_float e dd | TList -> gen_list e dd in
+  let scrut = gen_int env (d - 1) in
+  let n = fresh "n" in
+  let envn = { env with vars = { vname = n; vty = TInt; vne = false } :: env.vars } in
+  S [A "match"; scrut;
+     S [A (string_of_int (rint 0 4)); gen env (d - 1)];               (* literal arm *)
+     S [A n; A "if"; S [A ">"; A n; A (string_of_int (rint 0 6))];    (* guarded var arm *)
+        gen envn (d - 1)];
+     S [A "_"; gen env (d - 1)]]                                      (* wildcard fallback *)
 
 and gen_bool env d : sx =
   if d <= 0 then
@@ -258,6 +283,8 @@ and gen_string env d : sx =
            S [A "string-append"; gen_string env (d - 1); A "\"abcd\""];
            A "0"; A (string_of_int (rint 0 4))]);
       1, (fun () -> S [A "if"; gen_bool env (d - 1); gen_string env (d - 1); gen_string env (d - 1)]);
+      1, (fun () -> S [A "->string"; gen_int env (d - 1)]);   (* C1 lowering target *)
+      2, (fun () -> gen_match TStr env d);
     ]
 
 and gen_float env d : sx =
@@ -322,6 +349,7 @@ and gen_list env d : sx =
         let x = fresh "x" in
         let env' = { env with vars = { vname = x; vty = TInt; vne = false } :: env.vars } in
         S [A "filter"; S [A "fn"; S [A x]; gen_bool env' (d - 1)]; gen_list env (d - 1)]);
+      1, (fun () -> S [A "apply"; A "list"; gen_list env (d - 1)]);  (* C2 lowering target *)
     ]
 
 let gen_of_ty env d = function

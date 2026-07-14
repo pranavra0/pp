@@ -6,6 +6,145 @@ v0.2.0 predate this file and are reconstructed from history for context.
 
 ## [Unreleased] — v0.2.0
 
+- **Phase C: the missing sugar — additions** (docs/MASTER-PLAN.md Phase C;
+  SYNTAX.md is the settled target). Each addition reads like what it does and
+  reuses an existing sigil meaning.
+  - **C1 — f-strings.** `f"Hello, {name}! Value: {x + 1}."` — the `f` prefix is
+    glued to the quote (a lone `f`; `foo"…"` still lexes as name + string).
+    `{expr}` holes take arbitrary expressions and lower through a new generic
+    `->string` primitive; `{{`/`}}` are literal braces; a hole balances nested
+    `{}` and copies inner string literals verbatim, and its raw source is
+    re-parsed by the reader **in context** (so a hole inside `quasiquote{}` may
+    contain `unquote(…)`). Lowers to `string-append`/`->string`; a single part
+    (`f"abc"` or `f"{x}"`) is emitted bare, so `f"abc"` is the **same AST** as
+    `"abc"`. Ordinary `"…"` strings never interpolate — `"{x}"` is three literal
+    characters, so JSON/shell/codegen fragments are safe by default. `->string`:
+    a string renders as itself (no quotes), every other value via the display
+    form (deep-forced; sealed values redacted). One-way desugar (no AST node), so
+    round-trips through `pp fmt` hash-preserved. `tests/081`.
+  - **C2 — call spread / `apply`.** `f(a, ...rest, b)` — a `...` anywhere in a
+    call's argument list — lowers to `apply(f, list(a), rest, list(b))`
+    (consecutive plain args grouped into one `list(…)` segment, each spread its
+    own). The new `apply` primitive (both backends, via the existing
+    `call_with_args`) concatenates the segments and calls `f`; only list spines
+    are forced, elements pass through like `cons`. Spread-free calls keep the
+    plain application (hash-preserving). Quasiquote parity is free (`apply`/`list`
+    are ordinary symbols). Motivating case: `run!("cc", ...flags, "-o", out)`.
+    `tests/082`.
+  - **C3 — `match` guards.** `pat if cond => expr` — the arm fires only when the
+    pattern matches **and** the guard (evaluated under the pattern's bindings;
+    only `nil`/`false` falsy) is truthy, else control falls to the next arm.
+    `EMatch` arms gained an optional guard slot, encoded so a guardless arm
+    hashes and quotes **identically** to before — **no existing match is
+    re-keyed**. The tree-walker evaluates the guard structurally; the compiler
+    folds it into the arm condition (`pat_cond AND guard`), keeping the
+    fall-through single and closure-free. Both readers, both printers, and the
+    kernel-property generators handle it. `tests/083`. Two **pre-existing**
+    `match` VM/tree-walker divergences were surfaced by the C-phase fuzzer and
+    fixed: (i) a list/tagged pattern against a non-pair scalar lowered to
+    `car(scalar)` and crashed the VM (the compiler now cons-guards every
+    `car`/`cdr`; `pair?` joined the unshadowable match aliases); (ii) a match
+    nested in another match's scrutinee collided on the fixed compiler temp
+    `__match_` in the shared VM frame (the temp is now unique per instance).
+    Neither is hash-affecting. `tests/057`.
+  - **C4 — sexpr surface for `match`.** The s-expression reader/printer now read
+    and write `(match scrutinee (pat [if guard] body) …)` — patterns `_`, a
+    literal, a bare symbol, `(list p… [. rest])`, `(tagged tag p…)`; a guarded
+    arm is `(pat if guard body)`. Match files round-trip braces→sexpr→braces
+    hash-preserved, so the whole-tree `pp fmt` sweep (`tests/055`) needs no match
+    exclusion, and the fuzzer now generates `match` (with guards) and round-trips
+    it through both surfaces. `tests/084`.
+  - **C5 — map patterns:** deferred (documented scoping decision — an explicit
+    stretch goal, absent from Phase C's exit criteria, with an underspecified
+    surface).
+  - **Test infra:** `dune runtest` gained `docs/DESIGN.md` as a dependency, so
+    `tests/074` (adversarial-worlds, which checks each observation head against a
+    DESIGN §4 honest-edge entry) no longer fails on a stale sandbox copy — it
+    passed run directly but failed under the dune sandbox.
+
+- **Phase B: settle the surface — removals and migrations** (docs/MASTER-PLAN.md
+  Phase B; SYNTAX.md is the settled target). One form per concept; every sigil
+  one meaning. Landed so far:
+  - **B8 — `@` attributes removed.** `@cache`/`@needs`/`@reads`/`@deprecated`
+    no longer parse; `@…` is a parse error pointing at `node` (for caching) and
+    `needs` (for authority). `@cache` was a second spelling of `node`; an
+    `@needs` that parses without narrowing authority is a lie in a capability
+    language (DESIGN §6).
+  - **B7 — postfix `?` removed.** The `expr?` / `let x = expr?` unwrap inside
+    `try {}` is gone in both the normal and quasiquote readers; `name <- expr`
+    is the one propagation spelling. A plain `let x = expr` inside `try {}` is
+    now an ordinary sequential binding.
+  - **B6 — `cond {}` removed.** Subsumed by flat `else if` chains and `match`
+    with guards; `cond` is an ordinary identifier again.
+  - **B4 / B11 / B12 — `pp lint` convention checks.**
+    - **B4 observation exclusivity:** a bare world-read primitive (`slurp`,
+      `env-get`, `probe`, `config`, `perform tree-observe`) used outside
+      `stdlib/` warns, pointing at its `$` head. Runs **pre-lowering** (a token
+      scan via `Reader_braces.lex`) — after lowering, `$file` and bare `slurp`
+      are the identical AST. The primitive set is derived from a single
+      `Surface_tables.observation_primitives` list, so it can't drift from the
+      family; a `with { config: … }` clause is not flagged (it is a clause, not
+      a call).
+    - **B11 dot-identifier:** an identifier containing `.` (a dot-method-call
+      trap) warns. Grant descriptors (`fs.read` …) lower to `cap-restrict`
+      before lint sees the AST, so they never trip it; `string->number` and the
+      like have no dot.
+    - **B12 tagged-value convention:** a function returning `[:err, _]` on one
+      branch and a bare value on another is flagged; `car`/`cdr` (or
+      `first`/`rest`) applied to a tagged result literal `[:ok, _]`/`[:err, _]`
+      is flagged (destructure with `match`/`<-`). The runnable tree is already
+      clean of the B11 dot-call, `key:` data-map, and bare-`{x}` patterns; the
+      lints are the durable enforcement.
+  - **B9 — `with { }` handlers regularized.** The two-token `handler NAME: fn`
+    key becomes a map-valued `handlers: { :name -> fn, ... }` clause — every
+    `with` clause is now a uniform `KEY: value` header (the `:` rule), and the
+    `Surface_tables.with_clauses` row flips `handler`→`handlers` (SPEC §B.8
+    regenerated; the "expected caps:, config:, handlers:" error text derives
+    from the table). The reader extracts the map's `:name -> fn` pairs into the
+    existing `EWithHandler` install, so both backends and the trust kernel are
+    unchanged. (Handler-set *values* passed as a variable are a follow-up: the
+    clause takes a map literal today, since promoting `EWithHandler` to a
+    runtime map value is a hash-affecting, kernel-adjacent change.)
+  - **B5 — `$config` joins the observation family.** `$config(key[, default])`
+    reads a scoped config value from the enclosing `with { config: … }` extent
+    (LAW 33), recording a `config:` trace cell — the `$` family now covers every
+    traced read kind. Added as an `obs_head` (new `Config` node in the
+    `Surface_tables` template DSL, since a config read is the `EConfig` special
+    form, not a plain call); both readers derive from it, so quasiquote parity is
+    free (A′1). `Cell.Config`'s surface decision flips from whitelisted to
+    `Surfaced "config"`; SPEC §B.8 regenerated; DESIGN §4 gains honest-edge E12
+    (config is an ambient scoped value like `$env`, no traversal surface), so the
+    A″5 head-coverage rule (`tests/074`) stays green at 6/6.
+  - **B2 — `collect` becomes a function.** The `collect { }` reader block form
+    is removed; the `collect-results` primitive is renamed `collect` and used as
+    a plain pipeline function: `srcs |> map(compile) |> collect` → `[:ok, [v…]]`
+    if every element is `[:ok, _]`, else `[:err, [e…]]`. `try` is the
+    short-circuit monad; `collect` is the accumulating validation — the
+    distinction lives in the library, not the grammar (DESIGN §6). `collect` is
+    now an ordinary identifier.
+  - **B10 — uniform `!` (depfile effect).** The depfile-refined process effect
+    is renamed `run-dep` → `run-dep!`: `perform run-dep!(depfile, cmd, …)`. `!`
+    marks "performs an effect" exceptionlessly. Dispatch is at the shared
+    `Evaluator.perform_effect` (both backends); every `perform run-dep(…)` in
+    stdlib/demo/tests/manual is swept, and SPEC L41 updated. Hash-affecting (a
+    real rename, not a reformat); rebuilds from the new source null-rebuild.
+    (The broader `run!`/`write!`/`log!` wrapper surface in SYNTAX §4 — callable
+    without `perform` — is not part of B10's scope; it needs reader sugar or the
+    C2 `apply` primitive for variadic effect wrappers.)
+  - **B3 — map update → spread.** `{ ...m, k -> v }` replaces the removed
+    `{ base | k -> v }` update form; multiple spreads merge, rightmost wins
+    (`{ ...defaults, ...overrides }`). A new `map-merge` primitive is the
+    lowering target; a spread-free `{ k -> v }` literal keeps its `hash-map`
+    lowering (hash-preserving — existing maps untouched). Spread completes the
+    list/call/map family. Map spread inside `quasiquote{}` is a documented B.7
+    exclusion (a qq map is built eagerly, so a spread's merge would run before
+    unquotes resolve) — plain map literals still template fine.
+  - **B1 — cell-literal observations removed.** The fused `file:"P"` /
+    `env:"N"` / `tree:"R"` token is deleted from the lexer, parser (both
+    readers), and token type. The `$` family is the one observation surface
+    (a single-string token can't spell `$env("CC", "gcc")` or a computed path).
+    Hash-preserving: `$file`/`$env`/`$glob` and the old literals lowered to the
+    same AST. SPEC §B.1 and L47–L49 amended.
 - **M7: the brace surface — a second reader, the same language**
   (docs/M7-SYNTAX.md). A brace/infix surface (`src/reader_braces.ml`) parses
   to the identical `Types.expr` the s-expression reader always produced, so

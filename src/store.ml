@@ -76,15 +76,50 @@ let obj_path hash =
 let trace_path hash =
   Filename.concat traces_dir hash
 
+(* ---- A″4 crash-injection oracle ----
+   Every durable write funnels through [atomic_write] (store.mli hides the path
+   plumbing, so there is no other way to touch the store on disk). One counter
+   here, bumped per call, therefore lets a harness kill the process at the N-th
+   write and at a chosen boundary WITHOUT a per-site list — sweeping N over a
+   build kills at every real write boundary by construction, so a new durable
+   write path is covered the moment it routes through here (which the .mli
+   forces). PP_CRASH_AT is "<boundary>:<n>", boundary ∈
+   {before, mid, pre-rename, post-rename}; the kill is an uncatchable SIGKILL to
+   self — no at_exit, no buffer flush — so it models a real crash, not a clean
+   OCaml exit. Absent the env var every check is a no-op (one lazy getenv). *)
+let crash_spec =
+  lazy (
+    match Sys.getenv_opt "PP_CRASH_AT" with
+    | None -> None
+    | Some s ->
+        (match String.split_on_char ':' s with
+         | [b; n] ->
+             (match int_of_string_opt n with Some n -> Some (b, n) | None -> None)
+         | _ -> None))
+
+let atomic_write_count = ref 0
+
+let maybe_crash (boundary : string) : unit =
+  match Lazy.force crash_spec with
+  | Some (b, n) when b = boundary && !atomic_write_count = n ->
+      (* uncatchable, bypasses at_exit/finalizers — exactly like SIGKILL. *)
+      Unix.kill (Unix.getpid ()) Sys.sigkill
+  | _ -> ()
+
 (* ---- Atomic file write ---- *)
 
 let atomic_write path content =
+  incr atomic_write_count;
+  maybe_crash "before";                (* nothing written yet *)
   let tmp = path ^ ".tmp." ^ string_of_int (Unix.getpid ()) in
   let oc = open_out_bin tmp in
   (try output_string oc content
    with exn -> close_out oc; Sys.remove tmp; raise exn);
+  maybe_crash "mid";                   (* content in tmp, not yet closed/renamed *)
   close_out oc;
-  Unix.rename tmp path
+  maybe_crash "pre-rename";            (* tmp complete & closed; canonical unchanged *)
+  Unix.rename tmp path;
+  maybe_crash "post-rename"            (* durable; process dies before further work *)
 
 (* ---- Object storage ---- *)
 
@@ -284,12 +319,18 @@ let stat_kind (path : string) : string =
 let stat_kind_hash (kind : string) : string =
   hash_string ("stat:" ^ kind)
 
-(* Environment observations: "env:<NAME>" — value or absence. *)
+(* Environment observations: "env:<NAME>" — value or absence. The present and
+   absent cases carry DISTINCT hash_concat tags so a variable whose value is the
+   literal string "absent" cannot hash-collide with an unset variable (the old
+   `hash_string ("env:" ^ s)` vs `hash_string "env:absent"` did exactly that,
+   an A″1-class observation collision that let a node hit a result cached under
+   the wrong world-state); framing via hash_concat also makes any value bytes,
+   including ':' , injective. *)
 let env_cell_id (name : string) : string = Cell.(to_string (Env name))
 let env_observed_hash (v : string option) : string =
   match v with
-  | Some s -> hash_string ("env:" ^ s)
-  | None -> hash_string "env:absent"
+  | Some s -> hash_concat ["env-present"; s]
+  | None -> hash_concat ["env-absent"]
 
 (* The single argv cell: the program-argument list after `--`. *)
 let argv_cell_id : string = Cell.to_string Cell.Argv

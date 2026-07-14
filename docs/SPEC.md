@@ -19,6 +19,16 @@
 > [ROADMAP.md](ROADMAP.md)) does not exit until every **holds** claim below has
 > a passing test and no law is silently violated.
 >
+> **Law-linkage gate (MASTER-PLAN A″3).** A **holds** claim is not self-certifying:
+> `tests/072-law-pins.sh` cross-references every LAW id here against the
+> `# pins: LAW-<n>` markers declared by the suite, and fails the build if a
+> **holds** law has neither a pinned test nor an explicit entry on the PENDING
+> backfill list. So a law cannot be *added* as **holds** without either a test
+> that falsifies it or a recorded promise to write one — and a pin that names a
+> renamed or deleted law is likewise a red build. Kernel laws (identity, the
+> capability M3-bans, traces, handler restore, failure caching) are the first
+> pinned tranche; the tail is paid down under the same gate.
+>
 > Cross-references: design rationale and the Q1–Q12 decisions live in
 > [DESIGN.md](DESIGN.md); the D1–D21 ledger in [STATUS.md](STATUS.md); the
 > phased plan in [ROADMAP.md](ROADMAP.md).
@@ -220,6 +230,19 @@ however a surface spells it. Scope follows LAW 4 with statement timing:
   name only defined by a *later* top-level form is an unbound-symbol error
   (function defs still late-bind, so top-level mutual recursion between
   functions is unaffected).
+
+**Exception — `try {}` `<-` bindings are sequential, and rebinding shadows.**
+A `try {}` block is *not* a letrec* scope. Its `<-` bindings execute top to
+bottom, each visible only to statements *after* it (a `<-` rhs sees earlier
+binds, never later ones — there is no mutual visibility to poison), and
+because the block lowers to nested `let`s, **binding the same name twice is
+allowed**: the second `<-` shadows the first for the statements that follow,
+exactly as re-`let`-ing a name in nested lets would. This is the one place
+LAW 4's "duplicate definition in block is a read error" does not apply —
+`try` statements are sequential lets, not a letrec* block of `def`s. Pinned
+by a differential test that rebinds a `<-` name twice and observes the later
+uses see the shadowing value on both backends
+(`tests/065-try-rebind-shadow.sh`).
 
 **Status: partial** — top-level and `do`-block `def`s are mutually recursive
 in both backends (they share a mutable global scope), and value defs behave
@@ -1543,7 +1566,13 @@ strings — row L55.)
 surrounding whitespace: `a - b` is subtraction, `a-b` is one identifier.
 Token identity is decided by maximal munch; whether a token *acts* as an
 infix operator is decided by position, never inside a token. `a ->b` is the
-identifier `->b` in operand position (a parse error), not an arrow. This one
+identifier `->b` in operand position (a parse error), not an arrow. The `->`
+token is the sharpest case of this rule, and it is load-bearing for the
+type-conversion naming convention: glued, `string->number` is a single
+identifier (a conversion primitive — likewise `number->string`); with
+whitespace on both sides, `k -> v` is the map/reconcile arrow (L10). The two
+never collide because the glue rule alone distinguishes them — `string ->
+number` (spaces) would instead be the arrow between two operands. This one
 rule is what lets the entire stdlib migrate with zero renames (M7
 consequences 1–2). The `<`-family (`<`, `<=`) is lexed specially in braces
 exactly as in sexprs (`<` is not a name character) but obeys the same
@@ -1579,13 +1608,13 @@ error, by design.
 
 **Keywords.** `:name` (`:` at token start) → `VKeyword`, as in sexprs.
 
-**Cell literals.** An identifier immediately followed by `:` immediately
-followed by a string literal — no whitespace anywhere: `file:"src/main.c"`,
-`env:"CC"`, `tree:"src"`. Exactly these three heads exist (rows L47–L49);
-any other `name:"…"` is a parse error (the space is reserved). World-reads
-get visual identity; the literal is authority-neutral — whether `file:"p"`
-returns plain bytes or a sealed value stays the grant's decision (LAW 39),
-because the lowering is the same read form either way.
+**Cell literals — removed (B1).** The fused `file:"P"` / `env:"N"` /
+`tree:"R"` token is no longer part of the language. A single-string token
+cannot spell a default (`$env("CC", "gcc")`) or a computed path, and an
+observation is an operation, not a literal (DESIGN §6). World-reads are the
+`$` family exclusively (§B.8; rows L47–L49 amended). An identifier followed
+immediately by `:` is now only an annotation colon (`x: ty`); `name:"…"`
+does not lex as a cell.
 
 **Annotations.** `:` after a parameter or binding name (`x: int`) or after a
 parameter list (`def f(x): int`) — rows L24, L27–L31.
@@ -1672,10 +1701,24 @@ including the block's duplicate-definition check (LAW 4).
 
 | # | Brace form | Reads as |
 |---|---|---|
-| L9 | `[e1, e2, …]` | `(vector e1 e2 …)` |
+| L9 | `[e1, e2, …]` | `(list e1 e2 …)` — **revised** (see note) |
 | L10 | `{ k1 -> v1, k2 -> v2, … }` | `(hash-map k1 v1 k2 v2 …)` |
+| L10a | `{ …m, k -> v, … }` (spread; B3) | fold: `(map-merge (hash-map) m)` for each `…spread`, `(map-insert acc k v)` for each pair, left to right — multiple spreads merge, rightmost wins. The spread-free literal keeps its `(hash-map …)` shape (hash-preserving). Replaces the removed `{ base \| k -> v }` update form. |
 | L11 | `{}` (expression position) | `(hash-map)` |
 | L12 | *(no set literal — `#` is the comment character)* `hash-set(e, …)` | `(hash-set e …)` |
+
+> **L9 is a revision, not sugar.** `[…]` originally read as `(vector …)`; it
+> now reads as `(list …)` — the default collection is a cons-list. This is a
+> **semantic, hash-affecting** change, *not* a surface convenience: a bracket
+> literal now evaluates to a different runtime value (a `VPair` cons-chain, not
+> a `VVector`), so its LAW-20 content hash changed and the golden store had to
+> be regenerated — that regeneration commit is the receipt that the change is
+> real, not cosmetic. Two consequences follow and are checked mechanically:
+> (1) the quasiquote path was realigned so a `[…]` template builds the same
+> cons-list value the equivalent code builds (A2, `tests/060-qq-list-parity.sh`);
+> (2) `pp check` sweeps for `vector-get`/`vector-length` applied directly to a
+> bracket literal — a leftover from the vector era that is now a type error —
+> and flags it (`tests/064-l9-vector-sweep.sh`).
 
 **Operators** (see §B.2 for nesting)
 
@@ -1693,6 +1736,7 @@ including the block's duplicate-definition check (LAW 4).
 | # | Brace form | Reads as |
 |---|---|---|
 | L19 | `f(a, b)`; `f()` | `(f a b)`; `(f)` |
+| L19a | `f(a, …rest, b)` (call spread; C2) | `(apply f (list a) rest (list b))` — a `…` anywhere in a call's argument list groups consecutive plain args into `list(…)` segments, each spread its own segment; the `apply` primitive concatenates the segments and calls `f`. A spread-free call keeps the plain L19 shape (hash-preserving). A compound spread target uses the spaced `… E` form (as in list literals). |
 | L20 | `(fn(x) { x })(3)`; `f(x)(y)` | `((fn (x) x) 3)`; `((f x) y)` |
 
 **Bindings and functions**
@@ -1720,13 +1764,18 @@ including the block's duplicate-definition check (LAW 4).
 | L34 | `node f(p…) { body… }` | `(defnode (f p…) body…)` — typed params/return as L30/L31 |
 | L35 | `node f(p) needs I1, I2 { body… }` | `(defnode (f p) (with-caps C ⟦body…⟧))` where `C` is the single lowered item, or `(cap-compose I1′ I2′ …)` for several |
 
-`needs` items (L35) lower as: `fs.read(E)` →
-`(cap-restrict (current-capabilities) E :ro)`; `fs.write(E)` → `… :wo`;
-`fs.rw(E)` → `… :rw`; any other item is an ordinary expression passed
-through unchanged (it must evaluate to a capability — LAW 22b's ⊆ gate does
-the enforcing; the reader adds nothing). `fs.read`/`fs.write`/`fs.rw` are
-recognized only inside a `needs` clause (elsewhere `fs.read` is just an
-identifier). The M7 sketch's bare `proc` item is **not frozen**: no existing
+`needs` items (L35) lower via the grant-descriptor sugar of §B.8
+(`fs.read`/`fs.write`/`fs.rw`, each a mode-scoped `cap-restrict` over
+`(current-capabilities)` — that table is the one authoritative listing, not
+this paragraph). **`needs` is value-open:** the descriptors are only sugar;
+any other item is an ordinary expression passed through unchanged (it must
+evaluate to a capability — LAW 22b's ⊆ gate does the enforcing; the reader
+adds nothing), so a named or composed grant is a legal item —
+`node deploy() needs k8s-prod { … }` where `let k8s-prod =
+cap-compose(net("k8s.prod.internal"), process)`. The capability *kind* set
+stays closed (DESIGN §1 principle 7); the *vocabulary* of named grants is open
+at the value level. The `fs.*` descriptors are recognized only inside a
+`needs` clause (elsewhere `fs.read` is just an identifier). The M7 sketch's bare `proc` item is **not frozen**: no existing
 form projects a single capability kind out of the ambient set
 (`cap-restrict` is path-scoped, and a path-restricted `CapProcess` is
 unusable — `demo/agent.pp`'s own comment), so freezing it would require a
@@ -1742,14 +1791,16 @@ expressible by composition: `def f(x) { with-caps(E) { node { … } } }`
 | L36 | `do { s… }` | `(do s…)` |
 | L37 | `if C { T… }` | `(if C ⟦T…⟧)` — else defaults to `nil`, LAW 9 |
 | L38 | `if C { T… } else { E… }` | `(if C ⟦T…⟧ ⟦E…⟧)` |
-| L39 | `if C1 { … } else if C2 { … } else { … }` | nested `(if C1 … (if C2 … …))` — there is no `cond`/`match` in the language; the chain **is** the spelling |
+| L39 | `if C1 { … } else if C2 { … } else { … }` | nested `(if C1 … (if C2 … …))` — there is no `cond`; a flat `else if` chain, or `match` on the scrutinee with guards, is the spelling |
+| L39a | `match E { p1 => b1; p2 if g => b2; … }` | `(match E (p1 b1) (p2 if g b2) …)` (`EMatch`). Patterns: literals, variables (bind), `_`, `[a, b, …rest]` (list, with spread), `(:tag p…)` (tagged). **Guards (C3):** `p if g => b` — the arm fires only when `p` matches AND `g` (evaluated under `p`'s bindings; only `nil`/`false` are falsy) is truthy, else control falls to the next arm; a guardless arm hashes identically to the pre-guard 2-tuple. First match wins; no match is a runtime error. The compiler's structural condition uses unshadowable primitives (LAW A5) and cons-guards every `car`/`cdr`, so a list/tagged pattern against a non-pair scalar falls through instead of erroring. **Sexpr surface (C4):** the s-expression reader/printer read and write this exact `(match …)` form (patterns `_`/literal/symbol/`(list …[. rest])`/`(tagged tag …)`, a guarded arm `(pat if guard body)`), so match files round-trip through `pp fmt`. |
+| L39b | `f"…{E}…"` (f-string; C1) | `(string-append lit0 (->string E1) lit1 …)` — the `f` prefix is glued to the quote; `{E}` holes take arbitrary expressions and lower through the generic `->string`; `{{`/`}}` are literal braces; a single part (`f"abc"` or `f"{x}"`) is emitted bare, so `f"abc"` ≡ `"abc"`. Ordinary `"…"` strings never interpolate. One-way desugar (no AST node); hash-preserved through `pp fmt`. |
 | L40 | `force(E)`; `delay(E)` | `(force E)`; `(delay E)` |
 
 **Effects, handlers, capabilities, config**
 
 | # | Brace form | Reads as |
 |---|---|---|
-| L41 | `perform name(a, …)` | `(perform name a …)` — for every effect: `read-file` `write-file` `run` `run-dep` `http-get` `http-post` `log` `tree-observe` `materialize-file` `remove-file` `proc-spawn` `proc-alive?` `proc-stop` `proc-reap` `domain-state-get` `domain-state-put` |
+| L41 | `perform name(a, …)` | `(perform name a …)` — for every effect: `read-file` `write-file` `run` `run-dep!` `http-get` `http-post` `log` `tree-observe` `materialize-file` `remove-file` `proc-spawn` `proc-alive?` `proc-stop` `proc-reap` `domain-state-get` `domain-state-put` (B10 renamed the depfile effect `run-dep` → `run-dep!`; `!` marks the effect) |
 | L42 | `with-handler(n1 = h1, n2 = h2) { body… }` | `(with-handler [n1 h1 n2 h2] body…)` — a handler name may also be a keyword literal, as in sexprs |
 | L43 | `with-caps(E) { body… }` | `(with-caps E body…)` |
 | L44 | `with-config(E) { body… }` | `(with-config E body…)` — `E` is any expression, typically a map literal `{:k -> v}` |
@@ -1763,15 +1814,17 @@ Capability values need no rows of their own: `current-capabilities()`,
 `register-domain`, `fenced`, `argv`, `env-get`, `file-exists?`, `dir?`,
 `hash-string`, `hash-value`, `gensym`, …).
 
-**Cells** (world-reads get visual identity; string-literal argument only —
-a computed path uses the call form, e.g. `slurp(path(f))`)
+**Cells** (world-reads are the `$` family — the one observation surface; the
+head set and lowerings are the generated table in §B.8. B1 removed the fused
+cell-literal tokens `file:"P"`/`env:"N"`/`tree:"R"`, which could not spell a
+default or a computed path.)
 
 | # | Brace form | Reads as |
 |---|---|---|
-| L47 | `file:"P"` | `(slurp "P")` — a `file:` (or, under a `secret:` grant, `sealed:`) observation |
-| L48 | `env:"N"` | `(env-get "N")` — an `env:` observation |
-| L49 | `tree:"R"` | `(perform tree-observe "R")` — a `tree:` observation |
-| L50 | *(no literal for `stat:`/`probe:`/`argv:` cells)* `file-exists?("p")`, `dir?("p")`, `probe("n")`, `argv()` | the same calls — they observe predicates/registered probes, not path contents, so call form is the honest spelling |
+| L47 | `$file(P)` | `(slurp P)` — a `file:` (or, under a `secret:` grant, `sealed:`) observation |
+| L48 | `$env(N[, default])` | `(env-get N)` — an `env:` observation |
+| L49 | `$glob(R)` | `(perform tree-observe R)` — a `tree:` observation |
+| L50 | *(no `$` head for `stat:` cells)* `file-exists?("p")`, `dir?("p")` | predicate observations keep the call form — they observe predicates, not path contents |
 
 The M7 sketch's `glob:"src/*.c"` is **not frozen**: no glob-observing form
 exists in core (the manifest read that exists is `tree-observe`, L49), and
@@ -1955,11 +2008,56 @@ because later stages implement exactly what S0 froze:
     deliberately: `defmacro` and `needs` templates, *named* node
     definitions (`node name { … }` / `node f(p) { … }`; the bare node
     *expression* `node { E }` is representable), computed *parameter*
-    names, and type annotations (an `ETyped` is not plain quoted-symbol
+    names, type annotations (an `ETyped` is not plain quoted-symbol
     data, so representing one would need a new data convention, not a
-    parser rule). **Workaround for all of these:** build the form as data
+    parser rule), and **map spread `{ …m, k -> v }`** (B3): a quasiquote
+    map is built eagerly (`quasiquote_walk` does not descend into a `VMap`),
+    so a spread's `map-merge` would run before unquotes are substituted —
+    plain `{ k -> v }` literals are representable, spread is not.
+    **Workaround for all of these:** build the form as data
     with ordinary `list`/`cons`/`quote{}` calls — `list(quote { defnode },
     …)` etc. — exactly what macro bodies could always return; and a
     block-vs-map ambiguity inside a template is resolved the same way as
     outside quasiquote (B.7 #2): expression-position `{…}` is map data,
     sequencing must be spelled `do { … }`.
+
+### B.8 Surface tables (generated from `src/surface_tables.ml`)
+
+The closed surface sets — the `$KIND` observation heads, the `with { }`
+clause keywords, and the `needs` grant-descriptor sugar — are one typed value
+each in `src/surface_tables.ml` (MASTER-PLAN A′1). Every consumer (both
+readers, the `needs` desugar, `lint`, error messages) derives from those
+tables; nothing hand-copies the list. **This block is generated, not authored:**
+`tests/067-surface-tables-drift.sh` regenerates it (`pp --dump-surface-tables`)
+and diffs, so a table edit that isn't mirrored here is a red build (closing the
+D10 doc-drift class), and no closed set is ever hand-listed in SPEC again. Do
+not edit between the markers by hand.
+
+<!-- BEGIN GENERATED surface-tables -->
+#### Observation heads — `$KIND(args…)`
+
+| head | arity | qq | lowering | meaning |
+|---|---|---|---|---|
+| `$file` | 1 | yes | `(slurp $1)` | $file(path) — read a file's contents (records a file: cell) |
+| `$env` | 1..2 | yes | `(if (nil? (env-get $1)) $2 (env-get $1))` | $env(name[, default]) — read an environment variable (records an env: cell); the optional default is used when the variable is unset |
+| `$glob` | 1 | yes | `(perform tree-observe $1)` | $glob(path) — observe a directory tree (records a tree: cell) |
+| `$probe` | 1 | yes | `(probe $1)` | $probe(name) — read an observer-written volatile probe cell |
+| `$secret` | 1 | yes | `(slurp $1)` | $secret(path) — read a sealed (confidential) file |
+| `$config` | 1..2 | yes | `(config $1 $2)` | $config(key[, default]) — read a scoped config value (records a config: cell); the optional default is used when the key is unset |
+
+#### `with { }` clauses
+
+| keyword | wrapper | meaning |
+|---|---|---|
+| `caps:` | `with-caps` | caps: C — run the body with capability set C |
+| `config:` | `with-config` | config: M — run the body with ambient config map M |
+| `handlers:` | `with-handler` | handlers: { :name -> fn, ... } — install a map of effect handlers |
+
+#### Grant-descriptor sugar (inside `needs`)
+
+| descriptor | lowering | meaning |
+|---|---|---|
+| `fs.read` | `(cap-restrict (current-capabilities) $1 :ro)` | fs.read(p) — read-only fs grant for p |
+| `fs.write` | `(cap-restrict (current-capabilities) $1 :wo)` | fs.write(p) — write-only fs grant for p |
+| `fs.rw` | `(cap-restrict (current-capabilities) $1 :rw)` | fs.rw(p) — read-write fs grant for p |
+<!-- END GENERATED surface-tables -->

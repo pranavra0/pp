@@ -182,6 +182,22 @@ let main () =
     | "-e" :: e :: rest -> eval_str := Some e; parse rest
     | "--version" :: _ | "-v" :: _ ->
         Printf.printf "pp v%s\n" Version.string; exit 0
+    | "--dump-surface-tables" :: _ ->
+        (* MASTER-PLAN A′2: emit the surface tables as the SPEC-generated block;
+           tests/067 diffs this against the block committed to docs/SPEC.md. *)
+        print_string (Surface_tables.render_spec_tables ()); exit 0
+    | "--check-kernel-props" :: rest ->
+        (* MASTER-PLAN A″2: run the derived-generator kernel properties
+           (hash injectivity, quote round-trip, printer round-trip). tests/071
+           drives this with a fixed seed. Optional: --seed N, --count K. *)
+        let seed = ref 1 and count = ref 3000 in
+        let rec grab = function
+          | "--seed" :: n :: more -> seed := int_of_string n; grab more
+          | "--count" :: k :: more -> count := int_of_string k; grab more
+          | _ -> ()
+        in
+        grab rest;
+        if Kernel_props.run ~seed:!seed ~count:!count then exit 0 else exit 1
     | "--help" :: _ | "-h" :: _ ->
         Printf.printf "pp — lazy, pure-by-default, content-addressed Lisp\n";
         Printf.printf "Usage:\n";
@@ -206,6 +222,7 @@ let main () =
         Printf.printf "  pp --update <file.pp>     Re-resolve islands and rewrite inline pins (implies --fetch-islands)\n";
         Printf.printf "  pp --fetch-islands        Allow git fetch for uncached island pins (default: off)\n";
         Printf.printf "  pp --watch-interval <s>   Poll interval for --watch (default 1.0)\n";
+        Printf.printf "  pp lint <file.pp>         Check source file for naming/style convention violations\n";
         Printf.printf "  pp run <file>            Run a pp source file\n";
         Printf.printf "  pp --version             Print version\n";
         Printf.printf "  pp --help                Print this help\n";
@@ -233,6 +250,9 @@ let main () =
         watch_interval := float_of_string secs; parse rest
     | "--stabilize" :: rest -> stabilize := true; parse rest
     | "graph" :: rest -> graph_mode := true; parse rest
+    | "lint" :: f :: rest ->
+        ignore rest;
+        Lint.lint_file f
     | "run" :: f :: rest -> files := f :: !files; parse rest
     | f :: rest -> files := f :: !files; parse rest
     | [] -> ()

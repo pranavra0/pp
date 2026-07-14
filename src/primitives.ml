@@ -466,6 +466,28 @@ let () =
   register "list" (fun args ->
     List.fold_right (fun a acc -> VPair (a, acc)) args VNil);  (* lazy *)
 
+  (* (apply f seg1 seg2 … segN) — C2's call-spread target. Each seg is a proper
+     list; apply concatenates them (in order) and calls f with the combined
+     elements. The reader lowers `f(a, ...rest, b)` to
+     `apply(f, list(a), rest, list(b))`, so a spread anywhere in an argument
+     list becomes one apply. Only the list SPINES are forced (to splice them);
+     elements pass through unforced, exactly as `cons`/`list` do, so a spread of
+     unforced node thunks stays unforced — same discipline as `map`. Dispatch to
+     the callee (tree-walker vs VM closure vs builtin) reuses [call_with_args],
+     so both backends run it identically. *)
+  register "apply" (fun args ->
+    match args with
+    | f :: segs ->
+        let fn = force_val f in
+        let rec splice l = match force_val l with
+          | VNil -> []
+          | VPair (a, d) -> a :: splice d
+          | other -> failwith ("apply expects proper lists as its argument \
+                                segments, got " ^ string_of_value other)
+        in
+        call_with_args fn (List.concat_map splice segs)
+    | [] -> failwith "apply expects a function and at least one argument segment");
+
   (* (map f lst) — Phase 3 / Wall A's missing batch fan-out point
      (docs/PLAN-phase3-parallel.md). Applies [f] to each element via the
      apply hook and conses the results WITHOUT forcing them: `(map compile
@@ -813,6 +835,19 @@ let () =
     | [VFloat f] -> VString (string_of_float f)
     | _ -> failwith "number->string expects a number");
 
+  (* (->string v) — C1's generic display conversion, the target of every
+     f-string hole. A string renders as ITSELF (no surrounding quotes — the
+     whole point of interpolation); every other value renders via
+     string_of_value (numbers plain, sealed values redacted to #<sealed>, lists
+     as `(a b …)`). Deep-forces so nested thunks render, like `print`. *)
+  register "->string" (fun args ->
+    match args with
+    | [a] ->
+        (match force_deep a with
+         | VString s -> VString s
+         | v -> VString (string_of_value v))
+    | _ -> failwith "->string expects exactly one argument");
+
   register "string->number" (fun args ->
     match force_args args with
     | [VString s] ->
@@ -941,6 +976,19 @@ let () =
              VMap ((key, v) :: List.filter (fun (k', _) -> k' <> key) kvs)
          | _ -> failwith "map-insert expects a map, a key, and a value")
     | _ -> failwith "map-insert expects a map, a key, and a value");
+
+  (* map-merge(a, b) — a with every binding of b inserted; b wins on collision.
+     The lowering target for map spread `{ ...a, ...b }` (B3). Keys in a VMap
+     are already forced values, so structural comparison is exact. *)
+  register "map-merge" (fun args ->
+    match args with
+    | [a; b] ->
+        (match force_val a, force_val b with
+         | VMap akvs, VMap bkvs ->
+             let b_has k = List.exists (fun (k', _) -> k' = k) bkvs in
+             VMap (bkvs @ List.filter (fun (k, _) -> not (b_has k)) akvs)
+         | _ -> failwith "map-merge expects two maps")
+    | _ -> failwith "map-merge expects two maps");
 
   (* ---- read-string: parse string to value (for pp compiler) ---- *)
 
@@ -1086,6 +1134,42 @@ let () =
              v)
     | _ -> failwith "probe expects a probe name string");
 
+  (* ---- collect: applicative/validation error-accumulation partition ---- *)
+
+  (* `collect(items)` — partition a list of `[:ok, v]` / `[:err, e]` results.
+     Returns `[:ok, values]` if all succeeded, `[:err, errors]` if any failed.
+     A plain function used in pipelines (`srcs |> map(f) |> collect`, B2); the
+     validation counterpart to `try`'s short-circuit monad. Was the
+     `collect-results` primitive behind the removed `collect { }` reader sugar. *)
+  register "collect" (fun args ->
+    let rec force_list l =
+      match force_val l with
+      | VNil -> []
+      | VPair (h, t) -> force_val h :: force_list t
+      | _ -> failwith "collect expects a list"
+    in
+    match args with
+    | [arg] ->
+        let items = force_list arg in
+        let rec partition items oks errs =
+          match items with
+          | [] ->
+              if errs = [] then
+                VPair (VKeyword "ok",
+                  VPair (List.fold_right (fun a acc -> VPair (a, acc)) (List.rev oks) VNil, VNil))
+              else
+                VPair (VKeyword "err",
+                  VPair (List.fold_right (fun a acc -> VPair (a, acc)) (List.rev errs) VNil, VNil))
+          | VPair (VKeyword "ok", VPair (v, VNil)) :: rest ->
+              partition rest (v :: oks) errs
+          | VPair (VKeyword "err", VPair (e, VNil)) :: rest ->
+              partition rest oks (e :: errs)
+          | other :: _ ->
+              failwith ("collect: each item must be [:ok, v] or [:err, e], got "
+                        ^ string_of_value other)
+        in
+        partition items [] []
+    | _ -> failwith "collect expects one argument");
   (* ---- M4 sealed cells ---- *)
 
   (* `(unseal v)` — the one sanctioned way out of VSealed to VString (the
@@ -1190,4 +1274,27 @@ let () =
     incr gensym_counter;
     VSymbol (Printf.sprintf "%s~%d" prefix !gensym_counter));
 
+  (* A5: unshadowable aliases for the primitives the `match` lowering
+     (Compiler.EMatch) compiles its structural condition/binding code
+     down to. The lowering builds ordinary EApply (ESymbol "car"/"cdr"
+     /"="/"nil?"/"not"/"error", ...) nodes; on the VM those compile to
+     LOAD_GLOBAL, which resolves whatever is CURRENTLY bound to that
+     name — so user code that shadows e.g. `car` (`def car(x) { ... }`)
+     silently redirects match's internal machinery, and the VM diverges
+     from the tree-walker (which matches structurally via
+     Types.match_pattern and is immune to shadowing). Register each of
+     these under a NUL-prefixed name — no pp source can contain a NUL,
+     so no `def`/`let` can ever rebind it — pointing at the SAME builtin
+     value already registered under the plain name. Compiler.ml's match
+     lowering references the "\000"-prefixed name instead of the plain
+     one, so it always reaches the true primitive regardless of
+     shadowing. Mirrors [dead_slot] above (compiler.ml) as an
+     unshadowable-by-construction identifier. *)
+  List.iter (fun n ->
+    match lookup n with
+    | Some v -> Hashtbl.replace builtins ("\000" ^ n) v
+    | None -> failwith ("A5: expected primitive " ^ n ^ " to already be registered")
+  ) ["car"; "cdr"; "="; "nil?"; "not"; "error"; "pair?"]
+
+  ;
   ()

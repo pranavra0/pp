@@ -70,12 +70,12 @@ def proc-forget!(name, known) {
   filter(
 fn(n) { not(n = name) }, known)
 }
-# ---- observe: reap once per pass, then {name -> spec | :stopped} ----
+# ---- observe: reap once per pass, then { ...acc, name -> spec } per live proc ----
 
 def proc-observe-one(name) {
   let (st = perform domain-state-get(proc-state-key(name))) {
-    if nil?(st) { nil } else if perform proc-alive?(hash-map-get(st, :pid)) {
-      hash-map-get(st, :spec)
+    if nil?(st) { nil } else if perform proc-alive?(st[:pid]) {
+      st[:spec]
     } else { :stopped }
   }
 }
@@ -85,7 +85,7 @@ def proc-observe() {
   foldl(
 fn(acc, name) {
     let (v = proc-observe-one(name)) {
-      if nil?(v) { acc } else { map-insert(acc, name, v) }
+      if nil?(v) { acc } else { { ...acc, name -> v } }
     }
   }, {}, proc-known-names())
 }
@@ -113,27 +113,27 @@ def proc-spec-eq?(a, b) { hash-value(a) = hash-value(b) }
 def proc-diff(observed, desired) {
   let (dnames = map-keys(desired), onames = map-keys(observed), dspec =
 
-fn(n) { force-deep(hash-map-get(desired, n)) }, starts = filter(
+fn(n) { force-deep(desired[n]) }, starts = filter(
 fn(n) {
-    let (ov = hash-map-get(observed, n)) {
+    let (ov = observed[n]) {
       if nil?(ov) { true } else { ov = :stopped }
     } }, dnames), restarts = filter(
 fn(n) {
-    let (ov = hash-map-get(observed, n)) {
+    let (ov = observed[n]) {
       if not(nil?(ov)) {
         if not(ov = :stopped) { not(proc-spec-eq?(ov, dspec(n))) } else {
           false
         } } else { false } } }, dnames), stops = filter(
 fn(n) {
-    if nil?(hash-map-get(desired, n)) {
-      not(hash-map-get(observed, n) = :stopped)
+    if nil?(desired[n]) {
+      not(observed[n] = :stopped)
     } else { false }
   }, onames), items = append(map(
 fn(n) { proc-plan-item("start", n, dspec(n)) }, starts), append(map(
 
 fn(n) { proc-plan-item("restart", n, dspec(n)) }, restarts), map(
 fn(n) { proc-plan-item("stop", n, nil) }, stops)))) {
-    {:items -> items, :summary -> [[:started, number->string(length(starts))], [:restarted, number->string(length(restarts))], [:stopped, number->string(length(stops))]]}
+{:items -> items, :summary -> vec[vec[:started, number->string(length(starts))], vec[:restarted, number->string(length(restarts))], vec[:stopped, number->string(length(stops))]]}
 # A VECTOR of pairs, not a map — see domain-fs.pp's fs-diff-for for
 # why (Codec's canonical on-disk form sorts map keys but preserves
 # vector order; plan caching round-trips a MISS through the store).
@@ -145,29 +145,29 @@ fn(n) { proc-plan-item("stop", n, nil) }, stops)))) {
 
 def proc-stop-current!(name) {
   let (st = perform domain-state-get(proc-state-key(name))) {
-    if nil?(st) { nil } else { perform proc-stop(name, hash-map-get(st, :pid)) }
+    if nil?(st) { nil } else { perform proc-stop(name, st[:pid]) }
   } }
 # (proc-apply-item known item) -> updated known-list, folded across every
 # plan item by proc-apply (below) — the known-set is read ONCE (the
 # fold's seed) and written ONCE (proc-apply's own single domain-state-put
 # after the fold completes), never re-queried mid-pass.
 def proc-apply-item(known, item) {
-  let (kind = hash-map-get(item, :kind), name = hash-map-get(item, :name)) {
+  let (kind = item[:kind], name = item[:name]) {
     if kind = "stop" {
       proc-stop-current!(name)
       proc-forget!(name, known)
     } else {
       if kind = "restart" { proc-stop-current!(name) }
-      let (spec = hash-map-get(item, :spec), pid = perform proc-spawn(map-insert(spec, :name, name))) {
+      let (spec = item[:spec], pid = perform proc-spawn({ ...spec, :name -> name })) {
         proc-remember!(name, pid, spec, known)
       }
     } } }
 def proc-apply(plan) {
-  perform domain-state-put("known-services", foldl(proc-apply-item, proc-known-names(), hash-map-get(plan, :items)))
+  perform domain-state-put("known-services", foldl(proc-apply-item, proc-known-names(), plan[:items]))
 }
 
 # ---- registration ----
 
 def register-proc-domain(write-cap) {
-  register-domain({:name -> "proc", :namespace -> ["proc:"], :observe -> proc-observe, :diff -> proc-diff, :apply -> proc-apply, :write-cap -> write-cap})
+  register-domain({:name -> "proc", :namespace -> vec["proc:"], :observe -> proc-observe, :diff -> proc-diff, :apply -> proc-apply, :write-cap -> write-cap})
 }

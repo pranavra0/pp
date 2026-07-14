@@ -173,6 +173,25 @@ The core list operations are builtins and need no library: `list`, `cons`,
 
 #example("ref-list-stdlib", sh: true)
 
+== List and vector literals
+
+The brace surface distinguishes lists from vectors at the literal level. A bare
+`[...]` produces a list, while `vec[...]` produces a vector. Both support
+spread to splice an existing collection:
+
+#table(
+  columns: (auto, 1fr),
+  inset: (x: 6pt, y: 4pt),
+  align: (left, left),
+  stroke: (x: none, y: 0.5pt + luma(220)),
+  table.header([*Form*], [*Meaning*]),
+  [`[a, b, c]`], [List literal `(list a b c)`],
+  [`vec[a, b, c]`], [Vector literal `(vector a b c)`],
+  [`[head, ...tail]`], [Spread: `cons(head, tail)` — only at trailing position],
+)
+
+#example("ref-list-vec-literals")
+
 == Maps
 
 Maps are immutable. The builtins construct one (`hash-map`), look up a key
@@ -186,6 +205,39 @@ depends on `stdlib/list.pp`, so load that first.
 
 #example("ref-map-stdlib", sh: true)
 
+== Index access
+
+Bracket indexing works on maps and vectors, lowering to the appropriate
+builtin. A numeric key calls `vector-get`; any other key calls `hash-map-get`.
+
+#table(
+  columns: (auto, 1fr),
+  inset: (x: 6pt, y: 4pt),
+  align: (left, left),
+  stroke: (x: none, y: 0.5pt + luma(220)),
+  table.header([*Form*], [*Meaning*]),
+  [`m[:key]`], [`hash-map-get(m, :key)` — map lookup],
+  [`v[0]`], [`vector-get(v, 0)` — vector index],
+)
+
+#example("ref-index-access")
+
+== Map update
+
+The update syntax produces a new map with one or more keys inserted or
+replaced, without mutating the original.
+
+#table(
+  columns: (auto, 1fr),
+  inset: (x: 6pt, y: 4pt),
+  align: (left, left),
+  stroke: (x: none, y: 0.5pt + luma(220)),
+  table.header([*Form*], [*Meaning*]),
+  [`{ m | k1 -> v1, k2 -> v2 }`], [Nested `map-insert`: `map-insert(map-insert(m, k1, v1), k2, v2)`],
+)
+
+#example("ref-map-update")
+
 == Strings
 
 The string builtins cover appending, length, splitting, substrings, index-of,
@@ -198,6 +250,36 @@ trimming, and conversion to and from numbers.
 
 #example("ref-string-stdlib", sh: true)
 
+=== Interpolation (f-strings)
+
+Interpolation requires the `f` prefix glued to the opening quote. `{expr}`
+holes take arbitrary expressions and lower through the generic `->string`
+conversion; the rest of the string is literal text. Ordinary `"..."` strings
+never interpolate, so `"{x}"` is three literal characters — JSON fragments,
+shell snippets, and generated code are safe by default.
+
+#table(
+  columns: (auto, 1fr),
+  inset: (x: 6pt, y: 4pt),
+  align: (left, left),
+  stroke: (x: none, y: 0.5pt + luma(220)),
+  table.header([*Form*], [*Meaning*]),
+  [`f"a{e}b"`], [`string-append("a", ->string(e), "b")`],
+  [`f"{e}"`], [`->string(e)` — coerces any value to its string form],
+  [`f"{{"` / `f"}}"`], [A literal `{` / `}` — doubling escapes the brace],
+  [`"{x}"`], [Three literal characters — an ordinary string never interpolates],
+)
+
+```pp
+let name = "world"
+let n = 3
+print(f"Hello, {name}! Built {n} targets.")
+```
+
+`->string` renders a string as itself (no quotes) and every other value in its
+display form. f-strings desugar to `string-append`/`->string` with no dedicated
+AST node, so they round-trip through `pp fmt` with the hash preserved.
+
 == Type predicates
 
 Each predicate forces its argument and tests its shape. The full set is
@@ -205,3 +287,134 @@ Each predicate forces its argument and tests its shape. The full set is
 `vector?`, `map?`, `set?`, and `fn?`.
 
 #example("ref-predicates")
+
+== Pattern matching
+
+`match` is the one pattern-dispatch form (there is no `cond` and there are no
+function clauses). It tries each arm's pattern against the scrutinee in order;
+the first that matches wins, and a scrutinee that matches no arm is a runtime
+error. Patterns are literals, variables (which bind), the wildcard `_`, list
+patterns with spread (`[a, ...rest]`), and tagged patterns (`[:ok, v]`).
+
+#table(
+  columns: (auto, 1fr),
+  inset: (x: 6pt, y: 4pt),
+  align: (left, left),
+  stroke: (x: none, y: 0.5pt + luma(220)),
+  table.header([*Form*], [*Meaning*]),
+  [`match e { p => r }`], [Bind `p`'s variables and evaluate `r` on the first matching arm],
+  [`p if cond => r`], [*Guard:* the arm fires only when `p` matches AND `cond` (evaluated under `p`'s bindings) is truthy, else control falls to the next arm],
+  [`[a, b, ...rest] => r`], [List pattern with spread — `a`, `b`, and the remainder `rest`],
+  [`[:ok, v] => r`], [Tagged pattern — a two-element list headed by a keyword],
+  [`_ => r`], [Wildcard — matches anything without binding],
+)
+
+```pp
+def classify(n) {
+  match n {
+    x if x < 0 => "negative"
+    0          => "zero"
+    x if x > 100 => "large"
+    _          => "small"
+  }
+}
+```
+
+Guards subsume the multi-way conditional: a `match` on the scrutinized value
+with guarded arms replaces what a `cond` chain would have spelled. Both
+backends agree on every pattern kind, and the lowering uses unshadowable
+internal primitives — redefining `car` or `=` cannot change match semantics.
+The s-expression surface reads and writes the same form
+(`(match e (p body) (p if guard body) ...)`), so match files round-trip
+through `pp fmt`.
+
+== Spread
+
+The `...` prefix is one concept in three places: list/vector construction, map
+update and merge (the Maps section above), and call arguments. In a list or
+vector literal it splices a collection in; in a call it splices arguments into
+the call, so a spread may appear anywhere in the argument list.
+
+#table(
+  columns: (auto, 1fr),
+  inset: (x: 6pt, y: 4pt),
+  align: (left, left),
+  stroke: (x: none, y: 0.5pt + luma(220)),
+  table.header([*Form*], [*Meaning*]),
+  [`[a, ...rest]`], [`cons(a, rest)`],
+  [`vec[a, ...rest]`], [`cons(a, rest)` in vector context],
+  [`f(a, ...rest, b)`], [Call spread: `apply(f, list(a), rest, list(b))` — a spread may appear anywhere in the arguments],
+)
+
+```pp
+let flags = ["-O2", "-Wall"]
+run!("cc", ...flags, "-c", src, "-o", obj)
+```
+
+A spread whose target is a compound expression uses the spaced form
+(`... expr`), matching the list-literal spelling.
+
+== Observation sigils
+
+The `$` sigil introduces world observations — reads that cross the boundary
+between pure computation and the outside world. Every observation records
+the corresponding trace cell, making it visible to the cache-validity system.
+
+#table(
+  columns: (auto, 1fr, auto),
+  inset: (x: 6pt, y: 4pt),
+  align: (left, left, left),
+  stroke: (x: none, y: 0.5pt + luma(220)),
+  table.header([*Form*], [*Lowering*], [*Trace cell*]),
+  [`$file("path")`], [`slurp("path")`], [`file:`],
+  [`$env("VAR")`], [`env-get("VAR")`], [`env:`],
+  [`$env("VAR", "default")`], [`if nil?(env-get("VAR")) "default" env-get("VAR")`], [`env:`],
+  [`$glob("pattern")`], [`list-dir("pattern")`], [`tree:`],
+  [`$probe("name")`], [`probe("name")`], [`probe:`],
+  [`$secret("path")`], [`slurp("path")`], [`sealed:`],
+)
+
+#example("ref-sigils")
+
+== Error propagation: try
+
+The `try` block introduces a region where bindings unwrap `[:ok, v]` /
+`[:err, e]` pairs automatically. Each `name <- expr` extracts the value on
+success or propagates the error on failure. A trailing `?` on an expression
+does the same inline.
+
+Inside a `try` block, `let name = expr?` is equivalent to `name <- expr`.
+The block's last expression is the overall value (reachable only when every
+binding succeeded).
+
+#table(
+  columns: (auto, 1fr),
+  inset: (x: 6pt, y: 4pt),
+  align: (left, left),
+  stroke: (x: none, y: 0.5pt + luma(220)),
+  table.header([*Form*], [*Meaning*]),
+  [`try { a <- f(); body }`], [Bind `a` to the unwrapped value; propagate on `:err`],
+  [`try { let x = g()?; body }`], [Same, using the `?` suffix],
+  [`try { body }`], [Plain body — no unwrapping, evaluates as usual],
+)
+
+#example("ref-try")
+
+== Collecting results
+
+`collect` is a plain function used in pipelines: it partitions a list of
+`[:ok, v]` / `[:err, e]` results, returning `[:ok, values]` if every element
+succeeded or `[:err, errors]` if any failed. It is the validation counterpart
+to `try` — where `try` short-circuits at the first error, `collect` runs
+everything and accumulates. There is no `collect { }` block form.
+
+#table(
+  columns: (auto, 1fr),
+  inset: (x: 6pt, y: 4pt),
+  align: (left, left),
+  stroke: (x: none, y: 0.5pt + luma(220)),
+  table.header([*Form*], [*Meaning*]),
+  [`srcs |> map(f) |> collect`], [`[:ok, [v…]]` if all ok, else `[:err, [e…]]`],
+)
+
+#example("ref-collect")

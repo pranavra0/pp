@@ -794,6 +794,25 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
             | Some d -> eval_tail d env k
             | None -> k VNil))
 
+  | EMatch (scrutinee, arms) ->
+      let v = force (eval scrutinee env) in
+      let rec try_arms = function
+        | [] -> failwith "match failure"
+        | (pat, guard, body) :: rest ->
+            (match Types.match_pattern v pat with
+             | Some binds ->
+                 let env' = List.fold_left (fun e (n, v) -> Types.extend_env e n v) env binds in
+                 (* A guard is evaluated under the arm's bindings; a falsy guard
+                    falls through to the next arm (C3). Only nil/false are falsy. *)
+                 let fires = match guard with
+                   | None -> true
+                   | Some g -> (match force (eval g env') with VBool false | VNil -> false | _ -> true)
+                 in
+                 if fires then eval_tail body env' k else try_arms rest
+             | None -> try_arms rest)
+      in
+      try_arms arms
+
 (* ---- Function Application (non-tail) ---- *)
 
 and apply (fn : value) (args : value list) (env : env) : value =
@@ -936,8 +955,9 @@ and perform_builtin_effect (name : string) (args : value list) : value =
          (process.ml). *)
       Process.run_effect args
 
-  | "run-dep" ->
-      (* Q2 refinement: run + depfile → precise cells, no coarse tree cells. *)
+  | "run-dep!" ->
+      (* Q2 refinement: run + depfile → precise cells, no coarse tree cells.
+         B10: `!`-suffixed — the effect name carries the effect marker. *)
       Process.run_dep_effect args
 
   | "http-get" ->
