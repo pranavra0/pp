@@ -11,6 +11,9 @@
   ; M7 S2: tests/055's whole-tree `pp fmt` round-trip sweep also covers the
   ; manual's live-executed .pp examples
   (source_tree docs/manual)
+  ; A′2: tests/067 diffs SPEC's generated surface-tables block against
+  ; `pp --dump-surface-tables`, so the SPEC file must be a runtest dep.
+  docs/SPEC.md
   build.pp
   scripts/run-tests.sh
   src/main.exe

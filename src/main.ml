@@ -182,6 +182,10 @@ let main () =
     | "-e" :: e :: rest -> eval_str := Some e; parse rest
     | "--version" :: _ | "-v" :: _ ->
         Printf.printf "pp v%s\n" Version.string; exit 0
+    | "--dump-surface-tables" :: _ ->
+        (* MASTER-PLAN A′2: emit the surface tables as the SPEC-generated block;
+           tests/067 diffs this against the block committed to docs/SPEC.md. *)
+        print_string (Surface_tables.render_spec_tables ()); exit 0
     | "--help" :: _ | "-h" :: _ ->
         Printf.printf "pp — lazy, pure-by-default, content-addressed Lisp\n";
         Printf.printf "Usage:\n";

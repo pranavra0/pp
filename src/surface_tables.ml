@@ -139,6 +139,74 @@ let grant_sugar : grant_sugar list = [
 let find_grant_sugar (name : string) : grant_sugar option =
   List.find_opt (fun g -> g.descriptor = name) grant_sugar
 
+(* ---- SPEC rendering (MASTER-PLAN A′2) --------------------------------- *)
+
+(* The tables above are the ONLY hand-authored copy of these closed sets. SPEC
+   used to hand-list them in prose (the D10 drift class); instead it now carries
+   a *generated* block that [tests/067] regenerates from here and diffs. A table
+   edit that isn't mirrored into SPEC is therefore a red build, not a stale
+   paragraph — the doc-sync failure mode becomes mechanical. This function emits
+   exactly the text that lives between SPEC's generated-block markers. *)
+
+(* Render a lowering template back to its s-expression spelling; user arguments
+   show as positional holes [$1], [$2], … (1-based) so the shape is legible
+   without inventing parameter names. *)
+let rec render_tmpl : tmpl -> string = function
+  | Prim s -> s
+  | Arg i -> Printf.sprintf "$%d" (i + 1)
+  | App ts -> "(" ^ String.concat " " (List.map render_tmpl ts) ^ ")"
+  | If (c, t, e) ->
+      Printf.sprintf "(if %s %s %s)"
+        (render_tmpl c) (render_tmpl t) (render_tmpl e)
+
+let render_arity (h : obs_head) : string =
+  if h.min_args = h.max_args then string_of_int h.min_args
+  else if h.max_args = max_int then Printf.sprintf "%d+" h.min_args
+  else Printf.sprintf "%d..%d" h.min_args h.max_args
+
+let render_wrapper : with_wrapper -> string = function
+  | WCaps -> "with-caps"
+  | WConfig -> "with-config"
+  | WHandlers -> "with-handler"
+
+let render_spec_tables () : string =
+  let b = Buffer.create 2048 in
+  let line s = Buffer.add_string b s; Buffer.add_char b '\n' in
+  line "#### Observation heads — `$KIND(args…)`";
+  line "";
+  line "| head | arity | qq | lowering | meaning |";
+  line "|---|---|---|---|---|";
+  List.iter (fun h ->
+    (* the max-arity template is the most informative shape (e.g. $env's
+       with-default form); arity is pre-checked before the reader interprets it *)
+    let arity_for_tmpl = if h.max_args = max_int then h.min_args else h.max_args in
+    line (Printf.sprintf "| `$%s` | %s | %s | `%s` | %s |"
+            h.head (render_arity h)
+            (if h.qq_legal then "yes" else "no")
+            (render_tmpl (h.tmpl arity_for_tmpl))
+            h.doc))
+    obs_heads;
+  line "";
+  line "#### `with { }` clauses";
+  line "";
+  line "| keyword | wrapper | meaning |";
+  line "|---|---|---|";
+  List.iter (fun c ->
+    let kw = if c.colon then c.clause ^ ":" else c.clause ^ " NAME:" in
+    line (Printf.sprintf "| `%s` | `%s` | %s |"
+            kw (render_wrapper c.wrapper) c.wdoc))
+    with_clauses;
+  line "";
+  line "#### Grant-descriptor sugar (inside `needs`)";
+  line "";
+  line "| descriptor | lowering | meaning |";
+  line "|---|---|---|";
+  List.iter (fun g ->
+    line (Printf.sprintf "| `%s` | `(cap-restrict (current-capabilities) $1 :%s)` | %s |"
+            g.descriptor g.restrict_mode g.gdoc))
+    grant_sugar;
+  Buffer.contents b
+
 (* ---- the exhaustive ratchet over Cell.t ------------------------------- *)
 
 (* Every cell kind's surface story, decided in ONE place. The match is

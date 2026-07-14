@@ -340,6 +340,13 @@ let fresh_try_var () =
 
 type try_stmt = TryBind of string * expr | TryExpr of expr
 
+(* A parsed handler name (A′5): the `with-handler(name = fn, …)` name slot
+   accepts a symbol or a keyword, in BOTH the normal and quasiquote readers.
+   [parse_handler_pairs] parses the shared pair syntax once and returns these
+   raw names; each reader maps them to its own representation (normal keeps the
+   string; quasiquote builds `'sym` vs `'(quote :kw)` data). *)
+type hname = HName of string | HKeyword of string
+
 
 let rec parse_expr ps (c : ctx) : expr =
   parse_pipe ps c
@@ -476,6 +483,39 @@ and parse_args ps : expr list =
       | t -> parse_error ps ("expected ',' or ')', got " ^ string_of_btok t)
     in
     loop []
+  end
+
+(* Shared `with-handler(name = value, …)` pair parser (A′5). The pair syntax —
+   a symbol/keyword name, `=`, a value, comma-separated, up to `)` — is
+   identical in both readers; only the value parser and the built shape differ,
+   so each caller passes its [parse_value] and maps the returned raw pairs. One
+   parser means the two contexts cannot drift: previously the quasiquote copy
+   silently accepted a trailing comma while the normal copy rejected it (like
+   every other comma list in the grammar, e.g. [parse_args]); folding them here
+   makes both reject it. *)
+and parse_handler_pairs ps ~(parse_value : unit -> expr) : (hname * expr) list =
+  if (peek ps ~nl:true).t = TRParen then (advance ps; [])
+  else begin
+    let rec pairs acc =
+      let name =
+        match (peek ps ~nl:true).t with
+        | TName s -> advance ps; HName s
+        | TKeyword k -> advance ps; HKeyword k
+        | t -> parse_error ps ("handler name must be a symbol or keyword, got "
+                               ^ string_of_btok t)
+      in
+      (match (peek ps ~nl:true).t with
+       | TName "=" -> advance ps
+       | t -> parse_error ps ("expected '=' after handler name, got "
+                              ^ string_of_btok t));
+      skip_nl ps;
+      let v = parse_value () in
+      match (peek ps ~nl:true).t with
+      | TComma -> advance ps; skip_nl ps; pairs ((name, v) :: acc)
+      | TRParen -> advance ps; List.rev ((name, v) :: acc)
+      | t -> parse_error ps ("expected ',' or ')', got " ^ string_of_btok t)
+    in
+    pairs []
   end
 
 (* ---- primaries and head forms ---- *)
@@ -1061,27 +1101,14 @@ and parse_head ps c (n : string) : expr =
       (* L42: with-handler(n1 = h1, n2 = h2) { body... } *)
       advance ps; advance ps;
       skip_nl ps;
-      let rec pairs acc =
-        let name =
-          match (peek ps ~nl:true).t with
-          | TName s -> advance ps; s
-          | TKeyword k -> advance ps; k
-          | t -> parse_error ps ("handler name must be a symbol or keyword, got "
-                                 ^ string_of_btok t)
-        in
-        (match (peek ps ~nl:true).t with
-         | TName "=" -> advance ps
-         | t -> parse_error ps ("expected '=' after handler name, got "
-                                ^ string_of_btok t));
-        skip_nl ps;
-        let h = parse_expr ps free_ctx in
-        match (peek ps ~nl:true).t with
-        | TComma -> advance ps; skip_nl ps; pairs ((name, h) :: acc)
-        | TRParen -> advance ps; List.rev ((name, h) :: acc)
-        | t -> parse_error ps ("expected ',' or ')', got " ^ string_of_btok t)
+      (* A name and a keyword both denote the handler by its string here
+         (EWithHandler stores a string); the shared parser (parse_handler_pairs)
+         keeps them distinct for the quasiquote reader's benefit. *)
+      let handlers =
+        List.map
+          (function (HName s, h) | (HKeyword s, h) -> (s, h))
+          (parse_handler_pairs ps ~parse_value:(fun () -> parse_expr ps free_ctx))
       in
-      let handlers = if (peek ps ~nl:true).t = TRParen
-                     then (advance ps; []) else pairs [] in
       let body = parse_block_body ps in
       EWithHandler (handlers, body)
   | "module" when next_t = TLBrace ->
@@ -2034,29 +2061,19 @@ and parse_qq_head ps (n : string) : expr =
   | "with-handler" when next_t = TLParen ->
       advance ps; advance ps;
       skip_nl ps;
-      let rec pairs acc =
-        if (cur ps).t = TRParen then (advance ps; List.rev acc)
-        else begin
-          let name_e =
-            match (peek ps ~nl:true).t with
-            | TName s -> advance ps; qq_sym s
-            | TKeyword k -> advance ps; EQuote (ELiteral (VKeyword k))
-            | t -> parse_error ps ("handler name must be a symbol or keyword, got "
-                                   ^ string_of_btok t)
-          in
-          (match (peek ps ~nl:true).t with
-           | TName "=" -> advance ps
-           | t -> parse_error ps ("expected '=' after handler name, got "
-                                  ^ string_of_btok t));
-          skip_nl ps;
-          let h = parse_qq ps in
-          match (peek ps ~nl:true).t with
-          | TComma -> advance ps; skip_nl ps; pairs (h :: name_e :: acc)
-          | TRParen -> advance ps; List.rev (h :: name_e :: acc)
-          | t -> parse_error ps ("expected ',' or ')', got " ^ string_of_btok t)
-        end
+      (* Same pair syntax as the normal reader (parse_handler_pairs); the data
+         shape is the flat [name; value; …] vector the with-handler lowering
+         expects, with a name kept as `'sym` and a keyword as `'(quote :kw)`. *)
+      let flat =
+        List.concat_map
+          (fun (name, h) ->
+            let name_e = match name with
+              | HName s -> qq_sym s
+              | HKeyword k -> EQuote (ELiteral (VKeyword k))
+            in
+            [name_e; h])
+          (parse_handler_pairs ps ~parse_value:(fun () -> parse_qq ps))
       in
-      let flat = pairs [] in
       let body = parse_qq_block_items ps in
       qq_chain (qq_sym "with-handler" :: EApply (ESymbol "vector", flat) :: body)
   | "module" when next_t = TLBrace ->

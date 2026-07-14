@@ -403,4 +403,22 @@ if PP="$PP" bash tests/066-dollar-heads.sh; then
 else
   echo "FAIL 066-dollar-heads"; fail=1
 fi
+echo "--- A′2: surface-tables SPEC drift + single-source grep ---"
+if PP="$PP" bash tests/067-surface-tables-drift.sh; then
+  echo "ok   067-surface-tables-drift"
+else
+  echo "FAIL 067-surface-tables-drift"; fail=1
+fi
+echo "--- A′3: needs value-openness (named/composed/sugar grants, differential) ---"
+if PP="$PP" bash tests/068-needs-value-open.sh; then
+  echo "ok   068-needs-value-open"
+else
+  echo "FAIL 068-needs-value-open"; fail=1
+fi
+echo "--- A′5: one with-handler pair parser, two contexts (differential) ---"
+if PP="$PP" bash tests/069-handler-pair-dedup.sh; then
+  echo "ok   069-handler-pair-dedup"
+else
+  echo "FAIL 069-handler-pair-dedup"; fail=1
+fi
 exit $fail

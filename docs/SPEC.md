@@ -1752,13 +1752,18 @@ including the block's duplicate-definition check (LAW 4).
 | L34 | `node f(p…) { body… }` | `(defnode (f p…) body…)` — typed params/return as L30/L31 |
 | L35 | `node f(p) needs I1, I2 { body… }` | `(defnode (f p) (with-caps C ⟦body…⟧))` where `C` is the single lowered item, or `(cap-compose I1′ I2′ …)` for several |
 
-`needs` items (L35) lower as: `fs.read(E)` →
-`(cap-restrict (current-capabilities) E :ro)`; `fs.write(E)` → `… :wo`;
-`fs.rw(E)` → `… :rw`; any other item is an ordinary expression passed
-through unchanged (it must evaluate to a capability — LAW 22b's ⊆ gate does
-the enforcing; the reader adds nothing). `fs.read`/`fs.write`/`fs.rw` are
-recognized only inside a `needs` clause (elsewhere `fs.read` is just an
-identifier). The M7 sketch's bare `proc` item is **not frozen**: no existing
+`needs` items (L35) lower via the grant-descriptor sugar of §B.8
+(`fs.read`/`fs.write`/`fs.rw`, each a mode-scoped `cap-restrict` over
+`(current-capabilities)` — that table is the one authoritative listing, not
+this paragraph). **`needs` is value-open:** the descriptors are only sugar;
+any other item is an ordinary expression passed through unchanged (it must
+evaluate to a capability — LAW 22b's ⊆ gate does the enforcing; the reader
+adds nothing), so a named or composed grant is a legal item —
+`node deploy() needs k8s-prod { … }` where `let k8s-prod =
+cap-compose(net("k8s.prod.internal"), process)`. The capability *kind* set
+stays closed (DESIGN §1 principle 7); the *vocabulary* of named grants is open
+at the value level. The `fs.*` descriptors are recognized only inside a
+`needs` clause (elsewhere `fs.read` is just an identifier). The M7 sketch's bare `proc` item is **not frozen**: no existing
 form projects a single capability kind out of the ambient set
 (`cap-restrict` is path-scoped, and a path-restricted `CapProcess` is
 unusable — `demo/agent.pp`'s own comment), so freezing it would require a
@@ -1995,3 +2000,43 @@ because later stages implement exactly what S0 froze:
     block-vs-map ambiguity inside a template is resolved the same way as
     outside quasiquote (B.7 #2): expression-position `{…}` is map data,
     sequencing must be spelled `do { … }`.
+
+### B.8 Surface tables (generated from `src/surface_tables.ml`)
+
+The closed surface sets — the `$KIND` observation heads, the `with { }`
+clause keywords, and the `needs` grant-descriptor sugar — are one typed value
+each in `src/surface_tables.ml` (MASTER-PLAN A′1). Every consumer (both
+readers, the `needs` desugar, `lint`, error messages) derives from those
+tables; nothing hand-copies the list. **This block is generated, not authored:**
+`tests/067-surface-tables-drift.sh` regenerates it (`pp --dump-surface-tables`)
+and diffs, so a table edit that isn't mirrored here is a red build (closing the
+D10 doc-drift class), and no closed set is ever hand-listed in SPEC again. Do
+not edit between the markers by hand.
+
+<!-- BEGIN GENERATED surface-tables -->
+#### Observation heads — `$KIND(args…)`
+
+| head | arity | qq | lowering | meaning |
+|---|---|---|---|---|
+| `$file` | 1 | yes | `(slurp $1)` | $file(path) — read a file's contents (records a file: cell) |
+| `$env` | 1..2 | yes | `(if (nil? (env-get $1)) $2 (env-get $1))` | $env(name[, default]) — read an environment variable (records an env: cell); the optional default is used when the variable is unset |
+| `$glob` | 1 | yes | `(list-dir $1)` | $glob(pattern) — list a directory (records a tree: cell) |
+| `$probe` | 1 | yes | `(probe $1)` | $probe(name) — read an observer-written volatile probe cell |
+| `$secret` | 1 | yes | `(slurp $1)` | $secret(path) — read a sealed (confidential) file |
+
+#### `with { }` clauses
+
+| keyword | wrapper | meaning |
+|---|---|---|
+| `caps:` | `with-caps` | caps: C — run the body with capability set C |
+| `config:` | `with-config` | config: M — run the body with ambient config map M |
+| `handler NAME:` | `with-handler` | handler NAME: fn — install one effect handler (B9 will move to handlers: { :name -> fn, ... }) |
+
+#### Grant-descriptor sugar (inside `needs`)
+
+| descriptor | lowering | meaning |
+|---|---|---|
+| `fs.read` | `(cap-restrict (current-capabilities) $1 :ro)` | fs.read(p) — read-only fs grant for p |
+| `fs.write` | `(cap-restrict (current-capabilities) $1 :wo)` | fs.write(p) — write-only fs grant for p |
+| `fs.rw` | `(cap-restrict (current-capabilities) $1 :rw)` | fs.rw(p) — read-write fs grant for p |
+<!-- END GENERATED surface-tables -->
