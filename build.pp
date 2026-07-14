@@ -6,7 +6,7 @@
 def compile-ocaml(source, flags) {
   effect(print("compiling", source, "..."), string-append(source(source, 0, string-length(source) - 3), ".cmo"))
 }
-# (perform ProcessSpawn "ocamlc" (concat flags source))
+# perform ProcessSpawn("ocamlc", concat(flags, source))
 # For now, just return the expected .cmo path
 
 
@@ -25,8 +25,8 @@ def build-pp() {
 
 
 
-# (perform ProcessSpawn "ocamlc"
-# (list "-o" "pp" types_cmo hasher_cmo ...))
+# perform ProcessSpawn("ocamlc"
+# list("-o", "pp", types_cmo, hasher_cmo, ...))
 
 # Force the final binary — transitively forces everything in the DAG
 

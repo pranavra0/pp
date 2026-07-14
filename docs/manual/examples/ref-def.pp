@@ -1,5 +1,5 @@
-# At the top level, (def name value) evaluates the value once and binds it;
-# (def (name args) body) defines a function.
+# At the top level, def name = value evaluates the value once and binds it;
+# def name(args) { body } defines a function.
 let answer = 6 * 7
 print(answer)
 def square(x) { x * x }

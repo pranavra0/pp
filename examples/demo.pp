@@ -57,7 +57,7 @@ print("=== 4. Effect block with capabilities ===")
 def read-config(path) {
   effect(:capabilities, [filesystem(path, :ro)], print("would read config from", path), string-append("config for ", path))
 }
-# (perform read-file path)
+# perform read-file(path)
 
 
 print(read-config("/etc/app/config.toml"))

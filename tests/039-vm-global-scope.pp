@@ -2,7 +2,7 @@
 #
 # Both come from the VM resolving names it cannot place in a frame via the
 # globals table:
-# (a) a bare top-level `(do (def x ...) ...)` must keep its defs
+# (a) a bare top-level `do { def x ... ... }` must keep its defs
 # BLOCK-LOCAL — visible inside the `do`, gone once it closes — exactly
 # like the tree-walker (evaluator.ml EDo threads a local env_ref that
 # is never merged back into the caller).
