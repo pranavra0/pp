@@ -421,4 +421,9 @@ if PP="$PP" bash tests/069-handler-pair-dedup.sh; then
 else
   echo "FAIL 069-handler-pair-dedup"; fail=1
 fi
+if PP="$PP" bash tests/070-hash-injective-nearmiss.sh; then
+  echo "ok   070-hash-injective-nearmiss"
+else
+  echo "FAIL 070-hash-injective-nearmiss"; fail=1
+fi
 exit $fail

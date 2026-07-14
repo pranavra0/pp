@@ -293,8 +293,25 @@ let hex_encode (s : string) : string =
 let hash_string (s : string) : string =
   hex_encode (Cryptokit.hash_string (Cryptokit.Hash.sha256 ()) s)
 
+(* Injective framing (A″1). Each part is emitted as its byte length in decimal,
+   a ':', then the part's bytes — so the pre-hash string can be parsed back to
+   the exact part list (read digits to ':', then read that many bytes, repeat).
+   Distinct part LISTS therefore map to distinct pre-hash strings even when a
+   part itself contains ':' (user paths, symbol names, tags) or is empty. The
+   old `String.concat ":"` was ambiguous the instant any part held a ':' — the
+   LAW-20 collision class where two distinct ASTs share one content key and pp
+   serves a wrong cached result. Every hash builder below funnels through here
+   (and through no other join), so injectivity is a single-site property that
+   A″2's generated-AST property test guards forever. Changing this framing is
+   hash-affecting across the whole store — see the golden fixture regeneration
+   receipt (tests/fixtures/store-v1). *)
 let hash_concat (parts : string list) : string =
-  hash_string (String.concat ":" parts)
+  let buf = Buffer.create 64 in
+  List.iter (fun p ->
+    Buffer.add_string buf (string_of_int (String.length p));
+    Buffer.add_char buf ':';
+    Buffer.add_string buf p) parts;
+  hash_string (Buffer.contents buf)
 
 (* THE canonical float spelling — bit-exact via %h (so two doubles that differ
    anywhere in their bits hash and encode differently; string_of_float's ~12
@@ -393,11 +410,15 @@ and hash_pattern (p : pattern) : string =
   | PVariable s -> hash_concat ["p_var"; s]
   | PWildcard -> "p_wild"
   | PList (pats, rest) ->
-      let ph = String.concat "" (List.map hash_pattern pats) in
+      (* Frame the sub-pattern list through hash_concat rather than a
+         delimiter-free `String.concat ""`: the latter was injective only by
+         the accident that every sub-hash is exactly 64 chars, so [ab] and [a;b]
+         could alias the moment that invariant slipped (A″1). *)
+      let ph = hash_concat (List.map hash_pattern pats) in
       let rh = match rest with Some r -> hash_pattern r | None -> "nil" in
       hash_concat ["p_list"; ph; rh]
   | PTagged (tag, pats) ->
-      let ph = String.concat "" (List.map hash_pattern pats) in
+      let ph = hash_concat (List.map hash_pattern pats) in
       hash_concat ["p_tagged"; tag; ph]
 
 and hash_value (v : value) : string =
@@ -690,7 +711,7 @@ let free_vars (e : expr) : SS.t =
 (* Incremental hash: hash("env", parent_hash, binding_name, hash_of_value).
    O(1) in the size of the env chain. *)
 let env_extend_hash (parent_hash : string) (name : string) (v_hash : string) : string =
-  hash_string (String.concat ":" ["env"; parent_hash; name; v_hash])
+  hash_concat ["env"; parent_hash; name; v_hash]
 
 (* Extend an environment with one binding.
    Creates a new env node with a fresh ID and an incrementally-computed hash. *)
@@ -705,9 +726,9 @@ let extend_env (env : env) (name : string) (v : value) : env =
 let hash_bindings_flat (bindings : (string * value) list) : string =
   let sorted = List.sort (fun (a,_) (b,_) -> String.compare a b) bindings in
   let parts = List.map (fun (name, v) ->
-    String.concat ":" ["env_binding"; name; hash_value v]
+    hash_concat ["env_binding"; name; hash_value v]
   ) sorted in
-  hash_string (String.concat ":" ("env_flat" :: parts))
+  hash_concat ("env_flat" :: parts)
 
 (* Build an environment from a flat list of bindings (for initial env).
    Assigns a fresh ID and computes a deterministic hash. *)

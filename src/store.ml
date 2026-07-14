@@ -284,12 +284,18 @@ let stat_kind (path : string) : string =
 let stat_kind_hash (kind : string) : string =
   hash_string ("stat:" ^ kind)
 
-(* Environment observations: "env:<NAME>" — value or absence. *)
+(* Environment observations: "env:<NAME>" — value or absence. The present and
+   absent cases carry DISTINCT hash_concat tags so a variable whose value is the
+   literal string "absent" cannot hash-collide with an unset variable (the old
+   `hash_string ("env:" ^ s)` vs `hash_string "env:absent"` did exactly that,
+   an A″1-class observation collision that let a node hit a result cached under
+   the wrong world-state); framing via hash_concat also makes any value bytes,
+   including ':' , injective. *)
 let env_cell_id (name : string) : string = Cell.(to_string (Env name))
 let env_observed_hash (v : string option) : string =
   match v with
-  | Some s -> hash_string ("env:" ^ s)
-  | None -> hash_string "env:absent"
+  | Some s -> hash_concat ["env-present"; s]
+  | None -> hash_concat ["env-absent"]
 
 (* The single argv cell: the program-argument list after `--`. *)
 let argv_cell_id : string = Cell.to_string Cell.Argv
