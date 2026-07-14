@@ -1,0 +1,60 @@
+# Deploy the pp reference manual to GitHub Pages.
+#
+# On every push to master, builds the manual (via scripts/build-manual.sh,
+# which runs every code example through pp and typesets with typst) and
+# deploys docs/manual/site/ (index.html + pp-manual.pdf) to the gh-pages
+# branch. GitHub Pages must be configured to serve from the gh-pages branch.
+#
+# After this workflow runs once:
+#   1. Go to https://github.com/pranavra0/pp/settings/pages
+#   2. Under "Build and deployment" → "Source", select "Deploy from a branch"
+#   3. Branch: gh-pages, folder: / (root)
+#   4. Save — your manual is live at https://pranavra0.github.io/pp/
+
+name: Deploy manual to GitHub Pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:      # allow manual re-deploy from the Actions tab
+
+# Grant GITHUB_TOKEN the contents: write permission needed by
+# peaceiris/actions-gh-pages to push to the gh-pages branch.
+permissions:
+  contents: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---- build pp itself (the manual build needs a pp binary) -------------
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5.4.1"
+
+      - name: Install OCaml dependencies
+        run: opam install . --deps-only
+
+      - name: Build pp
+        run: opam exec -- dune build
+
+      # ---- build the manual -------------------------------------------------
+      - name: Install typst
+        run: |
+          # typst is available in the Ubuntu apt repo, but we pin a known-good
+          # release via the official installer for reproducibility.
+          curl -fsSL https://github.com/typst/typst/releases/download/v0.15.0/typst-x86_64-unknown-linux-musl.txz \
+            | sudo tar xJ -C /usr/local/bin --strip-components=1 typst-x86_64-unknown-linux-musl/typst
+
+      - name: Build manual
+        run: opam exec -- bash scripts/build-manual.sh
+
+      - name: Deploy to GitHub Pages (gh-pages branch)
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: docs/manual/site
+          # Only the built artefacts — no history needed.
+          force_orphan: true
