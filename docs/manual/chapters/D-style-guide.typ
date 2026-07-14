@@ -3,7 +3,7 @@
 = Style Guide — Quick Reference
 
 This appendix distills the naming and style conventions every pp file should
-follow. The full guide is [docs/CONVENTIONS.md] in the repository.
+follow. The full guide is [docs/SYNTAX.md] in the repository.
 
 == Suffix Conventions
 

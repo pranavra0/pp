@@ -45,6 +45,35 @@ review; resolutions to that review are marked **[R#]** inline.
    distributed) *builds* first. Provisioning is a build. Reconciliation is the
    same rebuilder under the push scheduler. Orchestration is a library/island —
    never core surface.
+7. **Closed kinds, open instances.** A closed set in the language (cell
+   kinds, capability kinds, `with` clauses, `$` observation heads, grant
+   descriptors) is legitimate iff (a) the runtime must enumerate it to
+   verify traces or enforce authority, and (b) there is an instance-level
+   extension point users reach instead of extending the set: probes and
+   domains for observations, effect names and config keys for dynamic
+   extent, value-level `cap-restrict`/`cap-compose` (and `needs <expr>`)
+   for grants. Capability kinds cannot "run out": all world-interaction
+   bottoms out in the closed primitive effect surface, and the kinds gate
+   exactly those primitives — so a user domain's authority always reduces
+   to existing kinds, and a genuinely new kind means a new world-channel in
+   the runtime, which is a core change by definition. Implementation
+   discipline: each closed set is defined **once**, as a typed table in one
+   OCaml module, with every consumer (readers, quasiquote grammar, lint,
+   fuzzer, SPEC appendix, error messages) derived from it — variant
+   exhaustiveness makes an undecided case a compile error, and a CI drift
+   test guards the generated SPEC block. A closed set hand-written in two
+   places is a defect.
+8. **Coverage is derived, never enumerated.** Every recurring obligation —
+   "each AST node needs a generator arm", "each law needs a pinned test",
+   "each observation head needs an adversarial fixture", "each write site
+   needs crash coverage" — must be attached to a gate that fails mechanically
+   when unmet: an exhaustive match over a variant (the compiler remembers),
+   a drift test against a table (CI remembers), or a harness at a single
+   `.mli` seam every instance must route through (the architecture
+   remembers). A hand-maintained coverage checklist is a defect for the same
+   reason a hand-duplicated closed set is (principle 7): memory drifts,
+   ratchets don't. The residual human act is deciding the red build, never
+   remembering to make it red.
 
 **Fate of plain `write-file` in user code.** It dies as a domain-write path.
 **Nodes may write only to sandbox-local scratch paths** (thrown away; only
@@ -778,6 +807,73 @@ that discipline lives in `src/domains.ml`, not in the domain's own code.
 - **Terraform / Kubernetes** — the reconciler's lineage. pp differs by deriving
   desired state from a cached incremental computation and refusing to trust a
   state file (Q4).
+
+---
+
+## 6. Rejected surface decisions
+
+Settled during the 2026-07 surface consolidation (see
+[SYNTAX.md](SYNTAX.md)); recorded here so they stay dead. Re-proposing one
+of these requires overturning the stated reason, not just re-liking the
+feature.
+
+- **`:=` mutation (any tier).** Forks the semantics; a mutable slot's
+  identity is the cell, not its content, which LAW 20 cannot key. The
+  Erlang process-dictionary lesson: an escape hatch anywhere migrates code
+  toward it under deadline pressure. If ever revisited, the node-body ban
+  must be a *reader-level* rejection, not a runtime check.
+- **`{key: value}` data maps.** `reconcile {}` is identity sugar over the
+  map literal (L61); desired state IS an ordinary map, and a second map
+  notation would manufacture a distinction the runtime doesn't have. `:` is
+  grammar (closed clause headers, annotations, keywords), `->` is data.
+- **Postfix `?` error propagation.** `?` is a name character carrying the
+  predicate convention; a postfix operator makes it mean two things at
+  adjacent call sites, and Rust's `?` is a false cognate (implies
+  `From`-style error coercion pp cannot offer). `<-` in `try {}` is the one
+  spelling.
+- **`collect {}` block form.** Statement-level accumulation was confusing
+  enough that the design's own flagship example contradicted its
+  implementation. `collect` is a function; the monad(`try`)/validation
+  (`collect`) distinction lives in the library, not the grammar.
+- **Function clauses** (multiple `def`s, one name). Duplicates `match`,
+  requires a multi-pass block parser, and special-cases exactly the
+  duplicate-name invariant LAW 4 exists to enforce. One dispatch primitive.
+- **`@` attributes** (`@cache`, `@needs`, `@reads`, `@deprecated`).
+  `@cache def` would be a second spelling of `node` — the central
+  abstraction gets exactly one name, structural, never inferred (Unison
+  precedent). An `@needs` that parses without narrowing authority is a lie
+  in a capability language.
+- **`cond {}`.** Subsumed by flat `else if` chains and `match` with
+  guards; removed rather than deprecated (it was weeks old).
+- **Comprehensions** (`[f(x) for x in xs]`). A second grammar for
+  `|> filter |> map`; reveals no domain concept. Pipelines are pp's
+  comprehension.
+- **Dot-method calls** (`x.f(args)`). `.` is a name character, so the form
+  silently parses as a call to a global named `x.f` — a trap, not a
+  feature. `|>` is pp's method syntax; identifiers containing `.` outside
+  grant descriptors are linted.
+- **Cell-literal observations** (`file:"P"`, `env:"N"`, `tree:"R"`).
+  A fused single-string token cannot spell defaults (`$env("CC", "gcc")`)
+  or computed paths, and an observation is an operation, not a literal.
+  Removed in favor of the `$` family (L47–L49 amended); `pp fmt` rewrote
+  them hash-preservingly.
+- **A second observation notation, ever.** The world-read surface is
+  auditable only if there is exactly one thing to grep. New observation
+  kinds join as new `$` heads.
+- **Call-site node markers.** LAW 6 makes node application and function
+  application identical at the call site; a marker would advertise a
+  difference that doesn't exist there and tax every `def`→`node` refactor.
+  Definition-site `node` + `pp why` is the audit surface.
+- **Multi-shot effect resumption.** Re-entering a `perform` twice has no
+  answer to "which trace entry does the second resumption write?" in the
+  linear trace log. One-shot (dynamically checked) is the Phase-4 target;
+  multi-shot waits for a linearity story (OCaml 5 precedent).
+- **ADT declaration syntax** for tagged values. `[:ok, v]`/`[:err, e]` is
+  a *checked convention* (match tagged patterns + lint), not a type system.
+  Static sums are a different project.
+- **Implicit string interpolation.** Every string a parser = a landmine in
+  a language that generates code for other languages. Interpolation
+  requires the `f` prefix.
 
 ---
 

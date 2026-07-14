@@ -66,23 +66,27 @@ If direnv isn't active, prefix commands with `opam exec --` and use `bin/pp` or
 - What's real vs planned + the D-list: [docs/STATUS.md](docs/STATUS.md)
 - Semantics (normative): [docs/SPEC.md](docs/SPEC.md)
 - Plan and rationale: [docs/ROADMAP.md](docs/ROADMAP.md), [docs/DESIGN.md](docs/DESIGN.md)
+- Surface syntax (settled design): [docs/SYNTAX.md](docs/SYNTAX.md); implementation status in [docs/MASTER-PLAN.md](docs/MASTER-PLAN.md)
 - Testing: [docs/TESTING.md](docs/TESTING.md)
 
 ## Style
 
-pp code follows [docs/CONVENTIONS.md](docs/CONVENTIONS.md). Key rules:
+pp code follows [docs/SYNTAX.md](docs/SYNTAX.md) — §1 (the sigil table and the
+`:`-grammar/`->`-data rule) and §15 (style) are the normative parts. Key rules:
 
-- **Suffix conventions:** `?` for predicates (`nil?`), `!` for effects (`run!`), `->` for conversions (`string->number`), no suffix for pure functions.
+- **Suffix conventions:** `?` for predicates (`nil?`), `!` for effects (`run!`) — uniformly, no unmarked effect wrappers — `->` for conversions (`string->number`), no suffix for pure functions.
 - **Truthiness:** Only `nil` and `false` are falsy. Use `if x` not `if not(nil?(x))`.
 - **Flat `let`:** One `let (a = …, b = …) { … }`, not nested single-binding ladders. Use `let*` for sequential shadowing.
-- **`else if` chains:** `else if` is a flat chain — do not nest the second `if` inside braces.
+- **`else if` chains:** flat — do not nest the second `if` inside braces.
 - **Naming:** Functions are verb-led (`longest-palindrome`, not `expand-around-centre`). Values are full words (`max-len`, not `ml`). Inner helpers name the step (`scan`, not `loop`).
-- **`car`/`cdr`:** Built-in; alias to `first`/`rest` in a prelude if needed. Pick one style per file.
-- **Tier awareness:** `!`-suffixed functions may appear in node bodies when they perform traced effects. Pure computations in nodes should not carry `!`.
-- **Comments:** Why, not what — algorithm choice, complexity, edge cases. Library files get a header listing every export.
-- **List/vector literals:** Use `[...]` for lists and `vec[...]` for vectors. Lists are immutable singly-linked; vectors provide random access.
-- **World observations:** Use `$file("path")`, `$env("VAR")`, `$glob("pattern")`, `$probe("name")`, and `$secret("path")` to read from the outside world. The `$` sigil makes every capability-gated read visually distinct.
-- **Error propagation:** Use `try { a <- f(); ... }` to unwrap `[:ok, v]` / `[:err, e]` pairs. The `?` suffix (`let x = expr?`) is shorthand for the same pattern.
-- **Multi-way conditionals:** Use `cond { test1 => result1; true => fallback }` instead of deeply nested `else if` chains.
+- **Comments:** Why, not what. Library files get a header listing every export.
+- **Data:** `[...]` for lists (the default collection), `vec[...]` for vectors, `{k -> v}` for maps, `{...m, k -> v}` for update/merge. `:` keys are special-form clause grammar only — data maps always use `->`.
+- **World observations:** `$file(...)`, `$env(...)`, `$glob(...)`, `$probe(...)`, `$secret(...)`, `$config(...)` are the only way to read the world; bare `slurp`/`env-get` are linted.
+- **Error handling:** produce `[:ok, v]` / `[:err, e]`; consume with `try { a <- f(); ... }` (short-circuit) or `|> collect` (accumulate all errors). Never `car` a result. There is no postfix `?`.
+- **Dispatch:** `match` (with guards) is the one pattern-dispatch form. No `cond`, no function clauses.
+- **Pipelines are the method syntax:** `x |> f(args)`. There are no dot-method calls.
+- **Strings:** interpolation requires the `f"..."` prefix; ordinary strings never interpolate.
 
-When writing or editing pp code in this repo, apply these conventions.
+Rejected features and why: [docs/DESIGN.md](docs/DESIGN.md) §6 — do not
+reintroduce them. When writing or editing pp code in this repo, apply these
+conventions.

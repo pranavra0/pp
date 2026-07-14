@@ -1,620 +1,223 @@
-# pp Ergonomics — Master Implementation Plan
+# pp Surface — Master Implementation Plan (v2)
 
-A comprehensive plan covering every surface improvement identified across the
-pattern analysis, syntax design, and style conventions. Ordered by dependency,
-with exit criteria for each phase.
+The implementation plan for the settled surface in [SYNTAX.md](SYNTAX.md).
+This v2 plan supersedes the original ergonomics plan and its companion
+analysis docs (`PRAGMATIC-SYNTAX.md`, `PATTERNS.md`, `CONVENTIONS.md`),
+which were consolidated into SYNTAX.md after a two-round design review.
+Rejected features are recorded in [DESIGN.md](DESIGN.md) §6 — do not
+re-propose them here.
 
-This plan builds on top of the completed M7 brace-surface migration. It does
-not reopen M7; it adds new syntax on top of the existing two-reader,
-one-AST architecture.
+**Ordering principle: defects, then one source of truth, then kernel
+verification, then syntax.** Phase A fixes defects — determinism, backend
+agreement, macro/surface coherence, SPEC honesty. Phase A′ hardens the
+architecture so the defect *classes* can't recur: every closed surface set
+derived from one typed OCaml table, module seams made explicit. Phase A″
+verifies the trust kernel itself — hash injectivity, the capability
+algebra, executable SPEC laws, crash safety — with every obligation
+attached to a compiler or CI ratchet (DESIGN §1 principle 8), never to a
+checklist. Phase B settles the surface by *removing and migrating*; only
+then does Phase C add sugar. **Nothing in B or C ships while an A or A′
+item is open, or before A″'s kernel properties and ratchet mechanisms are
+in place** (see A″'s gating note for the tranche rule).
 
-This plan draws from:
-- [PATTERNS.md](PATTERNS.md) — what the codebase already encodes
-- [PRAGMATIC-SYNTAX.md](PRAGMATIC-SYNTAX.md) — the target surface design
-- [CONVENTIONS.md](CONVENTIONS.md) — naming and style rules
-
-> **Note:** This plan intentionally omits time estimates. Work proceeds
-> opportunistically; phases are gated by exit criteria, not calendars.
-
----
-
-## Current state (as of 2026-07-14)
-
-Verified by running `dune runtest`, `pp`, `pp --bytecode`, and `pp --diff`
-against hand-written examples.
-
-| Phase | Status | Notes |
-|-------|--------|-------|
-| Phase 0 | Done | `docs/CONVENTIONS.md` and `AGENTS.md` style section exist. pp-leetcode workspace rewrites are out-of-repo. |
-| Phase 1 | Mostly done | 1.1–1.3, 1.5–1.7 implemented. 1.4 (f-strings) and 1.8 (call-spread `apply`) not yet implemented. |
-| Phase 1b | Complete | `try { }` / `<-` / `?` and `collect { }` with full error partitioning all implemented. |
-| Phase 2 | Partial | 2.3 (`with`), 2.4 (`fenced`), 2.5 (`$secret`/`unseal`) done. 2.1 (function clauses) not implemented. 2.2 (`@` attributes) parses but `@needs`/`@reads` passthrough. |
-| Phase 3 | In progress | `match` AST works in both backends for all listed pattern kinds (literal, variable, wildcard, list with spread, tagged). Compiler properly handles list patterns — no divergence. Map patterns and `for`/`while`/`:=` are stretch. Sexpr surface support for match patterns not yet implemented (round-trip sweep excludes match-using .pp files). |
-| Phase 4 | Not started | Resumable effects and TCO are stretch. |
-| Phase 5 | Not started | `pp lint` exists but does not cover all convention rules; no migration has been run. |
-
-**Next slice:** implement Phase 1.4 (f-string interpolation: `f"Hello, {name}!"`).
+> **Status pinning.** Status below is as of branch
+> `pragmatic-suffix-conventions` @ `2f817c8`, 2026-07-14. Any edit to a
+> status entry must update this pin. A status table that doesn't name its
+> ref is a defect (this bit a reviewer once already).
 
 ---
 
-## Phase dependency graph
+## Quality gates (every item, non-negotiable)
 
-```
-Phase 0 (conventions) ──────────────────────────────────────────────┐
-                                                                     │
-Phase 1 (basic sugars) ──┬── Phase 1b (error sugars) ───────────────┤
-                         │                                           │
-Phase 2 (pattern surface)┤                                           │
-                         │                                           │
-Phase 3 (AST additions) ─┴── Phase 3b (comprehensions) ─────────────┤
-                                                                     │
-Phase 4 (VM deep support)                                            │
-                                                                     │
-Phase 5 (tooling) ───────────────────────────────────────────────────┘
-```
-
-Phases 0–2 touch only the reader (and `desugar.ml`). Phases 3–4 add AST nodes
-and backend support. Phase 5 is tooling and migration.
+1. **Differential:** both backends produce the same result and the same
+   error text for every touched form.
+2. **Round-trip:** `pp fmt --to-braces | pp fmt --to-sexpr` preserves the
+   LAW-20 hash for generated and hand-written examples.
+3. **Quasiquote parity:** the form parses identically inside
+   `quasiquote {}` (same lowering, same collection defaults) or is added to
+   SPEC B.7's exclusion list. Fuzzer round-trips through
+   `quasiquote { unquote(...) }`.
+4. **Fuzzer** generates the form; invariants hold.
+5. **`dune runtest` green**; no regressions.
+6. **Manual:** at least one executed example uses the form.
 
 ---
 
-## Phase 0 — Conventions & Documentation
+## Phase A — Bulletproof the core (defects)
 
-**What:** Canonicalize the naming/style rules. No code changes.
+All items are fixes to code already on this branch, or SPEC amendments that
+make existing behavior honest. No new surface.
 
-**Status:** Items 0.1–0.9 are covered by `docs/CONVENTIONS.md`; item 0.13
-(style section in `AGENTS.md`) is done. Items 0.10–0.12 depend on the
-out-of-repo `workspace/` (pp-leetcode) and the manual build.
+| # | Item | Detail | Status |
+|---|------|--------|--------|
+| A1 | **Deterministic `try` lowering** | `try_counter` (`reader_braces.ml:319`) is a global ref never reset per parse, so `__try_N` temp names — and therefore LAW-20 hashes — depend on what was parsed earlier in the process. Derive temp names from position (or reset per top-level form), and add a test that parses the same file twice in different orders and asserts identical `hash_expr`. | open |
+| A2 | **Quasiquote/list divergence** | Inside `quasiquote {}`, `[...]` still lowers to `vector` while ordinary code lowers to `list` — a macro template builds a different value than the code it generates. Align the quasiquote path with L9 (list). | open |
+| A3 | **Quasiquote coverage of new sugar** | None of `try`/`match`/`$KIND`/`m[k]`/spread parse inside `quasiquote {}`. Implement each (or document as a B.7 exclusion with rationale). Add the CI rule: every new `parse_head` arm appears in `parse_qq_head` or in B.7. For table-driven forms (`$` heads, `with` clauses, grant sugar) parity comes free from A′1/A′5; this item covers the block forms (`try`/`match`/spread/`m[k]`). | open |
+| A4 | **`else`-newline misparse** | `parse_if` doesn't `skip_nl` before checking `else`, so `}\nelse {` silently parses as no-else + stray symbol + map literal. Fix in the **parser** (accept newline before `else`); `pp fmt` normalizes to `} else {`. | open |
+| A5 | **Match lowering shadowing hazard** | The compiler lowers `match` via `EApply(ESymbol "car"/"="/"nil?"/"not"/...)` — user code shadowing those names diverges the VM from the tree-walker (which matches structurally). Route the lowering through unshadowable internal primitives; add a fuzz case that shadows `car` inside a match arm. | open |
+| A6 | **`$KIND` takes expressions** | `$file`/`$glob`/`$secret` currently accept string literals only; real code computes paths (`demo/deploy.pp:68`). Accept arbitrary expressions in all `$` heads (incl. `$env` name + default). Without this the exclusivity lint (B4) is impossible. Implemented *via* A′1: table-driven heads parse their arguments as ordinary expression lists uniformly, so per-head literal restrictions cannot exist. | open — lands with A′1 |
+| A7 | **SPEC honesty amendments** | (i) L9 re-pointed at `list`, marked **revised, not sugar** — the bracket change was hash-affecting and the golden-store fix commit is the receipt; add a `pp check` sweep for `vector-get`/`vector-length` on bracket literals. (ii) B.1 gains the `->` glue sentence with the `string->number` example. (iii) LAW 4 gains the documented `try {}` exception: `<-` bindings are sequential, rebinding shadows; pin with a differential test that rebinds a name twice. | open |
+| A8 | **`collect{}` block bug** | The implemented statement-partitioning lowering contradicts its own motivating example (which would crash). Resolved by B2 (conversion to a function) — no fix to the block form. | superseded by B2 |
 
-**Deliverables:
+**Exit:** all of A1–A7 closed; a same-source-twice hash-determinism test,
+a shadowed-`car` match fuzz case, and a quasiquote-parity fuzz gate exist
+and run in CI.
 
-| # | Item | File |
-|---|------|------|
-| 0.1 | Suffix convention (`?` `!` `->` pure-default) | `docs/CONVENTIONS.md` |
-| 0.2 | Truthiness rules (`if x` not `if not(nil?(x))`) | `docs/CONVENTIONS.md` |
-| 0.3 | Flat `let` over nested `let` ladders | `docs/CONVENTIONS.md` |
-| 0.4 | `cond`-style `else if` chains (no nesting) | `docs/CONVENTIONS.md` |
-| 0.5 | Naming: result-named functions, no abbreviations | `docs/CONVENTIONS.md` |
-| 0.6 | `car`/`cdr` → alias recommendation | `docs/CONVENTIONS.md` |
-| 0.7 | `hash-map-get` → local alias recommendation | `docs/CONVENTIONS.md` |
-| 0.8 | Library header block convention | `docs/CONVENTIONS.md` |
-| 0.9 | Tier awareness (node vs scripting suffix rules) | `docs/CONVENTIONS.md` |
+---
 
-**Additional work needed:**
+## Phase A′ — One source of truth (architecture hardening)
+
+Phase A fixes the defects; A′ removes the *conditions* that produced them.
+The recurring failure mode this branch exposed is the same list written out
+by hand in N places — the `$` heads in the reader, the quasiquote grammar,
+the lint whitelist, the fuzzer, and SPEC; the grant descriptors in the
+reader and the docs; two readers duplicating sub-grammars. Hand-maintained
+copies drift; drift was every one of D4/D5/D6/D9. The fix is the OCaml
+discipline the codebase already half-has: **each closed set is one typed
+value in one module, and everything else is derived from it — with variant
+exhaustiveness making "forgot to decide" a compile error instead of a
+review comment.**
+
+Ground truth found while planning (verified at `2f817c8`):
+- `Cell.t` (`src/cell.ml:25`) already IS the closed variant of cell kinds —
+  14 constructors. The runtime has the single source of truth; the surface
+  layers just never consume it.
+- `needs` is **already value-open**: the lowering's fallback (`| e -> e`,
+  `reader_braces.ml:781`) passes any non-sugar expression through to
+  `cap-compose`. The "closed grant vocabulary" is three sugar heads, not a
+  semantic limit. What's missing is documentation, tests, and table-driving
+  the sugar.
+- `src/` is 17,099 lines across 30+ modules with **zero `.mli` files** —
+  no boundary in the codebase is compiler-enforced.
+
+| # | Item | Detail | Status |
+|---|------|--------|--------|
+| A′1 | **`surface_tables.ml` — the closed sets as data** | One module holding the typed tables every other layer derives from: (i) **observation heads** — `{head; cell_kind; lowers_to; arity; qq_legal; doc}`, produced by an *exhaustive* function over `Cell.t` returning `` `Head spec `` or `` `RuntimeRecorded reason `` so every cell kind carries an explicit surface decision (adding a Cell constructor without deciding its surface story becomes a compile error; the pass will force currently-undecided kinds — e.g. `Stat`, read today via `file-exists?`, must either join as `$stat` or be a documented lint whitelist entry); (ii) **`with` clauses** — `caps`/`config`/`handlers` → wrapper constructor; (iii) **grant descriptor sugar** — `fs.read`/`fs.write`/`fs.rw` → restrict mode. Consumers: both readers (normal *and* quasiquote paths), `lint.ml` whitelists, the fuzzer's generators, and error messages ("unknown observation `$foo`; known heads: …" listed from the table). Head arguments parse as ordinary expression lists uniformly — subsumes A6. | open |
+| A′2 | **SPEC drift test** | The tables render to a generated block (between markers) in the SPEC appendix; a CI test regenerates and diffs. No closed set is ever hand-listed in SPEC again — the doc-sync failure mode (D10) becomes a red build, not a stale paragraph. | open |
+| A′3 | **`needs` value-openness made normative** | Document in SYNTAX.md §5 and SPEC: `needs` accepts any expression evaluating to a capability; the dotted descriptors are table-driven sugar (A′1). Named grants are ordinary bindings — `let k8s-prod = cap-compose(net("k8s.prod.internal"), process)` … `node deploy() needs k8s-prod { … }`. Add differential tests (both backends) for named/composed grants and for the sugar. The capability *kind* set stays closed — see DESIGN.md §1 principle 7 for why it cannot "run out". | open |
+| A′4 | **Compiler-enforced module seams** | Add `.mli` interfaces to the soundness kernel first — `cell`, `capabilities`, `hasher`, `store`, `runtime` — exposing only the intended API (e.g. `Runtime.record_read` stays; its internals don't). Then the surface layer: `surface_tables`, `desugar`. Exit test: `dune build` fails if any module reaches around a seam. This is the down-payment on "clear abstraction boundaries"; further `.mli` coverage proceeds opportunistically. | open |
+| A′5 | **One sub-grammar, two contexts** | De-duplicate `reader_braces.ml` (2,041 lines): the normal and `quasiquote{}` paths share near-verbatim parses (e.g. handler pairs at ~778 and ~1359 on master). Factor each form's parser into a single function parameterized by context so a form added once exists in both — making A3's CI rule a backstop rather than the mechanism. | open |
+
+**Exit:**
+- Each closed-set string (`"file"`, `"caps"`, `"fs.read"`, …) appears in
+  exactly one `.ml` file — verified by a grep-based CI check
+- Adding a `Cell.t` constructor without a surface decision fails to compile
+- SPEC drift test red on any table/SPEC divergence
+- `needs k8s-prod` (named composed grant) differential-tested green in both
+  backends
+- Soundness-kernel `.mli`s in place; build enforces them
+
+---
+
+## Phase A″ — Trust kernel verification
+
+A/A′ make the *surface* sound; A″ verifies the kernel the surface rests on
+— identity (hashing), authority (the capability algebra), validity (trace
+verification), and durability (store/journal). These are the components
+where failure is silent and catastrophic (a wrong cached result, a widened
+authority), and they are also the smallest — a few hundred lines each —
+which is exactly the size where property testing approaches exhaustiveness.
+
+**The anti-balloon rule (DESIGN.md §1 principle 8): coverage is derived,
+never enumerated.** Every A″ item must attach its obligation to a compiler
+or CI gate — an exhaustive match over a variant, a drift test against a
+table, or a harness at a single `.mli` seam — so that extending the
+language *forces* the corresponding verification decision. An A″ item whose
+maintenance story is "remember to add a test" is rejected as designed.
+
+| # | Item | Detail | Enforcement mechanism | Status |
+|---|------|--------|----------------------|--------|
+| A″1 | **Injective hash encoding** | `hash_concat` is `String.concat ":"` over parts that include unescaped user strings (paths, symbol names, tags), and `hash_pattern` joins sub-hashes with no delimiter at all — the exact shape where two distinct ASTs can produce one LAW-20 key and pp silently serves a wrong result. Fix the combinator once (length-prefix every part); audit all call sites. | Injective by construction after the fix; guarded forever by A″2's property. | open |
+| A″2 | **Derived generators + kernel properties** | One QuickCheck-style generator each for `Types.expr`, `pattern`, and `value`, written as an exhaustive match over the variant. Properties running under it: (i) distinct ASTs ⇒ distinct `hash_expr` (injectivity); (ii) `quote_to_value`/`value_to_expr` round-trip totality; (iii) both printers round-trip with hash equality. | Adding a constructor breaks the generator's compile until handled — which extends *every* property at once. No per-feature test list exists. | open |
+| A″3 | **Executable SPEC** | Every law with a `holds` status marker gets at least one pinned test; tests declare `# pins: LAW-<n>` markers. A CI script cross-references SPEC law IDs against test markers. Backfill in tranches, kernel laws first (identity: 20; caps: M3 bans; traces: 23–28; handler restore: 27; failure caching: 28). | The linkage script is the gate: a law marked `holds` with zero pinned tests is a red build — laws can be added, never quietly. | open |
+| A″4 | **Crash-injection at the durability seam** | All durable writes route through the journal/store choke points exposed by their A′4 `.mli`s. Harness: kill at every write boundary, restart, assert the store is valid-or-invalidated — never wrong. | Coverage is the *seam*, not a site list: new write paths must route through the tested choke point because the `.mli` leaves no other way. | open |
+| A″5 | **Adversarial world suite** | Fixtures per observation kind: symlink loops and `..` escapes for `file:`/`tree:`, TOCTOU between observe and use, depfile liars for `run-dep!`, clock skew for probes. Each either defeated or recorded as an explicit trust assumption in DESIGN §4 (honest edges) with its blast radius. | Keyed off the A′1 table: a CI rule requires every user-observable head to have an adversarial fixture or a DESIGN §4 entry — new heads can't ship unexamined. | open |
+| A″6 | **Capability algebra properties** | Generator over capability values (exhaustive over the kind variant); property: no sequence of user-reachable operations (`cap-restrict`, `cap-compose`) widens authority — `cap_subseteq` monotonicity. Plus the node-boundary bans (no authority/sealed in free vars or results) property-tested, not just unit-tested. | Same compiler ratchet as A″2: a new capability kind breaks the generator until handled. | open |
+
+**Exit:**
+- `hash_concat` length-prefixed; injectivity property runs in CI over
+  generated AST pairs (with a pinned corpus of near-miss shapes)
+- The three kernel properties (A″2) and the caps property (A″6) green and
+  wired to the derived generators
+- Law-linkage script in CI; identity/caps/trace laws pinned (tranche 1)
+- Crash harness kills at every journal/store boundary; recovery asserts
+  valid-or-invalidated
+- Adversarial fixture (or documented §4 assumption) exists for every
+  user-observable head in the A′1 table — checked by CI against the table
+
+**Gating:** Phases B–E remain blocked on A and A′ in full, and on A″1, A″2,
+A″6, plus the *mechanisms* of A″3–A″5 existing (linkage script, crash
+harness, fixture rule). Law backfill and fixture depth proceed in tranches
+alongside later phases — the ratchet prevents regression while the tail is
+paid down.
+
+---
+
+## Phase B — Settle the surface (removals & migrations)
+
+Each migration ships with a `pp fmt` auto-upgrade rule and is verified by
+the round-trip/LAW-20 gate. Don't hand-edit the tree.
+
+| # | Item | Detail | Status |
+|---|------|--------|--------|
+| B1 | **Remove cell literals** | Delete the `file:"P"` / `env:"N"` / `tree:"R"` fused-token path (`TCell`); amend SPEC L47–L49 (removed, with rationale: single-string token can't spell defaults or computed paths). `pp fmt` rewrites existing occurrences to `$file`/`$env` — hash-preserving, both lower identically. No deprecation window: pp has no external users, so we take the correct surface now. | open |
+| B2 | **`collect` becomes a function** | Delete the `collect {}` reader form; expose `collect` (the existing `collect-results` primitive, renamed) as a plain function used in pipelines: `srcs \|> map(compile) \|> collect`. Docs teach the try-vs-collect distinction (short-circuit vs accumulate). | open |
+| B3 | **Map update → spread** | Replace `{ m \| k -> v }` with `{ ...m, k -> v }`; spread of multiple maps merges (rightmost wins). `pp fmt` rewrites the `\|` form (it is weeks old). Spread in list literals already ships; this completes the family. | open |
+| B4 | **Observation exclusivity lint** | `pp lint`: bare `slurp`/`env-get`/`list-dir`/`probe`/`config` outside `stdlib/` warns, pointing at the `$` form. Must run **pre-lowering** (post-lowering, `$secret` and `$file` are identical). | open |
+| B5 | **`$config` joins the family** | `$config(key)` / `$config(key, default)` lowering to the config read, recording `config:` cells. The family now covers every traced read kind. | open |
+| B6 | **Remove `cond {}`** | Delete the form outright (young, nothing depends on it); `match` with guards (C3) plus flat `else if` chains cover it. Removal may land with C3 in one change. | open |
+| B7 | **Remove postfix `?`** | Delete the `expr?` unwrap path inside `try {}`; `<-` is the one propagation spelling. | open |
+| B8 | **Delete `@` attributes** | Remove the parse-and-passthrough attribute code entirely (`@needs` that doesn't narrow authority is a lie in a capability language; `@cache` would duplicate `node`). | open |
+| B9 | **`with{}` handlers regularized** | `handlers: { :name -> fn, ... }` map-valued clause replaces the `handler name:` two-token key. Handler sets become first-class composable values. | open |
+| B10 | **Uniform `!`** | Rename effect wrappers that lack the suffix (`run-dep` → `run-dep!`, sweep stdlib/demo/manual). `!` = "performs an effect", nothing else. | open |
+| B11 | **Doc scrub** | Purge from all docs/examples: dot-method calls (`src.replace-ext(...)` — currently parses as a call to a global literally named that), `key:` data maps (`register-domain` examples use `->` maps as `stdlib/domain-fs.pp` already does), bare `"{x}"` interpolation (f-strings only). Add the `.`-in-identifier lint (allowed only in grant descriptors). | open |
+| B12 | **Tagged-value convention checks** | CONVENTIONS content in SYNTAX.md §2/§15 backed by lint: flag functions returning `[:err, _]` on one branch and a bare value on another; flag `car`/`cdr` applied to a result-shaped value. | open |
+
+**Exit:** grammar contains one form per concept; `grep` for any removed
+form returns nothing outside CHANGELOG; full tree reformatted by `pp fmt`
+with hash equality; `build-self.sh` and `build-lua.sh` null-rebuild with 0
+recomputes.
+
+---
+
+## Phase C — The missing sugar (additions)
+
+| # | Item | Detail | Status |
+|---|------|--------|--------|
+| C1 | **f-strings** | `f"..."` (prefix glued to quote), `{expr}` holes lowering through a new generic `->string`. Ordinary strings never interpolate. Pre-flip audit: one-time lint pass flagging existing strings containing literal `{`. | open |
+| C2 | **Call spread / `apply`** | `f(a, ...rest, b)` via a new `apply` primitive (evaluator + VM). Motivating case: `run!("cc", ...flags, "-o", out)`. | open |
+| C3 | **`match` guards** | `pat if cond => expr` in both backends. With C3 landed, B6 (remove `cond`) completes. | open |
+| C4 | **Sexpr surface for `match`** | The sexpr reader/printer learn match, so match-using files rejoin the round-trip sweep — restoring the strongest cross-reader invariant. | open |
+| C5 | **Map patterns** (stretch) | `{:key -> pat, ...}` as a new pattern kind inside `match` — a pattern kind, not a new form. | stretch |
+
+**Exit:** the SYNTAX.md §16 showcase parses and runs verbatim in both
+backends; round-trip sweep covers 100% of `.pp` files again (no match
+exclusions); fuzzer generates every C-item form.
+
+---
+
+## Phase D — Deep semantics (stretch)
+
+| # | Item | Detail |
+|---|------|--------|
+| D1 | **One-shot resumable effects** | Explicit `resume(v)`, dynamically checked one-shot (second call errors, deterministically, in both backends). Current handlers are already implicit one-shot resumption (the handler's return value is the resume in tail position) — this admits and generalizes that. **Multi-shot is rejected** until someone answers which trace entry a re-entered `perform` writes (see DESIGN.md §6). |
+| D2 | **Tail-call modulo cons** | Unchanged from v1; stretch. |
+
+---
+
+## Phase E — Migration & documentation
 
 | # | Item |
 |---|------|
-| 0.10 | Rewrite `workspace/std/*.pp` and `workspace/lib/*.pp` in pp-leetcode to follow all conventions |
-| 0.11 | Rewrite LeetCode solutions to use flat `let`, proper naming, suffix conventions |
-| 0.12 | Add a `docs/CONVENTIONS.md` quick-ref card to the manual appendix |
-| 0.13 | Add "style" section to AGENTS.md so AI coders learn the conventions |
-
-> Note: the `workspace/` directory is outside this repo (pp-leetcode). Examples
-> in `CONVENTIONS.md` reference it for illustration; update them when integrating
-> that code, or replace with real files from `stdlib/` and `tests/`.
-
-**Exit criteria:**
-- LeetCode solutions follow Phase 0 conventions
-- Every `let` ladder in workspace/{std,lib,problems} collapsed to flat form
-- No `is-?` double-suffixing, no `loop`-named helpers, no abbreviation-only names
-
----
-
-## Phase 1 — Basic Reader Sugars
-
-**What:** Reader-level desugars in `reader_braces.ml` that lower to existing
-AST forms. Zero evaluator/compiler/VM changes. LAW-20 keys unchanged.
-
-**Status:** 1.1–1.3 and 1.5–1.7 are implemented and verified. 1.4 (f-strings)
-and 1.8 (call-spread `apply`) are not yet implemented.
-
-### 1.1 — `[a, b, c]` list literal
-
-**Current state:** `[a, b]` lowers to `vector(a, b)`. Should lower to
-`list(a, b)` — lists are the default collection in pp.
-
-**Change:** In `reader_braces.ml`, `TLBracket` parsing: emit
-`EApply(ESymbol "list", exprs)` instead of `EApply(ESymbol "vector", exprs)`.
-
-**Spread:** `[a, ...rest]` → `cons(a, rest)`. Multi-element spread:
-`[a, b, ...rest]` → `cons(a, cons(b, rest))`.
-
-```pp
-[a, b, c]       → list(a, b, c)
-[a, ...rest]    → cons(a, rest)
-[a, b, ...rest] → cons(a, cons(b, rest))
-```
-
-### 1.2 — `m[k]` map access
-
-**New syntax:** `expr [ index ]` in postfix position.
-
-```pp
-m[:key]          → hash-map-get(m, :key)
-m["string-key"]  → hash-map-get(m, "string-key")
-v[0]             → vector-get(v, 0)
-```
-
-**Parser change:** Add `TLBracket` to `parse_postfix` (next to `TLParen` call
-handling). Parse one expression inside brackets, close with `TRBracket`.
-
-**Ambiguity:** `f[x]` could be map access or function call with a list
-argument. Resolution: in postfix position (after an expression), `[` always
-means index. To call a function with a list literal, use parens: `f([a, b])`.
-
-### 1.3 — `{ m | k -> v }` map update
-
-**New syntax:** `{ base | k1 -> v1, k2 -> v2 }` — a map literal with a
-base expression and update arrows.
-
-```pp
-{ m | :key -> value }               → map-insert(m, :key, value)
-{ m | :a -> 1, :b -> 2 }            → map-insert(map-insert(m, :a, 1), :b, 2)
-```
-
-### 1.4 — string interpolation: `f"Hello, {name}!"`
-
-**New syntax:** `f"..."` — an f-prefixed string with `{expr}` interpolation
-holes. The `f` must be glued to the opening quote.
-
-```pp
-f"Hello, {name}! Value: {x + 1}."
-→ string-append("Hello, ", name, "! Value: ", number->string(x + 1), ".")
-```
-
-The lexer reads the whole f-string; the parser splits on `{` / `}` boundaries,
-parsing each `{...}` content as an expression. Non-string holes are wrapped in
-`number->string` (or an equivalent `to-string` primitive).
-
-### 1.5 — `cond { test => result; ... }` multi-way conditional
-
-**New syntax:** `cond { arm; arm; ... }` where each arm is `test => result`
-and arms are separated by newlines or `;`.
-
-```pp
-cond {
-  close = ")" => "("
-  close = "}" => "{"
-  close = "]" => "["
-  true        => nil
-}
-```
-
-Lowers to nested `EIf`. The `else` arm is syntactic sugar for `true => expr`.
-`=>` is used instead of `->` to avoid overloading the map/desired-state arrow.
-
-### 1.6 — `...args` spread in list/vector construction
-
-**New syntax:** `[a, ...rest, b]` and `vec[a, ...rest, b]`.
-
-Lowers to cons/append chains.
-
-### 1.7 — `$KIND` observation sigils
-
-**New syntax:** `$` prefix followed by an observation head.
-
-```pp
-$file("src/main.c")    → slurp("src/main.c")
-$env("CC")             → env-get("CC")
-$env("CC", "gcc")      → env-get("CC", "gcc")
-$glob("src/*.c")       → list-dir("src", "*.c")
-$probe("clock")        → probe("clock")
-$secret("/run/key")    → sealed read
-```
-
-This unifies the five world-read primitives under one visual family. Each
-lowers to the existing primitive and records the appropriate trace cell.
-
-### 1.8 — `...args` spread in call position
-
-**New syntax:** `f(a, b, ...rest)` — splices a list into arguments.
-
-```pp
-run!("cc", ...flags, "-o", out)
-```
-
-This requires a new `apply` primitive that calls a function with a dynamic
-argument list. It is not purely reader-level; it needs evaluator and VM support.
-
-### Phase 1 exit criteria
-
-- All Phase 1 sugars parse and round-trip through `pp fmt` with hash equality
-- `dune runtest` green (no existing behavior changed)
-- Manual examples updated to use new syntax where appropriate
-- Fuzzer extended to generate the new forms (round-trip test)
-
----
-
-## Phase 1b — Error Handling Sugars
-
-**What:** Reader-level sugars for the five-tier error model. All lower to
-`match`-like chains over `[:ok, v]` / `[:err, e]` tagged lists.
-
-**Status:** `try { }`, `<-`, postfix `?`, and `collect { }` with full ok/err
-partitioning are all implemented and verified via differential testing.
-
-### 1b.1 — `[:ok(v)]` / `[:err(e)]` tagged values
-
-Use the existing convention: a two-element list whose first element is `:ok`
-or `:err`.
-
-```pp
-[:ok, value]
-[:err, message]
-[:none]
-```
-
-No new tag syntax is introduced; `#` remains the comment character exclusively.
-
-### 1b.2 — `try { }` block with `<-` propagation
-
-**New syntax:**
-
-```pp
-try {
-  a <- fallible()        # if :err, exit try with that error
-  b <- another(a)        # a is unwrapped
-  [:ok, a + b]
-}
-```
-
-The `<-` arrow means: match the RHS against `[:ok, v]` → bind v;
-`[:err, e]` → exit the try block with `[:err, e]`.
-
-Lowers to nested `match`/`if` chains. A regular `let x = e` inside `try` does
-not unwrap.
-
-### 1b.3 — `?` postfix operator
-
-`expr?` is a postfix alias for unwrap-or-propagate.
-
-```pp
-try {
-  let a = divide(x, y)?
-  let b = divide(a, 2)?
-  [:ok, a + b]
-}
-```
-
-Ship both `<-` and `?`; they lower to the same machinery.
-
-### 1b.4 — `collect { }` error accumulation
-
-**New syntax:**
-
-```pp
-let results = collect {
-  srcs |> map(fn(f) { compile(f) })
-}
-```
-
-Runs every expression, gathers all `:err`s, and returns `[:ok, values]` if all
-succeeded, or `[:err, errors]` if any failed.
-
-**Lowering:** A pass over the block partitions results into oks and errs.
-May use a stdlib helper that the reader calls.
-
-### Phase 1b exit criteria
-
-- `try { a <- f(); b <- g(a); [:ok, b] }` produces correct error-propagation behavior
-- `collect { ... }` accumulates all errors in a build-like scenario
-- `dune runtest` green
-- Fuzzer extended
-
----
-
-## Phase 2 — Pattern Surface
-
-**What:** Reader-level sugars that make pp's runtime patterns visible in
-source. Still reader-only, still zero AST changes (except where noted).
-
-**Status:** Unified `with { }` (2.3), `fenced { }` (2.4), and `$secret`/`unseal`
-(2.5) are done. Function clauses (2.1) are not implemented. `@` attributes
-(2.2) parse but `@needs`/`@reads` are passthrough/doc-only, not wired to
-capability narrowing.
-
-### 2.1 — Function clauses (multiple `def`s, same name)
-
-**New syntax:** Multiple `def` forms with the same name, differing only in
-patterns on arguments.
-
-```pp
-def divide(a, 0) { [:err, "division by zero"] }
-def divide(a, b) { [:ok, a / b] }
-
-def fib(0) { 0 }
-def fib(1) { 1 }
-def fib(n) { fib(n - 1) + fib(n - 2) }
-```
-
-**Lowering:** Collect all `def`s with the same name. Emit a single `def`
-whose body is a `cond`-like chain of pattern matches. Clauses are tried in
-source order.
-
-This needs a multi-pass approach in the block parser: collect defs, group by
-name, emit merged forms. Function clauses are NOT duplicates; `check_block_defs`
-must be updated to allow them.
-
-### 2.2 — `@` attributes on nodes and defs
-
-**New syntax:** `@tag(args)` annotations above definitions.
-
-```pp
-@needs(fs.read("src/"), process)
-@reads($glob("src/*.c"))
-node compile(src) { ... }
-
-@cache
-def helper(x) { ... }    # @cache on a def makes it a node
-
-@deprecated("use new-fn instead")
-def old-fn(x) { ... }
-```
-
-**Lowering:** `@needs(...)` on a `node` lowers to the existing `needs` →
-`EWithCaps` machinery. `@cache` on a `def` wraps the body in `ENode`.
-`@deprecated` emits a `perform log(...)` call at the start of the body (or is
-stored as metadata for a linter).
-
-### 2.3 — Unified `with` form
-
-**New syntax:** A single `with` block that combines caps, config, and
-handlers.
-
-```pp
-with {
-  caps: narrow-cap,
-  config: { cc: "clang", cflags: ["-O2", "-Wall"] },
-  handler log: fn(msg) { print("LOG: {msg}") },
-  handler read-file: fn(path) { mock-read(path) }
-} {
-  body
-}
-```
-
-**Lowering:** Nested `EWithCaps`, `EWithConfig`, `EWithHandler` in canonical
-order.
-
-### 2.4 — `fenced { }` shorthand
-
-**Current:** `perform fenced(:email, hash-map(...))`
-
-**New:**
-
-```pp
-fenced :email {
-  to: "user@example.com"
-  subject: "Build complete"
-  body: "All {count} targets built."
-}
-```
-
-Lowers to a map literal passed to `fenced`.
-
-### 2.5 — `$secret` and `unseal`
-
-Already covered by Phase 1.7. Keep `unseal` as the primitive name.
-
-### Phase 2 exit criteria
-
-- Function clauses: `def fib(0) { 0 }; def fib(1) { 1 }; def fib(n) { ... }` works identically in both backends
-- `@needs` / `@reads` on nodes produce correct capability narrowing
-- Unified `with { caps:, config:, handler: }` nests correctly
-- All Phase 2 sugars round-trip through `pp fmt`
-- `dune runtest` green
-
----
-
-## Phase 3 — AST Additions
-
-**Status:** `match` AST (`EMatch`) works in both backends for all listed pattern
-kinds: literal, variable, wildcard, tagged, and list (including spread with
-`...rest`). The compiler's recursive `pat_cond`/`pat_binds` lowering mirrors
-`Types.match_pattern`. Sexpr surface support for match patterns is not yet
-implemented, so match-using `.pp` files must be `.sh` test scripts rather than
-`.pp` files (the round-trip sweep would reject them). Map patterns and
-`for`/`while`/`:=` are stretch.
-
-### 3.1 — `match` expression
-
-**New AST node:** `EMatch of expr * (pattern * expr) list`
-
-```pp
-match value {
-  [:ok, v]  => process(v)
-  [:err, e] => log!("error: {e}"); nil
-  [x, ...rest] => recurse(x, rest)
-  []        => default
-  _         => fallback
-}
-```
-
-**Patterns:**
-- Literal: `42`, `"hello"`, `true`, `nil`
-- Variable: `x` (matches anything, binds)
-- Wildcard: `_` (matches anything, doesn't bind)
-- List: `[pat, ...rest]`, `[a, b]`, `[]`
-- Tagged: `[:ok, v]`, `[:err, e]`
-- Map: `{:key -> v, ...}` (stretch)
-- Guard: `pat if cond => expr`
-
-**Evaluator:** Walk patterns left-to-right, first match wins. No match →
-runtime error `"match failure"`.
-
-**Compiler:** Emit `JUMP_IF_FALSE` chains, `LOAD_LOCAL`/`STORE_LOCAL`,
-`CAR`/`CDR` for list destructure.
-
-### 3.2 — `for` / `while` loops (stretch)
-
-Comprehensions and iteration forms.
-
-```pp
-[compile(f) for f in srcs if f.ends-with?(".c")]
-→ srcs |> filter(fn(f) { f.ends-with?(".c") }) |> map(compile)
-```
-
-Reader-only if desugared to `map`/`filter`.
-
-### 3.3 — `:=` mutation (stretch — scripting tier only)
-
-Mutable local variables for the scripting tier. `x := new-value` updates
-a mutable slot. Barred from node bodies.
-
-This needs a new value type (`VRef`) or frame slot mutation operations.
-Significant VM change.
-
-### Phase 3 exit criteria
-
-- `match` works identically in both backends for all pattern kinds
-- Fuzzer generates match expressions and patterns (both backends agree)
-- All existing `if`/`else if` chains that could be `match` still work
-- `dune runtest` green
-- Fuzzer extended: both grammars generate match
-
----
-
-## Phase 4 — VM Deep Support
-
-**What:** Features that need new opcodes or significant VM changes.
-
-### 4.1 — Resumable effects (`perform` + `resume`)
-
-**Current:** `perform effect(args)` dispatches to the handler, but the handler
-cannot resume the computation.
-
-**New:** `perform effect(args)` captures the continuation. The handler can
-call `resume(value)` to continue the original computation with the given
-value.
-
-```pp
-with handler fetch: fn(url) {
-  let cached = cache-get(url)
-  if cached { resume(cached) }
-  else {
-    let result = http-get!(url)
-    cache-put(url, result)
-    resume(result)
-  }
-} {
-  let data = perform fetch("https://api.example.com/data")
-  process(data)
-}
-```
-
-This is full algebraic effects with delimited continuations. It needs VM
-support for capturing and restoring the operand stack, frame stack, and
-program counter. The tree-walker can use `call/cc`-style CPS.
-
-### 4.2 — Tail-call modulo cons (stretch)
-
-Optimize `cons(car(lst), recurse(cdr(lst)))` into a single frame that
-mutates a tail pointer.
-
-### Phase 4 exit criteria
-
-- If resumable effects ship: `perform` + `resume` works identically in both backends
-- Fuzzer generates resumable effect programs
-- `dune runtest` green
-
----
-
-## Phase 5 — Tooling & Migration
-
-**What:** `pp lint`, `pp fmt` integration, documentation, and mechanical
-migration of the existing codebase to use new syntax.
-
-### 5.1 — `pp lint`
-
-A linter that checks conventions from Phase 0:
-
-| Rule | Description |
-|------|-------------|
-| `suffix-predicate` | `?`-suffixed function returns non-bool |
-| `suffix-effect` | `!`-suffixed function is pure |
-| `suffix-double` | `is-?` double-suffixing |
-| `let-ladder` | Chained single-binding `let`s |
-| `truthiness` | `if not(nil?(x))` → `if x` |
-| `naming-loop` | Helper named `loop` |
-| `naming-abbrev` | Single-char or two-char names outside tight loops |
-| `car-cdr-mixed` | Mixed `car`/`cdr` and `first`/`rest` in one file |
-
-Implementation: a pass over the AST after parsing. Emits warnings to stderr
-with source locations. `pp lint file.pp` exits 0 if clean, 1 if warnings.
-
-### 5.2 — `pp fmt` integration
-
-Ensure all new Phase 1–3 syntax round-trips through the brace printer with
-identical LAW-20 hashes. This is the M7 S2 gate: `to-braces | to-sexpr` gives
-identical expanded-form hash.
-
-### 5.3 — Migration of existing code
-
-Mechanical rewrite of:
-- `stdlib/*.pp`
-- `build.pp`
-- All `tests/*.pp`
-- `examples/*.pp`
-- Manual chapter examples
-
-Using `pp fmt` where possible; hand-edit where formatter doesn't support new
-syntax yet. Run `dune runtest` after each batch.
-
-### 5.4 — Documentation
-
-- Integrate `CONVENTIONS.md` into the manual (appendix)
-- Add `PATTERNS.md` as a design document
-- Rewrite manual language reference to use new syntax
-- Add "Migration from sexpr" section
-- Update `AGENTS.md` with style checklist
-
-### Phase 5 exit criteria
-
-- `pp lint` catches all convention violations in the existing codebase
-- Every `.pp` file in the tree uses the new surface syntax
-- `dune runtest` green
-- `build-self.sh` null-rebuild with 0 recomputes (store populated pre-migration)
-- `build-lua.sh` null-rebuild with 0 recomputes
+| E1 | Reformat the entire tree (`stdlib/`, `tests/`, `examples/`, `demo/`, manual chapters) via `pp fmt` per B-phase rules; `dune runtest` after each batch. |
+| E2 | Manual: language-reference and style chapters re-authored against SYNTAX.md; every example executed. |
+| E3 | AGENTS.md style section regenerated from SYNTAX.md §15 (single source of truth). |
+| E4 | CHANGELOG entry per removed/changed form, with the one-line rationale and the fmt rule that migrates it. |
+
+**Final exit criteria (whole plan):**
+- Every `.pp` file in the tree parses under the settled grammar and only it
+- `pp lint` clean over the tree; observation-exclusivity, dot-identifier,
+  and tagged-shape rules active
+- `build-self.sh` / `build-lua.sh` null-rebuild: 0 recomputes
 - Manual rebuilds with every example executing
-
----
-
-## Dev loop & quality gates
-
-Every phase, no matter how small, must pass these gates before it is
-considered done:
-
-1. **Differential test:** both backends produce the same result and the same
-   error text for every new form.
-2. **Round-trip test:** `pp fmt --to-braces | pp fmt --to-sexpr` yields the
-   same LAW-20 hash as the original for generated and hand-written examples.
-3. **Fuzzer extension:** the fuzzer can generate the new surface forms, and
-   round-trip/hash invariants hold.
-4. **`dune runtest` green** with no regressions in existing tests.
-5. **Manual examples:** at least one executed example in the manual uses the
-   new form.
-
-No phase merges until all five gates pass.
-
----
-
-## Summary
-
-| Phase | Name | Backends touched |
-|-------|------|-----------------|
-| 0 | Conventions | None |
-| 1 | Basic sugars | Reader only (except call-spread `apply`) |
-| 1b | Error sugars | Reader only |
-| 2 | Pattern surface | Reader only |
-| 3 | AST additions | Both |
-| 4 | VM deep support | Both (stretch) |
-| 5 | Tooling & migration | Reader + tests |
-
-Phases 0–2 can ship independently — they're reader-only, zero LAW-20 impact,
-zero VM changes. Phase 3 requires both backend work but is self-contained
-(`match`). Phase 4 is stretch. Phase 5 is mechanical.
-
-### Minimal viable ship
-
-Phases 0–2: conventions + all reader sugars + error handling. Everything the
-user types is different, but the AST, evaluator, compiler, and VM are untouched.
-The store cannot tell anything changed. This is the M7-compatible path.
+- SPEC amendments A7 merged; SPEC and SYNTAX.md agree everywhere
