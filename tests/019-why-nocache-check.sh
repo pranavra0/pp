@@ -86,7 +86,7 @@ if [ -s "$TMP/out" ] && ! grep -q "Fatal" "$TMP/out"; then echo "ok   check-det-
 else echo "FAIL check-det-exit"; cat "$TMP/out"; fail=1; fi
 cat > "$TMP/vol.pp" <<'EOF'
 perform log(force(node {
-  hash-map-get(perform run("sh", "-c", "echo $RANDOM"), "out")
+  hash-map-get(perform run("head", "-c", "4", "/dev/urandom"), "out")
 }))
 EOF
 rm -rf "$TMP/.pp"

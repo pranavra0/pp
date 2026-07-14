@@ -815,7 +815,7 @@ let rec string_of_value (v : value) : string =
   | VBool true -> "true"
   | VBool false -> "false"
   | VInt n -> string_of_int n
-  | VFloat f -> string_of_float f
+  | VFloat f -> if f <> f then "nan" else string_of_float f
   | VString s -> "\"" ^ String.escaped s ^ "\""
   | VKeyword k -> ":" ^ k
   | VSymbol s -> s
