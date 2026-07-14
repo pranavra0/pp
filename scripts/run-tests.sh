@@ -351,4 +351,10 @@ if PP="$PP" bash tests/058-collect.sh; then
 else
   echo "FAIL 058-collect"; fail=1
 fi
+echo "--- A1: deterministic try lowering (LAW-20 hash independent of parse order) ---"
+if PP="$PP" bash tests/059-try-determinism.sh; then
+  echo "ok   059-try-determinism"
+else
+  echo "FAIL 059-try-determinism"; fail=1
+fi
 exit $fail

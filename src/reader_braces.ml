@@ -1951,6 +1951,10 @@ let read_string ?(source : string = "<?>") (input : string) : expr list =
     match (cur ps).t with
     | TEOF -> ()
     | _ ->
+        (* A1: fresh temp-var numbering per top-level form, so a form's
+           LAW-20 hash depends only on the form (and its location), never on
+           how many `try` blocks were parsed earlier in the process/file. *)
+        try_counter := 0;
         let line = (cur ps).tline in
         let e = parse_expr ps { nl = false; cond = false } in
         (match (cur ps).t with
