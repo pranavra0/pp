@@ -17,7 +17,7 @@ print(take(5, range(10, 20)))
 
 print("")
 print("=== 4. Print vector ===")
-print([1, 2, 3 + 4, 5 * 6])
+print(vec[1, 2, 3 + 4, 5 * 6])
 
 print("")
 print("=== 5. Print map ===")

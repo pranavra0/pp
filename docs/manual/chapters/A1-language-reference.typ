@@ -173,6 +173,25 @@ The core list operations are builtins and need no library: `list`, `cons`,
 
 #example("ref-list-stdlib", sh: true)
 
+== List and vector literals
+
+The brace surface distinguishes lists from vectors at the literal level. A bare
+`[...]` produces a list, while `vec[...]` produces a vector. Both support
+spread to splice an existing collection:
+
+#table(
+  columns: (auto, 1fr),
+  inset: (x: 6pt, y: 4pt),
+  align: (left, left),
+  stroke: (x: none, y: 0.5pt + luma(220)),
+  table.header([*Form*], [*Meaning*]),
+  [`[a, b, c]`], [List literal `(list a b c)`],
+  [`vec[a, b, c]`], [Vector literal `(vector a b c)`],
+  [`[head, ...tail]`], [Spread: `cons(head, tail)` — only at trailing position],
+)
+
+#example("ref-list-vec-literals")
+
 == Maps
 
 Maps are immutable. The builtins construct one (`hash-map`), look up a key
@@ -185,6 +204,39 @@ Maps are immutable. The builtins construct one (`hash-map`), look up a key
 depends on `stdlib/list.pp`, so load that first.
 
 #example("ref-map-stdlib", sh: true)
+
+== Index access
+
+Bracket indexing works on maps and vectors, lowering to the appropriate
+builtin. A numeric key calls `vector-get`; any other key calls `hash-map-get`.
+
+#table(
+  columns: (auto, 1fr),
+  inset: (x: 6pt, y: 4pt),
+  align: (left, left),
+  stroke: (x: none, y: 0.5pt + luma(220)),
+  table.header([*Form*], [*Meaning*]),
+  [`m[:key]`], [`hash-map-get(m, :key)` — map lookup],
+  [`v[0]`], [`vector-get(v, 0)` — vector index],
+)
+
+#example("ref-index-access")
+
+== Map update
+
+The update syntax produces a new map with one or more keys inserted or
+replaced, without mutating the original.
+
+#table(
+  columns: (auto, 1fr),
+  inset: (x: 6pt, y: 4pt),
+  align: (left, left),
+  stroke: (x: none, y: 0.5pt + luma(220)),
+  table.header([*Form*], [*Meaning*]),
+  [`{ m | k1 -> v1, k2 -> v2 }`], [Nested `map-insert`: `map-insert(map-insert(m, k1, v1), k2, v2)`],
+)
+
+#example("ref-map-update")
 
 == Strings
 
@@ -205,3 +257,101 @@ Each predicate forces its argument and tests its shape. The full set is
 `vector?`, `map?`, `set?`, and `fn?`.
 
 #example("ref-predicates")
+
+== The cond conditional
+
+`cond` is a multi-way conditional that lowers to nested `if` expressions.
+Each arm pairs a test with a result separated by `=>`. The last arm should
+use `true` as its test to serve as the else clause.
+
+#table(
+  columns: (auto, 1fr),
+  inset: (x: 6pt, y: 4pt),
+  align: (left, left),
+  stroke: (x: none, y: 0.5pt + luma(220)),
+  table.header([*Form*], [*Meaning*]),
+  [`cond { t1 => r1; t2 => r2 }`], [Nested `if`: `if t1 { r1 } else { if t2 { r2 } }`],
+  [`cond { ...; true => r }`], [Else clause: the `true` arm acts as the final branch],
+)
+
+#example("ref-cond")
+
+== Spread in lists
+
+The `...` prefix splices a collection into a list or vector literal. Spread is
+only allowed as the last element.
+
+#table(
+  columns: (auto, 1fr),
+  inset: (x: 6pt, y: 4pt),
+  align: (left, left),
+  stroke: (x: none, y: 0.5pt + luma(220)),
+  table.header([*Form*], [*Meaning*]),
+  [`[a, ...rest]`], [`cons(a, rest)`],
+  [`vec[a, ...rest]`], [`cons(a, rest)` in vector context],
+  [`[a, b, ...more]`], [`cons(a, cons(b, more))`],
+)
+
+#example("ref-spread")
+
+== Observation sigils
+
+The `$` sigil introduces world observations — reads that cross the boundary
+between pure computation and the outside world. Every observation records
+the corresponding trace cell, making it visible to the cache-validity system.
+
+#table(
+  columns: (auto, 1fr, auto),
+  inset: (x: 6pt, y: 4pt),
+  align: (left, left, left),
+  stroke: (x: none, y: 0.5pt + luma(220)),
+  table.header([*Form*], [*Lowering*], [*Trace cell*]),
+  [`$file("path")`], [`slurp("path")`], [`file:`],
+  [`$env("VAR")`], [`env-get("VAR")`], [`env:`],
+  [`$env("VAR", "default")`], [`if nil?(env-get("VAR")) "default" env-get("VAR")`], [`env:`],
+  [`$glob("pattern")`], [`list-dir("pattern")`], [`tree:`],
+  [`$probe("name")`], [`probe("name")`], [`probe:`],
+  [`$secret("path")`], [`slurp("path")`], [`sealed:`],
+)
+
+#example("ref-sigils")
+
+== Error propagation: try
+
+The `try` block introduces a region where bindings unwrap `[:ok, v]` /
+`[:err, e]` pairs automatically. Each `name <- expr` extracts the value on
+success or propagates the error on failure. A trailing `?` on an expression
+does the same inline.
+
+Inside a `try` block, `let name = expr?` is equivalent to `name <- expr`.
+The block's last expression is the overall value (reachable only when every
+binding succeeded).
+
+#table(
+  columns: (auto, 1fr),
+  inset: (x: 6pt, y: 4pt),
+  align: (left, left),
+  stroke: (x: none, y: 0.5pt + luma(220)),
+  table.header([*Form*], [*Meaning*]),
+  [`try { a <- f(); body }`], [Bind `a` to the unwrapped value; propagate on `:err`],
+  [`try { let x = g()?; body }`], [Same, using the `?` suffix],
+  [`try { body }`], [Plain body — no unwrapping, evaluates as usual],
+)
+
+#example("ref-try")
+
+== Collecting results
+
+`collect { e1; e2; e3 }` evaluates each expression and collects the results
+into a list for batch processing.
+
+#table(
+  columns: (auto, 1fr),
+  inset: (x: 6pt, y: 4pt),
+  align: (left, left),
+  stroke: (x: none, y: 0.5pt + luma(220)),
+  table.header([*Form*], [*Meaning*]),
+  [`collect { e1; e2 }`], [`(list e1 e2)` — collect results into a list],
+)
+
+#example("ref-collect")

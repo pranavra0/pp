@@ -178,7 +178,7 @@ load("stdlib/list.pp")
 load("stdlib/map.pp")
 
 def register-kv-domain() {
-  register-domain({:name -> "kv", :namespace -> [string-append("file:", "$KV"), string-append("tree:", "$KV")], :observe -> (
+  register-domain({:name -> "kv", :namespace -> vec[string-append("file:", "$KV"), string-append("tree:", "$KV")], :observe -> (
 
 
 fn() { perform tree-observe("$KV") }), :diff -> (

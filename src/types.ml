@@ -27,6 +27,15 @@ type env = {
   bindings : (string * value) list;
 }
 
+
+(* ---- Patterns for match expressions ---- *)
+and pattern =
+  | PLiteral of value       (* 42, "hello", true, nil *)
+  | PVariable of string     (* x — matches anything, binds *)
+  | PWildcard               (* _ — matches anything, no bind *)
+  | PList of pattern list * pattern option  (* [a, b, ...rest] *)
+  | PTagged of string * pattern list  (* [:ok, v] or [:err, e] *)
+
 (* ---- Expressions — the AST produced by the reader ---- *)
 
 and expr =
@@ -61,6 +70,7 @@ and expr =
   | EConfig of expr * expr option  (* (config key [default]) — read config *)
   | ETyped of expr * expr          (* (the-expr : type) — type annotation *)
   | ELocated of (string * int) * expr  (* source-located expression *)
+  | EMatch of expr * (pattern * expr) list  (* match expr { pat => body; ... } *)
 
 (* ---- Values — the runtime representation ---- *)
 
@@ -371,6 +381,24 @@ let rec hash_expr (e : expr) : string =
       hash_concat ["typed"; hash_expr e; hash_expr ty]
   | ELocated ((file, line), e) ->
       hash_concat ["located"; file; string_of_int line; hash_expr e]
+  | EMatch (scrutinee, arms) ->
+      let arm_hashes = List.map (fun (p, body) ->
+        hash_concat ["arm"; hash_pattern p; hash_expr body]
+      ) arms in
+      hash_concat ("match" :: hash_expr scrutinee :: arm_hashes)
+
+and hash_pattern (p : pattern) : string =
+  match p with
+  | PLiteral v -> hash_concat ["p_lit"; hash_value v]
+  | PVariable s -> hash_concat ["p_var"; s]
+  | PWildcard -> "p_wild"
+  | PList (pats, rest) ->
+      let ph = String.concat "" (List.map hash_pattern pats) in
+      let rh = match rest with Some r -> hash_pattern r | None -> "nil" in
+      hash_concat ["p_list"; ph; rh]
+  | PTagged (tag, pats) ->
+      let ph = String.concat "" (List.map hash_pattern pats) in
+      hash_concat ["p_tagged"; tag; ph]
 
 and hash_value (v : value) : string =
   (* Frames already being hashed (physical identity): a closure captured in a
@@ -634,6 +662,23 @@ let free_vars (e : expr) : SS.t =
         SS.union (fv bound k) (match d with Some e -> fv bound e | None -> SS.empty)
     | ETyped (e, _) -> fv bound e
     | ELocated (_, e) -> fv bound e
+    | EMatch (scrutinee, arms) ->
+        let rec pat_vars p = match p with
+          | PVariable s -> SS.singleton s
+          | PList (pats, rest) ->
+              let pv = List.fold_left (fun a p -> SS.union a (pat_vars p)) SS.empty pats in
+              (match rest with Some r -> SS.union pv (pat_vars r) | None -> pv)
+          | PTagged (_, pats) ->
+              List.fold_left (fun a p -> SS.union a (pat_vars p)) SS.empty pats
+          | PLiteral _ | PWildcard -> SS.empty
+        in
+        let arm_bound = List.fold_left (fun a (p, _) ->
+          SS.union a (pat_vars p)) SS.empty arms in
+        let bound' = SS.union arm_bound bound in
+        let scrut_fv = fv bound scrutinee in
+        let arms_fv = List.fold_left (fun a (p, body) ->
+          SS.union a (fv bound' body)) SS.empty arms in
+        SS.union scrut_fv arms_fv
   in
   fv SS.empty e
 
@@ -804,6 +849,30 @@ let rec quote_to_value (e : expr) : value =
         VPair (quote_to_value e, VPair (quote_to_value ty, VNil)))
   | ELocated (_, e) ->
       quote_to_value e
+  | EMatch (scrutinee, arms) ->
+      let q_arms = List.fold_right (fun (p, body) acc ->
+        let q_pat = quote_pattern p in
+        VPair (VPair (q_pat, VPair (quote_to_value body, VNil)), acc)
+      ) arms VNil in
+      VPair (VSymbol "match",
+        VPair (quote_to_value scrutinee, VPair (q_arms, VNil)))
+
+and quote_pattern (p : pattern) : value =
+  match p with
+  | PLiteral v -> VPair (VSymbol "lit", VPair (v, VNil))
+  | PVariable s -> VPair (VSymbol "var", VPair (VString s, VNil))
+  | PWildcard -> VSymbol "_"
+  | PList (pats, rest) ->
+      let q_pats = List.map quote_pattern pats in
+      let q_rest = match rest with Some r -> quote_pattern r | None -> VNil in
+      VPair (VSymbol "list",
+        VPair (List.fold_right (fun p acc -> VPair (p, acc)) q_pats VNil,
+               VPair (q_rest, VNil)))
+  | PTagged (tag, pats) ->
+      let q_pats = List.map quote_pattern pats in
+      VPair (VSymbol "tagged",
+        VPair (VString tag,
+               List.fold_right (fun p acc -> VPair (p, acc)) q_pats VNil))
 
 (* =================================================================== *)
 (*  Pretty-print a value for the REPL                                   *)
@@ -1056,3 +1125,46 @@ and expr_of_list (items : value list) : expr =
   | (VSymbol "do") :: rest -> EDo (List.map value_to_expr rest)
   | fn :: args -> EApply (value_to_expr fn, List.map value_to_expr args)
   | [] -> ELiteral VNil (* unreachable: [items] always comes from a VPair *)
+
+(* Pattern matching: try to match a value against a pattern.
+   Returns Some [(name, value); ...] on match, None on failure. *)
+let rec match_pattern (v : value) (p : pattern) : (string * value) list option =
+  match p with
+  | PWildcard -> Some []
+  | PVariable name -> Some [(name, v)]
+  | PLiteral lit -> if v = lit then Some [] else None
+  | PList (pats, rest) ->
+      let rec match_list v pats rest =
+        match pats, v with
+        | [], _ ->
+            (match rest with
+             | Some r -> match_pattern v r
+             | None -> if v = VNil then Some [] else None)
+        | p :: ps, VPair (h, t) ->
+            (match match_pattern h p with
+             | Some b1 ->
+                 (match match_list t ps rest with
+                  | Some b2 -> Some (b1 @ b2)
+                  | None -> None)
+             | None -> None)
+        | _ :: _, _ -> None
+      in
+      match_list v pats rest
+  | PTagged (tag, pats) ->
+      match v with
+      | VPair (VKeyword kw, rest) when kw = tag ->
+          let rec match_tagged rest pats =
+            match pats, rest with
+            | [], VNil -> Some []
+            | [], _ -> Some []
+            | p :: ps, VPair (h, t) ->
+                (match match_pattern h p with
+                 | Some b1 ->
+                     (match match_tagged t ps with
+                      | Some b2 -> Some (b1 @ b2)
+                      | None -> None)
+                 | None -> None)
+            | _ :: _, _ -> None
+          in
+          match_tagged rest pats
+      | _ -> None

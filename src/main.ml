@@ -206,6 +206,7 @@ let main () =
         Printf.printf "  pp --update <file.pp>     Re-resolve islands and rewrite inline pins (implies --fetch-islands)\n";
         Printf.printf "  pp --fetch-islands        Allow git fetch for uncached island pins (default: off)\n";
         Printf.printf "  pp --watch-interval <s>   Poll interval for --watch (default 1.0)\n";
+        Printf.printf "  pp lint <file.pp>         Check source file for naming/style convention violations\n";
         Printf.printf "  pp run <file>            Run a pp source file\n";
         Printf.printf "  pp --version             Print version\n";
         Printf.printf "  pp --help                Print this help\n";
@@ -233,6 +234,9 @@ let main () =
         watch_interval := float_of_string secs; parse rest
     | "--stabilize" :: rest -> stabilize := true; parse rest
     | "graph" :: rest -> graph_mode := true; parse rest
+    | "lint" :: f :: rest ->
+        ignore rest;
+        Lint.lint_file f
     | "run" :: f :: rest -> files := f :: !files; parse rest
     | f :: rest -> files := f :: !files; parse rest
     | [] -> ()

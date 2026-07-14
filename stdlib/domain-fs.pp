@@ -76,19 +76,19 @@ def fs-diff-for(root) {
     let (dkeys = map-keys(desired), okeys = map-keys(observed), creates = filter(
 
 
-fn(rel) { nil?(hash-map-get(observed, rel)) }, dkeys), existing = filter(
-fn(rel) { not(nil?(hash-map-get(observed, rel))) }, dkeys), updates = filter(
+fn(rel) { nil?(observed[rel]) }, dkeys), existing = filter(
+fn(rel) { not(nil?(observed[rel])) }, dkeys), updates = filter(
 fn(rel) {
-      not(hash-map-get(observed, rel) = fs-content-hash(hash-map-get(desired, rel)))
+      not(observed[rel] = fs-content-hash(desired[rel]))
     }, existing), deletes = filter(
 
-fn(rel) { nil?(hash-map-get(desired, rel)) }, okeys), items = append(map(
+fn(rel) { nil?(desired[rel]) }, okeys), items = append(map(
 
-fn(rel) { fs-plan-item("create", rel, hash-map-get(desired, rel)) }, creates), append(map(
+fn(rel) { fs-plan-item("create", rel, desired[rel]) }, creates), append(map(
 
-fn(rel) { fs-plan-item("update", rel, hash-map-get(desired, rel)) }, updates), map(
+fn(rel) { fs-plan-item("update", rel, desired[rel]) }, updates), map(
 fn(rel) { fs-plan-item("delete", rel, nil) }, deletes)))) {
-      {:items -> items, :summary -> [[:root, root], [:create, number->string(length(creates))], [:update, number->string(length(updates))], [:delete, number->string(length(deletes))]]}
+{:items -> items, :summary -> vec[vec[:root, root], vec[:create, number->string(length(creates))], vec[:update, number->string(length(updates))], vec[:delete, number->string(length(deletes))]]}
 # A VECTOR of [key value] pairs, not a map — plan caching
 # round-trips a cache MISS's result through the store, and
 # Codec's on-disk format canonicalizes (sorts) a VMap's entries
@@ -104,9 +104,9 @@ fn(rel) { fs-plan-item("delete", rel, nil) }, deletes)))) {
 # ---- apply ----
 
 def fs-apply-item(root, item) {
-  let (kind = hash-map-get(item, :kind), rel = hash-map-get(item, :rel), path = string-append(root, "/", rel)) {
+  let (kind = item[:kind], rel = item[:rel], path = string-append(root, "/", rel)) {
     if kind = "delete" { perform remove-file(path) } else {
-      let (content = hash-map-get(item, :content), bytes = fs-content-bytes(content)) {
+      let (content = item[:content], bytes = fs-content-bytes(content)) {
         if fs-blob-ref-executable?(content) {
           perform materialize-file(path, bytes, :executable)
         } else { perform materialize-file(path, bytes) }
@@ -116,12 +116,12 @@ def fs-apply-item(root, item) {
 }
 
 def fs-apply-for(root) {
-  fn(plan) { each(fn(item) { fs-apply-item(root, item) }, hash-map-get(plan, :items))
+  fn(plan) { each(fn(item) { fs-apply-item(root, item) }, plan[:items])
   }
 # ---- registration ----
 }
 def register-fs-domain(root, write-cap) {
-  register-domain({:name -> "fs", :namespace -> [string-append("file:", root), string-append("tree:", root), string-append("stat:", root)], :observe -> (
+  register-domain({:name -> "fs", :namespace -> vec[string-append("file:", root), string-append("tree:", root), string-append("stat:", root)], :observe -> (
 
 
 

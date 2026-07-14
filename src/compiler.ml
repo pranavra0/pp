@@ -555,6 +555,51 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       let saved_frame = match st.cenv with [] -> [] | f :: _ -> f in
       compile_sequential saved_frame bindings
 
+  | EMatch (scrutinee, arms) ->
+      (* Lower to nested let+if chain and compile that *)
+      let tmp = "__match_" in
+      let tmp_sym = ESymbol tmp in
+      let car_of e = EApply (ESymbol "car", [e]) in
+      let cdr_of e = EApply (ESymbol "cdr", [e]) in
+      let rec lower_arms = function
+        | [] -> EApply (ESymbol "error", [ELiteral (VString "match failure")])
+        | [(pat, body)] -> lower_pat pat body (lower_arms [])
+        | (pat, body) :: rest ->
+            let cond = pat_cond pat in
+            let then_e = lower_pat_bind pat body in
+            EIf (cond, then_e, lower_arms rest)
+      and pat_cond pat =
+        match pat with
+        | PLiteral v -> EApply (ESymbol "=", [tmp_sym; ELiteral v])
+        | PWildcard | PVariable _ -> ELiteral (VBool true)
+        | PTagged (tag, _) -> EApply (ESymbol "=", [car_of tmp_sym; ELiteral (VKeyword tag)])
+        | PList _ -> ELiteral (VBool false)
+      and lower_pat_bind pat body =
+        match pat with
+        | PVariable name -> ELet ([name, tmp_sym], body)
+        | PTagged (_, [PVariable name]) ->
+            ELet ([name, car_of (cdr_of tmp_sym)], body)
+        | PTagged (_, pats) ->
+            let binds = List.mapi (fun i p ->
+              match p with
+              | PVariable n -> (n, car_of (nth_cdr i tmp_sym))
+              | _ -> ("_", ELiteral VNil)
+            ) pats in
+            let real_binds = List.filter (fun (n, _) -> n <> "_") binds in
+            if real_binds = [] then body
+            else ELet (real_binds, body)
+        | PList _ | PLiteral _ | PWildcard -> body
+      and lower_pat pat body fallback =
+        let cond = pat_cond pat in
+        let then_e = lower_pat_bind pat body in
+        EIf (cond, then_e, fallback)
+      and nth_cdr n e =
+        if n <= 0 then e
+        else cdr_of (nth_cdr (n - 1) e)
+      in
+      let lowered = ELet ([tmp, scrutinee], lower_arms arms) in
+      compile_expr st lowered tail
+
 (* ---- Compile a program ---- *)
 
 let compile_program (exprs : expr list) : bytecode =

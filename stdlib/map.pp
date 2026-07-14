@@ -8,5 +8,5 @@ def map-has?(m, k) { member?(k, map-keys(m)) }
 
 # map-merge(a, b) — a with every binding of b inserted (b wins on collision)
 def map-merge(a, b) { foldl(
-fn(acc, k) { map-insert(acc, k, hash-map-get(b, k)) }, a, map-keys(b))
+fn(acc, k) { { acc | k -> b[k] } }, a, map-keys(b))
 }

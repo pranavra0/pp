@@ -359,10 +359,41 @@ let rec print_expr st (e : expr) : unit =
        | Some d -> sep_before st " " d; print_expr st d
        | None -> ());
       emit st ")"
+  | EMatch (scrutinee, arms) ->
+      emit st "(match ";
+      print_expr st scrutinee;
+      List.iter (fun (p, body) ->
+        emit st " (";
+        print_pattern st p;
+        emit st " ";
+        print_expr st body;
+        emit st ")"
+      ) arms;
+      emit st ")"
   | ETyped _ ->
       unpr "a bare type annotation has no surface spelling (in either surface)"
   | EApply (fn, args) -> print_apply st fn args
 
+
+and print_pattern st (p : pattern) : unit =
+  match p with
+  | PLiteral v -> emit st (literal v)
+  | PVariable s ->
+      if not (name_ok s) then unpr "pattern variable %s has no sexpr spelling" s;
+      emit st s
+  | PWildcard -> emit st "_"
+  | PList (pats, rest) ->
+      emit st "(list";
+      List.iter (fun p -> emit st " "; print_pattern st p) pats;
+      (match rest with
+       | Some r -> emit st " . "; print_pattern st r
+       | None -> ());
+      emit st ")"
+  | PTagged (tag, pats) ->
+      emit st "(tagged";
+      emit st " "; emit st tag;
+      List.iter (fun p -> emit st " "; print_pattern st p) pats;
+      emit st ")"
 and print_apply st (fn : expr) (args : expr list) : unit =
   match fn, args with
   | ESymbol "vector", elems ->

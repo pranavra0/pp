@@ -171,6 +171,7 @@ let lex ~(file : string) (input : string) : tok list =
         advance ();
         (match peek () with
          | Some '=' -> advance (); add_at start start_line (TName "<=")
+         | Some '-' -> advance (); add_at start start_line (TName "<-")
          | _ -> add_at start start_line (TName "<"));
         run ()
     | Some ':' ->
@@ -312,6 +313,17 @@ let peek_infix ps ~nl (ops : string list) : string option =
       else Some s
   | _ -> None
 
+(* Bracket spread support *)
+type bracket_elem = BElem of expr | BSpread of expr
+(* Counter for fresh temp variables in try-block lowering *)
+let try_counter = ref 0
+let fresh_try_var () =
+  incr try_counter;
+  "__try_" ^ string_of_int !try_counter
+
+type try_stmt = TryBind of string * expr | TryExpr of expr
+
+
 let rec parse_expr ps (c : ctx) : expr =
   parse_pipe ps c
 
@@ -406,7 +418,7 @@ and parse_mul ps c =
   loop ();
   !left
 
-(* level 1: call postfix E(a, ...) — left-associative: f(x)(y) = ((f x) y) *)
+(* level 1: call postfix E(a, ...) and index postfix E[k] — left-associative *)
 and parse_postfix ps c =
   let e = ref (parse_primary ps c) in
   let rec loop () =
@@ -415,6 +427,19 @@ and parse_postfix ps c =
         advance ps;
         let args = parse_args ps in
         e := EApply (!e, args);
+        loop ()
+    | TLBracket ->
+        (* L10: expr[index] — map or vector access *)
+        advance ps;
+        skip_nl ps;
+        let idx = parse_expr ps free_ctx in
+        expect ps ~nl:true TRBracket "']'";
+        let accessor =
+          match idx with
+          | ELiteral (VInt _) -> "vector-get"
+          | _ -> "hash-map-get"
+        in
+        e := EApply (ESymbol accessor, [!e; idx]);
         loop ()
     | _ -> ()
   in
@@ -468,19 +493,14 @@ and parse_primary ps c : expr =
       expect ps ~nl:true TRParen "')'";
       e
   | TLBracket ->
-      (* L9: [e1, e2, ...] -> (vector e1 e2 ...) *)
+      (* L9: [e1, e2, ...] -> (list e1 e2 ...); lists are the default collection
+         Spread: [a, ...rest] -> cons(a, rest); [a, b, ...rest] -> cons(a, cons(b, rest)) *)
       advance ps;
       skip_nl ps;
-      if (cur ps).t = TRBracket then (advance ps; EApply (ESymbol "vector", []))
+      if (cur ps).t = TRBracket then (advance ps; EApply (ESymbol "list", []))
       else begin
-        let rec loop acc =
-          let e = parse_expr ps free_ctx in
-          match (peek ps ~nl:true).t with
-          | TComma -> advance ps; skip_nl ps; loop (e :: acc)
-          | TRBracket -> advance ps; List.rev (e :: acc)
-          | t -> parse_error ps ("expected ',' or ']', got " ^ string_of_btok t)
-        in
-        EApply (ESymbol "vector", loop [])
+        let elems = parse_bracket_elems ps in
+        build_spread_list "list" "cons" elems
       end
   | TLBrace ->
       if c.cond then
@@ -490,30 +510,116 @@ and parse_primary ps c : expr =
   | TName "true" -> advance ps; ELiteral (VBool true)
   | TName "false" -> advance ps; ELiteral (VBool false)
   | TName "nil" -> advance ps; ELiteral VNil
+  | TName n when String.length n > 0 && n.[0] = '$' ->
+      (* $file("path"), $env("VAR"[,"default"]), $glob("pattern"),
+         $probe("name"), $secret("path") — observation sigils *)
+      let kind = String.sub n 1 (String.length n - 1) in
+      advance ps;
+      (match kind with
+       | "file" ->
+           advance ps;
+           (match (peek ps ~nl:true).t with
+            | TString p -> advance ps; expect ps ~nl:true TRParen "')'";
+              EApply (ESymbol "slurp", [ELiteral (VString p)])
+            | t -> parse_error ps ("$file expects a string path, got " ^ string_of_btok t))
+       | "env" ->
+           advance ps;
+           skip_nl ps;
+           (match (peek ps ~nl:true).t with
+            | TString name ->
+                advance ps;
+                (match (peek ps ~nl:true).t with
+                 | TComma ->
+                     advance ps; skip_nl ps;
+                     let d = parse_expr ps free_ctx in
+                     expect ps ~nl:true TRParen "')'";
+                     let v = EApply (ESymbol "env-get", [ELiteral (VString name)]) in
+                     EIf (EApply (ESymbol "nil?", [v]), d, v)
+                 | TRParen -> advance ps;
+                     EApply (ESymbol "env-get", [ELiteral (VString name)])
+                 | t -> parse_error ps ("expected ',' or ')', got " ^ string_of_btok t))
+            | t -> parse_error ps ("$env expects a string name, got " ^ string_of_btok t))
+       | "glob" ->
+           advance ps;
+           (match (peek ps ~nl:true).t with
+            | TString p -> advance ps; expect ps ~nl:true TRParen "')'";
+              EApply (ESymbol "list-dir", [ELiteral (VString p)])
+            | t -> parse_error ps ("$glob expects a string pattern, got " ^ string_of_btok t))
+       | "probe" ->
+           advance ps;
+           (match (peek ps ~nl:true).t with
+            | TString name -> advance ps; expect ps ~nl:true TRParen "')'";
+              EApply (ESymbol "probe", [ELiteral (VString name)])
+            | t -> parse_error ps ("$probe expects a string name, got " ^ string_of_btok t))
+       | "secret" ->
+           advance ps;
+           (match (peek ps ~nl:true).t with
+            | TString p -> advance ps; expect ps ~nl:true TRParen "')'";
+              EApply (ESymbol "slurp", [ELiteral (VString p)])
+            | t -> parse_error ps ("$secret expects a string path, got " ^ string_of_btok t))
+       | _ -> ESymbol n)
   | TName n -> parse_head ps c n
 
-(* { k1 -> v1, k2 -> v2, ... } -> (hash-map k1 v1 k2 v2 ...); cur = '{' *)
+(* { k1 -> v1, k2 -> v2, ... } -> (hash-map k1 v1 k2 v2 ...)
+   { base | k1 -> v1, k2 -> v2, ... } -> map-insert(map-insert(base, k1, v1), ...);
+   cur = '{' *)
 and parse_map_literal ps : expr =
   advance ps;
   skip_nl ps;
   if (cur ps).t = TRBrace then (advance ps; EApply (ESymbol "hash-map", []))
   else begin
-    let rec loop acc =
-      let key = parse_expr ps free_ctx in
-      (match peek_infix ps ~nl:true ["->"] with
-       | Some _ -> advance ps
-       | None ->
-           parse_error ps
-             ("expected '->' between map key and value, got "
-              ^ string_of_btok (peek ps ~nl:true).t));
-      skip_nl ps;
-      let v = parse_expr ps free_ctx in
-      match (peek ps ~nl:true).t with
-      | TComma -> advance ps; skip_nl ps; loop (v :: key :: acc)
-      | TRBrace -> advance ps; List.rev (v :: key :: acc)
-      | t -> parse_error ps ("expected ',' or '}', got " ^ string_of_btok t)
-    in
-    EApply (ESymbol "hash-map", loop [])
+    let first = parse_expr ps free_ctx in
+    (* check if this is a map update: { base | k -> v, ... } *)
+    (match peek_infix ps ~nl:true ["|"] with
+     | Some _ ->
+         advance ps;  (* consume '|' *)
+         skip_nl ps;
+         let rec updates acc =
+           let key = parse_expr ps free_ctx in
+           (match peek_infix ps ~nl:true ["->"] with
+            | Some _ -> advance ps
+            | None ->
+                parse_error ps
+                  ("expected '->' between map key and value, got "
+                   ^ string_of_btok (peek ps ~nl:true).t));
+           skip_nl ps;
+           let v = parse_expr ps free_ctx in
+           let acc = EApply (ESymbol "map-insert", [acc; key; v]) in
+           match (peek ps ~nl:true).t with
+           | TComma -> advance ps; skip_nl ps; updates acc
+           | TRBrace -> advance ps; acc
+           | t -> parse_error ps ("expected ',' or '}', got " ^ string_of_btok t)
+         in
+         updates first
+     | None ->
+         (* normal map literal: the first expr is a key *)
+         (match peek_infix ps ~nl:true ["->"] with
+          | Some _ -> advance ps
+          | None ->
+              parse_error ps
+                ("expected '->' between map key and value, got "
+                 ^ string_of_btok (peek ps ~nl:true).t));
+         skip_nl ps;
+         let first_val = parse_expr ps free_ctx in
+         let rec loop acc =
+           match (peek ps ~nl:true).t with
+           | TComma ->
+               advance ps; skip_nl ps;
+               let key = parse_expr ps free_ctx in
+               (match peek_infix ps ~nl:true ["->"] with
+                | Some _ -> advance ps
+                | None ->
+                    parse_error ps
+                      ("expected '->' between map key and value, got "
+                       ^ string_of_btok (peek ps ~nl:true).t));
+               skip_nl ps;
+               let v = parse_expr ps free_ctx in
+               loop (v :: key :: acc)
+           | TRBrace -> advance ps; acc
+           | t -> parse_error ps ("expected ',' or '}', got " ^ string_of_btok t)
+         in
+         let rest = loop [] in
+         EApply (ESymbol "hash-map", first :: first_val :: List.rev rest))
   end
 
 (* A brace block `{ stmt; ... }`; returns the raw statement list.
@@ -698,6 +804,176 @@ and parse_head ps c (n : string) : expr =
       EDo (check_defs ps stmts)
   | "if" when starts_expr next_t ->
       parse_if ps
+  | "cond" when next_t = TLBrace ->
+      (* cond { test1 => result1; test2 => result2; ... } — multi-way conditional
+         lowers to nested EIf; the last arm `true => result` is the else *)
+      advance ps;
+      skip_nl ps;
+      expect ps ~nl:false TLBrace "'{'";
+      let rec skip_seps () =
+        match (cur ps).t with
+        | TNewline | TSemi -> advance ps; skip_seps ()
+        | _ -> ()
+      in
+      let rec parse_arms acc =
+        skip_seps ();
+        if (cur ps).t = TRBrace then (advance ps; List.rev acc)
+        else if (cur ps).t = TEOF then
+          parse_error ps "unterminated cond block"
+        else begin
+          let test = parse_expr ps { nl = false; cond = false } in
+          (match peek_infix ps ~nl:true ["=>"] with
+           | Some _ -> advance ps
+           | None ->
+               parse_error ps "cond arm must be `test => result`");
+          skip_nl ps;
+          let result = parse_expr ps { nl = false; cond = false } in
+          skip_seps ();
+          parse_arms ((test, result) :: acc)
+        end
+      in
+      let arms = parse_arms [] in
+      let rec lower arms =
+        match arms with
+        | [] -> ELiteral VNil
+        | [(test, result)] ->
+            if test = ESymbol "true" || test = ELiteral (VBool true)
+            then result
+            else EIf (test, result, ELiteral VNil)
+        | (test, result) :: rest ->
+            EIf (test, result, lower rest)
+      in
+      lower arms
+  | "try" when next_t = TLBrace ->
+      (* try { name <- expr; ...; final-expr } — error propagation
+         Each `name <- expr` unwraps [:ok, v] or propagates [:err, e]. *)
+      advance ps;
+      skip_nl ps;
+      let stmts = parse_try_stmts ps in
+      lower_try_block stmts
+  | "collect" when next_t = TLBrace ->
+      (* collect { expr; expr; ... } — evaluate each, collect [:ok, v]/[:err, e] *)
+      advance ps;
+      skip_nl ps;
+      let stmts = parse_block_stmts ps in
+      lower_collect_block stmts
+  | "fenced" when (match next_t with TKeyword _ -> true | _ -> false) ->
+      (* fenced :kind { key -> value, ... } -> perform fenced(:kind, map) *)
+      advance ps;  (* consume 'fenced' *)
+      let kind = (match (cur ps).t with
+        | TKeyword kw -> advance ps; ELiteral (VKeyword kw)
+        | _ -> parse_error ps "fenced requires a keyword kind, e.g. fenced :email { ... }")
+      in
+      skip_nl ps;
+      let spec = parse_map_literal ps in
+      EPerform ("fenced", [kind; spec])
+  | "match" when starts_expr next_t ->
+      (* match expr { pat1 => body1; pat2 => body2; ... } *)
+      advance ps;  (* consume 'match' *)
+      let scrutinee = parse_expr ps { nl = false; cond = true } in
+      skip_nl ps;
+      expect ps ~nl:false TLBrace "'{'";
+      let arms = parse_match_arms ps in
+      EMatch (scrutinee, arms)
+  | "with" when next_t = TLBrace ->
+      (* with { caps: C, config: M, handler H: fn ... } { body }
+         Lowers to nested EWithCaps, EWithConfig, EWithHandler in canonical order. *)
+      advance ps;  (* consume 'with' *)
+      skip_nl ps;
+      expect ps ~nl:false TLBrace "'{'";
+      let rec parse_clauses caps_opt config_opt handlers =
+        (* skip separators *)
+        let rec skip_seps () =
+          match (cur ps).t with
+          | TNewline | TSemi | TComma -> advance ps; skip_seps ()
+          | _ -> ()
+        in
+        skip_seps ();
+        if (cur ps).t = TRBrace then (advance ps; (caps_opt, config_opt, List.rev handlers))
+        else if (cur ps).t = TEOF then parse_error ps "unterminated with block"
+        else begin
+          match (cur ps).t with
+          | TName "caps" when (peek2 ps).t = TColon ->
+              advance ps; advance ps; skip_nl ps;
+              let cap = parse_expr ps { nl = false; cond = false } in
+              if caps_opt <> None then parse_error ps "duplicate caps: clause in with block";
+              parse_clauses (Some cap) config_opt handlers
+          | TName "config" when (peek2 ps).t = TColon ->
+              advance ps; advance ps; skip_nl ps;
+              let m = parse_expr ps { nl = false; cond = false } in
+              if config_opt <> None then parse_error ps "duplicate config: clause in with block";
+              parse_clauses caps_opt (Some m) handlers
+          | TName "handler" ->
+              advance ps;
+              let hname =
+                match (cur ps).t with
+                | TName s -> s
+                | TKeyword k -> k
+                | t -> parse_error ps ("expected handler name, got " ^ string_of_btok t)
+              in
+              advance ps;
+              if (cur ps).t <> TColon then
+                parse_error ps "expected ':' after handler name in with block";
+              advance ps; skip_nl ps;
+              let h = parse_expr ps { nl = false; cond = false } in
+              parse_clauses caps_opt config_opt ((hname, h) :: handlers)
+          | t -> parse_error ps ("expected caps:, config:, or handler in with block, got " ^ string_of_btok t)
+        end
+      in
+      let (caps_opt, config_opt, handlers) = parse_clauses None None [] in
+      let body = parse_block_body ps in
+      (* Nest in canonical order: caps (outermost), config, handlers (innermost) *)
+      let body =
+        match handlers with
+        | [] -> body
+        | _ -> EWithHandler (handlers, body)
+      in
+      let body =
+        match config_opt with
+        | None -> body
+        | Some m -> EWithConfig (m, body)
+      in
+      let body =
+        match caps_opt with
+        | None -> body
+        | Some cap -> EWithCaps (cap, body)
+      in
+      body
+  | n when String.length n > 0 && n.[0] = '@' ->
+      (* @attr(args) annotation on following definition *)
+      let attr = String.sub n 1 (String.length n - 1) in
+      advance ps;
+      let attr_args =
+        if (cur ps).t = TLParen then begin
+          advance ps;
+          let args = parse_args ps in
+          args
+        end else []
+      in
+      skip_nl ps;
+      (* Parse the following definition and apply the attribute *)
+      let def = parse_primary ps c in
+      (match attr, attr_args with
+       | "cache", [] ->
+           (match def with
+            | EDef (name, params, body) -> EDef (name, params, ENode body)
+            | _ -> parse_error ps "@cache can only be applied to a def")
+       | "needs", _ ->
+           (match def with
+            | EDefNode _ | ENode _ ->
+                (* @needs is handled inside node syntax; passthrough for now *)
+                def
+            | _ -> parse_error ps "@needs can only be applied to a node")
+       | "reads", _ -> def  (* @reads is documentation-only; passthrough *)
+       | "deprecated", [ELiteral (VString msg)] ->
+           (match def with
+            | EDef (name, params, body) ->
+                let warn = EApply (ESymbol "print", [ELiteral (VString ("deprecated: " ^ name ^ " — " ^ msg))]) in
+                EDef (name, params, EDo [warn; body])
+            | _ -> def)
+       | _ ->
+           (* unknown attribute: passthrough the def unchanged *)
+           def)
   | "let" ->
       (match next_t with
        | TName "=" ->
@@ -909,6 +1185,16 @@ and parse_head ps c (n : string) : expr =
       advance ps; advance ps;
       let args = parse_args ps in
       EApply (ESymbol n, args)
+  | "vec" when next_t = TLBracket ->
+      (* vec[e1, e2, ...] -> (vector e1 e2 ...); spread: vec[a, ...rest] *)
+      advance ps;  (* consume "vec" *)
+      advance ps;  (* consume "[" *)
+      skip_nl ps;
+      if (cur ps).t = TRBracket then (advance ps; EApply (ESymbol "vector", []))
+      else begin
+        let elems = parse_bracket_elems ps in
+        build_spread_list "vector" "cons" elems
+      end
   | _ ->
       (* not a form occurrence: the word denotes its symbol (L6/L7) *)
       advance ps;
@@ -919,6 +1205,228 @@ and needs_restrict (e : expr) (mode : string) : expr =
           [EApply (ESymbol "current-capabilities", []); e;
            ELiteral (VKeyword mode)])
 
+
+and parse_bracket_elems ps : bracket_elem list =
+  let rec loop acc =
+    match (cur ps).t with
+    | TName s when String.length s >= 3 && String.sub s 0 3 = "..." ->
+        advance ps;
+        let target =
+          if String.length s > 3 then
+            (* suffix is part of the token: ...rest *)
+            ESymbol (String.sub s 3 (String.length s - 3))
+          else
+            (* bare ..., parse next expression *)
+            parse_expr ps free_ctx
+        in
+        (match (peek ps ~nl:true).t with
+         | TComma -> advance ps; skip_nl ps; loop (BSpread target :: acc)
+         | TRBracket -> advance ps; List.rev (BSpread target :: acc)
+         | t -> parse_error ps ("expected ',' or ']', got " ^ string_of_btok t))
+    | _ ->
+        let e = parse_expr ps free_ctx in
+        (match (peek ps ~nl:true).t with
+         | TComma -> advance ps; skip_nl ps; loop (BElem e :: acc)
+         | TRBracket -> advance ps; List.rev (BElem e :: acc)
+         | t -> parse_error ps ("expected ',' or ']', got " ^ string_of_btok t))
+  in
+  loop []
+
+and build_spread_list (ctor : string) (cons_name : string)
+    (elems : bracket_elem list) : expr =
+  let rec has_spread = function
+    | [] -> false | BSpread _ :: _ -> true | BElem _ :: rest -> has_spread rest
+  in
+  if not (has_spread elems) then
+    let args = List.map (function BElem e -> e | BSpread e -> e) elems in
+    EApply (ESymbol ctor, args)
+  else
+    (* Split at the spread: prefix elements consed onto the spread tail *)
+    let rec split acc = function
+      | [] -> (List.rev acc, EApply (ESymbol ctor, []))
+      | BSpread e :: rest ->
+          if rest = [] then (List.rev acc, e)
+          else failwith "spread (...) only supported at end of list/vector"
+      | BElem e :: rest -> split (e :: acc) rest
+    in
+    let (prefix, tail) = split [] elems in
+    List.fold_right (fun e acc -> EApply (ESymbol cons_name, [e; acc])) prefix tail
+
+
+(* Parse statements inside a try { } block.
+   Returns list; each item is either `TryBind (name, rhs)` for a
+   `name <- expr` bind, or `TryExpr expr` for a normal statement. *)
+and parse_try_stmts ps : try_stmt list =
+  expect ps ~nl:false TLBrace "'{'";
+  let rec skip_seps () =
+    match (cur ps).t with
+    | TNewline | TSemi -> advance ps; skip_seps ()
+    | _ -> ()
+  in
+  let rec loop acc =
+    skip_seps ();
+    let k = cur ps in
+    if k.t = TRBrace then (advance ps; List.rev acc)
+    else if k.t = TEOF then parse_error ps "unterminated try block"
+    else begin
+      match k.t with
+      | TName name when not k.glued && not (peek2 ps).glued && (peek2 ps).t = TName "<-" ->
+          advance ps;  (* consume name *)
+          advance ps;  (* consume <- *)
+          skip_nl ps;
+          let rhs = parse_expr ps { nl = false; cond = false } in
+          loop (TryBind (name, rhs) :: acc)
+      | TName "let" ->
+          (* Check for `let name = expr?` — treat as TryBind *)
+          advance ps;  (* consume 'let' *)
+          (match (cur ps).t with
+           | TName name ->
+               advance ps;
+               if (cur ps).t = TName "=" then begin
+                 advance ps; skip_nl ps;
+                 let rhs = parse_expr ps { nl = false; cond = false } in
+                 if (cur ps).t = TName "?" && (cur ps).glued then begin
+                   advance ps;  (* consume ? *)
+                   loop (TryBind (name, rhs) :: acc)
+                 end else
+                   parse_error ps "in try block, use `let name = expr?` or `name <- expr` to unwrap"
+               end else
+                 parse_error ps "expected `let name = expr?` in try block"
+           | _ ->
+               parse_error ps "expected variable name after `let` in try block")
+      | _ ->
+          let e = parse_expr ps { nl = false; cond = false } in
+          (* Check for postfix ? operator on bare expression *)
+          let e =
+            if (cur ps).t = TName "?" && (cur ps).glued then begin
+              advance ps;  (* consume ? *)
+              let tmp = fresh_try_var () in
+              let tmp_sym = ESymbol tmp in
+              let ok_kw = ELiteral (VKeyword "ok") in
+              let car_of x = EApply (ESymbol "car", [x]) in
+              let cdr_of x = EApply (ESymbol "cdr", [x]) in
+              ELet ([tmp, e],
+                    EIf (EApply (ESymbol "=", [car_of tmp_sym; ok_kw]),
+                         car_of (cdr_of tmp_sym),
+                         tmp_sym))
+            end else e
+          in
+          loop (TryExpr e :: acc)
+    end
+  in
+  loop []
+
+(* Lower a try block's statements into a nested if-chain.
+   Each `name <- expr` becomes a check for [:ok, v] / [:err, e].
+   The last statement is the result (when all propagations succeed). *)
+and lower_try_block (stmts : try_stmt list) : expr =
+  let ok_kw = ELiteral (VKeyword "ok") in
+  let car_of e = EApply (ESymbol "car", [e]) in
+  let cdr_of e = EApply (ESymbol "cdr", [e]) in
+  let rec build = function
+    | [] -> ok_kw  (* default: :ok (nil result) *)
+    | [TryExpr e] -> e
+    | TryExpr e :: rest ->
+        EDo [e; build rest]
+    | TryBind (name, rhs) :: rest ->
+        let tmp = fresh_try_var () in
+        let tmp_sym = ESymbol tmp in
+        let ok_branch =
+          ELet ([name, car_of (cdr_of tmp_sym)], build rest)
+        in
+        let err_branch = tmp_sym in
+        ELet ([tmp, rhs],
+              EIf (EApply (ESymbol "=", [car_of tmp_sym; ok_kw]),
+                   ok_branch, err_branch))
+  in
+  build stmts
+
+(* Lower a collect block: evaluate all expressions, collect results into a list.
+   Each expression should return [:ok, v] or [:err, e].
+   Returns [:ok, values] if all succeeded, or [:err, errors] if any failed. *)
+and lower_collect_block (stmts : expr list) : expr =
+  let results = EApply (ESymbol "list", stmts) in
+  (* For now, just collect into a list; full error partitioning deferred to stdlib *)
+  results
+
+(* Parse match arms inside { } — each arm is `pattern => body` separated by newlines/; *)
+and parse_match_arms ps : (Types.pattern * expr) list =
+  let rec skip_seps () =
+    match (cur ps).t with
+    | TNewline | TSemi -> advance ps; skip_seps ()
+    | _ -> ()
+  in
+  let rec loop acc =
+    skip_seps ();
+    if (cur ps).t = TRBrace then (advance ps; List.rev acc)
+    else if (cur ps).t = TEOF then parse_error ps "unterminated match block"
+    else begin
+      let pat = parse_pattern ps in
+      (match peek_infix ps ~nl:true ["=>"] with
+       | Some _ -> advance ps
+       | None -> parse_error ps "match arm must be `pattern => body`");
+      skip_nl ps;
+      let body = parse_expr ps { nl = false; cond = false } in
+      loop ((pat, body) :: acc)
+    end
+  in
+  loop []
+
+(* Parse a single pattern *)
+and parse_pattern ps : Types.pattern =
+  let k = cur ps in
+  match k.t with
+  | TName "_" -> advance ps; Types.PWildcard
+  | TName n when n.[0] >= 'a' && n.[0] <= 'z' ->
+      (* Lowercase name: variable pattern *)
+      advance ps; Types.PVariable n
+  | TName n -> advance ps; Types.PVariable n  (* any name is a variable for now *)
+  | TInt i -> advance ps; Types.PLiteral (VInt i)
+  | TFloat f -> advance ps; Types.PLiteral (VFloat f)
+  | TString s -> advance ps; Types.PLiteral (VString s)
+  | TKeyword kw -> advance ps; Types.PLiteral (VKeyword kw)
+  | TName "true" -> advance ps; Types.PLiteral (VBool true)
+  | TName "false" -> advance ps; Types.PLiteral (VBool false)
+  | TName "nil" -> advance ps; Types.PLiteral VNil
+  | TLBracket ->
+      (* List pattern: [p1, p2, ...rest] *)
+      advance ps;
+      skip_nl ps;
+      if (cur ps).t = TRBracket then (advance ps; Types.PList ([], None))
+      else begin
+        let rec loop_pats acc =
+          let p = parse_pattern ps in
+          match (peek ps ~nl:true).t with
+          | TComma -> advance ps; skip_nl ps; loop_pats (p :: acc)
+          | TRBracket -> advance ps; List.rev (p :: acc)
+          | t -> parse_error ps ("expected ',' or ']', got " ^ string_of_btok t)
+        in
+        (* Check for ...rest spread at the end *)
+        let pats = loop_pats [] in
+        (* For now, just a list of patterns — spread support deferred *)
+        Types.PList (pats, None)
+      end
+  | TLParen ->
+      (* Tagged pattern: (:ok v) or just grouping *)
+      advance ps;
+      skip_nl ps;
+      (match (cur ps).t with
+       | TKeyword tag ->
+           advance ps;
+           let rec loop_pats acc =
+             if (cur ps).t = TRParen then (advance ps; List.rev acc)
+             else begin
+               let p = parse_pattern ps in
+               loop_pats (p :: acc)
+             end
+           in
+           Types.PTagged (tag, loop_pats [])
+       | _ ->
+           let p = parse_pattern ps in
+           expect ps ~nl:true TRParen "')'";
+           p)
+  | _ ->
+      parse_error ps ("expected pattern, got " ^ string_of_btok k.t)
 and parse_one_arg_form ps (mk : expr -> expr) (what : string) : expr =
   advance ps;  (* '(' *)
   skip_nl ps;

@@ -22,7 +22,7 @@ fn(x3) { x2 })(x2)
 })
 print("")
 print("=== nested let inside a collection literal in a binding ===")
-print("b =>", let* (x1 = 31, x2 = hash-map-get({:k4 -> let (x5 = 0) { x5 }}, :k4) - 1) {
+print("b =>", let* (x1 = 31, x2 = {:k4 -> let (x5 = 0) { x5 }}[:k4] - 1) {
   (
 fn(x3) { x2 })(x2)
 })
@@ -40,7 +40,7 @@ fn(z) { p }) { f(99) })
 
 print("")
 print("=== nested let in vector literal element, later var captured ===")
-print("e =>", let* (x1 = 7, x2 = vector-get([let (w = 3) { w }, x1], 1)) {
+print("e =>", let* (x1 = 7, x2 = vector-get(vec[let (w = 3) { w }, x1], 1)) {
   (
 fn(z) { x2 })(x2)
 })

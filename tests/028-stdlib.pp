@@ -31,12 +31,12 @@ print(lines("a\nb\nc\n"))
 # ---- map primitives + stdlib/map.pp ----
 let m = {:a -> 1, :b -> 2}
 print(length(map-keys(m)))
-print(hash-map-get(m, :a))
+print(m[:a])
 print(map-has?(m, :b))
 print(map-has?(m, :zz))
 let m2 = map-remove(m, :a)
 print(map-has?(m2, :a))
-print(hash-map-get(m2, :b))
+print(m2[:b])
 
 # ---- list additions ----
 print(append(list(1, 2), list(3, 4)))

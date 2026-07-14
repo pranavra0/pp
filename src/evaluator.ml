@@ -794,6 +794,19 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
             | Some d -> eval_tail d env k
             | None -> k VNil))
 
+  | EMatch (scrutinee, arms) ->
+      let v = force (eval scrutinee env) in
+      let rec try_arms = function
+        | [] -> failwith "match failure"
+        | (pat, body) :: rest ->
+            (match Types.match_pattern v pat with
+             | Some binds ->
+                 let env' = List.fold_left (fun e (n, v) -> Types.extend_env e n v) env binds in
+                 eval_tail body env' k
+             | None -> try_arms rest)
+      in
+      try_arms arms
+
 (* ---- Function Application (non-tail) ---- *)
 
 and apply (fn : value) (args : value list) (env : env) : value =

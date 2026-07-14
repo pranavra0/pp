@@ -67,3 +67,22 @@ If direnv isn't active, prefix commands with `opam exec --` and use `bin/pp` or
 - Semantics (normative): [docs/SPEC.md](docs/SPEC.md)
 - Plan and rationale: [docs/ROADMAP.md](docs/ROADMAP.md), [docs/DESIGN.md](docs/DESIGN.md)
 - Testing: [docs/TESTING.md](docs/TESTING.md)
+
+## Style
+
+pp code follows [docs/CONVENTIONS.md](docs/CONVENTIONS.md). Key rules:
+
+- **Suffix conventions:** `?` for predicates (`nil?`), `!` for effects (`run!`), `->` for conversions (`string->number`), no suffix for pure functions.
+- **Truthiness:** Only `nil` and `false` are falsy. Use `if x` not `if not(nil?(x))`.
+- **Flat `let`:** One `let (a = …, b = …) { … }`, not nested single-binding ladders. Use `let*` for sequential shadowing.
+- **`else if` chains:** `else if` is a flat chain — do not nest the second `if` inside braces.
+- **Naming:** Functions are verb-led (`longest-palindrome`, not `expand-around-centre`). Values are full words (`max-len`, not `ml`). Inner helpers name the step (`scan`, not `loop`).
+- **`car`/`cdr`:** Built-in; alias to `first`/`rest` in a prelude if needed. Pick one style per file.
+- **Tier awareness:** `!`-suffixed functions may appear in node bodies when they perform traced effects. Pure computations in nodes should not carry `!`.
+- **Comments:** Why, not what — algorithm choice, complexity, edge cases. Library files get a header listing every export.
+- **List/vector literals:** Use `[...]` for lists and `vec[...]` for vectors. Lists are immutable singly-linked; vectors provide random access.
+- **World observations:** Use `$file("path")`, `$env("VAR")`, `$glob("pattern")`, `$probe("name")`, and `$secret("path")` to read from the outside world. The `$` sigil makes every capability-gated read visually distinct.
+- **Error propagation:** Use `try { a <- f(); ... }` to unwrap `[:ok, v]` / `[:err, e]` pairs. The `?` suffix (`let x = expr?`) is shorthand for the same pattern.
+- **Multi-way conditionals:** Use `cond { test1 => result1; true => fallback }` instead of deeply nested `else if` chains.
+
+When writing or editing pp code in this repo, apply these conventions.
