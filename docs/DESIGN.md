@@ -773,6 +773,28 @@ that discipline lives in `src/domains.ml`, not in the domain's own code.
 - **E9 Coarse-cell fallback is non-incremental.** Until a tool has a depfile
   adapter, its nodes invalidate on any mounted-tree change. Mitigation: sound by
   default, precision added adapter-by-adapter; `pp why` shows coarse vs refined.
+- **E10 Ambient environment reads (`$env`).** `$env` observes the process
+  environment inherited from whoever launched `pp`. There is no path-traversal
+  or confused-deputy surface to defeat — a variable *name* is not a resource
+  locator, so unlike `$file`/`$glob`/`$secret` there is no "spelled-inside,
+  resolves-outside" attack (which is why A″5 records this as a trust assumption
+  rather than an adversarial fixture). Trust assumption: the launcher controls
+  the environment (the same boundary as `argv` and the loader's interpreter
+  authority — pp does not defend against a hostile parent process). Blast
+  radius: whatever the launcher exports. Containment: an `$env` read enters the
+  trace as an `env:` cell whose observed hash distinguishes *present* from
+  *absent* (A″1's `env-present`/`env-absent` framing), so a changed or newly-set
+  variable re-keys correctly and can never silently reuse a stale value.
+- **E11 Volatile probe cells (`$probe`).** A probe is observer-written volatile
+  state (LAW 38): its value may change between observation and use (a TOCTOU
+  window) and between successive reads (clock skew). pp does not freeze or
+  defeat this — it *contains* it (this is why A″5 records it as a trust
+  assumption, not a fixture that "wins"). A probe read is treated as a **cell**
+  (re-observed each pass), never memoized as a node result, so its instability
+  is confined to one edge and poisons no downstream cache (LAW 38 / E4). Trust
+  assumption: the observer writing the probe is trusted; the adversary here is
+  nondeterminism, not a confused deputy. Blast radius: a stale probe value
+  forces a re-observe, never a wrong cached result.
 
 ---
 

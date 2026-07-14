@@ -19,6 +19,16 @@
 > [ROADMAP.md](ROADMAP.md)) does not exit until every **holds** claim below has
 > a passing test and no law is silently violated.
 >
+> **Law-linkage gate (MASTER-PLAN A″3).** A **holds** claim is not self-certifying:
+> `tests/072-law-pins.sh` cross-references every LAW id here against the
+> `# pins: LAW-<n>` markers declared by the suite, and fails the build if a
+> **holds** law has neither a pinned test nor an explicit entry on the PENDING
+> backfill list. So a law cannot be *added* as **holds** without either a test
+> that falsifies it or a recorded promise to write one — and a pin that names a
+> renamed or deleted law is likewise a red build. Kernel laws (identity, the
+> capability M3-bans, traces, handler restore, failure caching) are the first
+> pinned tranche; the tail is paid down under the same gate.
+>
 > Cross-references: design rationale and the Q1–Q12 decisions live in
 > [DESIGN.md](DESIGN.md); the D1–D21 ledger in [STATUS.md](STATUS.md); the
 > phased plan in [ROADMAP.md](ROADMAP.md).
@@ -2020,7 +2030,7 @@ not edit between the markers by hand.
 |---|---|---|---|---|
 | `$file` | 1 | yes | `(slurp $1)` | $file(path) — read a file's contents (records a file: cell) |
 | `$env` | 1..2 | yes | `(if (nil? (env-get $1)) $2 (env-get $1))` | $env(name[, default]) — read an environment variable (records an env: cell); the optional default is used when the variable is unset |
-| `$glob` | 1 | yes | `(list-dir $1)` | $glob(pattern) — list a directory (records a tree: cell) |
+| `$glob` | 1 | yes | `(perform tree-observe $1)` | $glob(path) — observe a directory tree (records a tree: cell) |
 | `$probe` | 1 | yes | `(probe $1)` | $probe(name) — read an observer-written volatile probe cell |
 | `$secret` | 1 | yes | `(slurp $1)` | $secret(path) — read a sealed (confidential) file |
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# pins: LAW-22b LAW-25
 # M3: in-language capability attenuation (docs/PLAN-m3-attenuation.md).
 #
 # The differential test that is IMPOSSIBLE to write before with-caps exists

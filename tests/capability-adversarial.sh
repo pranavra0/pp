@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# pins: LAW-22 LAW-22b LAW-25 LAW-27
 # Adversarial capability suite — Phase 0 exit (3); extended for M3 in-language
 # attenuation (docs/PLAN-m3-attenuation.md, D18 lineage).
 # Runs both backends and compares their verdicts.

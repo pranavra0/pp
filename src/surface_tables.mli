@@ -15,6 +15,7 @@ type tmpl =
   | Arg of int
   | App of tmpl list
   | If of tmpl * tmpl * tmpl
+  | Perform of string * tmpl list      (* (perform EFFECT args…) — a traced observation *)
 
 type obs_head = {
   head : string;

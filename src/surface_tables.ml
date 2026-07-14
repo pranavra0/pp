@@ -37,6 +37,11 @@ type tmpl =
   | Arg of int              (* the i-th user-supplied argument (0-based) *)
   | App of tmpl list        (* application: head then args *)
   | If of tmpl * tmpl * tmpl
+  | Perform of string * tmpl list
+    (* (perform EFFECT args…) — an observation that must route through an
+       effect, not a plain call: $glob records a `tree:` cell via the
+       [tree-observe] effect (the same lowering the `tree:` literal uses), which
+       a bare application to a primitive symbol cannot express. *)
 
 type obs_head = {
   head : string;               (* the sigil name, without the leading '$' *)
@@ -61,8 +66,8 @@ let obs_heads : obs_head list = [
                  App [Prim "env-get"; Arg 0])
       | _ -> assert false (* arity guaranteed by min/max_args *)) };
   { head = "glob"; min_args = 1; max_args = 1; qq_legal = true;
-    doc = "$glob(pattern) — list a directory (records a tree: cell)";
-    tmpl = (fun _ -> App [Prim "list-dir"; Arg 0]) };
+    doc = "$glob(path) — observe a directory tree (records a tree: cell)";
+    tmpl = (fun _ -> Perform ("tree-observe", [Arg 0])) };
   { head = "probe"; min_args = 1; max_args = 1; qq_legal = true;
     doc = "$probe(name) — read an observer-written volatile probe cell";
     tmpl = (fun _ -> App [Prim "probe"; Arg 0]) };
@@ -158,6 +163,8 @@ let rec render_tmpl : tmpl -> string = function
   | If (c, t, e) ->
       Printf.sprintf "(if %s %s %s)"
         (render_tmpl c) (render_tmpl t) (render_tmpl e)
+  | Perform (eff, ts) ->
+      "(perform " ^ eff ^ " " ^ String.concat " " (List.map render_tmpl ts) ^ ")"
 
 let render_arity (h : obs_head) : string =
   if h.min_args = h.max_args then string_of_int h.min_args

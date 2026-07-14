@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# pins: LAW-24
 # Q6 / D8c: the runtime/traced split — loader authority is bounded and
 # loader reads are runtime-tagged trace cells.
 #

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# pins: LAW-20
 # Regression: the persistent node key is LAW 20 — H(code ‖ free-var value hashes)
 # — not the Phase-0 whole-environment hash.
 #

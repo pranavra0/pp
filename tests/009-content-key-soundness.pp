@@ -1,4 +1,5 @@
 # Soundness of the content-addressed thunk key (D6 + D17).
+# pins: LAW-19
 #
 # STATUS: regression test — passes on both backends since the D6/D17 fix.
 # Before the fix the tree-walker returned d6b=1 and d17b=1 (stale cache hits).

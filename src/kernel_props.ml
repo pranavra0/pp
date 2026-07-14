@@ -18,6 +18,14 @@
                          per-form surface table declares round-trippable; a
                          printer Unprintable is a counted skip, a crash or drift
                          is a failure.
+     (iv)  CAPS (A″6)    a generator over capability VALUES, exhaustive over the
+                         kind variant (same ratchet), and the algebra
+                         properties: no user-reachable attenuation widens
+                         authority (cap_restrict ⊆ its input; cap-compose is the
+                         union of its parts — it invents nothing), the with-caps
+                         ⊆ gate is sound (an approved request grants nothing the
+                         ambient does not), and the node-boundary ban catches an
+                         embedded capability/sealed value at any depth.
 
    THE RATCHET (DESIGN §1 principle 8 — coverage derived, never enumerated).
    Each type has a mirror tag enum and two EXHAUSTIVE matches:
@@ -217,6 +225,110 @@ and gen_value_of_tag ~(mode : mode) (st : rng) (depth : int) (tag : value_tag) :
   | Vt_closure | Vt_builtin | Vt_capability | Vt_thunk | Vt_envmap
   | Vt_bytecode | Vt_sealed ->
       failwith "gen_value_of_tag: runtime-only value has no syntax"
+
+(* ========================================================= CAPABILITIES == *)
+
+(* MASTER-PLAN A″6 — the capability algebra as a property, not a unit test.
+   The generator is exhaustive over the capability kind variant (same compiler
+   ratchet as the AST generators: a new capability constructor makes [cap_kind]
+   non-exhaustive, then [gen_cap_of_tag]), and every property below runs over
+   its whole output — so a new kind extends all of them at once. *)
+
+type cap_tag =
+  | Ct_none | Ct_filesystem | Ct_network | Ct_secret | Ct_process
+  | Ct_compose | Ct_restrict
+
+(* RATCHET: exhaustive over every capability constructor. *)
+let cap_kind : capability -> cap_tag = function
+  | CapNone -> Ct_none
+  | CapFilesystem _ -> Ct_filesystem
+  | CapNetwork _ -> Ct_network
+  | CapSecret _ -> Ct_secret
+  | CapProcess -> Ct_process
+  | CapCompose _ -> Ct_compose
+  | CapRestrict _ -> Ct_restrict
+
+let all_cap_tags =
+  [ Ct_none; Ct_filesystem; Ct_network; Ct_secret; Ct_process;
+    Ct_compose; Ct_restrict ]
+(* If this fires a cap constructor was added without extending [all_cap_tags];
+   [cap_kind]'s exhaustiveness is what told you a constructor appeared. *)
+let () = assert (List.length all_cap_tags = 7)
+
+let atomic_cap_tags =
+  [ Ct_none; Ct_filesystem; Ct_network; Ct_secret; Ct_process ]
+
+(* A small, CLEAN path universe: no '.'/'..'/trailing-slash for
+   [Runtime.canonical_path] to collapse, and nonexistent so realpath leaves the
+   tail lexical — so a path's spelling here IS its canonical form, and the probe
+   relationships below depend only on directory containment. Chosen to exercise
+   nesting (/g ⊃ /g/a ⊃ /g/a/b), siblings (/g/a vs /g/x), a second tree (/h),
+   and the everything-root (/). *)
+let cap_paths = [| "/g"; "/g/a"; "/g/a/b"; "/g/x"; "/h"; "/" |]
+let cap_hosts = [| "*"; "example.com"; "other.net" |]
+let cap_ports = [| None; Some 80; Some 443 |]
+let cap_modes = [| Read; Write; ReadWrite |]
+
+let rec gen_cap (st : rng) (depth : int) : capability =
+  let tag =
+    if depth <= 0 then choose st atomic_cap_tags
+    else choose st all_cap_tags
+  in
+  gen_cap_of_tag st depth tag
+
+(* RATCHET: exhaustive over the tag enum. *)
+and gen_cap_of_tag (st : rng) (depth : int) (tag : cap_tag) : capability =
+  let d = depth - 1 in
+  match tag with
+  | Ct_none -> CapNone
+  | Ct_filesystem -> CapFilesystem { path = pick st cap_paths; mode = pick st cap_modes }
+  | Ct_network -> CapNetwork { host = pick st cap_hosts; port = pick st cap_ports }
+  | Ct_secret -> CapSecret { path = pick st cap_paths }
+  | Ct_process -> CapProcess
+  | Ct_compose ->
+      let n = 1 + small st in
+      CapCompose (List.init n (fun _ -> gen_cap st d))
+  | Ct_restrict ->
+      let cap = gen_cap st d in
+      let scope = pick st cap_paths in
+      let mode = if rb st then None else Some (pick st cap_modes) in
+      CapRestrict { cap; scope; mode }
+
+(* Every authority question a capability can answer, flattened to a bool list in
+   a fixed order.  Comparing two caps' question vectors pointwise decides ⊆
+   *observationally* — via the very [check_*] functions each effect gates on,
+   so the property tests the authority that is actually enforced, not a
+   re-derivation of it. *)
+let cap_probe_vector (c : capability) : bool list =
+  let over arr f = Array.to_list (Array.map f arr) in
+  over cap_paths (fun p -> Capabilities.check_fs_read c p)
+  @ over cap_paths (fun p -> Capabilities.check_fs_write c p)
+  @ over cap_paths (fun p -> Capabilities.check_secret c p)
+  @ List.concat_map
+      (fun h -> over cap_ports (fun port -> Capabilities.check_network c ~host:h ~port))
+      (Array.to_list cap_hosts)
+  @ [ Capabilities.check_process c ]
+
+(* [a ⊆ b] observationally: every question [a] answers "granted", [b] does too. *)
+let cap_subseteq_probes (a : capability) (b : capability) : bool =
+  List.for_all2 (fun x y -> (not x) || y)
+    (cap_probe_vector a) (cap_probe_vector b)
+
+(* Wrap [inner] inside a randomly-shaped syntactic value, [k] levels deep, so
+   the node-boundary ban is tested against a capability buried at depth, not
+   just sitting at the top. *)
+let rec embed_deep (st : rng) (k : int) (inner : value) : value =
+  if k <= 0 then inner
+  else
+    let child = embed_deep st (k - 1) inner in
+    match ri st 4 with
+    | 0 -> VPair (child, VNil)
+    | 1 -> VVector [| VInt (ri st 9); child |]
+    | 2 -> VMap [ (VString "k", child) ]
+    | _ -> VSet [ child ]
+
+(* The capability properties themselves are defined after [fail] (below), in
+   the PROPERTIES section, since they report through it. *)
 
 (* ============================================================ PATTERNS ==== *)
 
@@ -542,6 +654,86 @@ type failure = { prop : string; detail : string }
 let failures : failure list ref = ref []
 let fail prop detail = failures := { prop; detail } :: !failures
 
+(* ---- (iv) capability algebra (A″6) -------------------------------------- *)
+
+let cap_checks = ref 0
+
+let cap_properties (st : rng) ~(count : int) : unit =
+  let depth () = 1 + ri st 3 in
+
+  (* Per-tag corpus (every kind once) + random sample. *)
+  let corpus =
+    List.map (gen_cap_of_tag st 3) all_cap_tags
+    @ List.init count (fun _ -> gen_cap st (depth ())) in
+
+  (* (a) cap_restrict (the raw CapRestrict algebra) NEVER widens: whatever a
+     restricted value grants, its underlying cap already granted. *)
+  List.iter (fun c ->
+    let scope = pick st cap_paths in
+    let mode = if rb st then None else Some (pick st cap_modes) in
+    let r = CapRestrict { cap = c; scope; mode } in
+    incr cap_checks;
+    if not (cap_subseteq_probes r c) then
+      fail "cap-restrict-narrows"
+        (Printf.sprintf "restrict to %s%s WIDENED authority beyond its input"
+           scope (match mode with None -> "" | Some m ->
+             ":" ^ (match m with Read -> "ro" | Write -> "wo" | ReadWrite -> "rw"))))
+    corpus;
+
+  (* (b) cap-compose is exactly the UNION of its parts: for every authority
+     question, the composite answers "granted" iff some part does — invents no
+     authority (the ⟸ half is "no widen") and loses none (⟹). *)
+  List.iter (fun _ ->
+    let n = 1 + small st in
+    let parts = List.init n (fun _ -> gen_cap st (depth ())) in
+    let comp = CapCompose parts in
+    let comp_vec = cap_probe_vector comp in
+    let part_vecs = List.map cap_probe_vector parts in
+    (* pointwise OR of the parts *)
+    let union_vec =
+      List.fold_left
+        (fun acc v -> List.map2 (||) acc v)
+        (List.map (fun _ -> false) comp_vec) part_vecs in
+    incr cap_checks;
+    if comp_vec <> union_vec then
+      fail "cap-compose-union"
+        "compose does not equal the union of its parts (invented or lost authority)")
+    (List.init count (fun _ -> ()));
+
+  (* (c) the with-caps ⊆ gate is SOUND: if [cap_subseteq requested ambient]
+     approves, then [requested] grants nothing the ambient does not — the gate
+     never lets a widening through (LAW 22b). *)
+  List.iter (fun _ ->
+    let requested = gen_cap st (depth ()) in
+    let na = small st in
+    let ambient = List.init na (fun _ -> gen_cap st (depth ())) in
+    incr cap_checks;
+    if Capabilities.cap_subseteq requested ambient
+       && not (cap_subseteq_probes requested (CapCompose ambient)) then
+      fail "cap-subseteq-sound"
+        "cap_subseteq approved a request that grants authority the ambient lacks")
+    (List.init count (fun _ -> ()));
+
+  (* (d) the node-boundary ban ([Hasher.contains_authority]) catches an embedded
+     capability OR sealed value at any depth, and does not false-positive on a
+     capability-free syntactic value. *)
+  List.iter (fun _ ->
+    let base = gen_value ~mode:Adv st (2 + ri st 3) in
+    (* no false positive: a generated syntactic value has no cap/sealed. *)
+    incr cap_checks;
+    if Hasher.contains_authority base then
+      fail "node-ban-false-positive"
+        "contains_authority flagged a capability-free value";
+    (* injected cap/sealed, buried [k] deep, must be caught. *)
+    let payload =
+      if rb st then VCapability (gen_cap st (depth ())) else VSealed "s3cr3t" in
+    let buried = embed_deep st (ri st 4) payload in
+    incr cap_checks;
+    if not (Hasher.contains_authority buried) then
+      fail "node-ban-evaded"
+        "contains_authority missed an embedded capability/sealed value")
+    (List.init count (fun _ -> ()))
+
 (* ---- (i) injectivity ---------------------------------------------------- *)
 
 (* Collect [n] samples, bucket by content hash; any bucket holding two
@@ -703,6 +895,7 @@ let run ~(seed : int) ~(count : int) : bool =
   fresh_counter := 0;
   print_skips := 0;
   print_checks := 0;
+  cap_checks := 0;
   let st = Random.State.make [| seed |] in
   let depth () = 2 + ri st 4 in
 
@@ -731,20 +924,24 @@ let run ~(seed : int) ~(count : int) : bool =
   (* (iii) printer round-trip (hash equality, both surfaces) *)
   List.iter print_roundtrip faith_exprs;
 
+  (* (iv) capability algebra (A″6) — narrowing, union, ⊆-gate soundness, ban *)
+  cap_properties st ~count;
+
   (* report *)
   let fs = List.rev !failures in
   Printf.printf
     "kernel-props: seed=%d count=%d | adv:e=%d v=%d p=%d faith:e=%d \
-     | forms=%d/%d value-kinds=%d/%d pattern-kinds=%d/%d \
-     | print-rt: %d checked, %d printer-refused\n"
+     | forms=%d/%d value-kinds=%d/%d pattern-kinds=%d/%d cap-kinds=%d/%d \
+     | print-rt: %d checked, %d printer-refused | cap-checks: %d\n"
     seed count (List.length adv_exprs) (List.length adv_values)
     (List.length adv_patterns) (List.length faith_exprs)
     (List.length all_expr_tags) (List.length all_expr_tags)
     (List.length syntactic_value_tags) (List.length all_value_tags)
     (List.length all_pattern_tags) (List.length all_pattern_tags)
-    !print_checks !print_skips;
+    (List.length all_cap_tags) (List.length all_cap_tags)
+    !print_checks !print_skips !cap_checks;
   (match fs with
-   | [] -> print_string "kernel-props: OK — injectivity, quote-rt, print-rt all hold\n"
+   | [] -> print_string "kernel-props: OK — injectivity, quote-rt, print-rt, caps all hold\n"
    | _ ->
        Printf.printf "kernel-props: %d FAILURE(S)\n" (List.length fs);
        (* dedupe identical (prop,detail) lines for readability *)

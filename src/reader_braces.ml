@@ -342,6 +342,8 @@ let rec interp_head_normal (args : expr list) (t : Surface_tables.tmpl) : expr =
       EIf (interp_head_normal args c,
            interp_head_normal args th,
            interp_head_normal args el)
+  | Surface_tables.Perform (eff, ts) ->
+      EPerform (eff, List.map (interp_head_normal args) ts)
 
 (* An infix-operator occurrence: a TName in [ops], with whitespace on BOTH
    sides (§B.1's frozen rule; `a ->b` is the identifier `->b`, and `(a)+ b`
@@ -1671,6 +1673,8 @@ and interp_head_qq (args : expr list) (t : Surface_tables.tmpl) : expr =
   | Surface_tables.If (c, th, el) ->
       qq_chain [qq_sym "if"; interp_head_qq args c;
                 interp_head_qq args th; interp_head_qq args el]
+  | Surface_tables.Perform (eff, ts) ->
+      qq_chain (qq_sym "perform" :: qq_sym eff :: List.map (interp_head_qq args) ts)
 
 and parse_qq ps : expr =
   climb_pipe (qq_spine ()) ps

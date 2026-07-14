@@ -432,4 +432,28 @@ if PP="$PP" bash tests/071-kernel-props.sh; then
 else
   echo "FAIL 071-kernel-props"; fail=1
 fi
+echo "--- capability algebra properties (A″6) suite ---"
+if PP="$PP" bash tests/075-cap-props.sh; then
+  echo "ok   075-cap-props"
+else
+  echo "FAIL 075-cap-props"; fail=1
+fi
+echo "--- A″4: crash-injection at the durability seam ---"
+if PP="$PP" bash tests/073-crash-injection.sh; then
+  echo "ok   073-crash-injection"
+else
+  echo "FAIL 073-crash-injection"; fail=1
+fi
+echo "--- A″5: adversarial world suite (per user-observable head) ---"
+if PP="$PP" bash tests/074-adversarial-worlds.sh; then
+  echo "ok   074-adversarial-worlds"
+else
+  echo "FAIL 074-adversarial-worlds"; fail=1
+fi
+echo "--- A″3: SPEC law-linkage (holds ⇒ pinned) ---"
+if PP="$PP" bash tests/072-law-pins.sh; then
+  echo "ok   072-law-pins"
+else
+  echo "FAIL 072-law-pins"; fail=1
+fi
 exit $fail
