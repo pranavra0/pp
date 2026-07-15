@@ -233,7 +233,7 @@ replaced, without mutating the original.
   align: (left, left),
   stroke: (x: none, y: 0.5pt + luma(220)),
   table.header([*Form*], [*Meaning*]),
-  [`{ m | k1 -> v1, k2 -> v2 }`], [Nested `map-insert`: `map-insert(map-insert(m, k1, v1), k2, v2)`],
+  [`{ ...m, :k1 -> v1, :k2 -> v2 }`], [Spread update: `map-insert(map-merge(m, new-map), k2, v2)` — rightmost wins],
 )
 
 #example("ref-map-update")
@@ -380,10 +380,9 @@ the corresponding trace cell, making it visible to the cache-validity system.
 
 The `try` block introduces a region where bindings unwrap `[:ok, v]` /
 `[:err, e]` pairs automatically. Each `name <- expr` extracts the value on
-success or propagates the error on failure. A trailing `?` on an expression
-does the same inline.
+success or propagates the error on failure. A plain `let name = expr` inside
+`try` is an ordinary sequential binding that does not unwrap.
 
-Inside a `try` block, `let name = expr?` is equivalent to `name <- expr`.
 The block's last expression is the overall value (reachable only when every
 binding succeeded).
 
@@ -394,7 +393,6 @@ binding succeeded).
   stroke: (x: none, y: 0.5pt + luma(220)),
   table.header([*Form*], [*Meaning*]),
   [`try { a <- f(); body }`], [Bind `a` to the unwrapped value; propagate on `:err`],
-  [`try { let x = g()?; body }`], [Same, using the `?` suffix],
   [`try { body }`], [Plain body — no unwrapping, evaluates as usual],
 )
 

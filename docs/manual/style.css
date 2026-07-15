@@ -1,7 +1,9 @@
 /* pp reference manual — styled after the Zig language reference: plain,
    system-font, a fixed left navigation column, thin-bordered code. No frills,
-   no dark theme, no rounded cards. Read via typst read() and inlined into the
-   exported HTML, so editing this file re-triggers the manual build. */
+   no rounded cards. Includes a dark mode triggered by the #dm-toggle button,
+   persisted in localStorage, or auto-detected via prefers-color-scheme.
+   Read via typst read() and inlined into the exported HTML, so editing this
+   file re-triggers the manual build. */
 
 :root {
   --text-color: #111;
