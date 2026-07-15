@@ -66,41 +66,29 @@ doesn't wait for pristine.
 
 The global-state collapse into `backend.ml` and the invocation record,
 the five literal-copy deletions, and the two-parser unification in
-`reader_braces.ml` have all landed. One item remains: rendering each
-surface from one typed table.
+`reader_braces.ml` have all landed, as has rendering each surface from
+one typed table — the CLI flag table (parse, dispatch and `--help` from
+one row set), the per-family primitive registrars, the uniform lint rule
+list, and the single test-harness loop over `tests/*.sh`. Two residues
+of that work remain.
 
-### Render each surface from one typed table
+### Finish the CLI restructure around the flag table
 
-Four places currently write the same list out by hand, multiple times:
+The flag table lands: parsing, dispatch and `--help` iterate one typed
+row set in `main.ml`, so a flag cannot be documented-but-not-parsed. Not
+yet done: `main`'s inline closures (`watch_loop`, `select_member_slice`,
+`build_all_desired`, and others) are still nested in `main ()`. Promote
+them to top-level functions over the invocation record, so `main ()`
+reads read-table, then build-invocation, then dispatch.
 
-- CLI: the flag list exists four times in `main.ml` — ref declarations,
-  parse arms, dispatch blocks, `--help` printfs. Replace with one typed
-  table `{name; arity; doc; internal; handler}`; parsing, dispatch and
-  `--help` all iterate it. No Cmdliner: the table stays plain OCaml,
-  keeping the shell free of a dependency, matching DESIGN.md's
-  dependency-light policy for the interpreter core. Give odd-arity flags an
-  honest escape-hatch row shape. Promote `main`'s inline closures
-  (`watch_loop`, `select_member_slice`, `build_all_desired`, and others)
-  to top-level functions over the invocation record; `main ()` becomes
-  read-table, then build-invocation, then dispatch.
-- Primitives: the single roughly 850-line `let () = ...` in
-  `primitives.ml` becomes `register_arith ()`, `register_lists ()`,
-  `register_caps ()`, `register_domains ()`, and so on, called from a
-  ten-line body.
-- Lint: rules become one list of `(id, check, message)` walked
-  uniformly (`lint.ml` currently hardcodes each rule as control flow
-  with stale numbering).
-- Tests: `scripts/run-tests.sh` is about 50 copies of one six-line
-  stanza; replace with a loop over `tests/*.sh`, with the description
-  read from each script's header line. Extract `tests/lib.sh` for the
-  `assert`/`ok`/`bad` plus `PP` normalization plus `mktemp -d` preamble
-  that more than 26 scripts each re-declare. Adding a shell suite
-  becomes: create the file. (The `.pp` differential suite already works
-  this way.)
+### Extract tests/lib.sh
 
-Deletes: three of the four CLI renderings, about 400 harness lines,
-about 300 lines of per-test boilerplate, and the possibility of a flag
-that is documented but not parsed, or parsed but not documented.
+The harness loop lands; the per-script preamble does not. Extract
+`tests/lib.sh` for the `ok`/`bad` plus `PP` default plus `mktemp -d`
+preamble that more than 26 scripts each re-declare, and migrate every
+sharing script to source it in one pass — all-or-nothing, so no script
+is left with its own copy beside the shared one. (`assert` stays
+per-script: its shape differs by suite.)
 
 ---
 
