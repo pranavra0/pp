@@ -148,7 +148,7 @@ let stratification_check (write_domains : (string * Runtime.domain_entry) list) 
    pure; apply under the SAME cap (a write grant already covers read at its
    own scope — no separate read-cap threading needed); journal a generic
    intent/done bracket; verify-after-write by re-observing and re-diffing. *)
-let with_domain (name : string) (cap : capability) (f : unit -> 'a) : 'a =
+let with_domain (name : string) (cap : Capability.t) (f : unit -> 'a) : 'a =
   Runtime.with_ref Runtime.current_domain (Some name) (fun () ->
     Runtime.with_ref Runtime.current_capabilities [cap] f)
 

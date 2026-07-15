@@ -5,7 +5,7 @@ type fenced_policy = Retry | Abort | Ask
 
 type invocation = {
   source_roots : Paths.canonical list;
-  initial_capabilities : capability list;
+  initial_capabilities : Capability.t list;
   program_argv : string list;
   program_files : string list;
   program_bytecode : bool;
@@ -37,7 +37,7 @@ let handlers_hash () =
      :: List.concat_map (fun (n, _, h) -> [n; h]) !handler_stack)
 
 (* Current capability set (for effectful blocks) *)
-let current_capabilities : capability list ref = ref []
+let current_capabilities : Capability.t list ref = ref []
 
 (* ReaderT-style ambient config stack *)
 let config_stack : value list ref = ref []
@@ -430,7 +430,7 @@ type domain_entry = {
   dm_observe : value;       (* () -> value; fresh every pass, never cached *)
   dm_diff : value option;   (* (observed, desired) -> plan, PURE; None = probe *)
   dm_apply : value option;  (* plan -> nil, NOT a node; None = probe *)
-  dm_cap : capability;
+  dm_cap : Capability.t;
     (* The ONE capability consumed at registration: a probe's :read-cap
        (observe only) or a domain's :write-cap (observe AND apply both run
        under it — a write grant already covers read at the same scope, so

@@ -27,7 +27,7 @@
 open Types
 
 let has_process_cap () =
-  List.exists Capabilities.check_process !Runtime.current_capabilities
+  List.exists Capability.check_process !Runtime.current_capabilities
 
 (* Resolve a command to the binary that will execute: as-is when it contains
    a slash, else the first match on $PATH. The resolved path is what the
@@ -54,11 +54,13 @@ let record_tool_cell (resolved : string) : unit =
    grant. Used by plain `run` and as run-dep!'s fallback when the tool
    produced no depfile. *)
 let record_tree_cells () : unit =
-  List.iter (function
-    | CapFilesystem { path; mode = (Read | ReadWrite) } ->
-        let cpath = Runtime.canonical_path path in
-        Runtime.record_read (Cell.(to_string (Tree (cpath :> string)))) (Store.tree_hash (cpath :> string))
-    | _ -> ())
+  List.iter (fun cap ->
+    List.iter (fun ((path : Paths.canonical), mode) ->
+      match mode with
+      | Capability.Read | Capability.ReadWrite ->
+          Runtime.record_read (Cell.(to_string (Tree (path :> string)))) (Store.tree_hash (path :> string))
+      | Capability.Write -> ())
+    (Capability.list_fs_paths cap))
     !Runtime.current_capabilities
 
 let record_run_observations (resolved : string) : unit =
@@ -174,7 +176,7 @@ let parse_depfile (content : string) : string list =
 let record_depfile_cells (deps : string list) : unit =
   List.iter (fun dep ->
     if Sys.file_exists dep then begin
-      if List.exists (fun cap -> Capabilities.check_fs_read cap dep)
+      if List.exists (fun cap -> Capability.check_fs_read cap (Paths.canonicalize ~realpath:(fun x -> x) dep))
            !Runtime.current_capabilities
       then ignore (Store.read_file_cell dep)
       else
@@ -287,7 +289,7 @@ let read_dispatch ~(tag : string) ~(cap_err : string -> string) (path : string) 
   | Some content -> VString content
   | None ->
       let fs_ok =
-        List.exists (fun cap -> Capabilities.check_fs_read cap path)
+        List.exists (fun cap -> Capability.check_fs_read cap (Paths.canonicalize ~realpath:(fun x -> x) path))
           !Runtime.current_capabilities
       in
       if fs_ok then
@@ -295,7 +297,7 @@ let read_dispatch ~(tag : string) ~(cap_err : string -> string) (path : string) 
          with Sys_error msg -> failwith (tag ^ ": " ^ msg))
       else
         let secret_ok =
-          List.exists (fun cap -> Capabilities.check_secret cap path)
+          List.exists (fun cap -> Capability.check_secret cap (Paths.canonicalize ~realpath:(fun x -> x) path))
             !Runtime.current_capabilities
         in
         if secret_ok then
@@ -317,7 +319,7 @@ let read_dispatch ~(tag : string) ~(cap_err : string -> string) (path : string) 
    Primitives.probe_value_for), domain observe/apply, and the script tier. *)
 
 let has_network_cap ~(host : string) ~(port : int option) : bool =
-  List.exists (fun cap -> Capabilities.check_network cap ~host ~port)
+  List.exists (fun cap -> Capability.check_network cap ~host ~port)
     !Runtime.current_capabilities
 
 (* Parse an http(s) URL into (scheme, host, port); port defaults to the

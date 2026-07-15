@@ -275,10 +275,10 @@ let walk_files (path : string) (acc : (string * string) list ref) : unit =
 
 let pre_observe_granted_scope () : (string * string * string) list =
   let roots =
-    Capabilities.list_fs_paths (CapCompose (Runtime.invocation_get ()).initial_capabilities)
-    |> List.filter_map (fun (p, m) -> match m with
-         | Read | ReadWrite -> Some p
-         | Write -> None)
+    Capability.list_fs_paths (Capability.compose (Runtime.invocation_get ()).initial_capabilities)
+    |> List.filter_map (fun ((p : Paths.canonical), m) -> match m with
+         | Capability.Read | Capability.ReadWrite -> Some (p :> string)
+         | Capability.Write -> None)
     |> List.sort_uniq compare
   in
   let acc = ref [] in

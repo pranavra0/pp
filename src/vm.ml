@@ -319,8 +319,8 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
           | VCapability c -> c
           | _ -> failwith "with-caps expects a capability value"
         in
-        if not (Capabilities.cap_subseteq requested !current_capabilities) then
-          raise (Capability_error Capabilities.err_with_caps_widen);
+        if not (Capability.subseteq requested !current_capabilities) then
+          raise (Capability_error Capability.err_with_caps_widen);
         let saved = !current_capabilities in
         current_capabilities := [requested];
         (* Nested run_isolated call (not a flat opcode pair): the try/with

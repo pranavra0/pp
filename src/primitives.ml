@@ -564,7 +564,7 @@ let register_scalars () =
 let register_caps () =
   register "cap-compose" (fun args ->
     let caps = List.map (fun v -> match force_val v with VCapability c -> c | _ -> failwith "cap-compose expects capabilities") args in
-    VCapability (CapCompose caps));
+    VCapability (Capability.compose caps));
 
   (* (current-capabilities) — reifies the ambient set AS OF THE CALL as a
      VCapability. Never a mint: it observes the ceiling the code already
@@ -572,24 +572,24 @@ let register_caps () =
      gated like every other perform path — no explicit-cap argument. *)
   register "current-capabilities" (fun args ->
     match args with
-    | [] -> VCapability (CapCompose !Runtime.current_capabilities)
+    | [] -> VCapability (Capability.compose !Runtime.current_capabilities)
     | _ -> failwith "current-capabilities takes no arguments");
 
   register "cap-restrict" (fun args ->
     let args = force_args args in
     match args with
     | [VCapability _ as cap; VString scope] ->
-        Capabilities.cap_restrict cap scope
+        VCapability (Capability.restrict (match cap with VCapability c -> c | _ -> failwith "impossible") (Paths.canonicalize ~realpath:(fun x -> x) scope))
     | [VCapability _ as cap; VString scope; VKeyword m] ->
         let mode = match m with
-          | "ro" -> Types.Read | "rw" -> Types.ReadWrite | "wo" -> Types.Write
+          | "ro" -> Capability.Read | "rw" -> Capability.ReadWrite | "wo" -> Capability.Write
           | _ -> failwith ("cap-restrict: invalid mode :" ^ m ^ " (expected :ro, :rw, or :wo)")
         in
-        Capabilities.cap_restrict ~mode cap scope
+        VCapability (Capability.restrict ~mode (match cap with VCapability c -> c | _ -> failwith "impossible") (Paths.canonicalize ~realpath:(fun x -> x) scope))
     | _ -> failwith "cap-restrict expects a capability, a scope string, and an optional mode keyword (:ro/:rw/:wo)");
 
   register "cap-none" (fun args ->
-    match args with [] -> VCapability CapNone | _ -> failwith "cap-none takes no arguments");
+    match args with [] -> VCapability Capability.none | _ -> failwith "cap-none takes no arguments");
 
   register "capability?" (fun args ->
     match args with [arg] -> VBool (match force_val arg with VCapability _ -> true | _ -> false) | _ -> failwith "capability? expects one arg");
@@ -849,7 +849,7 @@ let register_stdlib () =
     register name (fun args ->
       match force_args args with
       | [VString path] ->
-          if not (List.exists (fun cap -> Capabilities.check_fs_read cap path)
+          if not (List.exists (fun cap -> Capability.check_fs_read cap (Paths.canonicalize ~realpath:(fun x -> x) path))
                     !Runtime.current_capabilities) then
             raise (Types.Capability_error
                      (name ^ ": capability error: no read access for " ^ path));

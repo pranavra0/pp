@@ -23,11 +23,11 @@ let require_no_node_body (who : string) : unit =
     failwith (who ^ ": may not be called inside a node body (writes are domain-apply-only)")
 
 let has_fs_read path =
-  List.exists (fun cap -> Capabilities.check_fs_read cap path)
+  List.exists (fun cap -> Capability.check_fs_read cap (Paths.canonicalize ~realpath:(fun x -> x) path))
     !Runtime.current_capabilities
 
 let has_fs_write path =
-  List.exists (fun cap -> Capabilities.check_fs_write cap path)
+  List.exists (fun cap -> Capability.check_fs_write cap (Paths.canonicalize ~realpath:(fun x -> x) path))
     !Runtime.current_capabilities
 
 (* Capabilities.check_process recurses through CapCompose (and so, via
@@ -42,7 +42,7 @@ let has_fs_write path =
    has_process_cap did before it needed to recurse through CapCompose)
    would miss it. *)
 let has_process_cap () =
-  List.exists Capabilities.check_process !Runtime.current_capabilities
+  List.exists Capability.check_process !Runtime.current_capabilities
 
 (* Fully force a value (map values / vector-set elements are lazy by
    construction, primitives.ml) so Codec.encode_value and Hasher.hash_value
@@ -56,7 +56,8 @@ let has_process_cap () =
    assoc list (the diff runs in pp, over pp values) and canonicalizes root
    the same way every other fs boundary does (LAW 23 / DESIGN §2.1). *)
 let tree_observe (root : string) : value =
-  let root = (Runtime.canonical_path root :> string) in
+  let root_canon = Runtime.canonical_path root in
+  let root = (root_canon :> string) in
   (* A write-only domain grant (`fs:ROOT:wo`, tests/023) must still be able
      to observe its OWN managed tree — the single writer reading its own
      domain to converge is not a new authority concern (there is no other
@@ -84,14 +85,11 @@ let rec mkdir_p dir =
     | Unix.Unix_error (Unix.EEXIST, _, _) -> ()
   end
 
-(* ---- materialize-file: temp-in-target + rename(2), mkdir -p, optional
-   :executable — moved from Reconciler.write_atomic. Whole-domain
-   verify-after-write (Domains.ml) supersedes the old per-file inline
-   check, so this primitive itself does not re-read after writing. *)
 let materialize_file (path : string) (content : string) (executable : bool) : unit =
   require_no_node_body "materialize-file";
-  let path = (Runtime.canonical_path path :> string) in
-  if not (has_fs_write (path :> string)) then
+  let path_canon = Runtime.canonical_path path in
+  let path = (path_canon :> string) in
+  if not (has_fs_write path) then
     raise (Capability_error ("materialize-file: capability error: no write access for " ^ path));
   mkdir_p (Filename.dirname path);
   let tmp = path ^ ".pp-tmp." ^ string_of_int (Unix.getpid ()) in
@@ -99,17 +97,10 @@ let materialize_file (path : string) (content : string) (executable : bool) : un
   (try output_string oc content
    with exn -> close_out oc; (try Sys.remove tmp with _ -> ()); raise exn);
   close_out oc;
-  Unix.rename tmp path;
   if executable then (try Unix.chmod path 0o755 with _ -> ());
   Store.unpin_file path
 
-(* ---- remove-file: unlink + prune now-empty ancestor directories ----
-   Pruning climbs upward exactly as far as the ambient write authority
-   still covers the directory — the same check_fs_write test that gated the
-   remove itself — so it stops at a domain's own root without needing a
-   separate root argument threaded through (the old Reconciler took an
-   explicit ~root; this generalizes to any domain's write-cap boundary,
-   fs-rooted or not). *)
+
 let rec prune_empty_dirs (dir : string) : unit =
   if has_fs_write dir then
     match Sys.readdir dir with
@@ -119,12 +110,14 @@ let rec prune_empty_dirs (dir : string) : unit =
 
 let remove_file (path : string) : unit =
   require_no_node_body "remove-file";
-  let path = (Runtime.canonical_path path :> string) in
-  if not (has_fs_write (path :> string)) then
+  let path_canon = Runtime.canonical_path path in
+  let path = (path_canon :> string) in
+  if not (has_fs_write path) then
     raise (Capability_error ("remove-file: capability error: no write access for " ^ path));
   (try Sys.remove path with _ -> ());
   Store.unpin_file path;
   prune_empty_dirs (Filename.dirname path)
+
 
 (* ---- domain-state-get/put: per-domain persistent KV, replacing procs/'s
    role ----
@@ -144,7 +137,7 @@ let require_domain_context (who : string) : Runtime.domain_entry * string =
       (match Hashtbl.find_opt Runtime.domain_registry name with
        | None -> failwith (who ^ ": unknown current domain " ^ name)
        | Some entry ->
-           if Capabilities.cap_subseteq entry.Runtime.dm_cap !Runtime.current_capabilities
+           if Capability.subseteq entry.Runtime.dm_cap !Runtime.current_capabilities
            then (entry, name)
            else raise (Capability_error
                     (who ^ ": capability error: no authority for domain " ^ name)))

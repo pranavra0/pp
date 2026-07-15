@@ -17,7 +17,7 @@
 val handler_stack :
   (string * (Types.value list -> Types.value) * string) list ref
 val handlers_hash : unit -> string
-val current_capabilities : Types.capability list ref
+val current_capabilities : Capability.t list ref
 val config_stack : Types.value list ref
 val thunk_store : (string, Types.thunk) Hashtbl.t
 val with_ref : 'a ref -> 'a -> (unit -> 'b) -> 'b
@@ -42,7 +42,7 @@ val record_handler_observation : string -> unit
 type fenced_policy = Retry | Abort | Ask
 type invocation = {
   source_roots : Paths.canonical list;
-  initial_capabilities : Types.capability list;
+  initial_capabilities : Capability.t list;
   program_argv : string list;
   program_files : string list;
   program_bytecode : bool;
@@ -71,7 +71,7 @@ type domain_entry = {
   dm_observe : Types.value;
   dm_diff : Types.value option;
   dm_apply : Types.value option;
-  dm_cap : Types.capability;
+  dm_cap : Capability.t;
   dm_observe_cell : Types.value option;
 }
 val domain_registry : (string, domain_entry) Hashtbl.t

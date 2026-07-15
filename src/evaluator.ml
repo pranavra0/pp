@@ -14,7 +14,7 @@ open Runtime
    Two thunks with the same (expr, env, capabilities) are the SAME thunk.
    Uses env.env_hash for O(1) environment identity — no recursive traversal. *)
 let make_thunk_ca (expr : expr) (env : env) : value =
-  let caps_hash = hash_concat ("caps" :: List.map Types.hash_capability !current_capabilities) in
+  let caps_hash = hash_concat ("caps" :: List.map Capability.hash !current_capabilities) in
   let cfg_hash = hash_concat ("cfg" :: List.map hash_value !config_stack) in
   let h = hash_concat ["thunk"; Types.hash_expr expr; env.env_hash; caps_hash; cfg_hash; handlers_hash ()] in
   match Hashtbl.find_opt thunk_store h with
@@ -29,7 +29,7 @@ let make_thunk_ca (expr : expr) (env : env) : value =
    type_ann, vm.ml). The annotation participates in the content hash so a
    typed thunk is never conflated with an untyped thunk over the same expr. *)
 let make_thunk_ca_typed (expr : expr) (ty : expr) (loc : (string * int) option) (env : env) : value =
-  let caps_hash = hash_concat ("caps" :: List.map Types.hash_capability !current_capabilities) in
+  let caps_hash = hash_concat ("caps" :: List.map Capability.hash !current_capabilities) in
   let cfg_hash = hash_concat ("cfg" :: List.map hash_value !config_stack) in
   let h = hash_concat ["thunk-typed"; Types.hash_expr expr; Types.hash_expr ty; env.env_hash; caps_hash; cfg_hash; handlers_hash ()] in
   match Hashtbl.find_opt thunk_store h with
@@ -72,9 +72,9 @@ let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
    node_caps — its ambient AT CREATION — not necessarily whatever is live in
    current_capabilities at force time (with-caps can have narrowed the
    dynamic ambient in between). *)
-let cell_authorized_for (caps : capability list) (cell_id : string) : bool =
+let cell_authorized_for (caps : Capability.t list) (cell_id : string) : bool =
   let has_fs_read path =
-    List.exists (fun cap -> Capabilities.check_fs_read cap path) caps
+    List.exists (fun cap -> Capability.check_fs_read cap (Paths.canonicalize ~realpath:(fun x -> x) path)) caps
   in
   match Cell.of_string cell_id with
   | Cell.File path -> has_fs_read path
@@ -84,7 +84,7 @@ let cell_authorized_for (caps : capability list) (cell_id : string) : bool =
   (* A tool observation came from a `run`; serving a result that embeds
      one requires process authority, not an fs grant over the binary. *)
   | Cell.Tool _ ->
-      List.exists (fun cap -> Capabilities.check_process cap) caps
+      List.exists (fun cap -> Capability.check_process cap) caps
   (* A file-predicate observation (file-exists?/dir?) discloses presence,
      so serving it requires the same fs-read authority as recording it. *)
   | Cell.Stat path -> has_fs_read path
@@ -119,7 +119,7 @@ let cell_authorized_for (caps : capability list) (cell_id : string) : bool =
      grant cannot hit a node whose closure read it, even through an
      aggregator (tests/044's narrow-caller case). *)
   | Cell.Sealed path ->
-      List.exists (fun cap -> Capabilities.check_secret cap path) caps
+      List.exists (fun cap -> Capability.check_secret cap (Paths.canonicalize ~realpath:(fun x -> x) path)) caps
   (* A third-party domain's own sub-cell. Authorization is
      cap_subseteq of the REGISTERED write-cap against the caller's held
      set — zero new authority code, the same narrowing check with-caps
@@ -127,7 +127,7 @@ let cell_authorized_for (caps : capability list) (cell_id : string) : bool =
      the sound, conservative default, like Cell.Unknown. *)
   | Cell.Domain { name; sub = _ } ->
       (match Hashtbl.find_opt Runtime.domain_registry name with
-       | Some entry -> Capabilities.cap_subseteq entry.Runtime.dm_cap caps
+       | Some entry -> Capability.subseteq entry.Runtime.dm_cap caps
        | None -> false)
 
 (* Trace replay for an already-Evaluated persistent node: replay its stored
@@ -667,8 +667,8 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
         | VCapability c -> c
         | _ -> failwith "with-caps expects a capability value"
       in
-      if not (Capabilities.cap_subseteq requested !current_capabilities) then
-        raise (Capability_error Capabilities.err_with_caps_widen);
+      if not (Capability.subseteq requested !current_capabilities) then
+        raise (Capability_error Capability.err_with_caps_widen);
       with_ref current_capabilities [requested]
         (fun () -> eval_tail body env k)
 
@@ -1046,10 +1046,10 @@ and perform_builtin_effect (name : string) (args : value list) : value =
 (* ---- Helpers ---- *)
 
 and has_fs_read (path : string) : bool =
-  List.exists (fun cap -> Capabilities.check_fs_read cap path) !current_capabilities
+  List.exists (fun cap -> Capability.check_fs_read cap (Paths.canonicalize ~realpath:(fun x -> x) path)) !current_capabilities
 
 and has_fs_write (path : string) : bool =
-  List.exists (fun cap -> Capabilities.check_fs_write cap path) !current_capabilities
+  List.exists (fun cap -> Capability.check_fs_write cap (Paths.canonicalize ~realpath:(fun x -> x) path)) !current_capabilities
 
 
 (* (load-module "file.pp"): evaluate the file against a fresh initial env and

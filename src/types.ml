@@ -110,7 +110,7 @@ and value =
   | VSet of value list
   | VClosure of closure
   | VBuiltin of string * (value list -> value)  (* name + ocaml function *)
-  | VCapability of capability
+  | VCapability of Capability.t
   | VThunk of thunk
   | VEnvMap of (string * value) list  (* module export: list of (name, thunk) pairs *)
   | VBytecode of bytecode
@@ -156,7 +156,7 @@ and thunk = {
        — code + free-var value hashes — from captured frames, since a VM thunk
        carries bytecode+frames rather than an AST+env. Empty for every other
        thunk. *)
-  mutable node_caps : capability list;
+  mutable node_caps : Capability.t list;
     (* The ambient capability set captured when this node value was
        created, populated
        unconditionally at both construction sites (ENode eval, VM MAKE_NODE) —
@@ -177,31 +177,6 @@ and thunk_status =
   | Evaluating
   | Evaluated of value
 
-(* ---- Capabilities — authority tokens ---- *)
-and capability =
-  | CapFilesystem of { path : string; mode : fs_mode }
-  | CapNetwork of { host : string; port : int option }
-    (* host: "*" wildcards any host; port: None means unrestricted, Some p pins it exactly.
-       Minted only via `--grant net:<host>[:<port>]` (main.ml) — never
-       constructible in user code (LAW 22). *)
-  | CapSecret of { path : string }
-    (* Sealed cells: `--grant secret:<path>` (canonicalized at mint, like
-       fs grants). Authorizes reading the bytes under [path] as a VSealed
-       value — never as plain fs data — via the read dispatch in
-       Process/Store's slurp/read-file paths. Deliberately has no fs_mode:
-       a secret is read-only by construction, there is no "write a secret"
-       operation in stage 1. *)
-  | CapProcess
-  | CapCompose of capability list
-  | CapRestrict of { cap : capability; scope : string; mode : fs_mode option }
-    (* mode: an optional further fs_mode restriction (in addition to scope).
-       None means "inherit whatever the underlying cap grants". Constructing one with a mode WIDER than the
-       underlying cap holds at scope is rejected (Capabilities.cap_restrict);
-       a CapRestrict value on disk/in memory therefore never itself
-       represents a widen. *)
-  | CapNone
-
-and fs_mode = Read | Write | ReadWrite
 
 (* ---- Bytecode VM types ---- *)
 and opcode =
@@ -528,7 +503,7 @@ and hash_value (v : value) : string =
     | VBuiltin (name, _) ->
         hash_concat ["builtin"; name]
     | VCapability cap ->
-        hash_capability cap
+        Capability.hash cap
     | VEnvMap bindings ->
         let sorted = List.sort (fun (a,_) (b,_) -> String.compare a b) bindings in
         let parts = List.map (fun (name, v) ->
@@ -545,23 +520,6 @@ and hash_value (v : value) : string =
   in
   hash_val v
 
-and hash_capability (c : capability) : string =
-  match c with
-  | CapFilesystem { path; mode } ->
-      let m = match mode with Read -> "r" | Write -> "w" | ReadWrite -> "rw" in
-      hash_concat ["cap_fs"; path; m]
-  | CapNetwork { host; port } ->
-      hash_concat ["cap_net"; host; (match port with Some p -> string_of_int p | None -> "any")]
-  | CapSecret { path } ->
-      hash_concat ["cap_secret"; path]
-  | CapProcess -> hash_string "cap_process"
-  | CapCompose caps ->
-      hash_concat ("cap_compose" :: List.map hash_capability caps)
-  | CapRestrict { cap; scope; mode } ->
-      let m = match mode with
-        | None -> "any" | Some Read -> "r" | Some Write -> "w" | Some ReadWrite -> "rw" in
-      hash_concat ["cap_restrict"; hash_capability cap; scope; m]
-  | CapNone -> hash_string "cap_none"
 
 (* ---- Node-boundary authority ban (SPEC LAW 20) ----
 
@@ -954,7 +912,7 @@ let rec string_of_value (v : value) : string =
   | VClosure { fn_name = Some n; _ } -> "#<fn " ^ n ^ ">"
   | VClosure { fn_name = None; _ } -> "#<fn>"
   | VBuiltin (name, _) -> "#<builtin " ^ name ^ ">"
-  | VCapability c -> string_of_capability c
+  | VCapability c -> Capability.to_string c
   | VThunk t ->
       (match t.thunk_status with
        | Unevaluated -> "#<thunk>"
@@ -970,21 +928,6 @@ let rec string_of_value (v : value) : string =
          this one function, so redaction is total by construction. *)
       "#<sealed>"
 
-and string_of_capability (c : capability) : string =
-  match c with
-  | CapFilesystem { path; mode } ->
-      let m = match mode with Read -> ":ro" | Write -> ":wo" | ReadWrite -> ":rw" in
-      "#<cap fs " ^ path ^ " " ^ m ^ ">"
-  | CapNetwork { host; port } ->
-      "#<cap net " ^ host ^ (match port with Some p -> ":" ^ string_of_int p | None -> "") ^ ">"
-  | CapSecret { path } -> "#<cap secret " ^ path ^ ">"
-  | CapProcess -> "#<cap process>"
-  | CapCompose caps -> "#<cap compose " ^ string_of_int (List.length caps) ^ ">"
-  | CapRestrict { scope; mode; _ } ->
-      let m = match mode with
-        | None -> "" | Some Read -> " :ro" | Some Write -> " :wo" | Some ReadWrite -> " :rw" in
-      "#<cap restrict " ^ scope ^ m ^ ">"
-  | CapNone -> "#<cap none>"
 
 (* =================================================================== *)
 (*  Unquotation: value -> expr — the inverse of quote_to_value          *)

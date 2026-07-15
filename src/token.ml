@@ -189,7 +189,7 @@ let parse_token (s : string) : parsed_token option =
    header): a forged or foreign-cluster token never reaches the capability
    parser at all. *)
 let verify ~(secret : string) ~(cluster_id : string) (token_text : string)
-    : (capability list, string) result =
+    : (Capability.t list, string) result =
   match parse_token token_text with
   | None -> Error "malformed cluster token (unparseable or foreign format)"
   | Some pt ->
@@ -203,14 +203,14 @@ let verify ~(secret : string) ~(cluster_id : string) (token_text : string)
       else if int_of_float (Unix.time ()) > pt.pt_expires then
         Error (Printf.sprintf "cluster token rejected: expired at %d" pt.pt_expires)
       else
-        (try Ok (List.map Capabilities.parse_grant pt.pt_specs)
+        (try Ok (List.map (fun spec -> Capability.mint ~realpath:Backend.r.realpath spec) pt.pt_specs)
          with Failure msg -> Error ("cluster token names an invalid capability: " ^ msg))
 
 (* Convenience for the wire path: verify against the LOCAL member's own
    secret/cluster id (~/.pp/cluster), returning a capability list ready to
    feed straight into `cell_authorized_for` — the wire-verified equivalent
    of `node_caps` locally. *)
-let token_to_caps (token_text : string) : (capability list, string) result =
+let token_to_caps (token_text : string) : (Capability.t list, string) result =
   let secret = load_secret () in
   let cluster_id = load_cluster_id () in
   verify ~secret ~cluster_id token_text

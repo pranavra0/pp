@@ -780,7 +780,7 @@ let main () =
         (match Token.token_to_caps token_text with
          | Ok caps -> caps
          | Error reason -> failwith ("pp: --remote-node: token rejected: " ^ reason))
-    | None -> List.map Capabilities.parse_grant (List.rev !grants)
+    | None -> List.map (fun spec -> Capability.mint ~realpath:Backend.r.realpath spec) (List.rev !grants)
   in
 
   Runtime.invocation := Some {
