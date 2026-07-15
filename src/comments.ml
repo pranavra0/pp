@@ -1,4 +1,4 @@
-(* pp comments — the side channel `pp fmt` (M7 S2) uses to carry comments
+(* pp comments — the side channel `pp fmt` uses to carry comments
    losslessly across transpilation, without touching either reader or
    either printer's AST-facing behavior at all (comments are not part of
    `Types.expr`; LAW-20 hashes ignore them by construction — that's exactly

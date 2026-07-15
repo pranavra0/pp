@@ -1,23 +1,15 @@
 #!/usr/bin/env bash
-# tests/057 — Differential test for match list patterns (Phase 3.1). Kept as a
-# shell script (not a .pp file) for its expected-output oracle; since C4 the
-# sexpr surface DOES represent match, and tests/084 covers its round-trip.
-# Also pins two match soundness fixes surfaced during Phase C:
+# tests/057 — Differential test for match list patterns. Kept as a shell
+# script (not a .pp file) for its expected-output oracle; the sexpr surface
+# also represents match, and tests/084 covers its round-trip.
+# Also pins two match soundness fixes:
 #   - matching a list/tagged pattern against a non-pair scalar falls through
 #     (the compiler's `car`/`cdr` are now cons-guarded, matching the
 #     tree-walker) instead of crashing the VM;
 #   - a match nested in another match's scrutinee no longer collides on the
 #     compiler's scrutinee temp (unique per instance now).
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 run_both() {
   local name="$1" file="$2" expected="$3"
   local got_tw got_bc

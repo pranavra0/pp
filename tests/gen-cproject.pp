@@ -1,5 +1,5 @@
-# tests/gen-cproject.pp — ROADMAP §2 milestone: the Phase-1 proof's C-project
-# FIXTURE GENERATOR, written in pp. Generates the N-TU project that
+# tests/gen-cproject.pp — C-project FIXTURE GENERATOR, written in pp, for the
+# incremental-build proof. Generates the N-TU project that
 # tests/024-phase1-exit.sh builds (shared.h, f0..f{N-1}.c, main.c,
 # sources.txt). The top-level pass/fail oracle deliberately stays in shell —
 # a test written in pp inherits the bugs it hunts.

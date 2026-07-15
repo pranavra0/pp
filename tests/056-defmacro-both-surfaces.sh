@@ -1,24 +1,17 @@
 #!/usr/bin/env bash
-# tests/056 — M7 S5 exit criterion: "every existing macro test passes
-# authored in either surface, differentially" (docs/M7-SYNTAX.md's S5
-# stage). tests/041-defmacro.pp (braces, quote{}/quasiquote{}/unquote()/
-# splice()) and tests/041-defmacro.ppl (sexpr, `'`/`` ` ``/`,`/`,@`) are the
-# SAME test — same macros, same call sites, same expected values — one
-# transliterated from the other. The differential suite (scripts/run-
-# tests.sh's main loop) already proves each file agrees with ITSELF across
-# backends; this script is the missing cell of the 2x2 (2 surfaces x 2
-# backends): both files must ALSO agree with EACH OTHER, on both backends —
-# proving quasiquote{}'s S5 ergonomics lowered to the exact same AST shapes
-# the sexpr reader's quasiquote has always built (src/macro.ml,
-# the expander, and hash_expr never changed).
+# tests/056 — every macro test must pass whether authored in either surface.
+# tests/041-defmacro.pp (braces, quote{}/quasiquote{}/unquote()/splice()) and
+# tests/041-defmacro.ppl (sexpr, `'`/`` ` ``/`,`/`,@`) are the SAME test —
+# same macros, same call sites, same expected values — one transliterated
+# from the other. The differential suite (scripts/run-tests.sh's main loop)
+# already proves each file agrees with ITSELF across backends; this script
+# is the missing cell of the 2x2 (2 surfaces x 2 backends): both files must
+# ALSO agree with EACH OTHER, on both backends — proving the brace surface's
+# quasiquote{} lowers to the exact same AST shapes the sexpr reader's
+# quasiquote has always built (src/macro.ml, the expander, and hash_expr
+# never changed).
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 BRACE=tests/041-defmacro.pp
 SEXPR=tests/041-defmacro.ppl
 
@@ -43,8 +36,8 @@ else bad "056-brace-tw-eq-vm" "tw: $tw_brace" "vm: $vm_brace"; fi
 if [ "$tw_sexpr" = "$vm_sexpr" ]; then ok "056-sexpr-tw-eq-vm"
 else bad "056-sexpr-tw-eq-vm" "tw: $tw_sexpr" "vm: $vm_sexpr"; fi
 
-# The actual S5 exit criterion: braces and sexpr agree with EACH OTHER, on
-# EACH backend.
+# The core property: braces and sexpr agree with EACH OTHER, on EACH
+# backend.
 if [ "$tw_brace" = "$tw_sexpr" ]; then ok "056-tw-brace-eq-sexpr"
 else bad "056-tw-brace-eq-sexpr" "brace: $tw_brace" "sexpr: $tw_sexpr"; fi
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# tests/029 — REPL quality (ROADMAP §1; M7 S4 "flip the default" — the REPL
-# now reads the brace surface, docs/M7-SYNTAX.md): the scriptable parts.
+# tests/029 — REPL quality: the REPL now reads the brace surface by
+# default. Covers the scriptable parts:
 #   (a) multi-line input: a form left open continues onto following lines
 #       (brace/paren/bracket/string nesting, comment-aware — see
 #       Reader_braces.needs_more_input), both backends;
@@ -12,19 +12,11 @@
 #   (e) exit(N) exits the REPL with status N;
 #   (f) results print deep-forced (a delay shows its value, not #<thunk>).
 # (Arrow-key editing and ~/.pp/history need a pty; verified by hand.)
-# No .ppl/sexpr case here: the interactive REPL reads ONLY braces now (that
-# IS this stage's flip) — sexpr input has no interactive entry point to gate;
-# cross-surface FILE loading is covered by tests/054.
+# No .ppl/sexpr case here: the interactive REPL reads ONLY braces now —
+# sexpr input has no interactive entry point to gate; cross-surface FILE
+# loading is covered by tests/054.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 repl() {  # FLAGS... <<< input on stdin
   "$PP" "$@" 2>"$TMP/err"
 }
@@ -45,6 +37,32 @@ done
 got=$(printf 'string-append("a(b", # comment\n"c)d")\n' | repl)
 if [ "$got" = '"a(bc)d"' ]; then ok "multiline-string-comment"
 else bad "multiline-string-comment" "got: $(printf '%q' "$got")"; fi
+# a '{'-delimited block (a def body) holds the form open across lines too
+for flags in "" "--bytecode"; do
+  got=$(printf 'def f(x) {\nx + 1\n}\nf(41)\n' | repl $flags | tail -1)
+  if [ "$got" = "42" ]; then ok "multiline-block${flags:+-vm}"
+  else bad "multiline-block${flags:+-vm}" "got: $(printf '%q' "$got")"; fi
+done
+
+# ---- (g) continuation is decided by exception TYPE, not error-message text ----
+# A genuine syntax error whose message happens to carry a magic word ("foo
+# unterminated" -> "expected ...; got unterminated") must be reported at once,
+# NOT mistaken for an open form — so a following valid line still evaluates.
+# Under the old substring-matching classifier the "unterminated" in the message
+# swallowed the whole buffer and 10 never appeared.
+out=$(printf 'foo unterminated\n5 + 5\n' | repl)
+if printf '%s\n' "$out" | grep -q '^10$' \
+   && printf '%s\n' "$out" | grep -qi 'unterminated'; then
+  ok "genuine-error-not-incomplete"
+else bad "genuine-error-not-incomplete" "out: $(printf '%q' "$out")"; fi
+# An unclosed form submitted at end of input surfaces as a normal located
+# reader error (not the raw OCaml exception), so the message decouples from the
+# exception mechanism.
+got=$(printf 'def foo\n' | repl 2>&1)
+if printf '%s\n' "$got" | grep -q 'def requires a parameter list' \
+   && ! printf '%s\n' "$got" | grep -q 'Reader_incomplete'; then
+  ok "incomplete-at-eof-clean-error"
+else bad "incomplete-at-eof-clean-error" "got: $(printf '%q' "$got")"; fi
 
 # ---- (b) defs persist across lines ----
 for flags in "" "--bytecode"; do

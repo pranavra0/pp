@@ -1,8 +1,8 @@
-(* pp remote placement — M5 stage B (docs/PLAN-m5-distribution.md "Remote
-   placement" / "Q11-bis"; stage A — transport/tokens/sync — is
-   src/transport.ml + src/token.ml, commit 4d17d53).
+(* pp remote placement — dispatches a batch of node misses to a named
+   cluster member over the cluster transport (transport/tokens/sync live in
+   src/transport.ml + src/token.ml).
 
-   Wires Scheduler's [Remote member] policy to the stage-A transport: this
+   Wires Scheduler's [Remote member] policy to that transport: this
    module is compiled AFTER Evaluator, Transport, and Token (all three sit
    ABOVE Scheduler in the dependency graph — Transport calls
    Evaluator.cell_authorized_for, and Evaluator calls Scheduler — so this
@@ -14,22 +14,23 @@
    THE CORE MOVE: a cluster member is a SEPARATE `pp` process with its own
    $HOME (Store.store_root is a process-wide singleton — see transport.ml's
    header). Rather than inventing a "force only key K" wire protocol
-   (rejected for the same reason M1 rejected fresh-pp-per-key: no
-   derivation/eval split), the member is simply handed the SAME top-level
+   (which would need a derivation/eval split the scheduler's process-pool
+   design deliberately avoids elsewhere too), the member is simply handed the SAME top-level
    program (byte-identical source; both sides are ordinary files on the
    CI-loopback's shared disk, or scp'd identically in a real deployment)
    and runs it as an ordinary `pp` invocation, under `--schedule serial` —
    so it calls Evaluator.run_node_body itself, via its OWN completely
    normal main.ml control flow, no second "evaluate on member" function
    anywhere. Whatever nodes that run forces (our assigned batch keys, plus
-   any dependency it needs regardless of the dispatcher's partition —
    duplicate computation across machines is SOUND by determinism, LAW 37)
+
    land in the member's OWN store; the dispatcher then pulls each assigned
-   key back via the UNCHANGED stage-A serve-hit/recv-hit pair — the same
+   key back via the serve-hit/recv-hit pair — the same
    re-hash-on-receive choke point every other synced artifact goes
    through. *)
 
 open Types
+open Codec
 
 (* ---- Members file: ambient config, never --grant (contract: an address
    is not an authority ceiling — LAW 34's own distinction). One member per
@@ -79,7 +80,7 @@ let member_home_of_root (root : string) : (string, string) result =
       "member store root %s does not end in /%s — cannot derive its $HOME"
       root store_suffix)
 
-(* ---- Wire format for the Q11-bis pre-seed pin list ----
+(* ---- Wire format for the pre-seed pin list ----
    "(pin \"CELL-ID\" \"BLOB-HASH\")" per line — the same hand-rolled,
    quoted-string style token.ml/transport.ml already use for their own
    bespoke line formats (Codec.quote_string/parse_quoted_string reused,
@@ -90,14 +91,6 @@ let quote = Codec.quote_string
 let pin_line (cell : string) (hash : string) : string =
   Printf.sprintf "(pin %s %s)\n" (quote cell) (quote hash)
 
-let ( >>= ) o f = match o with None -> None | Some x -> f x
-
-let expect_lit (s : string) (i : int) (lit : string) : int option =
-  let l = String.length lit in
-  if i + l <= String.length s && String.sub s i l = lit then Some (i + l) else None
-
-let expect_char (s : string) (i : int) (c : char) : int option =
-  if i < String.length s && s.[i] = c then Some (i + 1) else None
 
 let parse_pin_line (line : string) : (string * string) option =
   expect_lit line 0 "(pin " >>= fun i ->
@@ -106,8 +99,8 @@ let parse_pin_line (line : string) : (string * string) option =
   Codec.parse_quoted_string line i >>= fun (hash, i) ->
   expect_char line i ')' >>= fun _ -> Some (cell, hash)
 
-(* ---- M6 Stage B: `(pin-probe "NAME" <codec-value>)` ----
-   docs/PLAN-m6-demo.md "Stage B — the pin seam": generalizes the pin file
+(* ---- `(pin-probe "NAME" <codec-value>)` ----
+   Generalizes the pin file
    to cover a probe's OWN value directly (not a blob-backed cell), so a
    program that folds `(probe NAME)` into its desired state can be pinned
    too. The value half is not a quoted string — it is Codec.encode_value's
@@ -130,7 +123,7 @@ let parse_pin_probe_line (line : string) : (string * string) option =
   else None
 
 (* ---- Member side: pre-seed Store.run_pins from the wire BEFORE anything
-   runs (Q11-bis, the soundness crux) ----
+   runs — the soundness crux of remote placement ----
 
    [read_file_cell]/[observe_cell] (store.ml) both consult [run_pins]
    FIRST, unconditionally, before ever touching disk for a `file:` cell —
@@ -140,8 +133,9 @@ let parse_pin_probe_line (line : string) : (string * string) option =
    present: the code path that would read this member's own disk for that
    cell is structurally unreachable, not merely avoided by convention. A
    member that never received a pin for some OTHER cell still observes its
-   own disk for that cell — untouched, exactly the "tool: cells are
-   deliberately NOT pre-seeded" carve-out (contract, Q11-bis).
+   own disk for that cell — untouched: `tool:` cells are
+   deliberately NOT pre-seeded, since the member's own toolchain is a
+   legitimate distinct observation.
 
    The dispatcher pushes each pinned blob DIRECTLY into this member's own
    store before ever spawning it ([ship_and_pull]'s [push_blob] call below,
@@ -155,7 +149,7 @@ let parse_pin_probe_line (line : string) : (string * string) option =
    discipline every other synced artifact gets, applied to a same-machine
    direct write instead of a pull).
 
-   A `(pin-probe "NAME" <value>)` line (M6 Stage B) is handled the same
+   A `(pin-probe "NAME" <value>)` line is handled the same
    pass, populating Runtime.probe_values DIRECTLY instead — no blob, no
    CAS, no re-hash-before-trust step, since the value's bytes travel
    in-line in the pin file itself rather than by content-addressed
@@ -165,8 +159,8 @@ let parse_pin_probe_line (line : string) : (string * string) option =
    circuits the observe-fn for the whole pass exactly like an
    already-observed value would mid-pass.
 
-   Also called directly by main.ml's standalone `--pin-file` flag (M6
-   Stage B) — the SAME function, sans the --remote-node token/keys/reply
+   Also called directly by main.ml's standalone `--pin-file` flag —
+   the SAME function, sans the --remote-node token/keys/reply
    ceremony (which was always separate wiring in main.ml, never part of
    this function's own signature). *)
 let preseed_pins_from_file ~(pins_file : string) : unit =
@@ -222,7 +216,7 @@ let preseed_pins_from_file ~(pins_file : string) : unit =
    spine — never forces anything already-forced-by-Codec.decode_value) for
    "blob:" + exactly 64 lowercase-hex chars, the same shape blob-get's own
    prefix check already assumes. *)
-(* Factored out to src/blobref.ml (M5 stage C: src/store.ml's GC mark-by-
+(* Factored out to src/blobref.ml (src/store.ml's GC mark-by-
    replay needs the identical scan and is compiled before this module) —
    [blob_refs_in] here is just a re-export so every existing call site in
    this file keeps working unchanged. *)
@@ -232,7 +226,7 @@ let blob_refs_in = Blobref.blob_refs_in
 
    Reuses Transport.serve_hit VERBATIM, once per key, against THIS
    process's own (just-populated) store — zero new authority/serving code;
-   this is exactly stage A's serve-hit path, just driven internally by
+   this is exactly the cluster transport's serve-hit path, just driven internally by
    `--remote-node` instead of by a second `pp --serve-hit` invocation per
    key (an optimization: one subprocess handles run + serve for the whole
    assigned batch). The ONE addition on top of serve_hit itself: on a hit,
@@ -261,31 +255,27 @@ let serve_assigned_keys ~(token_text : string) ~(keys_file : string)
 
 (* ---- Dispatcher side ---- *)
 
-(* Q11-bis: pre-observe the granted source scope — EVERY regular file under
+(* Pre-observe the granted source scope — EVERY regular file under
    every fs-read-granting root this process currently holds
    (Capabilities.list_fs_paths already flattens CapCompose/CapRestrict, so
    this covers exactly what [cell_authorized_for]/[check_fs_read] would
-   authorize a read of). Coarse-but-sound (a documented residual, PLAN
-   "Residuals": whole-scope pre-observation cost on huge grants), not a
+   authorize a read of). Coarse-but-sound (a documented residual: pre-observing
+   the whole scope costs more the larger the grant), not a
    per-node-free-var-precise walk — deliberately: precision would require
    guessing which files a not-yet-run node body will read, and a wrong
-   guess would silently observe wrong bytes (the "heuristic predictive file
-   shipping" rejection in the plan's kill-list). *)
-let rec walk_files (path : string) (acc : (string * string) list ref) : unit =
-  match Unix.lstat path with
-  | exception _ -> ()
-  | { Unix.st_kind = Unix.S_REG; _ } ->
-      (try acc := (Store.file_cell_id path, Store.read_raw path) :: !acc
-       with _ -> ())
-  | { Unix.st_kind = Unix.S_DIR; _ } ->
-      (match Sys.readdir path with
-       | exception _ -> ()
-       | names -> Array.iter (fun n -> walk_files (Filename.concat path n) acc) names)
-  | _ -> ()
+   guess would silently observe wrong bytes, which heuristic predictive file
+   shipping cannot rule out. *)
+let walk_files (path : string) (acc : (string * string) list ref) : unit =
+  Fswalk.walk ~root:path ~cb:(fun ~rel:_ ~path visit ->
+    match visit with
+    | Fswalk.Entry { Unix.st_kind = Unix.S_REG; _ } ->
+        (try acc := (Store.file_cell_id path, Store.read_raw path) :: !acc
+         with _ -> ())
+    | _ -> ())
 
 let pre_observe_granted_scope () : (string * string * string) list =
   let roots =
-    Capabilities.list_fs_paths (CapCompose !Runtime.initial_capabilities)
+    Capabilities.list_fs_paths (CapCompose (Runtime.invocation_get ()).initial_capabilities)
     |> List.filter_map (fun (p, m) -> match m with
          | Read | ReadWrite -> Some p
          | Write -> None)
@@ -328,15 +318,15 @@ let member_env (member_home : string) : string array =
 
 (* Ship [closed] (already filtered to data-closed jobs) to [member_home]:
    pre-observe + push the granted scope's blobs directly into the member's
-   OWN store (item (b)/Q11-bis; a direct push, not a neutral relay — push
+   OWN store (a direct push, not a neutral relay — push
    is the TRUSTED direction in this threat model, verified against local
    content before writing, same as every other LocalDir push), mint a
-   token from this process's OWN top-level grant specs (item (c) — never
+   token from this process's OWN top-level grant specs (never
    wider than this process's own authority), spawn the member as an
    ordinary second `pp` invocation of the identical program under
-   `--schedule serial` (item (d) — run_node_body, no second force path),
-   then pull each assigned key back via the UNCHANGED stage-A serve-hit/
-   recv-hit pair through a neutral shared-root scratch dir (item (e) — the
+   `--schedule serial` (run_node_body, no second force path),
+   then pull each assigned key back via the serve-hit/
+   recv-hit pair through a neutral shared-root scratch dir (the
    PULL direction, re-hash-verified same as every other sync).
 
    Never raises: any failure anywhere in this pipeline (unreachable member,
@@ -361,7 +351,7 @@ let ship_and_pull ~(member_home : string) (closed : Scheduler.job list) : unit =
       (String.concat "" (List.map (fun (c, h, _) -> pin_line c h) pins));
     let secret = Token.load_secret () and cluster_id = Token.load_cluster_id () in
     let token_text =
-      Token.mint ~secret ~cluster_id ~specs:!Runtime.initial_grant_specs
+      Token.mint ~secret ~cluster_id ~specs:(Runtime.invocation_get ()).initial_grant_specs
         ~ttl_seconds:remote_ttl_seconds
     in
     let token_file = Filename.concat scratch "token" in
@@ -369,12 +359,12 @@ let ship_and_pull ~(member_home : string) (closed : Scheduler.job list) : unit =
     let keys_file = Filename.concat scratch "keys" in
     Store.atomic_write keys_file
       (String.concat "" (List.map (fun j -> j.Scheduler.j_key ^ "\n") closed));
-    (* Test-only synchronization seam (tests/048's Q11-bis case): a real
+    (* Test-only synchronization seam (tests/048's differing-file case): a real
        dispatcher-to-member gap is a NETWORK delay, which a single-machine
        test cannot otherwise force deterministically between "pins pushed"
        and "member spawned" — the exact window a real world-drift race
        occupies. Unset in every normal invocation (no --help surface, like
-       the other internal M5 test entries above); when set, runs a shell
+       the other internal cluster test entries above); when set, runs a shell
        command (e.g. mutating the shared world) between the two. *)
     (match Sys.getenv_opt "PP_REMOTE_TEST_HOOK" with
      | Some cmd when cmd <> "" -> ignore (Sys.command cmd)
@@ -385,8 +375,8 @@ let ship_and_pull ~(member_home : string) (closed : Scheduler.job list) : unit =
     let argv =
       ["--remote-node"; token_file; pins_file; shared_root; keys_file; reply_file;
        "--schedule"; "serial"]
-      @ (if !Runtime.program_bytecode then ["--bytecode"] else [])
-      @ !Runtime.program_files
+      @ (if (Runtime.invocation_get ()).program_bytecode then ["--bytecode"] else [])
+      @ (Runtime.invocation_get ()).program_files
     in
     let log_file = Filename.concat scratch "log" in
     let code = spawn_member ~exe ~argv ~env:(member_env member_home) ~log_file in

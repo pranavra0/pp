@@ -1,75 +1,19 @@
 (* pp primitives — built-in functions *)
 
 open Types
+open Backend
 
-(* Reference to the evaluator's force function — set by evaluator at init *)
-let force_ref : (value -> value) ref = ref (fun v -> v)
-let set_force (f : value -> value) = force_ref := f
 
 (* Reference to the current environment — updated by evaluator at eval entry *)
 let current_env_ref : env ref = ref Types.empty_env
 
-(* References to evaluator's eval and apply — set by evaluator at init *)
-let eval_ref : (expr -> env -> value) ref = ref (fun _ _ -> failwith "eval not initialized")
-let apply_ref : (value -> value list -> env -> value) ref = ref (fun _ _ _ -> failwith "apply not initialized")
-let set_eval (f : expr -> env -> value) = eval_ref := f
-let set_apply (f : value -> value list -> env -> value) = apply_ref := f
 
-(* Reference to the VM's thunk runner — set by VM at init *)
-let vm_run_thunk_ref : (Types.bytecode -> int -> Types.frame list -> Types.value) ref =
-  ref (fun _ _ _ -> failwith "VM not initialized")
-
-(* ---- Phase 3: hooks the scheduler-aware force-deep needs from the two
-   backends' node-key functions and the shared node-body runner. Set by
-   Evaluator.init (node_key_of_ref, run_node_body_ref) and Vm.init
-   (vm_node_key_ref) — mirrors the vm_run_thunk_ref pattern above. Primitives
-   is compiled before Evaluator/Vm, so these are the only way this module can
-   reach backend-specific code without a dependency cycle. *)
-let node_key_of_ref : (Types.thunk -> string) ref =
-  ref (fun _ -> failwith "node_key_of not initialized")
-let vm_node_key_ref : (Types.thunk -> string) ref =
-  ref (fun _ -> failwith "vm_node_key not initialized")
-let run_node_body_ref : (key:string -> run:(unit -> Types.value) -> Types.thunk -> Types.value) ref =
-  ref (fun ~key:_ ~run:_ _ -> failwith "run_node_body not initialized")
-(* True (and, for a real result, marks [t] Evaluated in place — same as
-   force_node's HitOk arm) when [key] is ALREADY a valid store hit or a
-   memoized failure; false on a genuine Miss. Set by Evaluator.init, which
-   owns [cell_authorized]. The scheduler-aware force-deep's collect pass
-   uses this to skip forking a job for a node the store can already serve —
-   without it, a "null rebuild" batch would re-run_node_body (and so
-   re-execute every external process) EVERY node on EVERY force-deep call,
-   because a fresh run's thunk_store always starts Unevaluated regardless
-   of what the on-disk store already has cached. *)
-let resolve_if_hit_ref : (Types.thunk -> string -> bool) ref =
-  ref (fun _ _ -> false)
-
-(* ---- M3 defmacro: the shared expansion hook (docs/PLAN, MASTERPLAN M3) ----
-
-   Set by Macro.ml (compiled after Evaluator, since expanding a macro call
-   runs its body through the tree-walker — LAW 36, "the tree-walker is the
-   oracle") once it loads. Primitives is compiled first, so this is the
-   same forward-reference trick as force_ref/eval_ref/apply_ref above: every
-   call site that turns a fresh Reader.read_string form list into something
-   either backend will actually see (repl.ml's top-level drivers, vm.ml's
-   LOAD_FILE/eval_module_from, evaluator.ml's ELoad/eval_module_file) MUST
-   route it through this ref first, so hash_expr and the compiler only ever
-   see already-expanded ASTs (LAW 20 needs no change elsewhere because of
-   this). Defaults to identity so a build that never links Macro (should
-   not happen — main.ml links everything) degrades to "macros do nothing"
-   rather than crashing. *)
-let expand_toplevel_ref : (Types.expr list -> Types.expr list) ref =
-  ref (fun exprs -> exprs)
-
-(* Reset the macro table (and anything else macro-expansion-related) at the
-   start of every fresh run — set by Macro.ml, called from Evaluator.init
-   alongside thunk_store/handler_stack's own resets. *)
-let macro_reset_ref : (unit -> unit) ref = ref (fun () -> ())
 
 (* Force helpers for builtins *)
-let force_val (v : value) : value = !force_ref v
+let force_val (v : value) : value = Backend.r.force v
 let force_args (args : value list) : value list = List.map force_val args
 
-(* ---- gensym (M3 / defmacro hygiene) ----
+(* ---- gensym (defmacro hygiene) ----
 
    A process-global monotonic counter, reset at the start of every fresh run
    (Evaluator.init, alongside thunk_store/handler_stack/macro table) so that
@@ -89,9 +33,9 @@ let force_args (args : value list) : value list = List.map force_val args
    collide. *)
 let gensym_counter = ref 0
 
-(* ---- Phase 3: scheduler-aware force-deep (docs/PLAN-phase3-parallel.md) ----
+(* ---- Scheduler-aware force-deep ----
 
-   Wall A: EApply forces every argument, so a compound value built by
+   EApply forces every argument, so a compound value built by
    ordinary code forces its elements one at a time, inline — a batch of
    sibling node thunks can only exist if something built the compound value
    WITHOUT forcing its elements (the `map` primitive, below). force-deep is
@@ -109,8 +53,7 @@ let gensym_counter = ref 0
    run — every node it reaches is now a cache hit (or, for a dead worker,
    falls through to an ordinary in-process compute — worker death degrades
    to serial, never a wrong answer). Under [Serial] policy, collection is
-   skipped entirely and force-deep is exactly the original one-pass walk —
-   byte-identical to pre-Phase-3 behavior, no risk to existing tests. *)
+   skipped entirely and force-deep is exactly the original one-pass walk. *)
 
 (* Non-forcing: only pattern-matches on values already in hand, so it can
    never trigger the very one-at-a-time serialization it exists to avoid.
@@ -126,15 +69,15 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
   let jobs = ref [] in
   let race_width () = match !Scheduler.policy with Scheduler.Race n -> n | _ -> 1 in
   let key_of (t : thunk) : string =
-    if t.vm_code <> None then !vm_node_key_ref t else !node_key_of_ref t
+    if t.vm_code <> None then Backend.r.vm_node_key t else Backend.r.node_key_of t
   in
   let job_run (t : thunk) (key : string) () : value =
     let run () =
       match t.vm_code with
-      | Some (bc, offset, frames) -> !vm_run_thunk_ref bc offset frames
-      | None -> !eval_ref t.thunk_expr t.thunk_env
+      | Some (bc, offset, frames) -> Backend.r.vm_run_thunk bc offset frames
+      | None -> Backend.r.eval t.thunk_expr t.thunk_env
     in
-    !run_node_body_ref ~key ~run t
+    Backend.r.run_node_body ~key ~run t
   in
   let rec walk (v : value) : unit =
     match v with
@@ -146,7 +89,7 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
              let k = key_of t in
              if not (Hashtbl.mem seen_keys k) then begin
                Hashtbl.add seen_keys k ();
-               if not (!resolve_if_hit_ref t k) then
+               if not (Backend.r.resolve_if_hit t k) then
                  jobs := { Scheduler.j_key = k; j_run = job_run t k;
                            j_width = race_width (); j_thunk = t }
                          :: !jobs
@@ -165,9 +108,8 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
   walk v;
   List.rev !jobs
 
-(* The ORIGINAL, single-pass definition — recurses into ITSELF only, never
-   back into the collect/dispatch step. This is exactly what force-deep was
-   before Phase 3, unchanged, and it is what actually walks the structure
+(* The single-pass definition — recurses into ITSELF only, never
+   back into the collect/dispatch step. This is what actually walks the structure
    after (or in [Serial]'s case, instead of) a batch dispatch. Critically,
    collection must happen exactly ONCE per top-level force-deep call: were
    this walk to re-run collect_unevaluated_nodes at every level (recursing
@@ -179,21 +121,15 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
    external process) an already-computed node all over again, once per
    remaining list position (an O(n^2) blowup, not a correctness issue but a
    catastrophic performance one — caught by tests/024's exec-count assert). *)
-let rec force_deep_plain (v : value) : value =
-  match force_val v with
-  | VPair (car, cdr) -> VPair (force_deep_plain car, force_deep_plain cdr)
-  | VVector vs -> VVector (Array.map force_deep_plain vs)
-  | VMap kvs -> VMap (List.map (fun (k, v) -> (force_deep_plain k, force_deep_plain v)) kvs)
-  | VSet vs -> VSet (List.map force_deep_plain vs)
-  | other -> other
 
 (* Deep force: recursively force all thunks in a data structure. Under a
    non-serial schedule policy, collects and dispatches every reachable
    unevaluated node in ONE batch BEFORE the recursive walk (see the
-   two-phase protocol above), then defers entirely to [force_deep_plain] —
-   every node it reaches from here on is now a store hit (or, for a dead
-   worker, an ordinary in-process compute). Under [Serial], collection is
-   skipped and this is exactly the original single-pass definition. *)
+   two-phase protocol above), then defers entirely to the plain recursive
+   walk in Force_deep — every node it reaches from here on is now a store
+   hit (or, for a dead worker, an ordinary in-process compute). Under
+   [Serial], collection is skipped and this is exactly the original
+   single-pass definition. *)
 let force_deep (v : value) : value =
   (match !Scheduler.policy with
    | Scheduler.Serial -> ()
@@ -201,9 +137,9 @@ let force_deep (v : value) : value =
        (match collect_unevaluated_nodes v with
         | [] -> ()
         | jobs -> Scheduler.dispatch_batch jobs));
-  force_deep_plain v
+  Force_deep.force_deep_plain v
 
-(* ---- M4 probes: shared evaluate-and-pin logic (PLAN-m4-cells.md) ----
+(* ---- Probes: shared evaluate-and-pin logic ----
 
    One implementation, used both by the `probe` primitive (registered below)
    and by the Store-facing re-observation hook wired in main.ml
@@ -224,18 +160,18 @@ let call_zero_arg (fn : value) : value =
           "probe: observe-fn expects 0 arguments, got a closure of %d"
           (List.length c.params));
       let new_frame = Types.make_frame 0 in
-      !vm_run_thunk_ref c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
+      Backend.r.vm_run_thunk c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
   | VClosure c ->
       if c.params <> [] then
         failwith (Printf.sprintf
           "probe: observe-fn expects 0 arguments, got a closure of %d"
           (List.length c.params));
-      !apply_ref fn [] !current_env_ref
-  | VBuiltin _ -> !apply_ref fn [] !current_env_ref
+      Backend.r.apply fn [] !current_env_ref
+  | VBuiltin _ -> Backend.r.apply fn [] !current_env_ref
   | _ -> failwith "probe: observe-fn is not a function"
 
 (* Call a function value with a fixed argument list, dispatching on
-   tree-walker vs VM closures exactly like [call_zero_arg] — Q13's
+   tree-walker vs VM closures exactly like [call_zero_arg] —
    register-domain needs 1-arg (apply) and 2-arg (diff) calls into
    user-registered closures from OCaml orchestration (Domains.ml), so this
    generalizes call_zero_arg's dispatch to arbitrary arity instead of adding
@@ -249,14 +185,14 @@ let call_with_args (fn : value) (args : value list) : value =
           (List.length c.params) (List.length args));
       let new_frame = Types.make_frame (List.length args) in
       List.iteri (fun i a -> Types.frame_set new_frame i a) args;
-      !vm_run_thunk_ref c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
+      Backend.r.vm_run_thunk c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
   | VClosure c ->
       if List.length c.params <> List.length args then
         failwith (Printf.sprintf
           "domain function expects %d argument(s), got %d"
           (List.length c.params) (List.length args));
-      !apply_ref fn args !current_env_ref
-  | VBuiltin _ -> !apply_ref fn args !current_env_ref
+      Backend.r.apply fn args !current_env_ref
+  | VBuiltin _ -> Backend.r.apply fn args !current_env_ref
   | _ -> failwith "domain function value is not a function"
 
 (* [Some v]: the probe's value for THIS pass — pinned in Runtime.probe_values
@@ -303,7 +239,7 @@ let probe_observe_for_store (name : string) : string option =
   | Some v -> Some (Hasher.hash_value v)
   | None -> None
 
-(* Q13: Store.observe_cell's `domain:<name>:<sub>` dispatch — calls the
+(* Store.observe_cell's `domain:<name>:<sub>` dispatch — calls the
    registered domain's own `:observe-cell` closure (fn (sub) -> hash|nil),
    the proc_observer/probe_observer pattern generalized to third-party
    domains. Runs under the domain's own registered cap (mirrors
@@ -387,20 +323,7 @@ let initial_env () : env =
 (* ---- Register all primitives ---- *)
 
 
-(* Refs for compiler primitives — set by Compiler.init_primitives after compiler.ml loads *)
-let compiler_state_ref : Types.comp_state option ref = ref None
-let compiler_finish_ref : (Types.comp_state -> Types.bytecode) ref =
-  ref (fun _ -> failwith "compiler not initialized")
-
-(* Ref for VM bytecode runner — set by Vm.init after vm.ml loads *)
-let vm_run_bytecode_ref : (Types.bytecode -> Types.value) ref =
-  ref (fun _ -> failwith "VM not initialized")
-
-(* Ref for VM global definition hook — set by Vm.init after vm.ml loads.
-   Used by eval-pp so that definitions it returns are visible to the VM. *)
-let vm_define_ref : (string -> Types.value -> unit) ref =
-  ref (fun _ _ -> ())
-let () =
+let register_arith () =
   (* Arithmetic — strict: force all args, variadic + and * with identity *)
   arith_fold "+" 0 ( + ) ( +. );
 
@@ -438,7 +361,9 @@ let () =
   chained_cmp ">"  ( > )  ( > );
   chained_cmp "<=" ( <= ) ( <= );
   chained_cmp ">=" ( >= ) ( >= );
+  ()
 
+let register_lists () =
   (* List operations — car/cdr force the pair, cons/list are lazy *)
   register "cons" (fun args ->
     match args with
@@ -466,7 +391,7 @@ let () =
   register "list" (fun args ->
     List.fold_right (fun a acc -> VPair (a, acc)) args VNil);  (* lazy *)
 
-  (* (apply f seg1 seg2 … segN) — C2's call-spread target. Each seg is a proper
+  (* (apply f seg1 seg2 … segN) — the reader's call-spread lowering target. Each seg is a proper
      list; apply concatenates them (in order) and calls f with the combined
      elements. The reader lowers `f(a, ...rest, b)` to
      `apply(f, list(a), rest, list(b))`, so a spread anywhere in an argument
@@ -488,8 +413,8 @@ let () =
         call_with_args fn (List.concat_map splice segs)
     | [] -> failwith "apply expects a function and at least one argument segment");
 
-  (* (map f lst) — Phase 3 / Wall A's missing batch fan-out point
-     (docs/PLAN-phase3-parallel.md). Applies [f] to each element via the
+  (* (map f lst) — the missing batch fan-out point: unlike EApply, which
+     forces every argument inline one at a time, `map` applies [f] to each element via the
      apply hook and conses the results WITHOUT forcing them: `(map compile
      names)` therefore yields a list of UNFORCED node thunks that
      force-deep can dispatch as one parallel batch, instead of the usual
@@ -497,13 +422,13 @@ let () =
      Only the list SPINE is forced (to walk it); elements are passed through
      exactly as `cons`/`list` do.
 
-     THE PAIRING TRAP (adversarial-review correction — document this,
-     don't just fix the exit test): the mapped function's BODY must not put
+     THE PAIRING TRAP: the mapped function's BODY must not put
      the per-element node through an argument position of its own.
      `(map (fn (n) (cons n (compile n))) names)` looks equivalent to
      pairing afterward, but it is NOT: `(compile n)` there is an argument to
-     `cons`, and EApply forces every argument (Wall A applies inside the
-     closure body too) — so each node is forced eagerly, one at a time,
+     `cons`, and EApply forces every argument — strict forcing applies
+     inside a closure's own body just as much as anywhere else — so each
+     node is forced eagerly, one at a time,
      right there, silently serializing the whole build. Parallel fan-out
      exists exactly when the node thunk IS the mapped element: write
      `(map compile names)`, `force-deep` THAT batch, and only pair names
@@ -535,8 +460,8 @@ let () =
               end;
               let new_frame = Types.make_frame 1 in
               Types.frame_set new_frame 0 arg;
-              !vm_run_thunk_ref c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
-          | _ -> !apply_ref fn [arg] !current_env_ref
+              Backend.r.vm_run_thunk c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
+          | _ -> Backend.r.apply fn [arg] !current_env_ref
         in
         let rec go l =
           match force_val l with
@@ -551,7 +476,9 @@ let () =
     match args with
     | [arg] -> VBool (match force_val arg with VNil -> true | _ -> false)
     | _ -> failwith "nil? expects one argument");
+  ()
 
+let register_collections () =
   (* Vector operations — lazy *)
   register "vector" (fun args ->
     VVector (Array.of_list args));
@@ -600,7 +527,9 @@ let () =
   predicate "fn?"      (function VClosure _ | VBuiltin _ -> true | _ -> false);
   register "thunk?" (fun args ->  (* unforced by design: tests thunk-ness *)
     match args with [arg] -> VBool (match arg with VThunk _ -> true | _ -> false) | _ -> failwith "thunk? expects one arg");
+  ()
 
+let register_scalars () =
   (* I/O — strict, deep-forces for display *)
   register "print" (fun args ->
     let args = List.map force_deep args in
@@ -630,8 +559,9 @@ let () =
     match args with
     | [VString msg] -> failwith msg
     | _ -> failwith "error");
+  ()
 
-
+let register_caps () =
   register "cap-compose" (fun args ->
     let caps = List.map (fun v -> match force_val v with VCapability c -> c | _ -> failwith "cap-compose expects capabilities") args in
     VCapability (CapCompose caps));
@@ -663,7 +593,9 @@ let () =
 
   register "capability?" (fun args ->
     match args with [arg] -> VBool (match force_val arg with VCapability _ -> true | _ -> false) | _ -> failwith "capability? expects one arg");
+  ()
 
+let register_metaeval () =
   (* ---- eval-pp and apply-pp ---- *)
 
   register "eval-pp" (fun args ->
@@ -671,7 +603,7 @@ let () =
     match args with
     | [VString code] ->
         (* Route through the same shared expansion hook as every other
-           top-level-shaped form list (M3 defmacro): eval-pp code may itself
+           top-level-shaped form list: eval-pp code may itself
            define or use macros, sequentially, exactly like a file's top
            level — and it must not see a stale macro table from a PRIOR
            eval-pp call, but starting a whole new one here is wrong too
@@ -681,7 +613,7 @@ let () =
            macro table, so it can use macros already defined by the calling
            program and any it defines here are visible to LATER eval-pp
            calls in the same run, but never resets between them. *)
-        let exprs = !expand_toplevel_ref (Reader.read_string code) in
+        let exprs = Backend.r.expand_toplevel (Reader.read_string code) in
         (* Capture the calling env into a local ref — avoid clobbering
            current_env_ref during inner evaluations. *)
         let local_env = ref !current_env_ref in
@@ -694,33 +626,33 @@ let () =
           | [EDef (name, params, body)] ->
               let closure = Types.make_closure ~name:(Some name) params body local_env in
               local_env := Types.extend_env !local_env name closure;
-              !vm_define_ref name closure;
+              Backend.r.vm_define name closure;
               new_defs := (name, closure) :: !new_defs;
               if !new_defs = [] then VNil else VEnvMap (List.rev !new_defs)
           | [EDefValue (name, rhs)] ->
-              let v = !eval_ref rhs !local_env in
+              let v = Backend.r.eval rhs !local_env in
               local_env := Types.extend_env !local_env name v;
-              !vm_define_ref name v;
+              Backend.r.vm_define name v;
               new_defs := (name, v) :: !new_defs;
               VEnvMap (List.rev !new_defs)
           | [last] ->
               (* Pure expression: evaluate and force *)
-              force_val (!eval_ref last !local_env)
+              force_val (Backend.r.eval last !local_env)
           | (ELocated (_, inner)) :: rest -> go (inner :: rest)
           | (EDef (name, params, body)) :: rest ->
               let closure = Types.make_closure ~name:(Some name) params body local_env in
               local_env := Types.extend_env !local_env name closure;
-              !vm_define_ref name closure;
+              Backend.r.vm_define name closure;
               new_defs := (name, closure) :: !new_defs;
               go rest
           | (EDefValue (name, rhs)) :: rest ->
-              let v = !eval_ref rhs !local_env in
+              let v = Backend.r.eval rhs !local_env in
               local_env := Types.extend_env !local_env name v;
-              !vm_define_ref name v;
+              Backend.r.vm_define name v;
               new_defs := (name, v) :: !new_defs;
               go rest
           | e :: rest ->
-              ignore (force_val (!eval_ref e !local_env));
+              ignore (force_val (Backend.r.eval e !local_env));
               go rest
         in go exprs
     | _ -> failwith "eval-pp expects a string"
@@ -740,9 +672,9 @@ let () =
          | VClosure c when Array.length c.vm_bc.code > 0 ->
              let new_frame = Types.make_frame (List.length c.params) in
              List.iteri (fun i arg -> Types.frame_set new_frame i arg) arg_values;
-             !vm_run_thunk_ref c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
+             Backend.r.vm_run_thunk c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
          | _ ->
-             !apply_ref fn arg_values !current_env_ref)
+             Backend.r.apply fn arg_values !current_env_ref)
     | _ -> failwith "apply-pp expects fn and list of args"
   );
 
@@ -754,7 +686,9 @@ let () =
     | [v] -> force_deep v
     | _ -> failwith "force-deep expects one argument"
   );
+  ()
 
+let register_io () =
   (* ---- slurp: read file to string ---- *)
 
   register "slurp" (fun args ->
@@ -763,9 +697,9 @@ let () =
     | [VString path] ->
         (* Node-local sandbox scratch reads are capability-free and unrecorded
            (LAW 18) — scratch is the node's working memory. Outside a
-           sandbox: an fs-read grant returns plain data (Q11 CAS-ingested,
-           pinned for the run), a CapSecret-only grant returns VSealed (M4 —
-           bytes pinned in-memory, NEVER the CAS); see Process.read_dispatch. *)
+           sandbox: an fs-read grant returns plain data (CAS-ingested,
+           pinned for the run), a CapSecret-only grant returns VSealed —
+           bytes pinned in-memory, NEVER the CAS; see Process.read_dispatch. *)
         Process.read_dispatch ~tag:"slurp"
           ~cap_err:(fun p -> "slurp: permission denied for " ^ p) path
     | _ -> failwith "slurp expects a file path string"
@@ -776,7 +710,7 @@ let () =
      "blob:<sha256>". Desired-state maps carry these refs instead of inline
      bytes; the reconciler diffs them by hash and materializes from the
      store — which is what lets `rm -rf build/` restore with zero tool
-     re-runs (exit criterion 4). *)
+     re-runs. *)
   register "blob" (fun args ->
     let args = force_args args in
     match args with
@@ -799,14 +733,15 @@ let () =
            | None -> failwith ("blob-get: blob missing from store: " ^ h))
         else failwith ("blob-get expects a blob:<hash> reference, got " ^ r)
     | _ -> failwith "blob-get expects a blob reference string");
+  ()
 
-  (* ---- stdlib primitives (ROADMAP §2) ---- *)
+let register_stdlib () =
+  (* ---- stdlib primitives ---- *)
 
   (* (hash-value V) — a canonical, structural content hash of ANY value
      (Hasher.hash_value, force-deep'd first) — order-INDEPENDENT for maps/
      sets (hash_value sorts a VMap's entries by encoded-key hash before
-     hashing, exactly like Codec's on-disk canonicalization, PLAN-m4-
-     cells.md / domain-state). Needed because pp's `=` on two maps is
+     hashing, exactly like Codec's on-disk canonicalization). Needed because pp's `=` on two maps is
      plain structural (assoc-list, ORDER-sensitive) list equality: a spec
      value that round-tripped through `domain-state-get/put` (Codec sorts
      VMap entries for canonical on-disk text) compares as "different" from
@@ -820,8 +755,7 @@ let () =
 
   (* (hash-string S) — SHA-256 hex digest of S's raw bytes, the SAME
      algorithm Store.hash_file_opt uses for a file's content hash (Types.
-     hash_string) — needed so a domain's `diff` (Q13, PLAN-m4-cells.md;
-     domain-fs.pp) can compute a content hash from a string PURELY (no
+     hash_string) — needed so a domain's `diff` (domain-fs.pp) can compute a content hash from a string PURELY (no
      capability, no store I/O — unlike `blob`, this never touches
      ~/.pp/store) and compare it against what `tree-observe` observed. *)
   register "hash-string" (fun args ->
@@ -835,7 +769,7 @@ let () =
     | [VFloat f] -> VString (string_of_float f)
     | _ -> failwith "number->string expects a number");
 
-  (* (->string v) — C1's generic display conversion, the target of every
+  (* (->string v) — the generic display conversion, the target of every
      f-string hole. A string renders as ITSELF (no surrounding quotes — the
      whole point of interpolation); every other value renders via
      string_of_value (numbers plain, sealed values redacted to #<sealed>, lists
@@ -931,7 +865,7 @@ let () =
   register "argv" (fun args ->
     match args with
     | [] ->
-        let av = !Runtime.program_argv in
+        let av = (Runtime.invocation_get ()).program_argv in
         Runtime.record_read Store.argv_cell_id (Store.argv_observed_hash ());
         List.fold_right (fun s acc -> VPair (VString s, acc)) av VNil
     | _ -> failwith "argv takes no arguments");
@@ -978,7 +912,7 @@ let () =
     | _ -> failwith "map-insert expects a map, a key, and a value");
 
   (* map-merge(a, b) — a with every binding of b inserted; b wins on collision.
-     The lowering target for map spread `{ ...a, ...b }` (B3). Keys in a VMap
+     The lowering target for map spread `{ ...a, ...b }`. Keys in a VMap
      are already forced values, so structural comparison is exact. *)
   register "map-merge" (fun args ->
     match args with
@@ -1003,9 +937,11 @@ let () =
          | _ -> VVector (Array.of_list (List.map Types.quote_to_value exprs)))
     | _ -> failwith "read-string expects a source string"
   );
+  ()
 
+let register_domains () =
   (* ---- fenced: register a non-convergent action for reconciler sequencing
-     (Q3 / LAW 31).  May not appear inside a node body.  The action is not
+     (LAW 31).  May not appear inside a node body.  The action is not
      executed during evaluation; the active reconciler drains it after
      convergent state is applied. *)
   register "fenced" (fun args ->
@@ -1019,7 +955,7 @@ let () =
         VNil
     | _ -> failwith "fenced expects a kind string and a spec map");
 
-  (* ---- Q13: register-domain / register-probe (PLAN-m4-cells.md §Q13) ----
+  (* ---- register-domain / register-probe ----
 
      `(register-domain {:name :namespace :observe :diff :apply :write-cap
      [:observe-cell]})` — script-tier only (trace_stack guard, the same
@@ -1032,19 +968,12 @@ let () =
      PREFIXES this domain owns (stratification, LAW 30 full form);
      `:observe-cell` is optional. Returns nil. *)
   let string_or_keyword where v =
-    match v with
-    | VString s | VKeyword s -> s
-    | other -> failwith (where ^ ": expected a string or keyword, got "
-                         ^ string_of_value other)
+    match string_like v with
+    | Some s -> s
+    | None -> failwith (where ^ ": expected a string or keyword, got "
+                         ^ string_of_value v)
   in
-  let find_kv (kvs : (value * value) list) (key : string) : value option =
-    List.find_map (fun (k, v) ->
-      match k with
-      | VKeyword k' when k' = key -> Some v
-      | VString k' when k' = key -> Some v
-      | _ -> None)
-      kvs
-  in
+  let find_kv = Force_deep.find_kv in
   register "register-domain" (fun args ->
     if !Runtime.trace_stack <> [] then
       failwith "register-domain: may not be called inside a node body (script-tier only, like fenced)";
@@ -1094,8 +1023,8 @@ let () =
 
   (* `(register-probe name observe-fn read-cap)` — sugar over register-domain
      for the ⊥-write-authority case: dm_namespace = [] (nothing to
-     stratify, core never converges it), dm_diff/dm_apply = None. Preserves
-     the pre-Q13 surface and error text exactly (tests/043-probes.sh). *)
+     stratify, core never converges it), dm_diff/dm_apply = None. Same
+     surface and error text as a standalone probe registry (tests/043-probes.sh). *)
   register "register-probe" (fun args ->
     if !Runtime.trace_stack <> [] then
       failwith "register-probe: may not be called inside a node body (script-tier only, like fenced)";
@@ -1133,12 +1062,14 @@ let () =
              Runtime.record_read (Cell.(to_string (Probe name))) (Hasher.hash_value v);
              v)
     | _ -> failwith "probe expects a probe name string");
+  ()
 
+let register_collect_and_sealed () =
   (* ---- collect: applicative/validation error-accumulation partition ---- *)
 
   (* `collect(items)` — partition a list of `[:ok, v]` / `[:err, e]` results.
      Returns `[:ok, values]` if all succeeded, `[:err, errors]` if any failed.
-     A plain function used in pipelines (`srcs |> map(f) |> collect`, B2); the
+     A plain function used in pipelines (`srcs |> map(f) |> collect`); the
      validation counterpart to `try`'s short-circuit monad. Was the
      `collect-results` primitive behind the removed `collect { }` reader sugar. *)
   register "collect" (fun args ->
@@ -1170,7 +1101,7 @@ let () =
         in
         partition items [] []
     | _ -> failwith "collect expects one argument");
-  (* ---- M4 sealed cells ---- *)
+  (* ---- Sealed cells ---- *)
 
   (* `(unseal v)` — the one sanctioned way out of VSealed to VString (the
      explicit, greppable Vault/SOPS-style boundary; derived data is ordinary
@@ -1183,7 +1114,9 @@ let () =
          | VSealed bytes -> VString bytes
          | other -> failwith ("unseal expects a sealed value, got " ^ string_of_value other))
     | _ -> failwith "unseal expects one argument");
+  ()
 
+let register_ppc () =
   register "ppc-emit-opcode" (fun _args ->
     failwith "ppc-emit-opcode: not yet implemented for self-hosting"
   );
@@ -1193,10 +1126,10 @@ let () =
   );
 
   register "ppc-finish" (fun args ->
-    match !compiler_state_ref with
+    match Backend.r.compiler_state with
     | Some st ->
-        compiler_state_ref := None;
-        let bc = !compiler_finish_ref st in
+        Backend.r.compiler_state <- None;
+        let bc = Backend.r.compiler_finish st in
         Types.VBytecode bc
     | None ->
         failwith "ppc-finish: no active compiler state"
@@ -1206,7 +1139,7 @@ let () =
     let args = force_args args in
     match args with
     | [Types.VBytecode bc] ->
-        !vm_run_bytecode_ref bc
+        Backend.r.vm_run_bytecode bc
     | _ -> failwith "ppc-run expects a bytecode value"
   );
 
@@ -1221,7 +1154,9 @@ let () =
   register "ppc-pop-cenv-frame" (fun args ->
     failwith "ppc-pop-cenv-frame: not yet implemented for self-hosting"
   );
+  ()
 
+let register_macros () =
   let rec quasiquote_walk v =
     match v with
     | VPair (VSymbol "unquote", VPair (arg, VNil)) -> arg
@@ -1262,8 +1197,8 @@ let () =
      INTRODUCES; splice caller-supplied forms in via quasiquote/unquote
      verbatim, never renamed. Without it, a macro's own temporary bindings
      can capture (or be captured by) the call site's bindings — pp macros
-     are deliberately unhygienic (MASTERPLAN M3: full hygiene is not
-     required for a Lisp-1 with explicit quasiquote). *)
+     are deliberately unhygienic: full hygiene is not
+     required for a Lisp-1 with explicit quasiquote. *)
   register "gensym" (fun args ->
     let prefix = match force_args args with
       | [] -> "g"
@@ -1273,8 +1208,10 @@ let () =
     in
     incr gensym_counter;
     VSymbol (Printf.sprintf "%s~%d" prefix !gensym_counter));
+  ()
 
-  (* A5: unshadowable aliases for the primitives the `match` lowering
+let register_match_aliases () =
+  (* Unshadowable aliases for the primitives the `match` lowering
      (Compiler.EMatch) compiles its structural condition/binding code
      down to. The lowering builds ordinary EApply (ESymbol "car"/"cdr"
      /"="/"nil?"/"not"/"error", ...) nodes; on the VM those compile to
@@ -1298,3 +1235,21 @@ let () =
 
   ;
   ()
+
+(* Every primitive registered at module load, grouped by family. The
+   match-alias step must run last: it aliases already-registered names
+   (car/cdr/=/nil?/not/error/pair?) under NUL-prefixed, unshadowable keys. *)
+let () =
+  register_arith ();
+  register_lists ();
+  register_collections ();
+  register_scalars ();
+  register_caps ();
+  register_metaeval ();
+  register_io ();
+  register_stdlib ();
+  register_domains ();
+  register_collect_and_sealed ();
+  register_ppc ();
+  register_macros ();
+  register_match_aliases ()

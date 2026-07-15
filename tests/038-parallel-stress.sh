@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Phase 3 / M1 (docs/PLAN-phase3-parallel.md) — exit criteria 2 and 3 for the
-# fork-at-dispatch scheduler, plus the fenced/parallel negative-half check.
+# Fork-at-dispatch scheduler stress test, plus a fenced-effects negative
+# check under non-serial schedules.
 #
-#   2. race:3 — a deliberately slow node, cold, under serial then race:3:
+#   race:3 — a deliberately slow node, cold, under serial then race:3:
 #      identical result, byte-identical program text (only the --schedule
 #      flag differs), exactly one surviving trace line, wall-clock roughly a
 #      single run (not 3x).
-#   3. N-writer store stress: 64 independent nodes under parallel:16 on one
+#   N-writer store stress: 64 independent nodes under parallel:16 on one
 #      cold store, repeated a bounded number of times: every run produces the
 #      correct value (the store round-trips: objects decode, traces parse),
 #      a serial re-run against the same warm store is hash-identical, and one
@@ -14,25 +14,17 @@
 #      hammering a SINGLE key with the trace lock disabled (PP_TRACE_LOCK=0 —
 #      an internal escape hatch, not a user-facing switch; see store.ml) still
 #      yields a parseable trace and a correct subsequent hit.
-#   +  `(fenced ...)` inside a node body still raises under a non-serial
-#      schedule (LAW 31's negative half, exercised across every policy).
+#   `(fenced ...)` inside a node body still raises under a non-serial
+#      schedule (SPEC law 31's negative half, exercised across every policy).
 #
 # Requires `sh`. Isolated HOME, like tests/010+.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()   { echo "ok   $1"; }
-bad()  { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
+. "$(dirname "$0")/lib.sh"
 now_ms() { perl -MTime::HiRes=time -e 'printf "%d", time()*1000'; }
 JOURNAL="$TMP/.pp/store/journal/log"
 
 # =====================================================================
-# Criterion 2: race:3 — one deliberately slow node
+# race:3 — one deliberately slow node
 # =====================================================================
 cat > "$TMP/slow.pp" <<'EOF'
 def slow() {
@@ -80,10 +72,10 @@ else
 fi
 
 # =====================================================================
-# Criterion 3: N-writer store stress — 64 independent nodes, parallel:16
+# N-writer store stress — 64 independent nodes, parallel:16
 # =====================================================================
 # Deliberately avoid `(load "stdlib/list.pp")`: its `map` is a plain pp
-# fn, and Wall A (EApply forces every argument) means passing a node
+# fn, and EApply forcing every argument means passing a node
 # through `cons`'s argument position there would force each node eagerly —
 # the pairing trap. int-range/sum-list below are hand-rolled so nothing in
 # this file shadows the builtin (non-forcing) `map`.
@@ -194,8 +186,9 @@ else
 fi
 
 # =====================================================================
-# Fenced effects (LAW 31) stay disallowed inside a node body under every
-# non-serial schedule too — placement must never widen what a node may do.
+# Fenced effects (SPEC law 31) stay disallowed inside a node body under
+# every non-serial schedule too — placement must never widen what a node
+# may do.
 # =====================================================================
 cat > "$TMP/fenced-in-node.pp" <<'EOF'
 let bad = node {

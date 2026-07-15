@@ -1,12 +1,12 @@
 (* pp store codec — one canonical, versioned, byte-stable TEXT encoding for
-   DATA values (M2.2 / ROADMAP §3: the store must be readable across
-   OS/arch/compiler, which OCaml Marshal is not).
+   DATA values: the store must be readable across
+   OS/arch/compiler, which OCaml Marshal is not.
 
    THE NON-DATA LAW: [encode_value] returns [Some text] only for values built
    entirely from VNil/VBool/VInt/VFloat/VString/VKeyword/VSymbol/VPair/
    VVector/VMap/VSet — data all the way down. Anything carrying code, a
    captured environment, a handle (VClosure, VThunk, VBuiltin, VCapability,
-   VEnvMap, VBytecode), or a sealed secret (VSealed, M4) makes the WHOLE
+   VEnvMap, VBytecode), or a sealed secret (VSealed) makes the WHOLE
    containing value non-data: encoding returns [None]. The persistent store holds data; code values are
    process-local (see store.ml's store_object).
 
@@ -145,7 +145,7 @@ let rec encode (v : value) : string option =
        | None -> None
        | Some parts -> Some (wrap "t" (List.stable_sort String.compare parts)))
   (* Non-data: code, captured environments, or handles. Process-local only.
-     VSealed (M4): confidentiality — encoding it would put secret bytes into
+     VSealed: confidentiality — encoding it would put secret bytes into
      ~/.pp/store/objects; the non-data law already covers it for free, same
      as every other opaque/handle kind. *)
   | VClosure _ | VBuiltin _ | VCapability _ | VThunk _ | VEnvMap _ | VBytecode _
@@ -170,6 +170,10 @@ let expect_char (s : string) (i : int) (c : char) : int option =
 let expect_lit (s : string) (i : int) (lit : string) : int option =
   let l = String.length lit in
   if i + l <= String.length s && String.sub s i l = lit then Some (i + l) else None
+
+let bind o f = match o with None -> None | Some x -> f x
+let (>>=) o f = bind o f
+
 
 (* Reads raw text up to (not including) the next ')', used for atoms whose
    own text can never contain '(' or ')' (ints, hex floats, nan/inf/-inf). *)

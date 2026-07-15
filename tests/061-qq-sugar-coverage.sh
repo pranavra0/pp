@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# tests/061 — A3: quasiquote sugar coverage (try / match / m[k] / list spread).
+# tests/061 — quasiquote sugar coverage (try / match / m[k] / list spread).
 #
 # Several block/sugar forms the ordinary brace parser supports did not parse
 # inside quasiquote { ... } at all — a macro template couldn't contain them.
-# This pins, for each of the four A3 forms, that it (a) parses inside
+# This pins, for each of the four forms, that it (a) parses inside
 # quasiquote{} on both backends, and (b) has VALUE PARITY: a quasiquote
 # template with unquote()d holes must build/run to the SAME result the
 # equivalent ordinary code does — on both the tree-walker ("$PP" f) and the
@@ -15,15 +15,7 @@
 # below goes through a real defmacro + call, never a bare quasiquote-value
 # comparison for those two.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 run_both() {
   # $1: test name, $2: file, $3: expected output (both backends must match it)
   local name="$1" file="$2" expected="$3"
@@ -107,9 +99,9 @@ run_both "qq-match-block-parity" "$TMP/match.pp" $'11\ntrue\n0\ntrue'
 # ---- m[k] postfix index ----
 # The reader picks the accessor (vector-get vs hash-map-get) from the
 # SYNTACTIC shape of the index — a literal int vs anything else — both
-# outside and inside quasiquote (A3 mirrors that same static decision), so
-# this pins both branches: an int-literal index into a vector, and a
-# keyword-literal index into a map.
+# outside and inside quasiquote (quasiquote mirrors that same static
+# decision), so this pins both branches: an int-literal index into a
+# vector, and a keyword-literal index into a map.
 cat > "$TMP/index.pp" <<'EOF'
 defmacro get0(m) { quasiquote { unquote(m)[0] } }
 defmacro geta(m) { quasiquote { unquote(m)[:a] } }
@@ -143,12 +135,12 @@ run_both "qq-spread-value-parity" "$TMP/spread-value.pp" $'(1 2 3)\ntrue\ntrue'
 # test uses: `list(unquote(x), unquote(y))`, never a bare data list, since
 # a macro's result must reflect back to valid syntax — the head of a data
 # list of plain numbers is not a function, and that failure is real and
-# unrelated to A3, the same one 060 sidesteps the same way). The spread
-# TAIL here is a literal nested qq list, not a macro parameter: a macro
-# argument is the CALLER's unevaluated SYNTAX (quote_to_value'd once), so
-# passing `[2, 3]` as an arg and unquote()ing it would splice the quoted
+# unrelated to this test, the same one tests/060 sidesteps the same way).
+# The spread TAIL here is a literal nested qq list, not a macro parameter: a
+# macro argument is the CALLER's unevaluated SYNTAX (quote_to_value'd once),
+# so passing `[2, 3]` as an arg and unquote()ing it would splice the quoted
 # call-syntax `(list 2 3)`, not the runtime list `(2 3)` — a real but
-# orthogonal "macros see syntax, not values" fact, not an A3 spread issue.
+# orthogonal "macros see syntax, not values" fact, not a spread-parity issue.
 cat > "$TMP/spread-macro.pp" <<'EOF'
 defmacro mk-list-spread(x) { quasiquote { [list, unquote(x), ... [2, 3]] } }
 print(mk-list-spread(1))

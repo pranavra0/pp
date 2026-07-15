@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # pins: LAW-39
-# M4 sealed cells (docs/PLAN-m4-cells.md "Sealed cells"; SPEC LAW 39).
+# Sealed cells: a confidential read is a distinct value kind, banned at the
+# node boundary in both directions and both backends (SPEC law 39).
 #
 # `--grant secret:<path>` mints CapSecret. A read covered by CapSecret and
 # NOT by CapFilesystem returns VSealed instead of VString: print redacts
@@ -8,9 +9,8 @@
 # store_blob/the CAS), and the node boundary bans VSealed both directions
 # exactly like VCapability. `(unseal v)` is the one explicit way out to
 # VString — a Vault/SOPS-style boundary, not dataflow tainting: unsealing
-# INSIDE a node makes the result ordinary data again (a documented residual,
-# PLAN-m4-cells.md "Walls/residuals" — "Sealed confidentiality ends at
-# unseal, by design"), so this suite's "never in store" checks are built
+# INSIDE a node makes the result ordinary data again, by design (a
+# documented residual), so this suite's "never in store" checks are built
 # around programs that never unseal inside a node.
 set -uo pipefail
 PP=${PP:-bin/pp}
@@ -136,8 +136,8 @@ assert "rotate-run3-rotated-a-recomputes" "COMPUTE-A" present
 assert "rotate-run3-rotated-b-still-hit"  "COMPUTE-B" absent
 
 # =====================================================================
-# (5) narrow caller without the secret grant can't hit a node whose
-#     closure read sealed (LAW 23b): populate the store under a grant,
+# (5) a caller without the secret grant can't hit a node whose closure
+#     read sealed data (SPEC law 23b): populate the store under a grant,
 #     then re-run the SAME program with NO grant at all — the cached trace
 #     must not be servable, and the secret must not leak.
 # =====================================================================

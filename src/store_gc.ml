@@ -1,11 +1,11 @@
-(* pp gc — explicit store GC (M5 stage C: docs/PLAN-m5-distribution.md
-   "Store GC"). NEVER automatic — the only entry point is the `pp gc` CLI
-   command (main.ml).
+(* pp gc — explicit store GC. NEVER automatic — the only entry point is the
+   `pp gc` CLI command (main.ml).
 
    Roots = the last N recorded epochs (Gcroots.read_all — already capped to
    N at write time, domains.ml's record_epoch) + their transitive blob:
-   refs. Mark-by-replay (the contract's load-bearing finding: traces do not
-   record child-keys, so there is no on-disk node graph to walk): for each
+   refs. Mark-by-replay (traces do not record child-keys, so there is no
+   on-disk node graph to walk — the only way to discover what a root's
+   closure touches is to re-run it): for each
    recorded root, re-run the IDENTICAL `pp` invocation (same files/grants/
    flags — Gcroots' whole reason for existing) as a `--gc-mark` subprocess,
    which runs the program (deriving its desired-state value exactly as a

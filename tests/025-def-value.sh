@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/025 — (def x v) / (defnode x e) value-binding semantics (ROADMAP §1).
+# tests/025 — (def x v) / (defnode x e) value-binding semantics.
 #
 # The differential suite only proves the backends AGREE; this oracle pins what
 # they agree ON:
@@ -14,15 +14,7 @@
 #       errors (top level is sequential for value defs).
 # Both backends, isolated HOME.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 # assert_out NAME FLAGS FILE EXPECTED-STDOUT (exact match)
 assert_out() {
   local name="$1" flags="$2" file="$3" expected="$4"

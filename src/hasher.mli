@@ -1,4 +1,4 @@
-(* hasher — the identity kernel's public face (MASTER-PLAN A′4 seam).
+(* hasher — the identity kernel's public face.
 
    All hashing logic lives in [Types] (SHA-256 via Cryptokit); this module is
    the thin, named re-export every other layer hashes through. The .mli fixes

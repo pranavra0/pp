@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # pins: LAW-20
-# Regression: the persistent node key is LAW 20 — H(code ‖ free-var value hashes)
-# — not the Phase-0 whole-environment hash.
+# Regression: the persistent node key is H(code ‖ free-var value hashes) —
+# not the whole-environment hash used before this fix (SPEC law 20).
 #
 # The old key folded in `env.env_hash`, so defining or rebinding ANY global (even
 # one the node never references) changed the key and needlessly invalidated every
-# cached node. LAW 20 keys a node on its code plus the *values* of the free
+# cached node. The node key covers a node's code plus the *values* of the free
 # variables it actually references, so:
 #   - rebinding an unrelated global is a cache HIT (identity unchanged), and
 #   - changing a referenced free variable's value is a MISS (identity changed).
 # The capability set is deliberately excluded from the key (authority gates a hit
-# at verify time — LAW 23 — it never renames the result).
+# at verify time, per SPEC law 23 — it never renames the result).
 #
 # Runs under an isolated HOME (tree-walker only, the sole backend with a store).
-# A node logs "COMPUTE" on the miss; per LAW 17 a hit does not replay it, so the
+# A node logs "COMPUTE" on the miss; per SPEC law 17 a hit does not replay it, so the
 # presence/absence of COMPUTE tells miss from hit.
 set -uo pipefail
 PP=${PP:-bin/pp}

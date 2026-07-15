@@ -1,223 +1,229 @@
-# pp GLOSSARY
+# pp glossary
 
-One-line definitions of the vocabulary. Deeper treatment: the concept model is
-in [DESIGN.md](DESIGN.md), the semantics in [SPEC.md](SPEC.md), the code
-structure in [ARCHITECTURE.md](ARCHITECTURE.md).
+Short definitions of the vocabulary. See [DESIGN.md](DESIGN.md) for the
+concept model, [SPEC.md](SPEC.md) for the semantics, and
+[ARCHITECTURE.md](ARCHITECTURE.md) for the code structure.
 
-Terms marked *(planned)* do not exist in the code yet — see
-[STATUS.md](STATUS.md) for what is real today.
+Terms marked (planned) do not exist in the code yet; see
+[STATUS.md](STATUS.md) for what does.
 
-Forms below are shown in `.pp`'s default brace surface. `.ppl` files (and
-macros, via `quote`/`quasiquote`/`defmacro`) use the s-expression AST form
-instead — the same forms, spelled `(node e)`, `(defnode x e)`, and so on; see
-[SPEC.md](SPEC.md) Appendix B for the complete brace↔s-expression lowering
-table.
+The forms below are shown in `.pp`'s default brace surface. `.ppl` files,
+and macros written with `quote`, `quasiquote`, or `defmacro`, use the
+s-expression AST form instead: the same forms spelled `(node e)`,
+`(defnode x e)`. See [SPEC.md](SPEC.md)'s lowering table for the full
+brace-to-s-expression mapping.
 
 ### Core execution
 
-- **thunk** — a suspended computation. Created by `let` bindings, `delay`, and
-  `node`. Forced on demand, memoized after the first force.
-- **`force`** — the only execution primitive: drive a thunk to a value.
-  Idempotent on non-thunks. *Where* a force runs (this core, another process,
-  another machine) is a scheduler decision, never language surface.
-- **`delay` / `force`** — ephemeral, in-memory laziness (lazy sequences).
-  Never persisted. Distinct from `node`.
-- **strict / call-by-value** — a function's arguments are fully forced before
-  its body runs. pp node application is call-by-value with memoization, not
+- `thunk`: a suspended computation, created by a `let` binding, `delay`, or
+  `node`. pp forces it on demand and memoizes it after the first force.
+- `force`: the only execution primitive. It drives a thunk to a value, and
+  leaves any other value unchanged. Where a force runs — this process,
+  another process, or another machine — is a scheduler decision, never
+  part of the language surface.
+- `delay` and `force`: ephemeral, in-memory laziness for lazy sequences,
+  never persisted, and distinct from `node`.
+- strict, or call-by-value: a function's arguments are fully forced before
+  its body runs. Node application is call-by-value with memoization, not
   call-by-need.
-- **demand-pruning** — the surviving sense of "laziness": only the nodes
-  reachable from the root desired-state formula are built; cached ones are
-  skipped. Not per-expression lazy demand.
-- **trampoline** — the heap-allocated work queue `force` switches to past a
-  depth threshold, so deep chains don't overflow the OCaml stack.
+- demand-pruning: the surviving sense of "laziness" in pp: it builds only
+  the nodes reachable from the root desired-state formula, and skips
+  cached ones. This is not per-expression lazy demand.
+- trampoline: the heap-allocated work queue that `force` switches to past
+  a depth threshold, so deep chains do not overflow the OCaml stack.
 
 ### Identity and caching
 
-- **content address** — a value's identity *is* its content hash (SHA-256).
-  Two computations with the same code and input values are the same computation.
-  Caching, dedup, cutoff, and distribution are corollaries of this.
-- **`env_hash`** — the precomputed, incrementally-built content hash of an
-  environment. Gives O(1) environment identity.
-- **thunk key** — `hash(expr, env_hash, capabilities, config, handlers)`. Equal
-  keys ⇒ the same memoized thunk. Must include everything the computation
-  depends on, or distinct computations collide (the D6/D17 bug class).
-- **node** — the unit of persistence and caching: a strict, content-addressed,
-  cacheable graph node. *Partly real:* `node { e }` is wired into `force` in **both
-  backends** and caches across runs, keyed the LAW-20 way —
-  `H(code-structure ‖ free-var value-hashes)`, whole-env and caps excluded
-  (`node_key_of` / `vm_node_key`), with matching keys so the backends share the
-  store. `node x { e }` binds the node thunk of `e` (i.e. `let x = node { e }`);
-  applied `node f(x) { … }` is currently a named closure. Distinct from a
-  `let`/argument thunk.
-- **trace** — recorded during a node's evaluation: the `(cell, observed-hash)`
-  pairs it read, its result hash, and an outcome. The store keys each node to a
-  **set** of traces; a cache hit succeeds if any stored trace still verifies
-  against the world. *Partly real:* file-read cells, config cells
-  (`config:<key>`, absence included), handler cells (`handler:<effect>` —
-  which handler, if any, intercepted a perform), ok-outcomes, and
-  failed-outcomes (a raising node stores a failing trace re-served until a read
-  changes — LAW 28) are recorded and re-verified today; child-keys and other
-  cell kinds are *(planned)*.
-- **cutoff** *(partly real)* — if a recomputed result's hash equals the prior
-  result's hash, dependents are not dirtied. Content-addressing makes cutoff
-  free and exact. Real today at node granularity via LAW-20 keying: a dependent
-  node whose free variable is the recomputed node's *value* re-keys identically
-  and hits (`tests/016`). Cutoff for inline-nested nodes and push-mode
-  dirty-propagation (reverse-edge graph) are Phase 2.
-- **store** — the persistent content-addressed store at `~/.pp/store`
-  (`objects/`, `traces/`), `store.ml`. **Live in both backends** for `node { e }`
-  thunks (D7 closed).
+- content address: a value's identity is its content hash, computed with
+  SHA-256: two computations with the same code and input values are the
+  same computation. Caching, dedup, cutoff, and distribution all follow
+  from this one idea.
+- `env_hash`: the precomputed, incrementally built content hash of an
+  environment, giving it constant-time identity.
+- thunk key: `hash(expr, env_hash, capabilities, config, handlers)`. Equal
+  keys mean the same memoized thunk. The key must include everything the
+  computation depends on, or distinct computations collide — leaving out
+  the captured environment or the ambient handler stack once did exactly
+  that; both are now fixed.
+- node: the unit of persistence and caching: a strict, content-addressed,
+  cacheable graph node. `node { e }` is wired into `force` in both back
+  ends and caches across runs; see [ARCHITECTURE.md](ARCHITECTURE.md) for
+  the key construction. `node x { e }` binds the node thunk of `e` (`let
+  x = node { e }`); an applied `node f(x) { … }` is currently just a named
+  closure, distinct from a `let` or argument thunk.
+- trace: recorded during a node's evaluation: the `(cell, observed-hash)`
+  pairs it read, its result hash, and an outcome. The store keys each node
+  to a set of traces, and a cache hit succeeds if any stored trace still
+  verifies against the world. Partly real today: file, config, and
+  handler cells, plus ok- and failed-outcomes, where a raising node
+  re-serves its failing trace until a read changes; child-keys and other
+  kinds are still planned.
+- cutoff (partly real): if a recomputed result's hash equals the prior
+  result's hash, pp does not dirty its dependents. This works today at
+  node granularity: a dependent node whose free variable is the
+  recomputed node's value re-keys identically and hits the cache
+  (`tests/016`). Cutoff for
+  inline-nested nodes, and push-mode dirty-propagation over the
+  reverse-edge graph, are still planned.
+- store: the persistent content-addressed store at `~/.pp/store`
+  (`objects/`, `traces/`), `store.ml`, shared by both back ends for
+  `node { e }` thunks.
 
 ### The outside world
 
-- **cell / `Var`** *(partly real)* — a stable identity naming a piece of the
-  external world plus its current observed value as a content hash. The
-  observer is its only writer. Cells are the *inputs*; nodes are the
-  *computations* over them. Real today: `file:<path>`, `config:<key>`,
-  `handler:<effect>`, `tool:<binary>`, `tree:<root>` (whole-tree hash — the Q2
-  coarse floor for `run`), `runtime:file:<path>` (a loader read —
-  validity-bearing but authority-exempt, Q6), `stat:<path>` (a file
-  predicate's presence/kind observation — `file-exists?`/`dir?`, fs-read
-  authority), `env:<NAME>` (environment variable, absence included), and
-  `argv:` (the program-argument list after `--`). M4 (real): `probe:<name>`
-  (an observer-written volatile cell — see **probe** below) and
-  `sealed:<path>` (a confidential read's bytes-hash — see **sealed cell**
-  below). Planned: `glob:`, `domain:<name>:<sub>` (Q13 third-party domains).
-- **probe** *(real, M4)* — the sanctioned nondeterministic dependency (SPEC
-  LAW 37/38). `register-probe(name, observe-fn, read-cap)` (script-tier) then
-  `probe(name)` (anywhere): the observe-fn runs at most once per pass,
-  OUTSIDE the reading node's trace stack, under exactly `read-cap`; the
-  reader records only a `probe:<name>` cell, capability-free at the read
-  site. Never persisted (`Runtime.probe_values` is in-memory, cleared every
-  pass) — a probe is the volatility-containment mechanism, not a cache.
-- **sealed cell** *(real, M4)* — a confidential read (SPEC LAW 39).
-  `--grant secret:<path>` mints `CapSecret`; a read covered by it and NOT by
-  an fs grant returns `VSealed` instead of `VString` — redacted on print,
-  excluded from the CAS, banned at the node boundary like a capability.
-  `unseal(v)` is the explicit, greppable way back to `VString`.
-- **`run` / process effect** — `perform run(CMD, ARG…)` executes an external
-  command under `--grant process`, returning `{"exit","out","err"}`. Inside a
-  node: cwd = the node's sandbox, and the trace records `tool:` + `tree:`
-  cells (`tests/017`).
-- **`run-dep!` / depfile adapter** — `perform run-dep!(DEPFILE, CMD, ARG…)`:
-  like `run`, but the tool's Makefile-style depfile refines the trace to the
-  exact files read — granted deps as `file:` cells, system deps as `tool:`
-  cells, no coarse `tree:` cells (`tests/022`).
-- **sandbox (per-node scratch)** — a throwaway directory created lazily per
-  node force and deleted when it completes. `run` executes there; relative
-  `slurp`/`write-file` resolve there, capability-free and unrecorded; absolute
-  node writes error (LAW 18). Hygiene, not soundness — traces are soundness.
-- **desired-state value** *(partly real)* — the pure, hashable value the
-  program's root returns (build → `{path → blob-hash}`; services →
-  `{proc → spec}`). Real today for the filesystem domain as
-  `{relative-path → content}` where content is an inline string or a
-  `blob:<sha256>` CAS reference from `blob(S)`, consumed by
-  `pp --reconcile ROOT` (`tests/018`, `tests/023`), and for the process
-  domain as `{service-name → spec}` consumed by `pp --supervise`
-  (`tests/033`).
-- **reconciler** — retired as a proper noun (there is no `reconciler.ml`
-  anymore): domains are now `observe`/`diff`/`apply` triples of pp
-  functions running under core-enforced discipline (Q13,
-  `src/domains.ml`), not a privileged OCaml module per domain. Filesystem
-  (`stdlib/domain-fs.pp`, `pp --reconcile ROOT`): diff desired vs observed
-  by content hash, journal `intent`/`done`, apply via `materialize-file`
-  (temp+rename) with verify-after-write, delete unmanaged files via
-  `remove-file`, refuse self-reading desired state (stratification, LAW
-  30). Watch mode live (`--watch --reconcile` polling loop; every
-  registered domain is re-checked every tick). Process domain
-  (`stdlib/domain-proc.pp`, `pp --supervise`) is live: start/stop/restart
-  on spec change, zombie reaping, journal intent/done (`tests/033`).
-  Fenced effects (LAW 31) are sequenced after ALL domains' convergent
-  work and recovered by `--fenced-policy retry|abort|ask` (`tests/034`).
-- **domain** *(real, Q13)* — a slice of external state under single
-  ownership (an output subtree, a process set, a third-party toy example
-  in `tests/046`), registered via `register-domain({:name :namespace
-  :observe :diff :apply :write-cap})`. A probe (LAW 37/38) is a domain
-  with ⊥ write authority — one registry, `Runtime.domain_registry`, two
-  hats.
+- cell, or `Var` (partly real): a stable identity that names a piece of
+  the external world, plus its current observed value as a content hash.
+  The observer is its only writer, and nodes compute over cells. Real
+  today: `file:<path>`, `config:<key>`,
+  `handler:<effect>`, `tool:<binary>`, `tree:<root>` (the coarse floor for
+  `run`), `runtime:file:<path>`, `stat:<path>`, `env:<NAME>`, and `argv:`,
+  plus `probe:<name>` and `sealed:<path>` (see below). Planned: `glob:`
+  and `domain:<name>:<sub>` for third-party domains.
+- probe (real): the sanctioned way to depend on something nondeterministic
+  (SPEC laws 37 and 38). A script-tier call to
+  `register-probe(name, observe-fn, read-cap)` registers an observer;
+  `probe(name)` reads it from anywhere. The observe function runs at most
+  once per pass, under exactly `read-cap`, recording only a
+  capability-free `probe:<name>` cell. pp never persists this:
+  `Runtime.probe_values` lives in memory and clears every pass, since a
+  probe is volatility, not something to cache.
+- sealed cell (real): a confidential read (SPEC law 39). `--grant
+  secret:<path>` mints a `CapSecret`; a read covered by it, not by a
+  filesystem grant, returns `VSealed` instead of `VString`. pp redacts a
+  sealed value on print, excludes it from the store, and bans it at the
+  node boundary like a capability; `unseal(v)` is the explicit, greppable
+  way back to a `VString`.
+- `run`, or the process effect: `perform run(CMD, ARG…)` executes an
+  external command under `--grant process`, and returns
+  `{"exit","out","err"}`. Inside a node, its working directory is the
+  node's sandbox, and the trace records `tool:` and `tree:` cells
+  (`tests/017`).
+- `run-dep!`, or the depfile adapter: `perform run-dep!(DEPFILE, CMD, ARG…)`
+  works like `run`, but reads the tool's Makefile-style depfile to refine
+  the trace down to the exact files read. It records granted dependencies
+  as `file:` cells and system dependencies as `tool:` cells, with no
+  coarse `tree:` cell (`tests/022`).
+- sandbox, or per-node scratch: a throwaway directory that pp creates
+  lazily for each node force and deletes when it completes (`run`,
+  `slurp`, and `write-file` all resolve there, capability-free and
+  unrecorded); an absolute path in a node write is an error instead (SPEC
+  law 18) — hygiene, not soundness; traces make the system sound.
+- desired-state value (partly real): the pure, hashable value a pp
+  program's root returns: `{path → blob-hash}` for a build,
+  `{proc → spec}` for services. Real today for the filesystem domain as
+  `{relative-path → content}` (an inline string or a `blob:<sha256>`
+  reference from `blob(S)`), consumed by `pp --reconcile ROOT`
+  (`tests/018`, `tests/023`); and for the process domain as
+  `{service-name → spec}`, consumed by `pp --supervise` (`tests/033`).
+- reconciler: retired as a proper noun; there is no `reconciler.ml` any
+  more. A domain is now an `observe`/`diff`/`apply` triple of pp functions
+  running under core-enforced discipline (`src/domains.ml`), not a
+  privileged OCaml module. The filesystem domain (`stdlib/domain-fs.pp`,
+  `pp --reconcile ROOT`) and the process domain (`stdlib/domain-proc.pp`,
+  `pp --supervise`) are both live, converging by content hash and
+  journaling intent and done (`tests/033`); desired state may not read
+  itself (stratification, SPEC law 30). See
+  [ARCHITECTURE.md](ARCHITECTURE.md) for the orchestration mechanics, and
+  the fenced effect entry below for crash recovery.
+- domain (real): a slice of external state under single ownership, such
+  as an output subtree or a set of processes (the third-party example is
+  `tests/046`). It is registered with
+  `register-domain({:name :namespace :observe :diff :apply :write-cap})`.
+  A probe (see above) is a domain with no write authority: one registry,
+  `Runtime.domain_registry`, serving both roles.
 
 ### Scheduling
 
-- **rebuilder** *(real)* — the one implementation of `force` over the store:
-  verify traces, cutoff on hash equality, record new traces on a miss. Shared by
-  both schedulers.
-- **pull scheduler** *(real)* — suspending; forces the root and recurses on
-  demand. For builds/provisioning (`--once`). The current default (and only
-  scheduler — `--watch` runs this in a polling loop).
-- **push scheduler** *(partly real)* — dirty-propagating over the reverse-edge
-  index derived from traces; re-forces only dirtied nodes. For services
-  (`--watch`). The polling pull-in-loop `--watch` is live; true push `stabilize`
-  (dirty-propagation) is planned.
+- rebuilder (real): the one implementation of `force` over the store,
+  verifying traces, applying cutoff on hash equality, and recording new
+  traces on a miss. Both schedulers share it.
+- pull scheduler (real): suspending. It forces the root and recurses on
+  demand, for builds and provisioning (`--once`). This is the current
+  default and only scheduler: `--watch` runs it in a polling loop.
+- push scheduler (partly real): dirty-propagating over the reverse-edge
+  index derived from traces, re-forcing only dirty nodes. Meant for
+  services, through `--watch`; true push-mode `stabilize`, with real
+  dirty-propagation, is still planned (see pull scheduler, above, for
+  what `--watch` runs today).
+
 ### Authority
 
-- **capability** — an authority token: a ceiling on what a computation *may*
-  touch. Unforgeable, minted only at the root, narrowable but not constructible
-  by user code. **Not** an ordering mechanism.
-- **powerbox** — the full authority set handed to `main` from the CLI
-  (`--grant`). The sole mint of capabilities.
-- **`cap-restrict` / `cap-compose`** — the only capability operations in user
-  code: narrow a capability's scope, or union two the code already holds.
-- **`CapNetwork` / `http-get` / `http-post`** *(real, M4)* — `CapNetwork
-  {host; port option}` (`--grant net:<host>[:<port>]`, `host = "*"`
-  wildcards) authorizes `perform http-get(url)` / `perform http-post(url,
-  body)`, which fork `curl` (no new OCaml networking code) and return
-  `{"status" INT "body" STRING}`. Banned inside node bodies — not
-  convergent, not the declared-nondeterminism mechanism (that's **probe**).
+- capability: an authority token, a ceiling on what a computation may
+  touch, unforgeable and minted only at the root. User code can narrow it
+  but never construct one; it is not an ordering mechanism.
+- powerbox: the full authority set the CLI hands to `main` via `--grant`
+  — the sole minter of capabilities.
+- `cap-restrict` and `cap-compose`: the only capability operations user
+  code can perform: narrowing a capability's scope, or combining two
+  already held.
+- `CapNetwork`, `http-get`, and `http-post` (real): a
+  `CapNetwork {host; port option}`, granted with
+  `--grant net:<host>[:<port>]` and wildcarded with `host = "*"`,
+  authorizes `perform http-get(url)` and `perform http-post(url, body)`.
+  These fork `curl` instead of adding OCaml networking code, and return
+  `{"status" INT "body" STRING}`. pp bans them inside node bodies:
+  a network call is not convergent; nondeterminism belongs to `probe`.
 
 ### Effects
 
-- **effect / `perform`** — a named, dynamically-dispatched operation
-  (`read-file`, `log`, …). Resolved against the handler stack; unhandled effects
-  hit builtin fallbacks.
-- **handler / `with-handler`** — a dynamic-extent installation that intercepts
-  matching `perform`s. Restored on normal return, exception, and tail call.
-- **result-transparent handler** *(planned)* — a scheduling/placement handler
-  that may change only *where/when* work runs, never observable results. Absent
-  from keys.
-- **semantic handler** — a handler that changes results (mock `read-file`,
-  fault injection). Records a synthetic `handler:<effect>` cell into the trace
-  so swapping it invalidates correctly (`tests/015`). Today every user handler
-  is treated as semantic; the per-arg refinement in LAW 26 is *(planned)*.
-- **fenced effect** — a non-convergent, irreversible action (send email,
-  charge card).  Barred from node bodies; surfaced as scripting-tier
-  `fenced(KIND, SPEC-MAP)`; sequenced reconciler-only with an intent/done
-  journal and at-most-once-per-pass.  Unknown-status entries after a crash
-  are resolved by `--fenced-policy retry|abort|ask`, never silent retry
-  (LAW 31; `tests/034`).
+- effect, or `perform`: a named operation, such as `read-file` or `log`,
+  dispatched dynamically. pp resolves it against the handler stack; an
+  unhandled effect falls back to a builtin.
+- handler, or `with-handler`: an installation, active for a dynamic
+  extent, that intercepts matching `perform` calls. pp restores the
+  previous handler on normal return, on exception, and on tail call.
+- result-transparent handler (planned): a scheduling or placement handler
+  that may change only where or when work runs, never its observable
+  results. It is left out of thunk keys.
+- semantic handler: a handler that changes results, such as a mock
+  `read-file` or fault injection. It records a synthetic
+  `handler:<effect>` cell into the trace, so swapping the handler
+  correctly invalidates the cache (`tests/015`). pp treats every user
+  handler as semantic today; a finer per-argument distinction is planned
+  (SPEC law 26).
+- fenced effect: a non-convergent, irreversible action, such as email or a
+  card charge. pp bars it from node bodies, and instead
+  surfaces it at the scripting tier as `fenced(KIND, SPEC-MAP)`, sequenced
+  only during reconciliation, with an intent-and-done journal and at most
+  one run per pass. If a crash leaves an entry with unknown status,
+  `--fenced-policy retry`, `abort`, or `ask` resolves it; pp never retries
+  silently (SPEC law 31, `tests/034`).
 
 ### Language surface
 
-- **the two tiers** — the **node tier** (pure, strict, cached, distributable —
-  where the build/DevOps thesis lives) and the **scripting tier** (dynamic,
-  imperative, uncached REPL glue). Purity is the price of a cache hit; caching
-  is opt-in per node.
-- **mutual `let`** — every binding is in scope in every right-hand side and the
-  body, position-free. "A `let` is a local Excel sheet." (`let*` is explicit
-  sequential sugar.)
-- **module / `import`** — a block of code whose exports are a value you import.
-- **island** — a module that lives elsewhere (a local dir, a git repo),
-  referenced by URI and pinned **inline** by the canonical content hash of
-  its source tree: `island("github:owner/repo#ref", "64-hex-pin")`. The pin
-  is part of the code hash, so a pinned island form is a *closed*
-  expression — paste it anywhere and it denotes the same bytes — and an
-  enclosing **node** is keyed on it (LAW 20). Resolution serves only the
-  verified, immutable cache copy; unpinned forms are a hard error;
-  `pp --update` re-resolves and rewrites pins in the source; fetching is
-  opt-in runtime authority (`--fetch-islands`, LAW 24), never ambient. D2.
-- **fexpr** *(cut)* — operatives that receive unevaluated arguments. Removed;
-  metaprogramming is served by total `quote`/quasiquote and `defmacro` (M3,
-  `macro.ml`): a macro's body runs through the tree-walker at a single
-  shared expansion point, before either backend's own machinery (hash_expr,
-  the compiler) ever sees the form — so LAW 20 needs no change and both
-  backends stay byte-identical (LAW 36) by construction.
+- the two tiers: the node tier, pure, strict, cached, and distributable;
+  and the scripting tier, dynamic, imperative, uncached glue for the REPL.
+  Purity is the price of a cache hit; caching is opt-in per node.
+- mutual `let`: every binding is in scope in every right-hand side and in
+  the body, regardless of position. `let*` adds explicit sequential
+  ordering as sugar on top.
+- module, or `import`: code whose exports are a value another module can
+  import.
+- island: a module that lives elsewhere, in a local directory or a git
+  repository, referenced by a URI and pinned inline by the canonical
+  content hash of its source tree, for example
+  `island("github:owner/repo#ref", "64-hex-pin")`. The pin is part of the
+  code hash: a pinned form denotes the same bytes wherever pasted, and
+  any enclosing node is keyed on it too (SPEC law 20). An unpinned form
+  is a hard error; fetching is opt-in runtime
+  authority, through `--fetch-islands`, never ambient (SPEC law 24). See
+  [ARCHITECTURE.md](ARCHITECTURE.md) for resolution and `--update`.
+- fexpr (cut): an operative that receives unevaluated arguments. pp
+  removed this; metaprogramming instead runs through total `quote`,
+  `quasiquote`, and `defmacro` (`macro.ml`). A macro's body runs through
+  the tree-walker at one shared expansion point, before either back end's
+  own machinery — `hash_expr` or the compiler — sees the form, so both
+  back ends stay byte-identical (SPEC law 36).
 
 ### Process and testing
 
-- **the two back ends** — the **tree-walker** (`evaluator.ml`, the reference
-  interpreter) and the **bytecode VM** (`compiler.ml` + `vm.ml`, the faster
-  execution model). They must produce identical output.
-- **oracle** — the tree-walker, taken as ground truth in differential tests
-  (though it too can be wrong — see D6/D17 in [STATUS.md](STATUS.md)).
-- **differential testing** — running both back ends and asserting identical
-  behavior. Enforced by `dune runtest` and the fuzzer ([TESTING.md](TESTING.md));
-  the project's core correctness ratchet.
+- the two back ends: the tree-walker (`evaluator.ml`), the reference
+  interpreter, and the bytecode VM (`compiler.ml`, `vm.ml`), the faster
+  model. They must produce identical output.
+- oracle: the tree-walker, taken as ground truth in differential tests. It
+  can still be wrong — see the thunk key entry above, and
+  [STATUS.md](STATUS.md), for its now-fixed key bugs.
+- differential testing: running both back ends and comparing behavior —
+  pp's core correctness check, enforced by `dune runtest` and the fuzzer
+  (see [TESTING.md](TESTING.md)).
+</content>

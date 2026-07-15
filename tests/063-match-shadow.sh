@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/063 — A5: match lowering must be unaffected by user shadowing of the
+# tests/063 — match lowering must be unaffected by user shadowing of the
 # primitives it compiles down to (car/cdr/=/nil?/not/error).
 #
 # The VM compiler lowers `match` to a nested let+if chain built from
@@ -14,15 +14,7 @@
 # agreement. This test shadows every primitive the lowering depends on and
 # pins that both backends still produce the correct, IDENTICAL result.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 run_both() {
   local name="$1" file="$2" expected="$3"
   local got_tw got_bc

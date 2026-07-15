@@ -1,21 +1,19 @@
 #!/usr/bin/env bash
-# LAW 20 exit criterion for M3 defmacro (MASTERPLAN M3 exit 3): a macro
-# EDIT — same call sites, only the macro's OWN definition changes — must
-# re-key the node whose body came from that macro's expansion (a store
+# A macro EDIT — same call sites, only the macro's OWN definition changes —
+# must re-key the node whose body came from that macro's expansion (a store
 # MISS + recompute, proven via `pp why` and the journal), and reverting the
-# definition must hit again. This is possible only because expansion
-# happens BEFORE hash_expr ever sees the node's body (macro.ml is the one
-# shared point both backends pass through): hash_expr operates on the
-# EXPANDED form, so a macro-only edit is not invisible to the store the way
-# it would be if the code hash were computed before/independent of
+# definition must hit again (SPEC law 20). This is possible only because
+# expansion happens BEFORE hash_expr ever sees the node's body (macro.ml is
+# the one shared point both backends pass through): hash_expr operates on
+# the EXPANDED form, so a macro-only edit is not invisible to the store the
+# way it would be if the code hash were computed before/independent of
 # expansion.
 #
-# Also pins the macro-in-node-body rule (MASTERPLAN M3's explicit ask):
-# a `defmacro` textually inside a `(node ...)` body is never specially
-# recognized — only a TRUE top-level form registers a macro (macro.ml's
-# documented decision) — so it reaches eval/compile as an ordinary
-# application of the unbound symbol "defmacro", identically in both
-# backends.
+# Also pins the macro-in-node-body rule: a `defmacro` textually inside a
+# `(node ...)` body is never specially recognized — only a TRUE top-level
+# form registers a macro (macro.ml's documented decision) — so it reaches
+# eval/compile as an ordinary application of the unbound symbol "defmacro",
+# identically in both backends.
 #
 # Runs under an isolated HOME; both backends.
 set -uo pipefail
@@ -51,11 +49,11 @@ defmacro build-step() {
 print(force(node { build-step() }))
 EOF
 
-# M7 S5: the SAME rekey battery, authored in the OTHER surface (.ppl,
-# sexpr) — same macro, same call site, same edit, proving LAW 20's rekey
-# property is a property of the AST macro.ml expands, not of which reader
-# produced it (docs/M7-SYNTAX.md S5: "every existing macro test passes
-# authored in either surface").
+# The SAME rekey battery, authored in the OTHER surface (.ppl, sexpr) —
+# same macro, same call site, same edit, proving the rekey property (SPEC
+# law 20) is a property of the AST macro.ml expands, not of which reader
+# produced it: every existing macro test passes authored in either
+# surface.
 cat > "$TMP/v1.ppl" <<'EOF'
 (defmacro (build-step) '(do (perform log "COMPUTE") 1))
 (print (force (node (build-step))))
@@ -83,7 +81,7 @@ rekey_battery() {  # EXT (".pp" or ".ppl") -> asserts, using $TMP/v1$EXT/v2$EXT
     assert "$tag-v1-why-reports-hit" "$TMP/why1" "\[why\].*hit" present
 
     # Same call site, EDITED macro definition: the node's expanded code hash
-    # changes (LAW 20), so this MUST miss and recompute — the exit criterion.
+    # changes (SPEC law 20), so this MUST miss and recompute.
     "$PP" $flag "$TMP/v2$ext" > "$TMP/o2" 2>&1
     assert "$tag-v2-edit-miss-computes" "$TMP/o2" "COMPUTE" present
     assert "$tag-v2-edit-value"         "$TMP/o2" "^2$"     present
@@ -102,10 +100,10 @@ rekey_battery() {  # EXT (".pp" or ".ppl") -> asserts, using $TMP/v1$EXT/v2$EXT
 rekey_battery ".pp"
 rekey_battery ".ppl"
 # NOTE: deliberately not also asserting the .pp and .ppl runs HIT the same
-# store key as each other — LAW 20's key includes ELocated (source path,
-# line) (SPEC Appendix B's elegance-criterion corollary), so v1.pp and
-# v1.ppl, being different FILES, get different keys regardless of surface;
-# that would be pinning file-path sensitivity, not surface-independence.
+# store key as each other. A node's key includes ELocated (source path,
+# line), per SPEC law 20, so v1.pp and v1.ppl, being different FILES, get
+# different keys regardless of surface; that would be pinning file-path
+# sensitivity, not surface-independence.
 
 # --- macro-in-node-body: an ordinary unbound-symbol error, both backends ---
 cat > "$TMP/innode.pp" <<'EOF'

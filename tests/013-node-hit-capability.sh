@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 # pins: LAW-23
 # Regression: a cache hit is gated on the caller's authority over the trace's
-# transitive read closure (LAW 23b) — the PUB = f(SECRET) laundering defense.
+# transitive read closure — the PUB = f(SECRET) laundering defense
+# (SPEC law 23b).
 #
-# A node keyed by LAW 20 excludes capabilities from its identity, so a
+# A node key excludes capabilities from its identity (SPEC law 20), so a
 # broad-capability run and a narrow-capability run compute the SAME key. Without
 # a hit-time check, the narrow caller would get a hit and learn the broad read's
 # result. The store therefore serves a hit only if the caller is authorized to
 # read every cell in the stored trace's closure (which, thanks to read
 # propagation, includes cells read by nested child nodes).
 #
-# Also pins that a capability denial is NOT memoized as a failing trace (LAW 15:
-# authority is not identity/validity), so a later authorized run still hits.
+# Also pins that a capability denial is NOT memoized as a failing trace —
+# authority is not identity or validity (SPEC law 15) — so a later authorized
+# run still hits.
 #
 # Tree-walker only, isolated HOME. "SECRET" leaking to stdout is the failure.
 set -uo pipefail

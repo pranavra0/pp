@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# A″1: injective LAW-20 hash encoding — near-miss corpus.
+# Two observation encodings that used to hash identically now hash
+# differently, so each recomputes instead of wrongly serving the other's
+# cached result.
 #
 # hash_concat frames every part as `<len>:<bytes>` (src/types.ml), so two
 # distinct part LISTS can never share a pre-hash string just because a part
@@ -15,7 +17,7 @@
 #   (b) argv ["a","b"] vs ["a:b"]: the ':' join made "argv:a:b" ambiguous.
 #
 # COMPUTE in output = the node body ran (miss); a hit does not replay it
-# (LAW 17). Runs under an isolated HOME; both backends.
+# (SPEC law 17). Runs under an isolated HOME; both backends.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac

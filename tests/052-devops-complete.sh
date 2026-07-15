@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# tests/052-devops-complete.sh — M6 Stage A (docs/PLAN-m6-demo.md): the
-# devops-complete demo's six clauses + its diagonal oracle.
+# tests/052-devops-complete.sh — the devops-complete demo's six clauses
+# plus its diagonal oracle.
 #
 # The demo (demo/deploy.pp + demo/agent.pp + demo/src/greeter.c) is
 # ENTIRELY library code — this file, plus main.ml's EXISTING CLI seams
@@ -44,8 +44,8 @@
 # reference tree, with row 7 additionally tied to a fresh independent
 # reconcile of row 1's hash.
 #
-# WALL (found building this test; reported per the plan's protocol, NOT
-# fixed — a src/*.ml change is outside Stage A's zero-core-change bound):
+# A REAL BUG found building this test, documented rather than fixed here
+# (fixing it would need a src/*.ml change, which this test file avoids):
 # Blobref.blob_refs_in (src/blobref.ml) recognizes only bare
 # "blob:<64-hex>" strings (its is_hex64 check runs on the WHOLE tail
 # after "blob:") — stdlib/domain-fs.pp's OWN documented executable-blob
@@ -64,9 +64,7 @@
 # Requires cc; skips cleanly if absent. Three isolated $HOMEs (control/
 # web1/web2), a SHARED local-dir root, demo fixtures under one $TMP.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-
+. "$(dirname "$0")/lib.sh"
 command -v cc >/dev/null 2>&1 || { echo "=== 052 DEVOPS-COMPLETE: SKIPPED (no cc) ==="; exit 0; }
 
 # Portable `timeout` (macOS ships without coreutils) — tests/031/033's shim.
@@ -76,10 +74,6 @@ if ! command -v timeout >/dev/null 2>&1; then
   chmod +x "$SHIM_DIR/timeout"
   PATH="$SHIM_DIR:$PATH"
 fi
-
-fail=0
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
 
 wait_for() {  # SECONDS CMD ARGS...
   local secs="$1"; shift
@@ -104,7 +98,6 @@ GREETER_C="$DEMO_SRC_DIR/greeter.c"
 AGENT_PP="$PWD/demo/agent.pp"
 DEPLOY_PP="$PWD/demo/deploy.pp"
 
-TMP=$(mktemp -d)
 # Every greeter this file spawns carries $TMP somewhere in its own argv
 # (a config or status path under $TMP) — proc-spawn forks+execve's it
 # directly, so it is reparented to init (not reaped) the instant its
@@ -402,10 +395,10 @@ else
 fi
 
 # =====================================================================
-# The demo's diagonal oracle (docs/PLAN-m6-demo.md "Diagonal oracle") —
-# a FRESH, independent deployment scenario (its own fixtures/hosts/run/
-# $HOMEs), so nothing above (which mutated secrets/fixtures repeatedly)
-# leaks into what should be a clean 12-way comparison.
+# The demo's diagonal oracle: a FRESH, independent deployment scenario
+# (its own fixtures/hosts/run/$HOMEs), so nothing above (which mutated
+# secrets/fixtures repeatedly) leaks into what should be a clean 12-way
+# comparison.
 # =====================================================================
 echo "--- diagonal oracle ---"
 OTMP="$TMP/oracle"; mkdir -p "$OTMP"
@@ -507,10 +500,9 @@ fi
 
 # ---- Row 7's tie: a SECOND, fully independent one-shot reconcile of
 # row 1's hash, into its OWN fresh tree/$HOMEs, must match the reference
-# byte-for-byte (the "fresh --reconcile of row-1-hash" the plan asks for
-# — literal `--reconcile` doesn't fit the host-qualified 2-level desired
-# shape here, so this is the equivalent form: an independent fresh
-# convergence of the identical published hash). ----
+# byte-for-byte. Literal `--reconcile` doesn't fit the host-qualified
+# 2-level desired shape here, so this is the equivalent form: an
+# independent fresh convergence of the identical published hash. ----
 FRESH_HOSTS="$OTMP/fresh-hosts"; FRESH_RUN="$OTMP/fresh-run"
 mkdir -p "$FRESH_HOSTS/web1" "$FRESH_HOSTS/web2" "$FRESH_RUN/web1" "$FRESH_RUN/web2"
 FRESH_H1="$OTMP/fresh-home-web1"; FRESH_H2="$OTMP/fresh-home-web2"; mkdir -p "$FRESH_H1" "$FRESH_H2"

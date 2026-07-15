@@ -16,6 +16,21 @@ let () = Printexc.register_printer (function
    picks up error decoration — it unwinds to main, which exits. *)
 exception Pp_exit of int
 
+(* The reader ran out of input while a form was still open (parser: the next
+   significant token is end-of-input; lexer: a token — string, escape, island —
+   scanned off the end of the source). Distinct from `Failure`, which is a
+   genuine syntax error on a token that IS present, so the REPL can decide
+   multi-line continuation by exception TYPE, not by matching error-message text
+   (Reader_braces.needs_more_input). Carries the same located message a plain
+   reader failure would, so it reads identically if ever printed. *)
+exception Reader_incomplete of string
+(* When an incomplete form is nonetheless submitted (EOF/Ctrl-D at the REPL, or
+   a truncated file), it surfaces as a normal located reader error rather than a
+   raw exception string — same treatment as Capability_error above. *)
+let () = Printexc.register_printer (function
+  | Reader_incomplete msg -> Some msg
+  | _ -> None)
+
 (* ---- Environment ---- *)
 
 (* An environment node with a stable ID, a cached hash, and a list of bindings.
@@ -57,8 +72,10 @@ and expr =
   | EDo of expr list        (* sequencing — forces each, returns last *)
   | EDef of string * string list * expr  (* (def (name params...) body) *)
   | EDefValue of string * expr  (* (def name value) — non-list head: a value
-                                   binding, evaluated at definition time (the
-                                   ROADMAP §1 footgun fix). Blocks give it
+                                   binding, evaluated at definition time (not
+                                   a nullary closure over the value, which
+                                   used to be the silent behavior and a real
+                                   footgun). Blocks give it
                                    letrec* scope; the top level is sequential. *)
   | ELetStar of (string * expr) list * expr  (* sequential let — desugared by reader *)
   | EModule of expr list        (* (module body...) — thunk producing an env *)
@@ -72,9 +89,9 @@ and expr =
   | ELocated of (string * int) * expr  (* source-located expression *)
   | EMatch of expr * (pattern * expr option * expr) list
       (* match expr { pat [if guard] => body; ... }; the middle field is an
-         optional guard (C3) — Some cond means the arm fires only when cond is
+         optional guard — Some cond means the arm fires only when cond is
          truthy under the pattern's bindings, else control falls to the next
-         arm. A None guard hashes/quotes exactly as the pre-C3 2-tuple arm did,
+         arm. A None guard hashes/quotes exactly as a bare 2-tuple arm would,
          so guardless matches keep their LAW-20 keys. *)
 
 (* ---- Values — the runtime representation ---- *)
@@ -97,17 +114,20 @@ and value =
   | VThunk of thunk
   | VEnvMap of (string * value) list  (* module export: list of (name, thunk) pairs *)
   | VBytecode of bytecode
-  | VSealed of string  (* M4: a sealed (confidential) read's bytes — opaque
+  | VSealed of string  (* A sealed (confidential) read's bytes — opaque
                           on purpose: string_of_value/print MUST redact
                           ("#<sealed>"), Codec.encode_value returns None (the
-                          non-data law), and the node-boundary ban (M3's
-                          contains_authority) bans it both directions exactly
+                          non-data law), and the node-boundary ban
+                          (contains_authority) bans it both directions exactly
                           like VCapability. hash_value hashes the ACTUAL bytes
                           (rotation invalidation needs it — the hash appears
                           only in trace lines, never in a printed value). The
                           explicit `(unseal v)` primitive is the one sanctioned
-                          way out to VString — no dataflow tainting beyond it
-                          (PLAN-m4-cells.md's Vault/SOPS line). *)
+                          way out to VString — no dataflow tainting beyond it,
+                          the same line secret managers like Vault and SOPS
+                          draw: once you explicitly decrypt/export a secret,
+                          derived copies are ordinary data with no further
+                          taint tracking. *)
 
 (* ---- Function closure ---- *)
 and closure = {
@@ -137,14 +157,16 @@ and thunk = {
        carries bytecode+frames rather than an AST+env. Empty for every other
        thunk. *)
   mutable node_caps : capability list;
-    (* Node capture (DESIGN Q11's promise): the ambient capability set at THIS
-       process's creation of this `(node e)` occurrence, populated
+    (* The ambient capability set captured when this node value was
+       created, populated
        unconditionally at both construction sites (ENode eval, VM MAKE_NODE) —
        never left as the default [] for a persist thunk (empty ambient is a
        legitimate captured value, distinct from "not yet captured"). Used by
        force_node as "the caller's capabilities" (LAW 23b): the hit gate and
        the miss recompute's ambient are THIS, not whatever is live in
-       current_capabilities at force time. Collapses to the process's
+       current_capabilities at force time — a node's authority is fixed at
+       creation, exactly as a closure's environment is. Collapses to the
+       process's
        --grant set when with-caps is unused (current_capabilities never
        changes without it), so tests/011/013/017 are byte-for-byte
        unaffected. Meaningless (unused) on non-persist thunks. *)
@@ -159,12 +181,11 @@ and thunk_status =
 and capability =
   | CapFilesystem of { path : string; mode : fs_mode }
   | CapNetwork of { host : string; port : int option }
-    (* host: "*" wildcards any host (the pre-M4 "any"-protocol shape,
-       generalized); port: None means unrestricted, Some p pins it exactly.
+    (* host: "*" wildcards any host; port: None means unrestricted, Some p pins it exactly.
        Minted only via `--grant net:<host>[:<port>]` (main.ml) — never
        constructible in user code (LAW 22). *)
   | CapSecret of { path : string }
-    (* M4 sealed cells: `--grant secret:<path>` (canonicalized at mint, like
+    (* Sealed cells: `--grant secret:<path>` (canonicalized at mint, like
        fs grants). Authorizes reading the bytes under [path] as a VSealed
        value — never as plain fs data — via the read dispatch in
        Process/Store's slurp/read-file paths. Deliberately has no fs_mode:
@@ -174,8 +195,7 @@ and capability =
   | CapCompose of capability list
   | CapRestrict of { cap : capability; scope : string; mode : fs_mode option }
     (* mode: an optional further fs_mode restriction (in addition to scope).
-       None means "inherit whatever the underlying cap grants" (the
-       pre-M3 behavior). Constructing one with a mode WIDER than the
+       None means "inherit whatever the underlying cap grants". Constructing one with a mode WIDER than the
        underlying cap holds at scope is rejected (Capabilities.cap_restrict);
        a CapRestrict value on disk/in memory therefore never itself
        represents a widen. *)
@@ -214,7 +234,7 @@ and opcode =
   | MAKE_MODULE of int       (* nexports; pops name+thunk pairs, pushes VEnvMap *)
   | IMPORT                   (* pop VEnvMap, merge bindings into current frame *)
   | LOAD_FILE of int | LOAD_MODULE_FILE of int  (* cp idx of path *)
-  | ISLAND of int * int option (* cp idx of uri, cp idx of inline pin (D2);
+  | ISLAND of int * int option (* cp idx of uri, cp idx of inline pin;
                                   resolves via Island at run time, then
                                   module-evaluates the pinned entry.pp *)
   | PUSH_CONFIG              (* pop config-map, push onto config stack *)
@@ -245,8 +265,10 @@ type def_info = {
 
 type comp_state = {
   mutable ops : opcode list;
+  mutable ops_len : int;
   mutable const_ht : (string, int) Hashtbl.t;
   mutable consts : value list;
+  mutable consts_len : int;
   mutable nparams_of : (int, int) Hashtbl.t;
   mutable param_names_of : (int, string list) Hashtbl.t;
   mutable closure_names_of : (int, string) Hashtbl.t;
@@ -256,8 +278,10 @@ type comp_state = {
 let fresh_comp_state () = {
   ops = [];
   const_ht = Hashtbl.create 128;
+  ops_len = 0;
   consts = [];
   nparams_of = Hashtbl.create 16;
+  consts_len = 0;
   param_names_of = Hashtbl.create 16;
   closure_names_of = Hashtbl.create 16;
   cenv = [];
@@ -298,16 +322,18 @@ let hex_encode (s : string) : string =
 let hash_string (s : string) : string =
   hex_encode (Cryptokit.hash_string (Cryptokit.Hash.sha256 ()) s)
 
-(* Injective framing (A″1). Each part is emitted as its byte length in decimal,
+(* Injective framing. Each part is emitted as its byte length in decimal,
    a ':', then the part's bytes — so the pre-hash string can be parsed back to
    the exact part list (read digits to ':', then read that many bytes, repeat).
    Distinct part LISTS therefore map to distinct pre-hash strings even when a
-   part itself contains ':' (user paths, symbol names, tags) or is empty. The
-   old `String.concat ":"` was ambiguous the instant any part held a ':' — the
+   part itself contains ':' (user paths, symbol names, tags) or is empty. A
+   plain `String.concat ":"` would be ambiguous the instant any part held a
+   ':' — the
    LAW-20 collision class where two distinct ASTs share one content key and pp
    serves a wrong cached result. Every hash builder below funnels through here
    (and through no other join), so injectivity is a single-site property that
-   A″2's generated-AST property test guards forever. Changing this framing is
+   the kernel-properties generated-AST test (src/kernel_props.ml) guards
+   forever. Changing this framing is
    hash-affecting across the whole store — see the golden fixture regeneration
    receipt (tests/fixtures/store-v1). *)
 let hash_concat (parts : string list) : string =
@@ -337,7 +363,7 @@ let dummy_bytecode = { consts = [||]; code = [||]; nparams_of = Hashtbl.create 0
 
 (* Content identity of a compiled bytecode unit: the marshalled consts+code
    arrays. In-memory identity only — these bytes are never persisted (the
-   store is Marshal-free since M2.2), so Marshal's same-version/same-arch
+   store never uses Marshal), so Marshal's same-version/same-arch
    caveat is confined to this process. *)
 let hash_bytecode (bc : bytecode) : string =
   try hash_string (Marshal.to_string (bc.consts, bc.code) [Marshal.Closures])
@@ -395,11 +421,11 @@ let rec hash_expr (e : expr) : string =
       hash_concat ["load_module"; path]
   | EIsland (uri, pin) ->
       (* Frame the pin option so an unpinned island (None) can never share a
-         key with one pinned to the empty string (Some ""): the raw-string
-         join `Some p -> p | None -> ""` conflated them, an A″1-class LAW-20
+         key with one pinned to the empty string (Some ""): a raw-string
+         join `Some p -> p | None -> ""` would conflate them, a LAW-20
          collision (island "u" "" and island "u" quote to distinct values —
-         VString "" vs VNil — yet hashed identically). Caught by A″2's
-         injectivity property; pinned in tests/071. *)
+         VString "" vs VNil — yet would hash identically). Caught by the
+         kernel-properties injectivity property; pinned in tests/071. *)
       let pin_part = match pin with Some p -> hash_concat ["pin"; p] | None -> "nopin" in
       hash_concat ["island"; uri; pin_part]
   | EWithConfig (map_expr, body) ->
@@ -425,9 +451,9 @@ and hash_pattern (p : pattern) : string =
   | PWildcard -> "p_wild"
   | PList (pats, rest) ->
       (* Frame the sub-pattern list through hash_concat rather than a
-         delimiter-free `String.concat ""`: the latter was injective only by
+         delimiter-free `String.concat ""`: the latter would be injective only by
          the accident that every sub-hash is exactly 64 chars, so [ab] and [a;b]
-         could alias the moment that invariant slipped (A″1). *)
+         could alias the moment that invariant slipped. *)
       let ph = hash_concat (List.map hash_pattern pats) in
       let rh = match rest with Some r -> hash_pattern r | None -> "nil" in
       hash_concat ["p_list"; ph; rh]
@@ -497,7 +523,7 @@ and hash_value (v : value) : string =
                        hash_concat ("params" :: params);
                        hash_expr body;
                        (!env).env_hash]
-          (* D6: the captured environment IS part of a closure's identity — two
+          (* The captured environment IS part of a closure's identity — two
              closures with identical code but different captures must hash
              differently, or an enclosing content-addressed thunk collides and
              returns a stale result (tests/009). We fold in the captured env's
@@ -558,13 +584,13 @@ and hash_capability (c : capability) : string =
       hash_concat ["cap_restrict"; hash_capability cap; scope; m]
   | CapNone -> hash_string "cap_none"
 
-(* ---- Node-boundary authority ban (SPEC LAW 20, M3; extended M4) ----
+(* ---- Node-boundary authority ban (SPEC LAW 20) ----
 
    Structural scan for an embedded VCapability OR VSealed, used by BOTH
    halves of the node boundary: the free-var ban (node_key_of / vm_node_key,
    import side) and the result ban (run_node_body, export side). Named
-   `contains_authority` (M4 rename from `contains_capability`, PLAN-m4-cells.md
-   "Sealed cells / Node boundary") because it now bans two different KINDS of
+   `contains_authority` (renamed from `contains_capability` once sealed
+   values needed the same ban) because it now bans two different KINDS of
    authority-shaped value with the same structural walk: a capability (raw
    authority) and a sealed secret (confidential bytes) — both must never cross
    a node boundary in either direction, both for the same reason (a node's key
@@ -575,7 +601,7 @@ and hash_capability (c : capability) : string =
    capability or sealed value hidden behind an unforced thunk is invisible to
    this check, a documented residual (the layer-1 gap; layers 2/3 — the result
    ban and the use-time ⊆ gates / sealed cell_authorized_for — are the actual
-   security floor, PLAN-m3-attenuation.md / PLAN-m4-cells.md).
+   security floor).
 
    BOTH closure representations need a cycle guard, not just the VM's:
    - VM closures carry their capture as `vm_frames`, a mutable frame graph a
@@ -888,7 +914,7 @@ let rec quote_to_value (e : expr) : value =
   | EMatch (scrutinee, arms) ->
       let q_arms = List.fold_right (fun (p, guard, body) acc ->
         let q_pat = quote_pattern p in
-        (* Guardless arm quotes to the pre-C3 2-list (pat body); a guarded arm
+        (* A guardless arm quotes to a 2-list (pat body); a guarded arm
            to a 3-list (pat guard body). value_to_expr splits on length. *)
         let q_arm = match guard with
           | None -> VPair (q_pat, VPair (quote_to_value body, VNil))
@@ -983,7 +1009,7 @@ and string_of_capability (c : capability) : string =
 
 (* =================================================================== *)
 (*  Unquotation: value -> expr — the inverse of quote_to_value          *)
-(*  (M3 / defmacro, D10's promise)                                      *)
+(*  (defmacro's syntax-as-values reflection/reification base)          *)
 (* =================================================================== *)
 
 (* A macro is a function from syntax-as-VALUES to syntax-as-VALUES
@@ -1003,8 +1029,8 @@ and string_of_capability (c : capability) : string =
    Values with no syntax — a closure, a builtin, a capability, an
    unevaluated thunk, a module env-map, raw bytecode — cannot be expanded
    into a form at all: `failwith` here, and the caller (Macro.expand_expr)
-   is responsible for naming the offending macro in the surfaced error
-   (MASTERPLAN M3's explicit ask). Callers should force-deep the value
+   is responsible for naming the offending macro in the surfaced error.
+   Callers should force-deep the value
    before calling this (Primitives.force_deep) — this function does NOT
    force thunks itself, so an unresolved VThunk reaching it is treated the
    same as any other non-syntax value. *)
@@ -1016,6 +1042,11 @@ let rec value_list_opt (v : value) : value list option =
       (match value_list_opt d with
        | Some rest -> Some (a :: rest)
        | None -> None)
+  | _ -> None
+
+let string_like (v : value) : string option =
+  match v with
+  | VString s | VKeyword s | VSymbol s -> Some s
   | _ -> None
 
 let rec value_to_expr (v : value) : expr =
@@ -1166,11 +1197,11 @@ and expr_of_list (items : value list) : expr =
   | [VSymbol "config"; k; d] -> EConfig (value_to_expr k, Some (value_to_expr d))
   | [VSymbol ":"; e; ty] -> ETyped (value_to_expr e, value_to_expr ty)
   | (VSymbol "do") :: rest -> EDo (List.map value_to_expr rest)
-  (* match, mirroring quote_to_value's EMatch encoding one-for-one (A3):
+  (* match, mirroring quote_to_value's EMatch encoding one-for-one:
      `(match scrutinee ((pat1 body1) (pat2 body2) ...))` — each arm a
      2-element sublist, decoded by value_to_pattern (quote_pattern's
-     inverse). Needed so a quasiquote { match ... } template — A3's whole
-     point — actually reconstructs an EMatch after macro expansion, not a
+     inverse). Needed so a quasiquote { match ... } template
+     actually reconstructs an EMatch after macro expansion, not a
      bare `(match ...)` application (the generic fallback below). *)
   | [VSymbol "match"; scrutinee; arms] ->
       (match value_list_opt arms with

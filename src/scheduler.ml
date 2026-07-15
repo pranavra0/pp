@@ -1,10 +1,10 @@
 (* pp scheduler — fork-at-dispatch process-pool scheduler for persistent
-   node misses (Phase 3 / M1). Contract: docs/PLAN-phase3-parallel.md.
+   node misses.
 
-   Worker model (the contract's "Wall B" resolution): fork() at the dispatch
+   Worker model: fork() at the dispatch
    point inherits ALL ambient state (handler_stack closures, capabilities,
    config, thunk_store) byte-identically via COW — no Runtime.t refactor and
-   no marshaling is needed for M1. A forked worker runs the EXACT function
+   no marshaling is needed. A forked worker runs the EXACT function
    the serial miss arm calls, [Evaluator.run_node_body] (passed in as
    [j_run] by the caller) — there is no second "evaluate node in worker"
    code path. The child exits 0 on success / 1 on error; the failing trace
@@ -19,15 +19,15 @@
    value channel, exactly as it already is for separate `pp` invocations
    (tests/010, tests/014). *)
 
-(* [Remote member]: M5 stage B (docs/PLAN-m5-distribution.md "Remote
-   placement") — the same handler, over the stage-A transport, to a named
-   cluster member (ambient config, ~/.pp/cluster/members — never --grant,
-   an address is not an authority ceiling). *)
+(* [Remote member]: remote placement — the same handler, over the cluster
+   transport, to a named cluster member (ambient config,
+   ~/.pp/cluster/members — never --grant, an address is not an authority
+   ceiling). *)
 type policy = Serial | Parallel of int | Race of int | Remote of string
 
 (* Ambient; set once from --schedule. Read only in the miss arms and here —
-   NEVER by node_key_of / vm_node_key, and it never enters a trace (D17
-   class 1 / LAW 26 by construction: this is a result-transparent handler). *)
+   NEVER by node_key_of / vm_node_key, and it never enters a trace (LAW 26
+   by construction: this is a result-transparent handler). *)
 let policy : policy ref = ref Serial
 
 type job = {
@@ -38,7 +38,7 @@ type job = {
      forks — sound because LAW 37 nodes are deterministic; the first
      exit-0 wins). *)
   j_width : int;
-  (* The thunk this job forces (M5 stage B). Every existing call site
+  (* The thunk this job forces. Every existing call site
      already has it in scope; carried here so remote dispatch can test
      data-closedness (Evaluator.is_data_closed) and read node_caps without
      Scheduler itself depending on Evaluator (see remote_dispatch_hook
@@ -142,8 +142,8 @@ let run_child (j : job) : unit =
   (try flush stderr with _ -> ());
   Unix._exit status
 
-(* Deterministic, load-independent observability of actual fan-out — the
-   real M1 claim is "nodes fork to workers," a fork COUNT, not a wall-clock
+(* Deterministic, load-independent observability of actual fan-out: what
+   matters is "nodes fork to workers," a fork COUNT, not a wall-clock
    time (wall-clock masked a regression once: a shadowed `map` silently
    defeated batching and a timing-only test read it as "no spare cores").
    PP_FORK_LOG=<path> appends one line per fork; a test asserts the count. *)
@@ -168,9 +168,8 @@ let fork_job (j : job) : int =
 (* ---- dispatch_batch ---- *)
 
 (* [Serial]: in-process, in order — byte-identical to calling every job's
-   [j_run] directly (this is the "policy check happens first, take the
-   original code" discipline: callers of dispatch_batch already special-case
-   Serial to skip collection/forking entirely per the contract, but
+   [j_run] directly (callers of dispatch_batch already special-case
+   Serial to skip collection/forking entirely, but
    dispatch_batch itself also degrades safely if ever called under Serial). *)
 let run_serial (jobs : job list) : unit =
   List.iter (fun j -> ignore (j.j_run ())) jobs

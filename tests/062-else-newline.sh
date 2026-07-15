@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/062 — A4: `if`/`else` across a newline must not misparse.
+# tests/062 — `if`/`else` across a newline must not misparse.
 #
 # `parse_if` (and the quasiquote `if` handler in parse_qq_head) checked for
 # `else` without first skipping a newline. Source written as:
@@ -21,15 +21,7 @@
 # This is a differential test: every case must agree, byte for byte, between
 # the tree-walker and the bytecode VM.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 run_case() {
   local name="$1" file="$2" expected="$3"
   local got_tw got_bc

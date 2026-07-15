@@ -1,26 +1,26 @@
-# defmacro (M3, D10's promise) — differential test.
+# defmacro: a differential test proving macro expansion is total, giving
+# metaprogramming without needing fexprs.
 #
 # Expansion happens at ONE shared point before either backend ever sees a
 # form (macro.ml), so this file exercises it purely through observable
-# VALUES (never node-body `log` side effects — LAW 17's "a hit replays no
-# log" would make repeated `dune runtest` runs against a developer's real
-# ~/.pp/store flaky if this were a fresh-vs-cached-run distinction; a
-# node's printed RESULT is deterministic regardless of hit/miss, so that's
-# all this file checks). The LAW 20 rekey property itself — editing a
-# macro's definition re-keys a node built from its expansion — is
+# VALUES (never node-body `log` side effects — a cache hit replays no log,
+# per SPEC law 17, which would make repeated `dune runtest` runs against a
+# developer's real ~/.pp/store flaky if this were a fresh-vs-cached-run
+# distinction; a node's printed RESULT is deterministic regardless of
+# hit/miss, so that's all this file checks). Editing a macro's own
+# definition re-keying a node built from its expansion (SPEC law 20) is
 # tests/042-defmacro-rekey.sh's job, under an isolated $HOME where hit vs.
 # miss can be observed directly.
 #
-# M7 S5: authored here in the brace surface, via quote{}/quasiquote{}/
+# Authored here in the brace surface, via quote{}/quasiquote{}/
 # unquote()/splice() — homoiconicity still lives at the AST layer (`quote`
-# yields sexpr data in both surfaces; the Elixir position, M7-SYNTAX.md's
-# thesis paragraph 2), but a template no longer has to be spelled out as
-# hand-nested cons/list calls. tests/041-defmacro.ppl is this SAME test,
-# authored in the sexpr surface (the AST-native notation `defmacro` has
-# always used); tests/056-defmacro-both-surfaces.sh is the M7 S5 gate
-# proving the two files produce byte-identical output on both backends —
-# a macro author may write braces or sexprs and the language does not
-# know the difference.
+# yields sexpr data in both surfaces), but a template no longer has to be
+# spelled out as hand-nested cons/list calls. tests/041-defmacro.ppl is
+# this SAME test, authored in the sexpr surface (the AST-native notation
+# `defmacro` has always used); tests/056-defmacro-both-surfaces.sh proves
+# the two files produce byte-identical output on both backends — a macro
+# author may write braces or sexprs and the language does not know the
+# difference.
 
 print("=== control-flow macro (unless), via quasiquote ===")
 defmacro unless(cond, then-branch) {
@@ -36,8 +36,8 @@ print("=== caller variable of the same name (M3 hygiene discipline) ===")
 # `let (tmp = unquote(a)) { ... }` would capture the caller's `tmp`;
 # `gensym("tmp")` produces a fresh, unwritable name (e.g. "tmp~3"), so the
 # caller's `tmp` (bound to 7) is what `unquote(a)` refers to, not the
-# macro's own temporary. This is exactly the "computed binding name" shape
-# quasiquote{} needed S5's `unquote(...)`-in-name-slot ergonomics for
+# macro's own temporary. This is the same computed-binding-name shape
+# quasiquote{} needs `unquote(...)` in a name slot for
 # (src/reader_braces.ml's parse_qq_name_slot) — `unquote(g)` names the
 # binding itself, not just its value.
 defmacro first-truthy(a, b) {

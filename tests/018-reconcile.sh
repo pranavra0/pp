@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Q4 / LAW 30: filesystem-domain reconciler v1 — desired state, single writer.
+# Filesystem-domain reconciler v1 — desired state, single writer.
 #
 #   pp --reconcile ROOT prog.pp takes the program's final value — a map of
 #   relative paths to string contents — as the DESIRED state of the domain
@@ -10,9 +10,9 @@
 #       the domain is managed, the grant is the consent);
 #     - verify-after-write re-reads every written file;
 #     - an intent/done pair is journaled to ~/.pp/store/journal before/after
-#       the apply (Q4 crash-safety: recovery is re-running reconcile).
+#       the apply (crash-safety: recovery is re-running reconcile).
 #   Authority: an fs WRITE grant over ROOT is required; no grant, no writes.
-#   Stratification (LAW 30): a program whose evaluation READ its own domain
+#   Stratification (SPEC law 30): a program whose evaluation READ its own domain
 #   (any file:/tree: observation under ROOT) is an error — otherwise
 #   reconcile loops forever.
 #
@@ -94,7 +94,7 @@ else
   echo "FAIL journal-intent-done: journal missing or incomplete"; fail=1
 fi
 
-# --- (g) stratification (LAW 30): desired state may not read its own domain ---
+# --- (g) stratification: desired state may not read its own domain (SPEC law 30) ---
 cat > "$TMP/strat.pp" <<EOF
 {"a.txt" -> slurp("$OUT/a.txt")}
 EOF

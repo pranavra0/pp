@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# tests/059 — A1: deterministic `try` lowering.
+# tests/059 — deterministic `try` lowering.
 #
 # `try {}` lowers to a nested if-chain over fresh temp names (`__try_N`).
-# Those names land in the AST and therefore in the LAW-20 hash. If the
-# counter that mints them is process-global and never reset, a form's hash
-# depends on how many `try` blocks were parsed *before* it — so the same
-# source hashes differently depending on parse order, and pp can serve a
-# wrong cached result. This test pins the invariant: a form's LAW-20 hash
+# Those names land in the AST and therefore in the content hash (SPEC law
+# 20). If the counter that mints them is process-global and never reset, a
+# form's hash depends on how many `try` blocks were parsed *before* it — so
+# the same source hashes differently depending on parse order, and pp can
+# serve a wrong cached result. This test pins the invariant: a form's hash
 # is a pure function of the form (and its location), independent of parse
 # history.
 #
@@ -14,15 +14,7 @@
 # process, and diffs their per-top-level-form hashes. With a global counter,
 # reading f1 bumps it, so identical f2 forms hash differently — a red build.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 # (a) Two byte-identical files, each a single `try`-using form. Reading the
 #     first must not perturb the hash of the second: identical text ⇒
 #     identical per-form hash regardless of read order in the process.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# tests/055 — M7 S2: `pp fmt` (docs/M7-SYNTAX.md "S2 — pp fmt"), the
-# location-preserving, comment-carrying transpiler both directions.
+# tests/055 — `pp fmt`: a location-preserving, comment-carrying transpiler
+# between the sexpr and brace surfaces, in both directions.
 #
 #   (a) a tricky-comments fixture (trailing on a def's head line, a
 #       standalone comment nested inside a multi-statement body, a
@@ -9,10 +9,10 @@
 #       source) round-trips sexpr -> braces -> sexpr: the program still
 #       runs identically, every comment's TEXT survives (mod the `;`/`#`
 #       delimiter and whitespace) with the same COUNT, and the whole
-#       chain's per-form LAW-20 hash matches the original (using `-i` so
-#       the location file never changes mid-chain — the exact contract
-#       docs/M7-SYNTAX.md's S2 section and the `-i` flag's own docstring
-#       both hinge on: hash preservation requires the path to stay put);
+#       chain's per-form hash (SPEC law 20) matches the original (using
+#       `-i` so the location file never changes mid-chain — hash
+#       preservation requires the path to stay put, per the `-i` flag's
+#       own docstring);
 #   (b) the same, starting from a BRACE-authored fixture (`#` comments),
 #       braces -> sexpr -> braces;
 #   (c) idempotence: `fmt --to-braces`/`--to-sexpr` is deterministic — run
@@ -22,28 +22,20 @@
 #       in place (same path both hops — mutates the dune-sandboxed copy
 #       tests run against, never the developer's real tree; restored
 #       immediately after each file so later tests in this same run see
-#       pristine sources), preserves every top-level form's LAW-20 hash.
-#       (Exit criterion 3 — the brace intermediate re-reading to the same
-#       hash as the sexpr original — is the same property tests/054's
-#       existing whole-tree `--roundtrip-braces` loop already gates.)
+#       pristine sources), preserves every top-level form's hash. The
+#       brace intermediate re-reading to the same hash as the sexpr
+#       original is the same property tests/054's whole-tree
+#       `--roundtrip-braces` loop already gates.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
+. "$(dirname "$0")/lib.sh"
 ROOT="$PWD"
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
 
 # comment TEXT content (order-preserving), delimiter/line-number-agnostic:
 # `pp --list-comments SURFACE FILE` prints "LINE: TRIMMED-TEXT"; strip the
 # "LINE: " prefix so comparisons are purely about which comment texts, and
 # how many, survived — never about exact re-flowed position (un-located
 # interior statements don't carry their own line at the AST level at all,
-# so exact position isn't part of the M7 contract; count + content is —
-# docs/M7-SYNTAX.md "Risks / residuals").
+# so exact position isn't guaranteed; count + content is what's gated).
 comment_texts() { "$PP" --list-comments "$1" "$2" 2>/dev/null | sed -E 's/^[0-9]+: //'; }
 
 # ---- (a) tricky-comments fixture, sexpr-authored ----
@@ -201,16 +193,15 @@ else
   bad "idempotent-to-sexpr" "$(diff "$TMP/b/out1.ppl" "$TMP/b/out2.ppl" | head -10)"
 fi
 
-# ---- (d) whole-tree sweep (M7 S3: the tree is brace-authored now, so the
-#      direction is to-sexpr + to-braces), in place, same path
-#      throughout (so `assert`'s baked `at file:line` message — a STRING
-#      VALUE inside the hashed expression, not just location metadata —
-#      matches too), hash-compared against a saved-before-mutation copy,
-#      then restored so later tests in this run see pristine sources.
-#      Comment COUNT + TEXT (delimiter/whitespace-agnostic) are checked at
-#      BOTH hops too: hashes ignore comments by construction, so hash
-#      equality alone can't catch a dropped one (docs/M7-SYNTAX.md
-#      "Risks / residuals" — this is the S3 gate). ----
+# ---- (d) whole-tree sweep (the tree is brace-authored, so the direction
+#      is to-sexpr + to-braces), in place, same path throughout (so
+#      `assert`'s baked `at file:line` message — a STRING VALUE inside the
+#      hashed expression, not just location metadata — matches too),
+#      hash-compared against a saved-before-mutation copy, then restored so
+#      later tests in this run see pristine sources. Comment COUNT + TEXT
+#      (delimiter/whitespace-agnostic) are checked at BOTH hops too: hashes
+#      ignore comments by construction, so hash equality alone can't catch
+#      a dropped one. ----
 sweep_fail=0
 sweep_count=0
 sweep_comments=0

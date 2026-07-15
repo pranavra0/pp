@@ -1,8 +1,8 @@
-# tests/030 — regression pin for the D21-family VM divergence caught by the
-# fuzzer (fuzz-failures/outdiff_* of 2026-07-10): a nested `let` inside a
-# `let*` binding RHS made the VM read the WRONG slot for a sibling binding
-# (e.g. x8 evaluated to x12's 48 instead of 97). Fixed in the working tree;
-# these four shrunk repros must print the tree-walker's answers under both
+# tests/030 — regression pin for a VM slot-reuse bug caught by the fuzzer
+# (fuzz-failures/outdiff_* of 2026-07-10): a nested `let` inside a `let*`
+# binding RHS made the VM read the WRONG slot for a sibling binding (e.g.
+# x8 evaluated to x12's 48 instead of 97). Fixed in the working tree; these
+# four shrunk repros must print the tree-walker's answers under both
 # backends forever.
 let* (x7 = 0, x8 = let (x12 = 48) { 97 }) {
   print(if x8 { x8 } else {

@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# tests/076 — Phase B surface removals: the deleted forms must no longer parse,
-# and the forms that replace or survive them must still work identically on
-# both backends.
+# tests/076 — four removed surface forms must no longer parse, and the forms
+# that replace or survive them must still work identically on both backends.
 #
-#   B8  @ attributes           (@cache/@needs/@reads/@deprecated)  -> parse error
-#   B7  postfix ? unwrap        (expr? / let x = expr?)             -> parse error
-#   B6  cond {}                 (cond { t => r; ... })              -> gone
-#   B1  cell literals           (file:"P" / env:"N" / tree:"R")     -> parse error
+#   @ attributes           (@cache/@needs/@reads/@deprecated)  -> parse error
+#   postfix ? unwrap        (expr? / let x = expr?)             -> parse error
+#   cond {}                 (cond { t => r; ... })              -> gone
+#   cell literals           (file:"P" / env:"N" / tree:"R")     -> parse error
 #
 # Preserved / replacement forms exercised on both backends:
 #   - try {} with `<-` propagation and a plain `let x = e` sequential binding
@@ -14,15 +13,7 @@
 #
 # Differential: the tree-walker and the bytecode VM must agree byte for byte.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 # A removed form must produce a parse error mentioning $needle, identically on
 # both backends (both must fail; both must contain the needle).
 run_removed() {
@@ -58,21 +49,23 @@ run_ok() {
   fi
 }
 
-# ---- B8: @ attributes ----
+# ---- @ attributes are rejected as unknown syntax (case B8 below) ----
 run_removed "B8-at-cache-rejected"  '@cache def f() { 1 }'          "not part of the language"
 run_removed "B8-at-needs-rejected"  '@needs(process) node h() { 1 }' "not part of the language"
 
-# ---- B7: postfix ? (the `?` only tokenizes separately after `)`/`]`) ----
+# ---- postfix ? unwrap is rejected; `?` only tokenizes separately after
+# `)`/`]` (case B7 below) ----
 run_removed "B7-bare-postfix-q" \
   'def f(r) { try { identity(r)? } }'                               "postfix"
 run_removed "B7-let-postfix-q" \
   'def f(r) { try { let v = identity(r)? ; [:ok, v] } }'            "postfix"
 
-# ---- B1: cell literals ----
+# ---- cell literals are rejected as parse errors (case B1 below) ----
 run_removed "B1-file-literal"  'print(file:"x")'                    ":"
 run_removed "B1-env-literal"   'print(env:"CC")'                    ":"
 
-# ---- B6: cond is now an ordinary identifier (no cond {} form) ----
+# ---- cond is now an ordinary identifier; there is no cond {} form (case B6
+#      below) ----
 # Using `cond` as a variable name must work — proving the special form is gone.
 cat > "$TMP/cond-ident.pp" <<'EOF'
 let cond = 42

@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # pins: LAW-21
-# LAW 21 / Phase-1 exit criteria 2 & 5 — cutoff at node granularity.
+# Cutoff at node granularity.
 #
-#   Criterion 2: touching an input (mtime change, no content change) rebuilds
-#   NOTHING. Trace validity is content-hash re-observation; mtime never enters.
+#   Touching an input (mtime change, no content change) rebuilds NOTHING.
+#   Trace validity is content-hash re-observation; mtime never enters
+#   (SPEC law 21).
 #
-#   Criterion 5: an edit that changes an input but NOT the derived value cuts
-#   off downstream. The mechanism is LAW-20 keying, not a dirty-propagation
-#   graph: a downstream node keyed on an upstream node's *value* (free-var
-#   value hash) re-keys identically when a recompute produces a byte-identical
-#   result, so the downstream is a hit while the upstream re-ran.
+#   An edit that changes an input but NOT the derived value cuts off
+#   downstream recompute. The mechanism is value-based keying, not a
+#   dirty-propagation graph: a downstream node keyed on an upstream node's
+#   *value* (free-var value hash) re-keys identically when a recompute
+#   produces a byte-identical result, so the downstream is a hit while the
+#   upstream re-ran (SPEC law 20).
 #
 # The model build: "compile" reads a header AND a source but its value depends
 # only on the source (like a .o that is invariant under header comments);
@@ -67,14 +69,14 @@ assert "null-no-compile"     "COMPILE"      absent
 assert "null-no-link"        "LINK"         absent
 assert "null-value-served"   "linked:BODY"  present
 
-# --- run 3 (criterion 2): touch both inputs, contents unchanged ---
+# --- run 3: touch both inputs (mtime only), contents unchanged ---
 touch -t 202001010000 "$TMP/h.h" "$TMP/a.c"
 run
 assert "touch-no-compile"    "COMPILE"      absent
 assert "touch-no-link"       "LINK"         absent
 assert "touch-value-served"  "linked:BODY"  present
 
-# --- run 4 (criterion 5): header edit that leaves the object identical ---
+# --- run 4: header edit that leaves the compiled object identical ---
 printf 'H2 comment-only\n' > "$TMP/h.h"
 run
 assert "hdr-edit-recompiles" "COMPILE"      present   # trace has h.h's cell

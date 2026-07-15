@@ -1,25 +1,17 @@
 #!/usr/bin/env bash
-# tests/065 — A7(iii): `try {}` <- bindings are sequential, and rebinding
-# shadows (the documented LAW 4 exception).
+# tests/065 — `try {}` <- bindings are sequential, and rebinding shadows
+# (the documented SPEC law 4 exception).
 #
-# LAW 4 makes ordinary blocks letrec*: defining a name twice in one block is a
-# read error ("duplicate definition in block"). A `try {}` block is the one
-# exception — it lowers to nested `let`s, so its `<-` bindings execute top to
-# bottom and rebinding the SAME name simply shadows the earlier binding for the
-# statements that follow. This pins that: a try block that rebinds `x` twice
-# must (a) parse (not raise a duplicate-definition read error) and (b) evaluate
-# so later uses see the shadowing value — identically on the tree-walker and
-# the bytecode VM.
+# SPEC law 4 makes ordinary blocks letrec*: defining a name twice in one
+# block is a read error ("duplicate definition in block"). A `try {}` block
+# is the one exception — it lowers to nested `let`s, so its `<-` bindings
+# execute top to bottom and rebinding the SAME name simply shadows the
+# earlier binding for the statements that follow. This pins that: a try
+# block that rebinds `x` twice must (a) parse (not raise a
+# duplicate-definition read error) and (b) evaluate so later uses see the
+# shadowing value — identically on the tree-walker and the bytecode VM.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 run_both() {
   # $1: name, $2: file, $3: expected output on BOTH backends
   local name="$1" file="$2" expected="$3"

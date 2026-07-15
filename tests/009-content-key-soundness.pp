@@ -1,8 +1,9 @@
-# Soundness of the content-addressed thunk key (D6 + D17).
+# Soundness of the content-addressed thunk key: two things the key omitted.
 # pins: LAW-19
 #
-# STATUS: regression test — passes on both backends since the D6/D17 fix.
-# Before the fix the tree-walker returned d6b=1 and d17b=1 (stale cache hits).
+# Regression test: passes on both backends since the fix below. Before the
+# fix, the tree-walker returned d6b=1 and d17b=1 — stale cache hits instead of
+# the correct new values.
 #
 # The tree-walker memoizes thunks in a global content-addressed table
 # (evaluator.ml make_thunk_ca / thunk_store). The key is
@@ -11,13 +12,13 @@
 # from that key, so distinct computations collide and the SECOND one
 # silently returns the FIRST one's cached result:
 #
-# D6  — env.env_hash folds in hash_value(closure), and a closure's hash
+# Bug 1 — env.env_hash folds in hash_value(closure), and a closure's hash
 # OMITS its captured environment (types.ml VClosure case:
 # "Env deliberately NOT hashed"). Two closures with identical
 # code but different captures hash identically, so an enclosing
 # let-thunk collides.
 #
-# D17 — the key omits handler_stack entirely. The same `perform ...`
+# Bug 2 — the key omits handler_stack entirely. The same `perform ...`
 # thunk forced under two different handlers collides.
 #
 # In both cases the VM (which does not share thunk_store) is correct, so

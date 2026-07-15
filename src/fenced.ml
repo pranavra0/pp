@@ -1,4 +1,4 @@
-(* pp fenced-effect executor (Q3 / LAW 31).
+(* pp fenced-effect executor (LAW 31).
 
    Fenced effects are non-convergent, irreversible actions (send email, charge
    card, post webhook).  They may not appear in node bodies; they are sequenced
@@ -28,11 +28,11 @@ let action_key ~(epoch : string) ~(kind : string) ~(spec_hash : string) : string
   Hasher.hash_concat ["fenced"; epoch; kind; spec_hash]
 
 let hash_spec (spec : value) : string =
-  Hasher.hash_value (!Runtime.force_hook spec)
+  Hasher.hash_value (Backend.r.force spec)
 
 (* Deep-force and validate that the spec is a map. *)
 let force_spec_map (spec : value) : (value * value) list =
-  match !Runtime.force_hook spec with
+  match Backend.r.force spec with
   | VMap kvs -> kvs
   | other -> failwith ("fenced: spec must be a map, got " ^ string_of_value other)
 
@@ -46,7 +46,7 @@ let run_command (spec : value) : value =
   let kvs = force_spec_map spec in
   let find key =
     List.find_opt (fun (k, _) ->
-      match !Runtime.force_hook k with
+      match Backend.r.force k with
       | VString s | VKeyword s | VSymbol s -> s = key
       | _ -> false)
       kvs
@@ -55,13 +55,13 @@ let run_command (spec : value) : value =
   | None -> VMap []
   | Some (_, v) ->
       let argv =
-        match !Runtime.force_hook v with
+        match Backend.r.force v with
         | VNil -> []
         | VPair _ as lst ->
             let rec collect = function
               | VNil -> []
               | VPair (a, d) ->
-                  (match !Runtime.force_hook a with
+                  (match Backend.r.force a with
                    | VString s | VKeyword s | VSymbol s -> s
                    | other -> failwith ("fenced: run argv must be strings, got " ^ string_of_value other))
                   :: collect d
@@ -69,7 +69,7 @@ let run_command (spec : value) : value =
             in collect lst
         | VVector arr ->
             Array.to_list (Array.map (fun x ->
-              match !Runtime.force_hook x with
+              match Backend.r.force x with
               | VString s | VKeyword s | VSymbol s -> s
               | other -> failwith ("fenced: run argv must be strings, got " ^ string_of_value other)) arr)
         | VString s -> ["/bin/sh"; "-c"; s]
@@ -113,33 +113,10 @@ let run_command (spec : value) : value =
 
 let result_hash (v : value) : string = Hasher.hash_value v
 
-(* Fully force a value (unlike [force_spec_map], which forces only the
-   outer WHNF) so [Codec.encode_value] sees the actual leaves rather than
-   unevaluated thunks — map values and vector/set elements are lazy
-   (primitives.ml: "keys forced, values lazy"), so a data-only spec would
-   otherwise misreport as non-data purely because its fields hadn't run
-   yet. *)
-let rec force_deep (v : value) : value =
-  match !Runtime.force_hook v with
-  | VPair (a, d) -> VPair (force_deep a, force_deep d)
-  | VVector vs -> VVector (Array.map force_deep vs)
-  | VMap kvs -> VMap (List.map (fun (k, v) -> (force_deep k, force_deep v)) kvs)
-  | VSet vs -> VSet (List.map force_deep vs)
-  | other -> other
-
-(* Register a fenced action from user code.  This only stores it for later
-   execution by the reconciler; it does not run anything or touch the journal.
-
-   A fenced spec is a serialized intent for crash recovery (Store.
-   load_fenced_spec re-executes it from disk after an unknown-status
-   action) — a spec that carries code (a closure, thunk, or other non-DATA
-   value, per Codec's non-data law) cannot be recovered, so a spec that
-   fails to encode is a hard error HERE, at registration, rather than a
-   silently-dropped store write later. *)
 let register (kind : string) (spec : value) : unit =
   if !Runtime.trace_stack <> [] then
     failwith "fenced: fenced effects may not appear inside node bodies (LAW 31)";
-  let forced = force_deep spec in
+  let forced = Force_deep.force_deep_plain spec in
   (match Codec.encode_value forced with
    | Some _ -> ()
    | None ->

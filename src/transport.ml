@@ -1,7 +1,6 @@
 (* pp transport — cross-machine sync of hash-named store artifacts, plus
-   the capability-gated single-hit control path (M5 stage A:
-   docs/PLAN-m5-distribution.md "Transport" / "Signed capability tokens";
-   docs/THREAT-MODEL-cluster.md is the gate this implements against).
+   the capability-gated single-hit control path
+   (docs/THREAT-MODEL-cluster.md is the gate this implements against).
 
    THE LOAD-BEARING INVARIANT: the receiving side re-hashes EVERY artifact
    against its claimed name before it is ever written into THIS node's own
@@ -18,12 +17,13 @@
    Every receive path (LocalDir.pull_*, [recv_hit]) funnels through them. *)
 
 open Types
+open Codec
 
 exception Transport_integrity_error of string
 
 (* ---- The abstract shape: local-dir today, ssh later ----
 
-   Per PLAN-m5-distribution.md "Transport": push/pull of hash-named
+   Push/pull of hash-named
    artifacts (objects|blobs|traces) + a control request/reply channel in
    the store's canonical text (a captured message is inspectable like a
    trace — no new wire format). [t] is "the other side" — a second
@@ -112,7 +112,7 @@ let ingest_trace_lines ~(key : string) (raw : string) : unit =
 
 (* ---- LocalDir: a second store-shaped root on one machine ----
 
-   The CI loopback (PLAN-m5-distribution.md): both "sides" of a sync are
+   The CI loopback: both "sides" of a sync are
    ordinary directories on the SAME machine (typically each node's own
    $HOME/.pp/store, or a throwaway shared drop directory), so every exit
    test here runs with zero real network/ssh infra. Layout mirrors
@@ -261,9 +261,9 @@ module LocalDir_conforms : TRANSPORT = LocalDir
 
 (* ---- ssh: STUBBED this stage ----
 
-   scp/rsync for artifacts, `ssh <host> pp --worker-control` for control
-   (PLAN-m5-distribution.md "Transport" (b)) — drops in behind the exact
-   same TRANSPORT shape once stage B needs a real second machine. Every
+   scp/rsync for artifacts, `ssh <host> pp --worker-control` for control —
+   drops in behind the exact
+   same TRANSPORT shape once a real second machine is needed. Every
    operation is a clear "not yet" error naming itself, never a silent
    no-op. *)
 module Ssh : TRANSPORT = struct
@@ -288,8 +288,8 @@ end
 
    Given (node-key, token), the serving side verifies the token, then
    calls the EXISTING, UNCHANGED Store.hit ~authorized:(cell_authorized_for
-   (token_to_caps token)) — zero new authority code, PLAN-m5-distribution.md
-   "Signed capability tokens". On a hit, exactly the trace(s) the token's
+   (token_to_caps token)) — zero new authority code, just the
+   existing LAW 23b gate fed a wire-verified capability list. On a hit, exactly the trace(s) the token's
    own capabilities cover are pushed (never an unauthorized trace, even
    though Store.hit's own gate would ALSO refuse to serve it later — this
    is defense in depth against leaking cell names/paths as metadata, LAW
@@ -386,15 +386,6 @@ type reply_decision =
   | RHit of { key : string; result_hash : string; blob_hashes : string list }
   | RMiss of string
   | RDeny of string * string
-
-let ( >>= ) o f = match o with None -> None | Some x -> f x
-
-let expect_char (s : string) (i : int) (c : char) : int option =
-  if i < String.length s && s.[i] = c then Some (i + 1) else None
-
-let expect_lit (s : string) (i : int) (lit : string) : int option =
-  let l = String.length lit in
-  if i + l <= String.length s && String.sub s i l = lit then Some (i + l) else None
 
 let parse_reply_text (text : string) : reply_decision option =
   let text = String.trim text in

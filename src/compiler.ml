@@ -9,8 +9,9 @@ let intern (st : comp_state) (v : value) : int =
   match Hashtbl.find_opt st.const_ht h with
   | Some idx -> idx
   | None ->
-      let idx = List.length st.consts in
-      st.consts <- st.consts @ [v];
+      let idx = st.consts_len in
+      st.consts <- v :: st.consts;
+      st.consts_len <- st.consts_len + 1;
       Hashtbl.add st.const_ht h idx;
       idx
 
@@ -20,16 +21,17 @@ let intern_name (st : comp_state) (name : string) : int =
 (* ---- Opcode emission ---- *)
 
 let emit (st : comp_state) (op : opcode) =
-  st.ops <- st.ops @ [op]
+  st.ops <- op :: st.ops;
+  st.ops_len <- st.ops_len + 1
 
-let current_offset (st : comp_state) = List.length st.ops
+let current_offset (st : comp_state) = st.ops_len
 
 (* ---- Backpatch helper ---- *)
 
 let backpatch_jump (st : comp_state) (jmp_idx : int) =
-  let target = List.length st.ops in
-  st.ops <- List.mapi (fun i op ->
-    if i = jmp_idx then
+  let target = st.ops_len in
+  st.ops <- List.mapi (fun ri op ->
+    if ri = st.ops_len - 1 - jmp_idx then
       match op with
       | JUMP _ -> JUMP (target - jmp_idx)
       | JUMP_IF_FALSE _ -> JUMP_IF_FALSE (target - jmp_idx)
@@ -85,6 +87,34 @@ let rec emit_thunk_region ?type_ann:(ta=None) ?thunk_loc:(tl=None) (st : comp_st
   backpatch_jump st jmp_idx;
   emit st (MAKE_THUNK (body_start, ta, tl));
   body_start
+
+and collect_block_defs (st : comp_state) (exprs : expr list)
+    : (int * (string, def_info) Hashtbl.t * (string, int) Hashtbl.t * (unit -> unit)) =
+  let def_infos = ref [] in
+  let val_infos = ref [] in
+  let slot_counter = ref 0 in
+  let names_to_add = ref [] in
+  List.iter (fun sub -> match sub with
+    | EDef (name, _, _) | EDefNode (name, _, _) ->
+        def_infos := {name; slot= !slot_counter} :: !def_infos;
+        names_to_add := name :: !names_to_add; incr slot_counter
+    | EDefValue (name, _) ->
+        val_infos := (name, !slot_counter) :: !val_infos;
+        names_to_add := name :: !names_to_add; incr slot_counter
+    | _ -> ()) exprs;
+  let start_slot, restore =
+    if !names_to_add = [] then (0, fun () -> ())
+    else extend_cenv st (List.rev !names_to_add) in
+  let def_map = Hashtbl.create 16 in
+  List.iter (fun di -> Hashtbl.add def_map di.name {di with slot = start_slot + di.slot}) !def_infos;
+  let val_map = Hashtbl.create 16 in
+  List.iter (fun (name, slot) -> Hashtbl.replace val_map name (start_slot + slot)) !val_infos;
+  List.iter (fun (name, slot) ->
+    ignore (emit_thunk_region st
+      (EApply (ESymbol "error",
+               [ELiteral (VString (name ^ ": referenced before its definition"))])));
+    emit st (STORE_LOCAL (start_slot + slot))) (List.rev !val_infos);
+  (start_slot, def_map, val_map, restore)
 
 (* Like emit_thunk_region, but for a persistent node: emits MAKE_NODE carrying
    the body AST (for the LAW 20 code hash) and the node's free-variable
@@ -204,7 +234,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       ignore (emit_closure_region st params body)
 
   | EApply (fn_expr, arg_exprs) ->
-      (* Strict application (Q1): compile_expr already emits FORCE for symbols;
+      (* Strict application: compile_expr already emits FORCE for symbols;
          literals are self-values. *)
       compile_expr st fn_expr false;
       List.iter (fun arg -> compile_expr st arg false) arg_exprs;
@@ -230,7 +260,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
          (evaluator.ml EDo) threads a local `env_ref` forked from the
          surrounding env; its defs are never merged back into the caller's
          env, so a bare top-level `(do (def x ...) ...)` must not leak `x`
-         to later top-level forms (D22a). Top-level def VISIBILITY ACROSS
+         to later top-level forms. Top-level def VISIBILITY ACROSS
          FORMS is a property of the top-level driver (EDef/EDefValue below,
          and eval_expressions in the tree-walker), not of `do` — so `do`
          must bind its own defs as local slots unconditionally, exactly like
@@ -239,39 +269,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
          VM's root frame, which is otherwise untouched at that point). *)
       (* Pass 1: collect defs — function defs AND value defs share the block's
          letrec* scope, so both get slots up front. *)
-      let def_infos = ref [] in
-      let val_infos = ref [] in
-      let slot_counter = ref 0 in
-      let names_to_add = ref [] in
-      List.iter (fun sub ->
-        match sub with
-        | EDef (name, _, _) | EDefNode (name, _, _) ->
-            def_infos := {name; slot= !slot_counter} :: !def_infos;
-            names_to_add := name :: !names_to_add;
-            incr slot_counter
-        | EDefValue (name, _) ->
-            val_infos := (name, !slot_counter) :: !val_infos;
-            names_to_add := name :: !names_to_add;
-            incr slot_counter
-        | _ -> ()
-      ) exprs;
-      let start_slot, restore =
-        if !names_to_add = [] then (0, fun () -> ())
-        else extend_cenv st (List.rev !names_to_add)
-      in
-      let def_map = Hashtbl.create 16 in
-      List.iter (fun di -> Hashtbl.add def_map di.name {di with slot = start_slot + di.slot}) !def_infos;
-      let val_map = Hashtbl.create 16 in
-      List.iter (fun (name, slot) -> Hashtbl.replace val_map name (start_slot + slot)) !val_infos;
-      (* Poison prologue: pre-store each value-def binding so a reference that
-         runs before its def raises "<name>: referenced before its definition"
-         — byte-identical to the tree-walker's poison thunks. *)
-      List.iter (fun (name, slot) ->
-        ignore (emit_thunk_region st
-          (EApply (ESymbol "error",
-                   [ELiteral (VString (name ^ ": referenced before its definition"))])));
-        emit st (STORE_LOCAL (start_slot + slot))
-      ) (List.rev !val_infos);
+      let (start_slot, def_map, val_map, restore) = collect_block_defs st exprs in
       (* Pass 2: compile each sub-expression *)
       let rec compile_subs = function
         | [] -> ()
@@ -302,7 +300,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
             emit st (LOAD_MODULE_FILE (intern_name st path));
             (* Statement position: tree-walker merges the module's bindings
                into the enclosing env (EDo/eval_expressions); IMPORT matches
-               (D20), then POP discards the statement's value. *)
+               that merge, then POP discards the statement's value. *)
             emit st IMPORT;
             emit st POP;
             compile_subs rest
@@ -383,7 +381,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       ) handlers;
       emit st (PUSH_HANDLER (List.length handlers));
       (* Body NON-tail (was [tail]) so control returns to run POP_HANDLER;
-         a tail call would frame-swap past POP and leak the handler (D9). *)
+         a tail call would frame-swap past POP and leak the handler. *)
       compile_expr st body false;
       emit st POP_HANDLER
 
@@ -397,7 +395,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
          defs (function AND value) are visible to later module-body
          expressions, including sibling exports and bare statements
          (evaluator.ml EModule folds `env_acc` left-to-right, so `final_env`
-         sees every def that came before it) — D22(b). The VM must resolve
+         sees every def that came before it). The VM must resolve
          those sibling references via LOCAL slots, not the globals table
          (a name is only stored into `globals` later, by IMPORT, once the
          caller merges the finished module — during construction the names
@@ -418,38 +416,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       emit st (JUMP 0);
       let body_start = current_offset st in
       (* Pass 1: collect def/value-def names for the block's letrec* scope. *)
-      let def_infos = ref [] in
-      let val_infos = ref [] in
-      let slot_counter = ref 0 in
-      let names_to_add = ref [] in
-      List.iter (fun sub ->
-        match sub with
-        | EDef (name, _, _) | EDefNode (name, _, _) ->
-            def_infos := {name; slot= !slot_counter} :: !def_infos;
-            names_to_add := name :: !names_to_add;
-            incr slot_counter
-        | EDefValue (name, _) ->
-            val_infos := (name, !slot_counter) :: !val_infos;
-            names_to_add := name :: !names_to_add;
-            incr slot_counter
-        | _ -> ()
-      ) exprs;
-      let start_slot, restore =
-        if !names_to_add = [] then (0, fun () -> ())
-        else extend_cenv st (List.rev !names_to_add)
-      in
-      let def_map = Hashtbl.create 16 in
-      List.iter (fun di -> Hashtbl.add def_map di.name {di with slot = start_slot + di.slot}) !def_infos;
-      let val_map = Hashtbl.create 16 in
-      List.iter (fun (name, slot) -> Hashtbl.replace val_map name (start_slot + slot)) !val_infos;
-      (* Poison prologue: same discipline as EDo — a value def referenced
-         before it runs raises "<name>: referenced before its definition". *)
-      List.iter (fun (name, slot) ->
-        ignore (emit_thunk_region st
-          (EApply (ESymbol "error",
-                   [ELiteral (VString (name ^ ": referenced before its definition"))])));
-        emit st (STORE_LOCAL (start_slot + slot))
-      ) (List.rev !val_infos);
+      let (start_slot, def_map, val_map, restore) = collect_block_defs st exprs in
       (* Pass 2: compile each child, storing defs/value-defs into their slot
          (so later siblings can resolve them via LOAD_LOCAL) in addition to
          pushing (name, value) onto the stack for MAKE_MODULE — DUP keeps a
@@ -518,8 +485,8 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       emit st FORCE;
       emit st PUSH_CONFIG;
       (* Body NON-tail (was [tail]) so control returns to run POP_CONFIG;
-         a tail call would frame-swap past POP and leak the config scope
-         (D9). Matches the tree-walker's dynamic extent (evaluator.ml
+         a tail call would frame-swap past POP and leak the config scope.
+         Matches the tree-walker's dynamic extent (evaluator.ml
          EWithConfig restores [config_stack] after the body). *)
       compile_expr st body false;
       emit st POP_CONFIG
@@ -561,7 +528,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
          literal/tag equality, and the then-branch binds pattern variables.
          This mirrors Types.match_pattern used by the tree-walker.
 
-         A5: the lowering below is ordinary generated code — EApply (ESymbol
+         The lowering below is ordinary generated code — EApply (ESymbol
          name, ...) — which on the VM compiles to LOAD_GLOBAL name and so
          resolves whatever the CURRENT global binding of `name` is. If user
          code shadows car/cdr/=/nil?/not/error (e.g. `def car(x) { ... }`),
@@ -664,7 +631,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
             let then_e = if binds = [] then body else ELet (binds, body) in
             EIf (cond, then_e, lower_arms rest)
         | (pat, Some guard, body) :: rest ->
-            (* C3: a guarded arm fires only when the pattern matches AND the
+            (* A guarded arm fires only when the pattern matches AND the
                guard is truthy under the pattern's bindings; otherwise control
                falls to the remaining arms. Fold the guard INTO the arm
                condition — `pat_cond AND (guard under binds)` — so the structure
@@ -700,8 +667,8 @@ let compile_program (exprs : expr list) : bytecode =
          | ELoadModule _ | EIsland _ ->
              (* Tree-walker merges a statement-position load-module's (and
                 island's) bindings into the top-level env (eval_expressions);
-                emit an explicit IMPORT to match, now that LOAD_MODULE_FILE
-                itself no longer merges (D20). *)
+                emit an explicit IMPORT to match, since LOAD_MODULE_FILE
+                itself does not merge. *)
              compile_expr st e true;
              emit st IMPORT;
              emit st POP
@@ -724,8 +691,8 @@ let compile_program (exprs : expr list) : bytecode =
   compile_all exprs;
   emit st HALT;
   {
-    consts = Array.of_list st.consts;
-    code = Array.of_list st.ops;
+    consts = Array.of_list (List.rev st.consts);
+    code = Array.of_list (List.rev st.ops);
     nparams_of = st.nparams_of;
     param_names_of = st.param_names_of;
     closure_names_of = st.closure_names_of;
@@ -734,8 +701,8 @@ let compile_program (exprs : expr list) : bytecode =
 let finish_comp_state (st : comp_state) : bytecode =
   emit st HALT;
   {
-    consts = Array.of_list st.consts;
-    code = Array.of_list st.ops;
+    consts = Array.of_list (List.rev st.consts);
+    code = Array.of_list (List.rev st.ops);
     nparams_of = st.nparams_of;
     param_names_of = st.param_names_of;
     closure_names_of = st.closure_names_of;
@@ -743,4 +710,4 @@ let finish_comp_state (st : comp_state) : bytecode =
 
 (* Register with primitives *)
 let () =
-  Primitives.compiler_finish_ref := finish_comp_state
+  Backend.r.compiler_finish <- finish_comp_state

@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# M4 network (docs/PLAN-m4-cells.md "Network"; SPEC LAW 22/26 amendment).
-#
 # `--grant net:<host>[:<port>]` mints CapNetwork {host; port}. `(perform
-# http-get url)` / `(perform http-post url body)` fork curl (E6: zero new
-# OCaml networking/TLS surface) but are AUTHORIZED against CapNetwork
+# http-get url)` / `(perform http-post url body)` fork curl (no new OCaml
+# networking/TLS surface) but are AUTHORIZED against CapNetwork
 # host[:port] — never CapProcess. Banned inside node bodies (trace_stack
 # guard, mirroring `fenced`/`write-file`'s node arm). Result shape:
 # `{"status" INT "body" STRING}`.
@@ -140,8 +138,9 @@ for bc in "" "--bytecode"; do
 done
 
 # =====================================================================
-# (5) http-get inside a node body is an error (banned, LAW 37/38) — both
-#     backends, and the network is never actually touched.
+# (5) http-get inside a node body is an error — fenced effects are barred
+#     from node bodies (SPEC law 31) — both backends, and the network is
+#     never actually touched.
 # =====================================================================
 cat > "$TMP/in-node.pp" <<EOF
 force(node { perform http-get("$URL") })

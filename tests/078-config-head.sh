@@ -1,23 +1,16 @@
 #!/usr/bin/env bash
-# tests/078 — B5: $config joins the observation family.
+# tests/078 — $config joins the observation family.
 #
 # $config(key[, default]) reads a scoped config value installed by an enclosing
-# `with { config: … }` extent (LAW 33), recording a config: trace cell — the $
-# family now covers every traced read kind. It lowers to the same EConfig node
-# as the bare `config(key)` form, and templates inside quasiquote{} (A′1 parity,
-# via the Surface_tables `Config` tmpl node).
+# `with { config: … }` extent (SPEC law 33), recording a config: trace cell —
+# the $ family now covers every traced read kind. It lowers to the same
+# EConfig node as the bare `config(key)` form, and templates inside
+# quasiquote{} the same way every other $-form does (via the Surface_tables
+# `Config` tmpl node).
 #
 # Differential: the tree-walker and the bytecode VM must agree byte for byte.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 run_both() {
   local name="$1" file="$2" expected="$3"
   local got_tw got_bc
@@ -48,7 +41,7 @@ with { config: { :cc -> "clang" } } {
 EOF
 run_both "config-default" "$TMP/default.pp" '"fallback"'
 
-# (c) computed key expression (A6: heads take expressions, not just literals).
+# (c) computed key expression: heads take expressions, not just literals.
 cat > "$TMP/computed.pp" <<'EOF'
 with { config: { :cflags -> "-O2" } } {
   print($config(string-append("cf", "lags")))
@@ -66,7 +59,7 @@ EOF
 run_both "config-equals-bare-form" "$TMP/same.pp" $'true\ntrue'
 
 # (e) quasiquote parity: a $config template with an unquoted hole expands to
-# code that evaluates to the same value as the bare form (A′1).
+# code that evaluates to the same value as the bare form.
 cat > "$TMP/qq.pp" <<'EOF'
 defmacro mk(k) { quasiquote { $config(unquote(k)) } }
 defmacro mkd(k, d) { quasiquote { $config(unquote(k), unquote(d)) } }

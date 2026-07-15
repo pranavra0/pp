@@ -1,22 +1,14 @@
 #!/usr/bin/env bash
-# tests/064 — A7(i): `pp lint` sweep for vector-get/vector-length on a bracket
+# tests/064 — `pp lint` sweep for vector-get/vector-length on a bracket
 # literal.
 #
-# SPEC L9 was revised: `[…]` now reads as `(list …)`, not `(vector …)`. So
+# The bracket literal `[…]` now reads as `(list …)`, not `(vector …)`. So
 # `vector-get([…], i)` / `vector-length([…])` — idioms from the vector era —
 # now apply a vector accessor to a list and fail at runtime. `pp lint` catches
 # this statically: it warns on vector-get/vector-length whose first argument is
 # a bracket literal, and must NOT warn when the argument is a real `vector(…)`.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 # vector accessors on bracket literals (should warn) plus the correct vector(…)
 # form (should NOT warn).
 cat > "$TMP/sweep.pp" <<'EOF'

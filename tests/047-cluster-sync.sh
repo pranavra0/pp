@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# M5 stage A: cluster transport + signed tokens + by-hash sync
-# (docs/PLAN-m5-distribution.md; docs/THREAT-MODEL-cluster.md is the gate).
+# Cluster transport: signed access tokens gate synced builds, and content
+# is synced by hash rather than trusted paths. See
+# docs/THREAT-MODEL-cluster.md for the threat model this guards against.
 #
 # Two SIMULATED cluster members are two `pp` process invocations differing
 # only in $HOME (Store.store_root is a process-wide singleton fixed at
@@ -10,23 +11,27 @@
 # secret/id distributed out of band via a plain file copy (simulating
 # `pp cluster-init` + scp).
 #
-#   T1 — corrupt a byte in a copied artifact (object, blob, trace) -> the
-#        receiving --transport-pull rejects it (re-hash-on-receive).
-#   T2 — a tampered-MAC token, and an expired token, are both denied by
-#        --serve-hit before Store.hit ever runs.
-#   T3 — a token whose caps don't cover the trace's closure gets MISS from
-#        --serve-hit (LAW 23b across the wire), even though the bytes are
-#        on local disk and a broader token gets a hit for the SAME key.
-#   T4 — `pp why` over the SYNCED trace, on the receiving node, redacts
-#        exactly like a local run under the same narrow grant.
-#   T5 — a node touching a sealed value never gets stored at all (M4's
-#        existing node-boundary ban), so there is nothing for serve-hit to
-#        ship; a whole-tree grep for the secret's content, across every
-#        directory anything crossed through, finds nothing.
-#   T6 (partial) — the result hash served via serve-hit/recv-hit is
-#        byte-identical to (a) what a fresh independent build of the same
-#        program computes, and (b) the node key is the same filename in
-#        both members' traces/ directories.
+#   Corrupting a byte in a copied artifact (object, blob, trace) makes the
+#     receiving --transport-pull reject it via re-hash-on-receive (case T1
+#     below).
+#   A tampered-MAC token, and an expired token, are both denied by
+#     --serve-hit before Store.hit ever runs (case T2 below).
+#   A token whose capabilities don't cover the trace's read closure gets a
+#     MISS from --serve-hit, even though the bytes are on local disk — a
+#     broader token gets a hit for the SAME key (authority is re-checked
+#     against the trace's read closure even across the wire, per SPEC law
+#     23b; case T3 below).
+#   `pp why` over the SYNCED trace, on the receiving node, redacts exactly
+#     like a local run under the same narrow grant (case T4 below).
+#   A node touching a sealed value is never stored at all (the existing
+#     node-boundary ban on sealed values), so there is nothing for
+#     serve-hit to ship; a whole-tree grep for the secret's content,
+#     across every directory anything crossed through, finds nothing
+#     (case T5 below).
+#   The result hash served via serve-hit/recv-hit is byte-identical to
+#     (a) what a fresh independent build of the same program computes,
+#     and (b) the node key is the same filename in both members' traces/
+#     directories (case T6 below, partial).
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -111,7 +116,8 @@ RESULT_HASH=$(grep -oE '"[0-9a-f]{64,}"' "$NODEA/.pp/store/traces/$KEY" | head -
 [ -n "$KEY" ] && [ -n "$RESULT_HASH" ] || { echo "FAIL setup: could not read key/result-hash"; exit 1; }
 
 # ---------------------------------------------------------------------
-# T2 — tokens: broad (covers WORK), narrow (does not), tampered, expired.
+# Tokens: a broad grant covering WORK, a narrow grant that doesn't, a
+# tampered token, and an expired token (case T2 below).
 # ---------------------------------------------------------------------
 HOME="$NODEA" "$PP" --grant "fs:${WORK}:ro" --mint-token "$TMP/token-broad.txt" 3600
 HOME="$NODEA" "$PP" --grant "fs:${OTHER}:ro" --mint-token "$TMP/token-narrow.txt" 3600
@@ -135,10 +141,10 @@ assert "T2-expired-denied" "deny" present "$TMP/reply-expired.txt"
 assert "T2-expired-reason" "expired" present "$TMP/reply-expired.txt"
 
 # ---------------------------------------------------------------------
-# T3 — LAW 23b across the wire: a token whose caps don't cover the node's
-# read closure gets a MISS, even though the bytes are on A's local disk;
-# the SAME key with a covering token gets a hit (proves it's the token,
-# not the key, that's the variable).
+# A token whose capabilities don't cover the node's read closure gets a
+# MISS, even though the bytes are on A's local disk; the SAME key with a
+# covering token gets a hit — proving it's the token, not the key, that's
+# the variable (SPEC law 23b enforced across the wire; case T3 below).
 # ---------------------------------------------------------------------
 HOME="$NODEA" "$PP" --serve-hit "$KEY" "$TMP/token-narrow.txt" "$SHARED" "$TMP/reply-narrow.txt" > "$TMP/out" 2>&1
 assert "T3-unauthorized-closure-miss" "miss" present "$TMP/reply-narrow.txt"
@@ -165,9 +171,10 @@ assert "B-no-recompute" "COMPUTE" absent
 assert "B-correct-result" "\[info\] V1" present
 
 # ---------------------------------------------------------------------
-# T4 — why redaction survives sync: B under a narrow grant (that does NOT
-# cover WORK) redacts the synced trace's cell exactly like A does locally
-# under the same narrow grant — same markers, same absence of the real path.
+# Why-redaction survives sync: B, under a narrow grant that does NOT
+# cover WORK, redacts the synced trace's cell exactly like A does locally
+# under the same narrow grant — same markers, same absence of the real
+# path (case T4 below).
 # ---------------------------------------------------------------------
 HOME="$NODEA" "$PP" why --grant "fs:${OTHER}:ro" "$TMP/prog.pp" > "$TMP/local-why.out" 2>&1
 HOME="$NODEB" "$PP" why --grant "fs:${OTHER}:ro" "$TMP/prog.pp" > "$TMP/synced-why.out" 2>&1
@@ -183,9 +190,9 @@ for f in "$TMP/local-why.out" "$TMP/synced-why.out"; do
 done
 
 # ---------------------------------------------------------------------
-# T1 — re-hash-on-receive: corrupt a byte in a copied object, blob, and
-# trace; --transport-pull must reject every one of them, never silently
-# accept.
+# Re-hash-on-receive: corrupt a byte in a copied object, blob, and trace;
+# --transport-pull must reject every one of them, never silently accept
+# (case T1 below).
 # ---------------------------------------------------------------------
 SHARED2="$TMP/shared2"
 HOME="$NODEA" "$PP" --transport-push object "$RESULT_HASH" "$SHARED2"
@@ -222,10 +229,10 @@ assert_exit "T1-trace-corruption-rejected-exit" 1 "$CODE"
 assert "T1-trace-corruption-message" "tampered in transit" present
 
 # ---------------------------------------------------------------------
-# T5 — sealed non-regression: a node touching a secret is refused at the
-# EXISTING M4 node boundary before it is ever stored, so serve-hit has
+# Sealed non-regression: a node touching a secret is refused at the
+# existing node boundary before it is ever stored, so serve-hit has
 # nothing to ship for it; nothing anywhere the sync touched contains the
-# secret's bytes.
+# secret's bytes (case T5 below).
 # ---------------------------------------------------------------------
 mkdir -p "$TMP/secret"
 printf 'TOPSECRETVALUE\n' > "$TMP/secret/s.txt"
@@ -245,9 +252,10 @@ else
 fi
 
 # ---------------------------------------------------------------------
-# T6 (partial) — key/result-hash identical whether computed locally or
-# fetched via serve-hit: a THIRD, independent, never-synced build of the
-# SAME program computes the SAME key filename and byte-identical object.
+# Key and result hash are identical whether computed locally or fetched
+# via serve-hit: a THIRD, independent, never-synced build of the SAME
+# program computes the SAME key filename and byte-identical object (case
+# T6 below, partial).
 # ---------------------------------------------------------------------
 HOME="$NODEC" "$PP" --grant "fs:${WORK}:ro" "$TMP/prog.pp" > "$TMP/out" 2>&1
 KEY_C=$(ls "$NODEC/.pp/store/traces" | head -1)

@@ -2,7 +2,7 @@
    backends (tree-walker `./pp f` and bytecode VM `./pp --bytecode f`), and
    asserts identical observable behavior (stdout; stderr when both succeed).
 
-   M7 S1: the suite is 2 readers x 2 backends — every generated program is
+   The suite is 2 readers x 2 backends — every generated program is
    ALSO pushed through `pp --roundtrip-braces f`, which (in one process)
    reads the sexpr AST, prints it as location-preserving brace text
    (src/printer_braces.ml), re-reads that with the brace reader
@@ -33,7 +33,7 @@
    - / and mod only ever get a nonzero positive literal divisor.
    - No random / wall-clock / network-island forms are ever generated;
      pinned file: islands over a fixed fixture are sampled in `full`.
-   - `defmacro` (M3/D10): `stmt_defmacro` (full only) defines a fresh,
+   - `defmacro`: `stmt_defmacro` (full only) defines a fresh,
      well-scoped macro that doubles its (always-literal) argument via
      `list`/`quote`, then calls it — exercises the shared expansion point
      (macro.ml) that both backends pass through before compile/eval ever
@@ -217,18 +217,18 @@ let rec gen_int env d : sx =
       1, (fun () -> S [A "do"; gen_int env (d - 1); gen_int env (d - 1)]);
       2, (fun () -> gen_match TInt env d);
       (if env.stdlib then 1 else 0), (fun () ->
-        (* C2: (apply + <nonempty int list>) — apply concatenates the one
+        (* (apply + <nonempty int list>) — apply concatenates the one
            segment and calls +, returning an int. Round-trips through braces
            as apply(+, …). *)
         S [A "apply"; A "+"; gen_list_ne env (d - 1)]);
     ]
 
-(* C3/C4: a total, well-typed `(match <scrut> arm…)` producing type [ty].
+(* A total, well-typed `(match <scrut> arm…)` producing type [ty].
    Every arm body is generated at [ty]; the scrutinee is an int so patterns are
    int literals / variables / `_` (never a list pattern against a scalar), and a
    final `_` arm guarantees no match-failure. Exercises guards (`pat if cond`)
    and — because the whole program is emitted as sexpr and also round-tripped
-   through braces — the C4 sexpr match reader and both printers. *)
+   through braces — the sexpr match reader and both printers. *)
 and gen_match ty env d : sx =
   let gen e dd = match ty with
     | TInt -> gen_int e dd | TStr -> gen_string e dd | TBool -> gen_bool e dd
@@ -283,7 +283,7 @@ and gen_string env d : sx =
            S [A "string-append"; gen_string env (d - 1); A "\"abcd\""];
            A "0"; A (string_of_int (rint 0 4))]);
       1, (fun () -> S [A "if"; gen_bool env (d - 1); gen_string env (d - 1); gen_string env (d - 1)]);
-      1, (fun () -> S [A "->string"; gen_int env (d - 1)]);   (* C1 lowering target *)
+      1, (fun () -> S [A "->string"; gen_int env (d - 1)]);   (* f-string interpolation's lowering target *)
       2, (fun () -> gen_match TStr env d);
     ]
 
@@ -349,7 +349,7 @@ and gen_list env d : sx =
         let x = fresh "x" in
         let env' = { env with vars = { vname = x; vty = TInt; vne = false } :: env.vars } in
         S [A "filter"; S [A "fn"; S [A x]; gen_bool env' (d - 1)]; gen_list env (d - 1)]);
-      1, (fun () -> S [A "apply"; A "list"; gen_list env (d - 1)]);  (* C2 lowering target *)
+      1, (fun () -> S [A "apply"; A "list"; gen_list env (d - 1)]);  (* call-spread's lowering target *)
     ]
 
 let gen_of_ty env d = function
@@ -416,12 +416,13 @@ let stmt_do_print env d =
   [S (A "do" :: inner)]
 
 let stmt_do_scoped_def env d =
-  (* D22(a), fixed: a bare top-level `(do (def x ...) ...)` binds x
-     BLOCK-LOCAL in both backends now — referencing it after the `do`
-     closes is an unbound-symbol error in both. Before the fix, the VM
-     stored the def as a VM global that leaked past the block, so the
-     second statement below would print a stale value instead of erroring
-     — a MISMATCH this generator would have caught. Not added to
+  (* A bare top-level `(do (def x ...) ...)` binds x
+     BLOCK-LOCAL in both backends — referencing it after the `do`
+     closes is an unbound-symbol error in both (a regression here would be
+     the VM instead storing the def as a VM global that leaked past the
+     block, so the second statement below would print a stale value
+     instead of erroring — a MISMATCH this generator would catch). Not
+     added to
      `env.gvars`/`env.vars`: later statements must not see it either. *)
   let x = fresh "g" in
   let ty = random_ty env in
@@ -430,7 +431,7 @@ let stmt_do_scoped_def env d =
    S [A "print"; A x]]
 
 let stmt_def_value env d =
-  (* (def x <expr>) — a VALUE binding (the ROADMAP §1 footgun fix): the RHS is
+  (* (def x <expr>) — a VALUE binding: the RHS is
      evaluated at definition time and any later statement may reference x. *)
   let x = fresh "g" in
   let ty = random_ty env in
@@ -480,7 +481,7 @@ let stmt_with_config env d =
 let ty_name = function TInt -> "int" | TStr -> "string" | TBool -> "bool" | _ -> "int"
 
 let stmt_typed_let env d =
-  (* (let [x : ty e] (print x)) — D3: VM enforces, tree-walker discards *)
+  (* (let [x : ty e] (print x)) — VM enforces, tree-walker discards *)
   let declared = [| TInt; TStr; TBool |].(Random.int 3) in
   let actual = if flip 0.6 then declared
                else [| TInt; TStr; TBool |].(Random.int 3) in
@@ -489,7 +490,7 @@ let stmt_typed_let env d =
       S [A "print"; A x]]]
 
 let stmt_typed_def env d =
-  (* (def (f p) : ty body) then call — D3 *)
+  (* (def (f p) : ty body) then call *)
   let f = fresh "f" in
   let p = fresh "p" in
   let declared = [| TInt; TStr; TBool |].(Random.int 3) in
@@ -514,27 +515,27 @@ let stmt_param_typed_def env d =
    S [A "print"; S [A f; gen_of_ty env (d - 1) actual]]]
 
 let stmt_module env d =
-  (* (import (module ...)) — D15: VM compiles only EDef children *)
+  (* (import (module ...)) — VM compiles only EDef children *)
   let m = fresh "m" in
   let p = fresh "p" in
   let penv = { vars = [{ vname = p; vty = TInt; vne = false }];
                fns = []; stdlib = false; gvars = [] } in
   let def = S [A "def"; S [A m; A p]; gen_int penv (d - 1)] in
   let children =
-    if flip 0.5 then [S [A "print"; gen_str_lit ()]; def]  (* non-def child: D15 *)
+    if flip 0.5 then [S [A "print"; gen_str_lit ()]; def]  (* non-def child *)
     else [def] in
   env.fns <- (m, 1, false) :: env.fns;
   [S [A "import"; S (A "module" :: children)];
    S [A "print"; S [A m; gen_int_lit ()]]]
 
 let stmt_module_sibling env d =
-  (* D22(b), fixed: module-body children see EARLIER siblings, letrec*-style
+  (* Module-body children see EARLIER siblings, letrec*-style
      — a sibling function def, a sibling value def, and a bare in-module
-     statement all resolve through the module's own local slots now.
-     Before the fix, any of these resolved globally at construction time and
-     raised "unbound symbol" in the VM (the tree-walker already threaded
-     `env_acc` forward across module children), e.g. exactly
-     `(import (module (def (f x) ...) (print (f 1))))` from STATUS D22. *)
+     statement all resolve through the module's own local slots (a
+     regression here would resolve any of these globally at construction
+     time and raise "unbound symbol" in the VM, since the tree-walker
+     already threads `env_acc` forward across module children — e.g.
+     exactly `(import (module (def (f x) ...) (print (f 1))))`). *)
   let f = fresh "m" and a = fresh "m" and b = fresh "m" in
   let p = fresh "p" in
   let penv = { vars = [{ vname = p; vty = TInt; vne = false }];
@@ -553,12 +554,12 @@ let stmt_module_sibling env d =
    S [A "print"; A b]]
 
 let stmt_load_module env _d =
-  (* (load-module "<abs stdlib>") then use a stdlib fn — D15/D20 opcode probe *)
+  (* (load-module "<abs stdlib>") then use a stdlib fn — an opcode probe *)
   env.stdlib <- true;
   [S [A "load-module"; A ("\"" ^ !stdlib_path ^ "\"")];
    S [A "print"; S [A "length"; S [A "range"; A "0"; A (string_of_int (rint 1 6))]]]]
 
-(* Islands (D2): a FIXED fixture island, pinned once at startup by running
+(* Islands: a FIXED fixture island, pinned once at startup by running
    `pp --update` on a seed file (which also exercises the pin rewriter and
    fills the cache). Only pinned file: islands over this fixture are ever
    generated — network islands stay out (real nondeterminism). Setup failure
@@ -568,7 +569,7 @@ let island_fixture : (string * string) option Lazy.t = lazy (
     let dir = Filename.temp_file "ppfuzz-island" "" in
     Sys.remove dir;
     Unix.mkdir dir 0o755;
-    (* M7 S3: `.pp` now dispatches to the brace reader, so the fixture's
+    (* `.pp` dispatches to the brace reader, so the fixture's
        entry file (found by island.ml's entry_file via the literal name
        "entry.pp") must hold brace-surface text. The seed file below stays
        sexpr — it's read by `pp --update` as an argument file, so it gets
@@ -613,7 +614,7 @@ let stmt_island env d =
        S [A "print"; S [A "isl-add"; A (string_of_int (rint 0 9))]]]
 
 let stmt_config_computed env d =
-  (* computed config key — D15: VM requires compile-time literal *)
+  (* computed config key — VM requires compile-time literal *)
   let k = fresh "k" in
   let klen = String.length k in
   let k1 = String.sub k 0 (klen / 2) and k2 = String.sub k (klen / 2) (klen - klen / 2) in
@@ -640,8 +641,8 @@ let stmt_with_handler env d =
       S [A "print"; S [A "perform"; A "log"; gen_string env (d - 1)]]]]
 
 let stmt_handler_leak env d =
-  (* with-handler whose body ends in a tail call — D9: VM never pops the
-     handler; a later perform diverges *)
+  (* with-handler whose body ends in a tail call — if the VM never pops the
+     handler, a later perform diverges *)
   let f = fresh "f" in
   let p = fresh "p" in
   let env' = { env with vars = { vname = p; vty = TInt; vne = false } :: env.vars } in
@@ -652,7 +653,7 @@ let stmt_handler_leak env d =
    S [A "print"; S [A "perform"; A "log"; gen_str_lit ()]]]
 
 let stmt_deep_rec env _d =
-  (* deep recursion — D4 stack-safety; tail and non-tail variants *)
+  (* deep recursion — stack-safety; tail and non-tail variants *)
   let f = fresh "f" in
   let n = fresh "p" in
   if flip 0.5 then begin
@@ -687,7 +688,7 @@ let stmt_big_map env _d =
             S [A "range"; A "0"; A (string_of_int n)]]]]]
 
 let stmt_eq_list env d =
-  (* (= E E) with textually identical E — D7: tree-walker dedups thunks *)
+  (* (= E E) with textually identical E — tree-walker dedups thunks *)
   let e = gen_list_ne env (d - 1) in
   [S [A "print"; S [A "="; e; e]]]
 
@@ -698,12 +699,12 @@ let stmt_seq_let env d =
       S [A "print"; A b]]]
 
 let stmt_quote_special _env _d =
-  (* D19: quote_to_value fails on if/let in both backends *)
+  (* quote_to_value fails on if/let in both backends *)
   if flip 0.5 then [S [A "print"; S [A "quote"; S [A "if"; A "1"; A "2"; A "3"]]]]
   else [S [A "print"; S [A "quote"; S [A "let"; V [A "x"; A "1"]; A "x"]]]]
 
 let stmt_defmacro _env _d =
-  (* (defmacro (name x) (list (quote +) x x)) then (print (name N)) — M3/D10:
+  (* (defmacro (name x) (list (quote +) x x)) then (print (name N)) —
      the macro receives its argument FORM as a quoted value at expansion
      time (never evaluating it inside the macro body) and builds a new form
      with list/quote, converted back to syntax (Types.value_to_expr) before
@@ -1106,7 +1107,7 @@ let shrink_candidates (forms : sx list) : sx list list =
   ) forms;
   List.rev !cands
 
-(* M7 S3: `.pp` now dispatches to the brace reader; every program this
+(* `.pp` dispatches to the brace reader; every program this
    fuzzer generates is sexpr text (the `sx` tree's printer emits classic
    S-expressions), so the scratch file keeps the `.ppl` extension — the
    sexpr surface is still fully supported, just no longer the default for
@@ -1122,7 +1123,7 @@ let run_both (src : string) : outcome * outcome =
   let bc = run_backend ["--bytecode"] f in
   (tw, bc)
 
-(* M7 S1: the reader round-trip check (sexpr -> braces -> re-read; AST +
+(* The reader round-trip check (sexpr -> braces -> re-read; AST +
    LAW-20 hash equality), run in-process by the interpreter itself.
    [run_both] has already written the program file. *)
 let run_all (src : string) : outcome * outcome * outcome =
@@ -1217,7 +1218,7 @@ let () =
      the error-path parity cases.  Reported so a run that generated no
      erroring programs is visible as such. *)
   let n_errpass = ref 0 in
-  (* M7 S1: round-trip accounting — every program is checked; failures are
+  (* Round-trip accounting — every program is checked; failures are
      gating mismatches with a `roundtrip:` signature. *)
   let n_rt_checked = ref 0 and n_rt_fail = ref 0 in
   Printf.printf "pp-fuzz: grammar=%s seed=%d start=%d count=%d depth=%d timeout=%dms pp=%s\n%!"

@@ -1,4 +1,4 @@
-(* surface_tables — the closed surface sets as data (MASTER-PLAN A′1/A′4 seam).
+(* surface_tables — the closed surface sets as data.
 
    The three closed tables and the exhaustive [Cell.t] ratchet. The .mli fixes
    the boundary: consumers (both readers, the `needs` desugar, lint, error
@@ -58,14 +58,14 @@ type grant_sugar = {
 val grant_sugar : grant_sugar list
 val find_grant_sugar : string -> grant_sugar option
 
-(* ---- observation-exclusivity primitives (B4) -------------------------- *)
+(* ---- observation-exclusivity primitives -------------------------------- *)
 
 (* The bare world-read primitives the `$` family wraps, each paired with the
-   `$` head to suggest instead. `pp lint` (B4) flags a bare use outside stdlib. *)
+   `$` head to suggest instead. `pp lint` flags a bare use outside stdlib. *)
 val observation_primitives : (string * string) list
 val observation_primitive : string -> string option
 
-(* ---- SPEC rendering (A′2) --------------------------------------------- *)
+(* ---- SPEC rendering ---------------------------------------------------- *)
 
 (* Emits exactly the text between docs/SPEC.md's generated-block markers;
    tests/067 diffs it. The render_* helpers it uses are module-private. *)
@@ -79,5 +79,6 @@ type surface_story =
   | Whitelisted of string
 
 (* Exhaustive over every [Cell.t] constructor — the compile-time ratchet that
-   forces a surface decision for any new cell kind (A′1). *)
+   forces a surface decision for any new cell kind: adding a constructor
+   without deciding how (or whether) it surfaces fails the build. *)
 val surface_decision : Cell.t -> surface_story

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# tests/028 — stdlib oracle (ROADMAP §2): expected VALUES for the new
-# primitives, plus the pieces that need process-level setup:
+# tests/028 — stdlib oracle: expected VALUES for the new primitives, plus
+# the pieces that need process-level setup:
 #   (a) string/number primitives produce the right values (not just parity);
 #   (b) argv: everything after `--` on the CLI is (argv), a list of strings;
 #   (c) env-get reads the environment, nil when absent;
@@ -11,15 +11,7 @@
 #       denied without an fs grant.
 # Both backends throughout, isolated HOME.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 assert_out() {  # NAME FLAGS FILE EXPECTED [ARGS...]
   local name="$1" flags="$2" file="$3" expected="$4"; shift 4
   local got

@@ -1,4 +1,5 @@
-(* pp Q13 generic domain orchestration (PLAN-m4-cells.md §Q13).
+(* pp generic domain orchestration — a domain is an observe/diff/apply
+   triple of ordinary pp functions running under core-enforced discipline.
 
    Everything TRUSTED about running a registered write-domain lives here:
    the journal bracket, the observed_all suspension, cap threading into
@@ -33,15 +34,10 @@
 
 open Types
 
-let find_kv (kvs : (value * value) list) (key : string) : value option =
-  List.find_map (fun (k, v) ->
-    match k with
-    | VKeyword k' | VString k' when k' = key -> Some (!Runtime.force_hook v)
-    | _ -> None)
-    kvs
+let find_kv kvs key = Force_deep.find_kv kvs key
 
 let plan_map (plan : value) : (value * value) list =
-  match !Runtime.force_hook plan with
+  match Backend.r.force plan with
   | VMap kvs -> kvs
   | other -> failwith ("domain diff: plan must be a map with :items and :summary, got "
                        ^ string_of_value other)
@@ -64,16 +60,14 @@ let summary_pair (entry : value) : string * string =
       failwith "domain diff: :summary entries must be 2-element [key value] pairs"
     else (arr.(0), arr.(1))
   in
-  let (k, v) = match !Runtime.force_hook entry with
+  let (k, v) = match Backend.r.force entry with
     | VVector arr -> two_of arr
     | VPair (a, VPair (b, VNil)) -> (a, b)
     | other -> failwith ("domain diff: :summary entries must be [key value] pairs, got "
                          ^ string_of_value other)
   in
-  let ks = match !Runtime.force_hook k with
-    | VString s | VKeyword s -> s
-    | other -> failwith ("domain diff: :summary key must be a string, got " ^ string_of_value other) in
-  let vs = match !Runtime.force_hook v with
+  let ks = match string_like (Backend.r.force k) with Some s -> s | None -> failwith ("domain diff: :summary key must be a string, got " ^ string_of_value k) in
+  let vs = match Backend.r.force v with
     | VString s -> s
     | other -> failwith ("domain diff: :summary value must be a string, got " ^ string_of_value other) in
   (ks, vs)
@@ -84,7 +78,7 @@ let plan_summary (plan : value) : (string * string) list =
   | Some (VPair _ as lst) ->
       let rec collect = function
         | VNil -> []
-        | VPair (a, d) -> summary_pair a :: collect (!Runtime.force_hook d)
+        | VPair (a, d) -> summary_pair a :: collect (Backend.r.force d)
         | other -> failwith ("domain diff: :summary must be a list/vector of pairs, got "
                              ^ string_of_value other)
       in collect lst
@@ -92,7 +86,7 @@ let plan_summary (plan : value) : (string * string) list =
   | Some other -> failwith ("domain diff: :summary must be a list/vector of [key value] pairs, got "
                             ^ string_of_value other)
 
-(* ---- Plan caching (Q4's "plans cache", falling out of the existing store) ----
+(* ---- Plan caching (falls out of the existing store, no new mechanism) ----
 
    key = H("domain-plan", diff-code-hash, observed-hash, desired-hash).
    diff runs under EMPTY caps (purity), so every world-read it could
@@ -101,7 +95,8 @@ let plan_summary (plan : value) : (string * string) list =
    is sound: Store.hit's classify treats an empty reads list as vacuously
    `Usable forever, so a hit here means exactly "same key ⇒ same plan",
    which is exactly what a pure function's cache should mean. Wiring a
-   synthetic `(node ...)` AST here (the alternative the contract offers)
+   synthetic `(node ...)` AST here (the alternative of routing this through
+   the ordinary node-caching machinery)
    would need a fabricated thunk/env solely to get a key and a store slot
    this direct Store.hit/store_object/store_trace path already gives for
    free, with no AST to keep in sync with a node body that doesn't exist —
@@ -157,7 +152,7 @@ let with_domain (name : string) (cap : capability) (f : unit -> 'a) : 'a =
   Runtime.with_ref Runtime.current_domain (Some name) (fun () ->
     Runtime.with_ref Runtime.current_capabilities [cap] f)
 
-(* Q13's own load-bearing wall (found the hard way): observe (and, to be
+(* A load-bearing wall (found the hard way): observe (and, to be
    safe across --watch --stabilize's keep_thunks, apply) is a call to a
    FIXED closure with NO varying arguments — a 0-ary observe, or an apply
    whose closure/env never changes between a pass's own two calls that
@@ -202,7 +197,7 @@ let run_domain ~(name : string) ~(entry : Runtime.domain_entry) ~(desired : valu
     | Some a -> a
     | None -> assert false
   in
-  (* Load-bearing suspension (PLAN-m4-cells.md): a domain's own bookkeeping
+  (* Load-bearing suspension: a domain's own bookkeeping
      during observe/diff/apply must never trip its own stratification scan —
      exception-safe with_ref, never a hand-rolled save/restore. Does NOT
      suspend trace_stack: node caching inside a domain's fns keeps working. *)
@@ -232,7 +227,7 @@ let run_domain ~(name : string) ~(entry : Runtime.domain_entry) ~(desired : valu
    register-domain itself simply returns this shape directly, N domains,
    one evaluation). Every name must resolve to a registered WRITE domain
    (a probe named here is a hard error, not silently skipped). *)
-(* M5 stage C (docs/PLAN-m5-distribution.md "Store GC"): recorded ONCE per
+(* Recorded ONCE per
    SUCCESSFUL pass (after every domain's run_domain has completed without
    raising) — [forced] is the exact fully-forced {domain -> desired} (or,
    under host-qualified distribution, {host -> {domain -> desired}}) value
@@ -248,15 +243,15 @@ let record_epoch (forced : value) : unit =
     let hash = Hasher.hash_value forced in
     (try Store.store_object ~key:hash ~value:forced with _ -> ());
     Journal.append (Journal.Epoch { hash });
-    Gcroots.record ~keep:!Runtime.gc_keep_epochs
+    Gcroots.record ~keep:(Runtime.invocation_get ()).gc_keep_epochs
       { Gcroots.gr_hash = hash;
-        gr_bytecode = !Runtime.program_bytecode;
-        gr_grants = !Runtime.initial_grant_specs;
-        gr_files = !Runtime.program_files;
-        gr_reconcile_root = !Runtime.program_reconcile_root;
-        gr_supervise = !Runtime.program_supervise;
-        gr_member_name = !Runtime.program_member_name;
-        gr_desired_object = !Runtime.program_desired_object }
+        gr_bytecode = (Runtime.invocation_get ()).program_bytecode;
+        gr_grants = (Runtime.invocation_get ()).initial_grant_specs;
+        gr_files = (Runtime.invocation_get ()).program_files;
+        gr_reconcile_root = (Runtime.invocation_get ()).program_reconcile_root;
+        gr_supervise = (Runtime.invocation_get ()).program_supervise;
+        gr_member_name = (Runtime.invocation_get ()).program_member_name;
+        gr_desired_object = (Runtime.invocation_get ()).program_desired_object }
   with _ -> ()
 
 let run_all (all_desired : value) : unit =

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# SPEC LAW 23 / DESIGN §2.1: cell-id canonicalization.
+# Cell-id canonicalization (SPEC law 23).
 #
 #   A cell-id is canonicalized before hashing: absolute real-path (symlinks
 #   resolved), no trailing slash. Done once, in Runtime.canonical_path, and
 #   applied at every file:/tree:/stat:/tool:/runtime:file: construction
 #   site, every --grant path, and the loader bound — so two syntactically
-#   different paths naming the same inode are one cell (the D8 path-prefix
-#   bug class, closed at the cell layer).
+#   different paths naming the same inode are one cell (this path-prefix
+#   bug class is closed at the cell layer).
 #
-#   Covers (MASTERPLAN M2 / task spec, minimum four):
+#   Covers (at least four cases):
 #     (a) a symlinked source tree: loader authority resolves cross-spelled
 #         load targets, and a node's grant/observation pair still HITS when
 #         the grant is spelled via the symlink one run and the real path the
@@ -23,7 +23,7 @@
 #         longest existing prefix and appending the rest lexically.
 #
 #   NFC Unicode normalization is NOT covered here — a documented residual
-#   (SPEC LAW 23, STATUS.md); this suite is realpath-only.
+#   (SPEC law 23; see docs/STATUS.md); this suite is realpath-only.
 #
 # Runs under an isolated HOME; both backends.
 set -uo pipefail
@@ -49,8 +49,8 @@ assert() {  # NAME PATTERN present|absent [FILE]
 run() { "$PP" "$@" > "$TMP/out" 2>&1; }
 
 # --- (a1) loader authority: a source tree reached via a symlink can `load`
-#          a sibling named via the REAL path, and vice versa (M2 exit
-#          criterion 3: "symlinked trees are undefined behavior" ends here) ---
+#          a sibling named via the REAL path, and vice versa (this closes
+#          "symlinked trees are undefined behavior") ---
 printf 'let libval = "LIBVAL"\n' > "$SRC/lib.pp"
 cat > "$SRC/via-link.pp" <<EOF
 load("$LINK/lib.pp")
@@ -104,7 +104,7 @@ assert "vm-a2-real-grant-hit"    "RUN" absent
 #         (Linux CI, where the (a) suite above is the portable equivalent).
 #         Granted root is a DEDICATED subdirectory, not $TMP itself — $TMP
 #         also holds this script's own volatile `$TMP/out` redirects, and
-#         the coarse `tree:` floor (Q2) would otherwise see THOSE change
+#         the coarse `tree:` floor would otherwise see THOSE change
 #         between runs, which is real but not what this test is isolating. ---
 VARDIR="$TMP/vardir"
 mkdir -p "$VARDIR"

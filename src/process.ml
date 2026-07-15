@@ -1,4 +1,4 @@
-(* pp `run` process effect (D13) — execute an external command.
+(* pp `run` process effect — execute an external command.
 
    (perform run CMD ARG...) ⇒ {"exit" int, "out" string, "err" string}
 
@@ -7,8 +7,9 @@
    Capability_error, which node caching deliberately does not memoize
    (authority is not identity — LAW 15).
 
-   Trace soundness (DESIGN Q2's coarse-cell floor): a run inside a node
-   records
+   Trace soundness: a run inside a node is traced by the coarse-cell
+   soundness floor — one whole-tree hash per fs-read grant, refined per-tool
+   by the depfile adapter below when a tool emits one. It records
      - `tool:<resolved-binary>` — content hash of the executable, and
      - `tree:<root>`           — whole-tree content hash of every
                                  fs-read-granted root at run time,
@@ -17,7 +18,7 @@
    itself never saw. Reads outside granted roots (system headers etc.) are
    the documented staleness hole the future `toolchain:` closure cell covers.
 
-   Sandbox (LAW 18 / Q2 sandbox v1): inside a node the child process runs
+   Sandbox (LAW 18): inside a node the child process runs
    with the node's scratch directory as cwd, so relative outputs land in
    node-local scratch and never in the caller's tree. The sandbox does not
    fail-close absolute paths — it is a hygiene mechanism; the trace cells
@@ -49,7 +50,7 @@ let record_tool_cell (resolved : string) : unit =
   | Some h -> Runtime.record_read (Cell.(to_string (Tool (Runtime.canonical_path resolved)))) h
   | None -> ()
 
-(* The coarse-cell soundness floor (Q2): one whole-tree hash per fs-read
+(* The coarse-cell soundness floor: one whole-tree hash per fs-read
    grant. Used by plain `run` and as run-dep!'s fallback when the tool
    produced no depfile. *)
 let record_tree_cells () : unit =
@@ -76,7 +77,7 @@ let read_all (path : string) : string =
 (* Execute argv, capturing stdout/stderr; cwd is the node sandbox when inside
    a node (created on demand), the process cwd otherwise. Every execution is
    journaled — "null rebuild executes zero external processes" is proved by
-   the journal, not asserted (ROADMAP Phase-1 exit criterion 1). *)
+   the journal, not asserted. *)
 let exec (argv : string list) : int * string * string =
   (try Journal.append (Journal.Exec argv) with _ -> ());
   let out_f = Filename.temp_file "pp-run" ".out" in
@@ -132,18 +133,19 @@ let run_effect (args : value list) : value =
              (VString "out",  VString out);
              (VString "err",  VString err) ]
 
-(* ---- Depfile adapter (Q2 refinement) ----
+(* ---- Depfile adapter ----
 
    (perform run-dep! DEPFILE CMD ARG...) — like `run`, but after the exec the
    Makefile-style depfile the tool wrote (`cc -MD -MF` and friends) is parsed
    and the EXACT files the tool read become the trace cells:
-     granted dep      → precise `file:` cell (via read_file_cell, so it is
-                        also Q11-pinned and CAS-ingested)
+     granted dep      → precise `file:` cell (via read_file_cell, so it also
+                        gets pinned into this run's CAS-ingested snapshot
+                        like every other file: cell)
      out-of-grant dep → `tool:` cell (a system read under process authority)
    and NO coarse `tree:` cells are recorded — the refinement that shrinks the
-   trace below the Q2 soundness floor. A missing/unreadable depfile falls
-   back to the coarse floor. The adapter trusts the tool's report; that trust
-   is per-tool and explicit (you chose run-dep!). *)
+   trace below the coarse-cell soundness floor. A missing/unreadable depfile
+   falls back to the coarse floor. The adapter trusts the tool's report; that
+   trust is per-tool and explicit (you chose run-dep!). *)
 
 (* "target: dep dep \\\n dep" → the dep paths. Line continuations become
    spaces; everything through the first ':' is the target and is dropped. *)
@@ -241,9 +243,9 @@ let write_file_effect ~(has_cap : string -> bool) (path : string)
            let ch = open_out path in
            output_string ch content;
            close_out ch;
-           (* Q11 coherence: pp's own write supersedes the run's pinned
-              snapshot of this cell — later node reads must see the new
-              content, not the pre-write pin. *)
+           (* pp's own write supersedes this run's CAS-ingest pin of the
+              cell — later node reads must see the new content, not the
+              pre-write pin. *)
            Store.unpin_file path;
            VNil
          with Sys_error msg -> failwith ("write-file: " ^ msg))
@@ -264,22 +266,22 @@ let sandbox_read (path : string) : string option =
        with _ -> None)
   | None -> None
 
-(* ---- M4 sealed cells: read dispatch shared by slurp/read-file ----
+(* ---- Sealed cells: read dispatch shared by slurp/read-file ----
 
    Sandbox scratch (above) takes precedence, unchanged. Outside a sandbox,
-   the GRANT decides the shape of the result, never the program text
-   (PLAN-m4-cells.md "Sealed cells": "program text stays deployment-
-   agnostic"):
+   the GRANT decides the shape of the result, never the program text —
+   program text stays deployment-agnostic; only what a given deployment's
+   `--grant` set covers determines whether a path reads as a plain string or
+   a sealed one:
      - covered by a CapFilesystem read grant (with or without ALSO a
-       CapSecret grant) → ordinary VString, exactly as before M4. Both-
-       grants deliberately resolves to plain fs behavior: the deployment
-       that also handed out an fs grant over the same path is saying "not
-       secret HERE" (PLAN-m4-cells.md).
+       CapSecret grant) → ordinary VString. Both-grants deliberately
+       resolves to plain fs behavior: the deployment that also handed out an
+       fs grant over the same path is saying "not secret HERE".
      - covered by CapSecret and NOT by CapFilesystem → VSealed, read via
        Store.read_sealed_cell (bytes pinned in Runtime.sealed_pins,
        in-memory only — store_blob/the CAS is never called for this path).
      - covered by neither → Capability_error, worded by the caller (`slurp`
-       and `read-file` keep their own pre-M4 message text via [cap_err]). *)
+       and `read-file` each keep their own message text via [cap_err]). *)
 let read_dispatch ~(tag : string) ~(cap_err : string -> string) (path : string) : value =
   match sandbox_read path with
   | Some content -> VString content
@@ -302,18 +304,17 @@ let read_dispatch ~(tag : string) ~(cap_err : string -> string) (path : string) 
         else
           raise (Capability_error (cap_err path))
 
-(* ---- M4 network: `(perform http-get url)` / `(perform http-post url body)` ----
+(* ---- Network: `(perform http-get url)` / `(perform http-post url body)` ----
 
-   Implemented by forking curl via [exec] above (E6: zero new OCaml
+   Implemented by forking curl via [exec] above (zero new OCaml
    networking/TLS surface) but AUTHORIZED against CapNetwork host[:port] —
    not CapProcess: granularity, "may read this host" is a much narrower
-   grant than "may exec anything" (PLAN-m4-cells.md "Network"). Banned
-   inside node bodies (trace_stack guard, the same LAW-31 pattern
-   `Fenced.register` and `write-file`'s node arm use) — network reads are
-   not convergent and are not the sanctioned nondeterminism mechanism
-   (probes are, LAW 37/38); legal in probe observe-fns (which run with
-   trace_stack forced to [] — Primitives.probe_value_for), domain
-   observe/apply (stage 2), and the script tier. *)
+   grant than "may exec anything". Banned inside node bodies (trace_stack
+   guard, the same LAW-31 pattern `Fenced.register` and `write-file`'s node
+   arm use) — network reads are not convergent and are not the sanctioned
+   nondeterminism mechanism (probes are, LAW 37/38); legal in probe
+   observe-fns (which run with trace_stack forced to [] —
+   Primitives.probe_value_for), domain observe/apply, and the script tier. *)
 
 let has_network_cap ~(host : string) ~(port : int option) : bool =
   List.exists (fun cap -> Capabilities.check_network cap ~host ~port)
@@ -325,8 +326,7 @@ let has_network_cap ~(host : string) ~(port : int option) : bool =
    Deliberately minimal — no userinfo, no IPv6 literal brackets; documented
    residuals, not needed for curl (curl gets the WHOLE url verbatim; this
    parse exists only to name the (host, port) pair the authority check
-   tests). Anything other than http/https is a hard error (PLAN-m4-cells.md:
-   "anything else = error"). *)
+   tests). Anything other than http/https is a hard error. *)
 let parse_http_url (url : string) : string * string * int =
   let strip prefix =
     let n = String.length prefix in

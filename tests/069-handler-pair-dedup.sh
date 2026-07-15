@@ -1,23 +1,17 @@
 #!/usr/bin/env bash
-# tests/069 — A′5: one `with-handler(name = fn, …)` pair parser, two contexts.
+# tests/069 — one `with-handler(name = fn, …)` pair parser, two contexts.
 #
 # The pair-parsing loop used to be copied in the normal reader and the
-# quasiquote reader (MASTER-PLAN A′5's cited example). They had drifted: the
-# quasiquote copy silently accepted a trailing comma while the normal copy
-# rejected it — like every other comma list in the grammar. They are now one
-# function (Reader_braces.parse_handler_pairs), so:
+# quasiquote reader. They had drifted: the quasiquote copy silently accepted
+# a trailing comma while the normal copy rejected it — like every other
+# comma list in the grammar. They are now one function
+# (Reader_braces.parse_handler_pairs), so:
 #   (a) with-handler runs, both backends, in ordinary code;
 #   (b) a with-handler quasiquote template expands and runs identically on both
 #       backends (the pair loop builds the same data either way);
 #   (c) a trailing comma is rejected in BOTH readers (the drift is gone).
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-fail=0
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 run_both() {
   local name="$1" file="$2" expected="$3"
   local tw bc

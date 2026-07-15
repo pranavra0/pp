@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Q11: snapshot-as-CAS-ingest — torn reads are dead.
+# Snapshot-as-CAS-ingest — torn reads are dead.
 #
 #   The first NODE-context observation of a file cell ingests its bytes into
 #   the CAS (~/.pp/store/blobs/<sha256>) and pins (cell → hash) for the rest

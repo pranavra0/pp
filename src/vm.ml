@@ -10,8 +10,9 @@ let sp = ref 0
 
 (* handler_stack, current_capabilities, config_stack, thunk_store are in Runtime. *)
 (* Save-stack so PUSH_HANDLER can restore the EXACT prior scope on
-   POP_HANDLER regardless of how many handlers were pushed (D9: PUSH_HANDLER
-   pushed n but one POP_HANDLER popped 1). Mirrors the tree-walker's
+   POP_HANDLER regardless of how many handlers were pushed (a naive
+   PUSH_HANDLER-pushes-n/POP_HANDLER-pops-1 scheme would leak handlers past
+   the construct that installed them). Mirrors the tree-walker's
    saved/restore pattern. (with-caps' WITH_CAPS opcode below needs no
    analogous save-stack: it restores current_capabilities via an ordinary
    OCaml local + try/with around its nested run_isolated call, which is also
@@ -56,6 +57,20 @@ let pop_n n =
 (* Saved evaluator force — vm_force falls back to this for tree-walker thunks.
    Declared before `run` so the mutually-recursive `vm_force` (below) can use it. *)
 let saved_eval_force : (value -> value) ref = ref (fun v -> v)
+(* Shared arity-check and frame-build for VM closures (VClosure c).
+   Extracted because CALL, TAIL_CALL, and PUSH_HANDLER all do the same:
+   validate arity, allocate a frame, fill it with args, and prepend
+   the closure's captured frames. Returns the new frame list. *)
+let build_call_frames (c : Types.closure) (args : value list) : frame list =
+  let nparams = List.length c.params in
+  let nargs = List.length args in
+  if nargs <> nparams then begin
+    let fname = match c.fn_name with Some nm -> nm | None -> "#<fn>" in
+    failwith (Printf.sprintf "arity mismatch calling %s: expected %d args, got %d" fname nparams nargs)
+  end;
+  let new_frame = make_frame nparams in
+  List.iteri (fun i arg -> frame_set new_frame i arg) args;
+  new_frame :: c.vm_frames
 
 (** Run a bytecode program starting at a given pc with given frames.
     Returns the result value (top of operand stack at HALT/RETURN). *)
@@ -216,8 +231,10 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
          | VThunk th ->
              th.thunk_persist <- true;
              th.node_fv <- fv_descs;
-             (* Node capture (Q11): the ambient at THIS creation, unconditionally
-                — never left at the [] default (see Types.thunk.node_caps). *)
+             (* Node capture: populate node_caps from the ambient at THIS
+                creation, unconditionally — never left at the [] default
+                (see Types.thunk.node_caps); force_node later reads this
+                back as the node's fixed authority. *)
              th.node_caps <- !current_capabilities
          | _ -> ());
         push t;
@@ -251,21 +268,12 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
          | VClosure c when c.vm_bc == Types.dummy_bytecode ->
              (* Tree-walker closure invoked from bytecode — fall back to
                 the evaluator's apply. *)
-             let r = !Primitives.apply_ref fn_val args !Primitives.current_env_ref in
+             let r = Backend.r.apply fn_val args !Primitives.current_env_ref in
              push r;
              incr pc;
              loop ()
          | VClosure c ->
-             let nparams = List.length c.params in
-             if n <> nparams then begin
-               let fname = match c.fn_name with Some nm -> nm | None -> "#<fn>" in
-               failwith (Printf.sprintf "arity mismatch calling %s: expected %d args, got %d" fname nparams n)
-             end;
-             let new_frame = make_frame nparams in
-             List.iteri (fun i arg ->
-               frame_set new_frame i arg
-             ) args;
-             let callee_frames = new_frame :: c.vm_frames in
+             let callee_frames = build_call_frames c args in
              push (run_isolated c.vm_bc c.vm_offset callee_frames);
              incr pc;
              loop ()
@@ -282,18 +290,9 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
         let fn_val = pop () in
         (match fn_val with
          | VClosure c when c.vm_bc == Types.dummy_bytecode ->
-             result := !Primitives.apply_ref fn_val args !Primitives.current_env_ref
+             result := Backend.r.apply fn_val args !Primitives.current_env_ref
          | VClosure c ->
-             let nparams = List.length c.params in
-             if n <> nparams then begin
-               let fname = match c.fn_name with Some nm -> nm | None -> "#<fn>" in
-               failwith (Printf.sprintf "arity mismatch calling %s: expected %d args, got %d" fname nparams n)
-             end;
-             let new_frame = make_frame nparams in
-             List.iteri (fun i arg ->
-               frame_set new_frame i arg
-             ) args;
-             local_frames := new_frame :: c.vm_frames;
+             local_frames := build_call_frames c args;
              bc_ref := c.vm_bc;
              pc := c.vm_offset;
              loop ()
@@ -375,27 +374,17 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
                [fun args -> apply handler_val args env] (evaluator.ml
                EWithHandler). [hv] is now the real handler function (the
                compiler no longer wraps it in a 0-param region). Save/restore
-               the operand stack exactly like CALL (D20): [run] shares the
+               the operand stack exactly like CALL: [run] shares the
                module-global operand_stack/sp. *)
             match hv with
             | VClosure c when c.vm_bc == Types.dummy_bytecode ->
-                !Primitives.apply_ref hv args !Primitives.current_env_ref
+                Backend.r.apply hv args !Primitives.current_env_ref
             | VClosure c ->
-                let nparams = List.length c.params in
-                if List.length args <> nparams then begin
-                  let fname = match c.fn_name with Some nm -> nm | None -> "#<fn>" in
-                  failwith (Printf.sprintf
-                    "arity mismatch calling %s: expected %d args, got %d"
-                    fname nparams (List.length args))
-                end;
-                let new_frame = make_frame nparams in
-                List.iteri (fun i arg -> frame_set new_frame i arg) args;
-                let frames' = new_frame :: c.vm_frames in
-                run_isolated c.vm_bc c.vm_offset frames'
+                run_isolated c.vm_bc c.vm_offset (build_call_frames c args)
             | VBuiltin (_, f) -> f args
             | _ -> failwith ("VM: handler is not a function: " ^ string_of_value hv)
            ),
-           hash_value hv)   (* D17: handler identity in the key *)
+           hash_value hv)   (* handler identity in the key *)
         ) !pairs in
         handler_save_stack := !handler_stack :: !handler_save_stack;
         handler_stack := new_handlers @ !handler_stack;
@@ -403,7 +392,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
         loop ()
 
     | POP_HANDLER ->
-        (* Restore the pre-PUSH handler stack exactly, not pop-one (D9). *)
+        (* Restore the pre-PUSH handler stack exactly, not pop-one. *)
         (match !handler_save_stack with
          | [] -> ()
          | saved :: rest ->
@@ -455,13 +444,14 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
           | VString s -> s
           | _ -> failwith "VM: LOAD_FILE constant is not a string"
         in
-        (* Loader authority: bounded + runtime-cell recorded (Q6/D8c) —
+        (* Loader authority: bounded to source roots + ~/.pp, recorded as a
+           runtime-cell —
            same helper as the tree-walker's ELoad/EIsland, so both backends
            fail identically outside the source roots. `~source:path`: the
            loaded file's OWN path, so its forms are located against it, not
            the reader's "<?>" default. *)
         let contents = Runtime.loader_read path in
-        (* M3 defmacro: shared expansion hook, before compile_program ever
+        (* Shared macro-expansion hook, before compile_program ever
            sees these forms — Macro.ml is compiled after Vm.ml's
            dependencies (evaluator), so this is a direct call, not the
            Primitives-ref indirection evaluator.ml needs. *)
@@ -469,7 +459,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
                       (Reader_braces.read_dispatch ~source:path ~path contents) in
         (* Compile and run ONE top-level form at a time (mirroring
            repl.ml's execute_file_bytecode for the outer file), each wrapped
-           in ITS OWN location (LAW 29/D12): an error escaping a form here
+           in ITS OWN location (LAW 29): an error escaping a form here
            is decorated with the LOADED file's file:line before it can
            unwind past this LOAD_FILE, so it never surfaces as the loading
            `(load ...)` form's line. `run_isolated` (not run_program_expr)
@@ -497,7 +487,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
         loop ()
 
     | ISLAND (uri_i, pin_i) ->
-        (* D2: resolve the inline pin to the verified cached tree, then
+        (* Resolve the inline pin to the verified cached tree, then
            module-evaluate its entry.pp — mirrors the tree-walker's EIsland. *)
         let const_string i what =
           match (!bc_ref).consts.(i) with
@@ -546,7 +536,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
 
 (* Evaluate a module file: run it against fresh globals and package the
    bindings it added as a VEnvMap. Shared by LOAD_MODULE_FILE and ISLAND.
-   D20: does NOT merge into caller globals — the tree-walker's ELoadModule
+   Does NOT merge into caller globals — the tree-walker's ELoadModule
    only returns the module value; statement-position merging is an explicit
    compiler-emitted IMPORT. *)
 and eval_module_from (path : string) (frames : frame list) : value =
@@ -554,7 +544,7 @@ and eval_module_from (path : string) (frames : frame list) : value =
     try Runtime.loader_read path
     with Sys_error msg -> failwith ("VM: cannot load module file: " ^ msg)
   in
-  (* M7 S1: dispatch on [path]'s extension; label stays the "<?>" default. *)
+  (* Dispatch on [path]'s extension; label stays the "<?>" default. *)
   let exprs = Macro.expand_toplevel_list (Reader_braces.read_dispatch ~path source) in
   let prog = Compiler.compile_program exprs in
   let saved_globals = Hashtbl.copy globals in
@@ -626,8 +616,8 @@ and vm_force (v : value) : value =
    the SAME key in both backends and shares the store entry; closures hash per
    backend, so those key separately but each remains sound.
 
-   M3 free-var ban (LAW 20 node-boundary, import side; extended M4/LAW 39 to
-   VSealed): if a free variable's forced value contains a VCapability or
+   Free-var ban (LAW 20 node-boundary, import side; also covers VSealed per
+   LAW 39): if a free variable's forced value contains a VCapability or
    VSealed (Hasher.contains_authority — never forces an already-Unevaluated
    thunk, so this can't force the same value twice or invalidate the "each is
    forced" note above; it just inspects whatever [vm_force] already
@@ -698,7 +688,7 @@ let run_program_expr (prog : bytecode) : value =
 
 let rec init () =
   Evaluator.init ();
-  saved_eval_force := !Primitives.force_ref;
+  saved_eval_force := Evaluator.force;
   Hashtbl.clear globals;
   let initial = Primitives.initial_env () in
   List.iter (fun (name, v) ->
@@ -712,20 +702,19 @@ let rec init () =
   config_stack := [];
   handler_save_stack := [];
   if not !Runtime.keep_thunks then Hashtbl.clear thunk_store;
-  Primitives.set_force vm_force;
+  Backend.r.force <- vm_force;
   (* Config-cell observations (LAW 33) hash the forced value; under the VM the
      forcing is vm_force (Evaluator.init is not run on this path). *)
-  Runtime.force_hook := vm_force;
-  Primitives.vm_run_thunk_ref := run_isolated;
-  (* Phase 3: let Primitives' scheduler-aware force-deep compute VM node keys
+  Backend.r.vm_run_thunk <- run_isolated;
+  (* Let Primitives' scheduler-aware force-deep compute VM node keys
      without a dependency cycle (Primitives is compiled before Vm). *)
-  Primitives.vm_node_key_ref := vm_node_key;
-  Primitives.vm_run_bytecode_ref := (fun bc ->
+  Backend.r.vm_node_key <- vm_node_key;
+  Backend.r.vm_run_bytecode <- (fun bc ->
     run_program bc
   );
   (* Wire the VM global-definition hook so that eval-pp definitions
      become visible to subsequent bytecode. *)
-  Primitives.vm_define_ref := (fun name v ->
+  Backend.r.vm_define <- (fun name v ->
     Hashtbl.replace globals name v
   )
 

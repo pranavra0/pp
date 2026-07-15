@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Phase 2: --watch / --once watch mode foundation, pp graph.
+# --watch / --once watch mode foundation, pp graph.
 #
-#   Exit criterion 3: --once provisions once and terminates.
-#   Exit criterion 4: --watch and --once hit the same node keys in the same store.
+#   --once provisions once and terminates.
+#   --watch and --once hit the same node keys in the same store.
 #   Introspection: pp graph prints the cell-node dependency graph from traces.
 #
 #   --watch uses a polling pull-in-loop: each iteration clears in-memory state

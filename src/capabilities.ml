@@ -45,7 +45,9 @@ let rec check_fs_read (cap : capability) (target_path : string) : bool =
   | CapRestrict { cap; scope; mode } ->
       (* Restriction: scope must cover the target, the underlying cap must
          itself grant read there, and an explicit mode (if any) must not
-         exclude read — the mode-intersection half of M3's CapRestrict. *)
+         exclude read — the mode-intersection half of CapRestrict: a
+         restriction narrows, so requesting a mode wider than the underlying
+         capability's own mode must fail, never widen it. *)
       path_grants ~scope target_path
       && check_fs_read cap target_path
       && (match mode with Some Write -> false | Some Read | Some ReadWrite | None -> true)
@@ -64,8 +66,8 @@ let rec check_fs_write (cap : capability) (target_path : string) : bool =
       && (match mode with Some Read -> false | Some Write | Some ReadWrite | None -> true)
   | _ -> false
 
-(* M4: does [cap] grant access to [host]:[port]? "*" as a granted host
-   wildcards any host (the pre-M4 "any"-protocol shape, generalized); a grant
+(* Does [cap] grant access to [host]:[port]? "*" as a granted host
+   wildcards any host; a grant
    with no port (None) is unrestricted by port, a grant with Some p pins it
    exactly — the query's port must be known (Some) and equal. Used both ways:
    with [cap] = the ambient (as a CapCompose) and (host, port) = an http
@@ -84,12 +86,13 @@ let rec check_network (cap : capability) ~(host : string) ~(port : int option) :
   | CapRestrict { cap; _ } -> check_network cap ~host ~port
   | _ -> false
 
-(* M4 sealed cells: does [cap] grant reading the secret at [target_path]?
+(* Does [cap] grant reading the secret at [target_path]?
    Path-component scoping, same as fs (Paths.under via path_grants) — but a
    SEPARATE capability kind (CapSecret), never fs_mode, because the read
    surface must return a distinct VALUE KIND (VSealed) for the node-boundary
-   ban to pattern-match (PLAN-m4-cells.md kill-list: "CapSecret as an
-   fs_mode" was rejected for exactly this reason). *)
+   ban to pattern-match: folding this into fs_mode would make a sealed read
+   indistinguishable in kind from a plain one, so the ban couldn't tell them
+   apart structurally. *)
 let rec check_secret (cap : capability) (target_path : string) : bool =
   match cap with
   | CapSecret { path } -> path_grants ~scope:path target_path
@@ -244,9 +247,8 @@ let rec cap_subseteq (requested : capability) (ambient : capability list) : bool
 (* ---- --grant spec parsing ----
 
    "fs:/path:rw" | "net:host[:port]" | "secret:/path" | "process" -> a
-   capability. Moved here (M5, PLAN-m5-distribution.md "Signed capability
-   tokens") from what used to be a local closure in main.ml, so the
-   signed-token verifier (Token.verify) can parse a token's embedded caps
+   capability. Moved here from what used to be a local closure in main.ml,
+   so the signed-token verifier (Token.verify) can parse a token's embedded caps
    with the EXACT SAME function `pp --grant` uses at the CLI — "zero new
    authority code": a wire-verified capability list is built by the
    identical parser as a locally-minted one, so cap_subseteq/

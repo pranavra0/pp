@@ -1,4 +1,4 @@
-# demo/agent.pp — M6 devops-complete demo: the per-host agent.
+# demo/agent.pp — a devops deploy demo: the per-host agent.
 #
 # BYTE-IDENTICAL on every host (that is the whole point — a member's
 # identity comes entirely from its CLI invocation, never from the

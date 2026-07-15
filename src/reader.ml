@@ -40,6 +40,12 @@ let current_file = ref ""
 let lex_error line msg =
   failwith (Printf.sprintf "%s at %s:%d" msg !current_file line)
 
+(* A token that scanned off the end of the source — the lexer's out-of-input
+   signal, distinct from a genuine bad-character error. See
+   Types.Reader_incomplete. *)
+let lex_incomplete line msg =
+  raise (Reader_incomplete (Printf.sprintf "%s at %s:%d" msg !current_file line))
+
 (* Lex a string into a list of (token, start_line) pairs. *)
 let lex (input : string) : (token * int) list =
   let len = String.length input in
@@ -112,7 +118,7 @@ let lex (input : string) : (token * int) list =
     let buf = Buffer.create 16 in
     let rec loop () =
       match peek () with
-      | None -> lex_error !lex_line "unterminated string"
+      | None -> lex_incomplete !lex_line "unterminated string"
       | Some '"' -> advance (); add (TokString (Buffer.contents buf))
       | Some '\\' ->
           advance ();
@@ -122,7 +128,7 @@ let lex (input : string) : (token * int) list =
            | Some '\\' -> advance (); Buffer.add_char buf '\\'; loop ()
            | Some '"' -> advance (); Buffer.add_char buf '"'; loop ()
            | Some c -> advance (); Buffer.add_char buf c; loop ()
-           | None -> lex_error !lex_line "unterminated escape")
+           | None -> lex_incomplete !lex_line "unterminated escape")
       | Some c ->
           if c = '\n' then incr lex_line;
           advance ();
@@ -150,7 +156,7 @@ let lex (input : string) : (token * int) list =
     let buf = Buffer.create 32 in
     let rec loop () =
       match peek () with
-      | None -> lex_error !lex_line "unterminated island literal"
+      | None -> lex_incomplete !lex_line "unterminated island literal"
       | Some '>' -> advance (); add (TokIsland (Buffer.contents buf))
       | Some c -> Buffer.add_char buf c; advance (); loop ()
     in
@@ -210,10 +216,14 @@ let next ps = let t = peek ps in advance ps; t
 let is_symbol ps name =
   match peek ps with TokSymbol n when n = name -> true | _ -> false
 
+(* Incomplete (REPL: read more) iff the failure is at end-of-input; genuine
+   otherwise. The sexpr reader has no newline tokens, so the current token IS
+   the next significant one. See Types.Reader_incomplete. *)
 let parse_error ps msg =
   let file = !current_file in
   let line = peek_line ps in
-  failwith (Printf.sprintf "%s at %s:%d" msg file line)
+  let located = Printf.sprintf "%s at %s:%d" msg file line in
+  if peek ps = TokEOF then raise (Reader_incomplete located) else failwith located
 
 (* Collect items until the [closing] delimiter (consumed); [what] names the
    form in the unterminated-at-EOF error. One loop for every bracketed form. *)
@@ -236,8 +246,9 @@ let expect_symbol ps =
 (* Blocks (do bodies, multi-expression fn/def/let bodies, modules) give every
    def whole-block letrec* scope, so one name defined twice in a block is
    incoherent. Function defs keep their pre-existing shadowing latitude; any
-   collision involving a VALUE def is rejected at read time.
-   M7: the check itself lives in Desugar (shared with the brace reader). *)
+   collision involving a VALUE def is rejected at read time. The check
+   itself lives in Desugar, shared with the brace reader, so both surfaces
+   enforce it identically. *)
 let check_block_defs ps (exprs : expr list) : expr list =
   Desugar.check_block_defs ~err:(fun msg -> parse_error ps msg) exprs
 
@@ -372,8 +383,9 @@ and parse_vector_param_list ps =
 (* Assemble a function's parameter names and body: each annotated parameter
    desugars into a located type check run ahead of the body — both backends
    compile/evaluate the shared desugared AST, so the checks are enforced
-   identically (LAW 32). An optional return annotation wraps the body.
-   M7: the desugar lives in Desugar (shared with the brace reader). *)
+   identically (LAW 32). An optional return annotation wraps the body. The
+   desugar lives in Desugar, shared with the brace reader, so both surfaces
+   produce the identical checked AST. *)
 and assemble_fn_body locate (params : (string * expr option) list)
     (ret_ty : expr option) (body : expr) : string list * expr =
   Desugar.assemble_fn_body locate params ret_ty body
@@ -397,7 +409,10 @@ and parse_def ps =
       EDef (name, param_names, body')
   | TokSymbol name ->
       (* (def name value) — a VALUE binding (evaluated at definition time),
-         not a nullary closure: the ROADMAP §1 footgun fix. *)
+         not a nullary closure: `(def x v)` used to silently create a
+         zero-argument closure over `v` instead of binding `x` to `v`'s
+         value, a real footgun since `x` then had to be CALLED to get the
+         value out. *)
       advance ps;
       let value = parse_expr ps in
       ignore (parse_rest ps);  (* consume ) and any trailing *)
@@ -528,11 +543,12 @@ and parse_quote ps =
   ignore (parse_rest ps);
   EQuote e
 
-(* (and exprs...) — short-circuiting AND (shared desugar, M7) *)
+(* (and exprs...) — short-circuiting AND, desugared to `if` via the shared
+   Desugar module so both readers produce the identical AST *)
 and parse_and ps =
   Desugar.desugar_and (parse_rest ps)
 
-(* (or exprs...) — short-circuiting OR (shared desugar, M7) *)
+(* (or exprs...) — short-circuiting OR (same shared desugar as `and`) *)
 and parse_or ps =
   Desugar.desugar_or (parse_rest ps)
 
@@ -582,8 +598,8 @@ and parse_defnode ps =
 
 (* (assert cond [msg]) — a located runtime check: a false/nil condition
    raises `assertion failed: <form> at file:line` (or the custom message,
-   location appended). Desugars to if+error so both backends enforce the
-   shared AST identically (shared desugar, M7). *)
+   location appended). Desugars to if+error via the shared Desugar module,
+   so both backends enforce the identical AST. *)
 and parse_assert ps =
   let line = peek_line ps in
   let cond = parse_expr ps in
@@ -619,8 +635,8 @@ and parse_let_star ps =
    exactly the (already-held, ⊆-checked) requested value for body's extent.
    Single capability expression (current-capabilities/cap-restrict/
    cap-compose/cap-none — never a list): the removed `effect` form's
-   `caps @ ambient` union rule was the widening backdoor this form must not
-   reopen (PLAN-m3-attenuation.md). *)
+   `caps @ ambient` union rule was a widening backdoor the instant capability
+   values existed, and this form must not reopen it. *)
 and parse_with_caps ps =
   let cap_expr = parse_expr ps in
   let body = block_body ps (parse_rest ps) in
@@ -680,7 +696,7 @@ and parse_load_module ps =
       ELoadModule path
   | _ -> parse_error ps "load-module expects a string path"
 
-(* (island <uri>[#ref] ["64-hex-pin"]) — content-addressed remote module (D2).
+(* (island <uri>[#ref] ["64-hex-pin"]) — content-addressed remote module.
    The URI may be written bare (file:./lib), as an island literal
    (<github:owner/repo#main> — '#' is not a symbol char), or as a string.
    The optional pin is the canonical tree hash, usually written as a string
@@ -714,7 +730,7 @@ and parse_config ps =
   advance ps;  (* consume ) *)
   EConfig (key_expr, default_opt)
 
-(* (match scrutinee (pat [if guard] body) ...) — C4: the sexpr surface for
+(* (match scrutinee (pat [if guard] body) ...) — the sexpr surface for
    match, the exact grammar Printer_sexpr emits so match-using files round-trip
    through --to-sexpr (they were the last exclusion in the tests/055 sweep).
    Patterns are `_`, a literal, a bare symbol (variable), `(list p... [. rest])`

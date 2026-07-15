@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # pins: LAW-24
-# Q6 / D8c: the runtime/traced split — loader authority is bounded and
-# loader reads are runtime-tagged trace cells.
+# The runtime/traced split: loader authority is bounded, and loader reads are
+# runtime-tagged trace cells.
 #
 #   `load`/`load-module`/`island` run with the INTERPRETER's authority, not
 #   the user capability set. That authority is bounded: the directories of
 #   the CLI-named programs, the working directory, and ~/.pp. Loading from
-#   anywhere else is an error — closing the D8c hole where the loader was an
+#   anywhere else is an error — closing the hole where the loader was an
 #   unbounded ambient bypass.
 #
 #   Each loader read is recorded as a `runtime:file:<path>` trace cell:

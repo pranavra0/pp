@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# tests/060 — A2: quasiquote/list parity.
+# tests/060 — quasiquote/list parity.
 #
-# In the brace surface, `[ ... ]` is the list literal (L9): ordinary code
-# lowers it to a cons-chain list value. Inside `quasiquote { }` the SAME
+# In the brace surface, `[ ... ]` is the list literal: ordinary code lowers
+# it to a cons-chain list value. Inside `quasiquote { }` the SAME
 # bracket syntax must build the SAME value — not a vector. Before this fix
 # the quasiquote path built a `(vector ...)`, so a macro template `[a, b]`
 # produced a different value (a vector) than the code `[a, b]` it stands in
@@ -12,15 +12,7 @@
 # This pins value-parity between the template result and the literal, on
 # both backends (differential), plus the empty and splice cases.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 # The value a quasiquote bracket template builds must equal the value the
 # equivalent ordinary bracket code builds, and must be a list (pair?), never
 # a vector.

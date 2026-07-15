@@ -1,93 +1,48 @@
 # AGENTS.md
 
-pp is a content-addressed, capability-scoped language in OCaml — brace/infix
-surface syntax by default (`.pp`), with a Lisp-family s-expression AST still
-underneath and fully supported (`.ppl`; it's what macros author/consume) —
-with two back ends (a tree-walking interpreter and a bytecode VM) that must
+pp is a content-addressed, capability-scoped language, written in OCaml. It
+has two back ends, a tree-walker (the oracle) and a bytecode VM, that must
 produce identical output.
 
-## Build, run, test
-
-Toolchain is **opam + dune** (not npm). Dependencies: `dune`, `cryptokit`.
+## Commands
 
 ```sh
-dune build            # builds the interpreter (targets bin/pp) and the fuzzer
-dune runtest          # differential test suite: both back ends diffed per file
-pp file.pp            # run (bin/pp is on PATH via direnv; else `dune exec pp --`)
-pp --diff file.pp     # run both back ends, fail if their results differ
-dune exec ./tools/fuzz.exe -- --grammar full --count 1000   # differential fuzzer
+dune build            # builds bin/pp and the fuzzer
+dune runtest          # differential suite (slow — see docs/TESTING.md)
+pp file.pp            # bin/pp is on PATH via direnv; else `opam exec -- dune exec pp --`
+pp --diff file.pp     # run both back ends, fail on divergence
 ```
 
-If direnv isn't active, prefix commands with `opam exec --` and use `bin/pp` or
-`dune exec pp --` instead of bare `pp`.
+## Invariants
 
-## What you need to know
+- The two back ends must agree. After touching `evaluator.ml`, `compiler.ml`,
+  `vm.ml`, or `types.ml`, run `--diff` and the fuzzer.
+- A content key must include everything the computation depends on. If you
+  touch hashing or thunk keys, keep `tests/009` passing. If you touch the
+  store, traces, or node keying, keep `tests/010` to `tests/024` passing.
+  `pp why file.pp` explains hits and misses.
+- Verify by running the binary, not by reading docs. Prose has lied before;
+  the tests and fuzzer exist because of it.
 
-- **The two back ends must agree.** Any divergence between `pp file` and
-  `pp --bytecode file` is a bug. `--diff` and the fuzzer exist to catch it;
-  run them after touching `evaluator.ml`, `compiler.ml`, `vm.ml`, or `types.ml`.
-- **Verify by running, not by reading the docs.** This project has a history of
-  docs claiming things that weren't true; that's why the fuzzer and
-  [docs/STATUS.md](docs/STATUS.md) exist. Confirm behavior against the binary.
-- **The content-addressed key must include everything a computation depends on.**
-  Omitting captured environments (D6) or the handler stack (D17) caused stale
-  cache hits. If you touch hashing (`types.ml`) or thunk keys (`evaluator.ml`),
-  keep `tests/009` passing.
-- **The persistent node cache is validated by traces, not just the key.**
-  `node { e }` writes results + verifying traces to `~/.pp/store` in **both
-  backends** (the VM via `MAKE_NODE`/`vm_node_key`/`force_node_thunk`). A hit
-  re-checks the cells the node recorded — `file:`, `config:`, `handler:`,
-  `tool:`, `tree:`, `stat:`, `env:`, `argv:` — and the caller's authority
-  over them, so what a node
-  *observed* governs validity while the key (`H(code ‖ free-var value-hashes)`,
-  nothing else — caps/config/handlers excluded) governs identity. The two
-  backends compute the same key for data free vars and share store entries.
-  If you touch `store.ml`, the read primitives (`slurp`/`read-file`), the
-  `run` effect or sandbox (`process.ml`), the free-var/keying logic
-  (`types.ml free_vars`, `node_key_of`, `vm_node_key`), or the
-  `force`/trace-frame plumbing (`evaluator.ml`, `vm.ml`, `runtime.ml`), the
-  reconciler (`reconciler.ml`), or the why/no-cache/check tooling, keep
-  `tests/010`–`tests/024` passing (plus `tests/028`, which pins the `stat:`
-  file-predicate cells). `pp why file.pp` explains hits/misses when
-  debugging cache behavior.
-- **Phase 1 is closed and its exit criteria are executable.** `tests/024`
-  builds a 101-TU C project through a real `build.pp` inside `dune runtest`;
-  `scripts/build-self.sh` (pp builds itself — run OUTSIDE dune) and
-  `scripts/build-lua.sh` (real Lua 5.4.7) replicate the proof. If a change
-  makes any exit criterion regress, that change is wrong, not the test.
+## Commits
 
-## Where things are
+Use Conventional Commits: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`,
+`perf:`, or `chore:`, followed by one terse lowercase sentence. Do not add
+trailers. Before release, never use `!` or `BREAKING CHANGE`. Done work
+lives in git history, not in docs, so delete finished plan items rather
+than marking them done.
 
-- Learning the language: [docs/manual/](docs/manual/) — the reference manual,
-  built by pp (`scripts/build-manual.sh`); every example is run by pp, so it
-  can't drift. Authoring conventions in [docs/manual/AUTHORING.md](docs/manual/AUTHORING.md).
-- Code structure and data flow: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-- Vocabulary: [docs/GLOSSARY.md](docs/GLOSSARY.md)
-- What's real vs planned + the D-list: [docs/STATUS.md](docs/STATUS.md)
-- Semantics (normative): [docs/SPEC.md](docs/SPEC.md)
-- Plan and rationale: [docs/ROADMAP.md](docs/ROADMAP.md), [docs/DESIGN.md](docs/DESIGN.md)
-- Surface syntax (settled design): [docs/SYNTAX.md](docs/SYNTAX.md); implementation status in [docs/MASTER-PLAN.md](docs/MASTER-PLAN.md)
-- Testing: [docs/TESTING.md](docs/TESTING.md)
+## Read only when the task needs it
 
-## Style
-
-pp code follows [docs/SYNTAX.md](docs/SYNTAX.md) — §1 (the sigil table and the
-`:`-grammar/`->`-data rule) and §15 (style) are the normative parts. Key rules:
-
-- **Suffix conventions:** `?` for predicates (`nil?`), `!` for effects (`run!`) — uniformly, no unmarked effect wrappers — `->` for conversions (`string->number`), no suffix for pure functions.
-- **Truthiness:** Only `nil` and `false` are falsy. Use `if x` not `if not(nil?(x))`.
-- **Flat `let`:** One `let (a = …, b = …) { … }`, not nested single-binding ladders. Use `let*` for sequential shadowing.
-- **`else if` chains:** flat — do not nest the second `if` inside braces.
-- **Naming:** Functions are verb-led (`longest-palindrome`, not `expand-around-centre`). Values are full words (`max-len`, not `ml`). Inner helpers name the step (`scan`, not `loop`).
-- **Comments:** Why, not what. Library files get a header listing every export.
-- **Data:** `[...]` for lists (the default collection), `vec[...]` for vectors, `{k -> v}` for maps, `{...m, k -> v}` for update/merge. `:` keys are special-form clause grammar only — data maps always use `->`.
-- **Spread (`...`):** one concept in three places — list construction (`[head, ...tail]`), call arguments (`run!("cc", ...flags, "-o", out)`), and map update/merge. A compound spread target uses the spaced `... expr` form.
-- **World observations:** `$file(...)`, `$env(...)`, `$glob(...)`, `$probe(...)`, `$secret(...)`, `$config(...)` are the only way to read the world; bare `slurp`/`env-get` are linted.
-- **Error handling:** produce `[:ok, v]` / `[:err, e]`; consume with `try { a <- f(); ... }` (short-circuit) or `|> collect` (accumulate all errors). Never `car` a result. There is no postfix `?`.
-- **Dispatch:** `match` (with guards) is the one pattern-dispatch form. No `cond`, no function clauses.
-- **Pipelines are the method syntax:** `x |> f(args)`. There are no dot-method calls.
-- **Strings:** interpolation requires the `f"..."` prefix; ordinary strings never interpolate.
-
-Rejected features and why: [docs/DESIGN.md](docs/DESIGN.md) §6 — do not
-reintroduce them. When writing or editing pp code in this repo, apply these
-conventions.
+| Task | Read |
+|---|---|
+| Writing or editing pp code (style, sigils, forms) | [docs/SYNTAX.md](docs/SYNTAX.md) — the sigil table and the writing style section are normative |
+| Language semantics, the laws | [docs/SPEC.md](docs/SPEC.md) |
+| Learning the language by example | [docs/manual/](docs/manual/) |
+| Which source file owns what; data flow | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| Vocabulary (cell, node, trace, island, …) | [docs/GLOSSARY.md](docs/GLOSSARY.md) |
+| What works today; discrepancy ledger | [docs/STATUS.md](docs/STATUS.md) |
+| What to work on next; the open plan | [docs/PLAN.md](docs/PLAN.md) |
+| Why it's designed this way; rejected features (don't re-propose) | [docs/DESIGN.md](docs/DESIGN.md) |
+| Running/adding tests, the fuzzer | [docs/TESTING.md](docs/TESTING.md) |
+| CLI flags | `pp --help` |

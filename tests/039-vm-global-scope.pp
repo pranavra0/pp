@@ -1,4 +1,6 @@
-# tests/039 — D22: VM global-scope holes (fixed; STATUS.md D22).
+# tests/039 — VM global-scope holes, fixed: a bare top-level do-block binds
+# its defs as local slots (never VM globals), and a module body compiles as
+# a fresh closure so sibling defs resolve like letrec*.
 #
 # Both come from the VM resolving names it cannot place in a frame via the
 # globals table:

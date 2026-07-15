@@ -1,6 +1,9 @@
-(* pp domain primitives (Q13, PLAN-m4-cells.md "primitives gap list").
+(* pp domain primitives.
 
-   The TRUSTED MECHANICS moved out of the old reconciler.ml/supervisor.ml:
+   A domain is an observe/diff/apply triple of ordinary pp functions
+   (registered via `register-domain`) running under core-enforced discipline;
+   these are the TRUSTED MECHANICS that used to live in reconciler.ml/
+   supervisor.ml:
    atomic file materialization, fork/exec/reap, and domain-private state
    persistence. What is NOT here is policy — no tree-walk/diff decision, no
    start/stop/restart decision; those live in stdlib/domain-fs.pp and
@@ -36,8 +39,8 @@ let has_fs_write path =
    cap-restrict), so `current_capabilities` inside observe/apply is a
    ONE-ELEMENT list whose element is a CapCompose — a flat top-level
    `function CapProcess -> true | _ -> false` scan (as process.ml's
-   pre-M4 has_process_cap does, correctly, for the historically-flat
-   ambient) would miss it. *)
+   has_process_cap did before it needed to recurse through CapCompose)
+   would miss it. *)
 let has_process_cap () =
   List.exists Capabilities.check_process !Runtime.current_capabilities
 
@@ -47,13 +50,6 @@ let has_process_cap () =
    Fenced.force_deep / Primitives.force_deep, duplicated here for the same
    reason those two are already duplicated rather than shared (small, and
    each module's force_hook indirection is set up independently). *)
-let rec force_deep (v : value) : value =
-  match !Runtime.force_hook v with
-  | VPair (a, d) -> VPair (force_deep a, force_deep d)
-  | VVector vs -> VVector (Array.map force_deep vs)
-  | VMap kvs -> VMap (List.map (fun (k, v) -> (force_deep k, force_deep v)) kvs)
-  | VSet vs -> VSet (List.map force_deep vs)
-  | other -> other
 
 (* ---- tree-observe: {relpath -> content-hash}, fs-read-gated ----
    Moved from Reconciler.observed_files; returns a pp VMap instead of an
@@ -71,24 +67,14 @@ let tree_observe (root : string) : value =
   if not (has_fs_read root || has_fs_write root) then
     raise (Capability_error ("tree-observe: capability error: no read or write access for " ^ root));
   let acc = ref [] in
-  let rec walk dir rel =
-    match Sys.readdir dir with
-    | exception _ -> ()
-    | names ->
-        Array.iter (fun name ->
-          let p = Filename.concat dir name in
-          let r = if rel = "" then name else rel ^ "/" ^ name in
-          match Unix.lstat p with
-          | exception _ -> ()
-          | { Unix.st_kind = Unix.S_DIR; _ } -> walk p r
-          | { Unix.st_kind = Unix.S_REG; _ } ->
-              (match Store.hash_file_opt p with
-               | Some h -> acc := (VString r, VString h) :: !acc
-               | None -> ())
-          | _ -> ())
-          names
-  in
-  if Sys.file_exists root && Sys.is_directory root then walk root "";
+  if Sys.file_exists root && Sys.is_directory root then
+    Fswalk.walk ~root ~cb:(fun ~rel ~path visit ->
+      match visit with
+      | Fswalk.Entry { Unix.st_kind = Unix.S_REG; _ } ->
+          (match Store.hash_file_opt path with
+           | Some h -> acc := (VString rel, VString h) :: !acc
+           | None -> ())
+      | _ -> ());
   VMap !acc
 
 let rec mkdir_p dir =
@@ -145,9 +131,10 @@ let remove_file (path : string) : unit =
    Scoped implicitly to Runtime.current_domain ("core knows which domain is
    running" — set by Domains.with_domain for the extent of observe/diff/
    apply). Gated on cap_subseteq of the CURRENT domain's own registered cap
-   against the ambient: during diff (threaded EMPTY caps, PLAN-m4-cells.md
-   purity requirement) this can never hold (no capability is a subset of
-   nothing unless it grants nothing), so diff calling domain-state-get/put
+   against the ambient: during diff (which runs under a threaded EMPTY
+   capability set, since diff must be pure) this can never hold (no
+   capability is a subset of nothing unless it grants nothing), so diff
+   calling domain-state-get/put
    is a Capability_error automatically — closing that side-channel with the
    SAME mechanism diff's purity already uses, not a new checker. *)
 let require_domain_context (who : string) : Runtime.domain_entry * string =
@@ -190,7 +177,7 @@ let domain_state_put (key : string) (v : value) : unit =
   | VNil -> if Sys.file_exists path then (try Sys.remove path with _ -> ())
   | _ ->
       Store.ensure_dir dir;
-      let forced = force_deep v in
+      let forced = Force_deep.force_deep_plain v in
       (match Codec.encode_value forced with
        | Some content -> Store.atomic_write path content
        | None -> failwith "domain-state-put: value is not serializable data")
@@ -206,37 +193,28 @@ let domain_state_put (key : string) (v : value) : unit =
    primitives.ml's hash-map/map-insert): every lookup below forces the
    value via force_hook before matching. *)
 let find_field kvs key =
-  Option.map (fun (_, v) -> !Runtime.force_hook v)
-    (List.find_opt (fun (k', _) ->
-       match k' with VString s | VKeyword s | VSymbol s -> s = key | _ -> false) kvs)
+  Option.map (fun (_, v) -> Backend.r.force v)
+    (List.find_opt (fun (k', _) -> string_like k' = Some key) kvs)
 
 let expect_string_field where kvs key =
   match find_field kvs key with
-  | Some (VString s | VKeyword s | VSymbol s) -> s
-  | Some other -> failwith (Printf.sprintf "%s: %s must be a string, got %s"
-                              where key (string_of_value other))
+  | Some v -> (match string_like v with Some s -> s | None -> failwith (Printf.sprintf "%s: %s must be a string, got %s" where key (string_of_value v)))
   | None -> failwith (Printf.sprintf "%s: missing '%s'" where key)
 
 let expect_opt_string_field where kvs key default_ =
   match find_field kvs key with
-  | Some (VString s | VKeyword s | VSymbol s) -> s
-  | Some other -> failwith (Printf.sprintf "%s: %s must be a string, got %s"
-                              where key (string_of_value other))
+  | Some v -> (match string_like v with Some s -> s | None -> failwith (Printf.sprintf "%s: %s must be a string, got %s" where key (string_of_value v)))
   | None -> default_
 
 let expect_string_list_field where kvs key =
-  let one v = match !Runtime.force_hook v with
-    | VString s | VKeyword s | VSymbol s -> s
-    | other -> failwith (Printf.sprintf "%s: %s elements must be strings, got %s"
-                          where key (string_of_value other))
-  in
+  let one v = match string_like (Backend.r.force v) with Some s -> s | None -> failwith (Printf.sprintf "%s: %s elements must be strings, got %s" where key (string_of_value v)) in
   match find_field kvs key with
   | None | Some VNil -> []
   | Some (VVector arr) -> Array.to_list (Array.map one arr)
   | Some (VPair _ as lst) ->
       let rec collect = function
         | VNil -> []
-        | VPair (a, d) -> one a :: collect (!Runtime.force_hook d)
+        | VPair (a, d) -> one a :: collect (Backend.r.force d)
         | other -> failwith (Printf.sprintf "%s: %s must be a list/vector of strings, got %s"
                               where key (string_of_value other))
       in collect lst
@@ -248,10 +226,8 @@ let expect_env_field where kvs key =
   | None | Some VNil -> []
   | Some (VMap envkvs) ->
       List.map (fun (k, v) ->
-        let ks = match !Runtime.force_hook k with VString s | VKeyword s | VSymbol s -> s
-          | other -> failwith (where ^ ": env key must be a string, got " ^ string_of_value other) in
-        let vs = match !Runtime.force_hook v with VString s | VKeyword s | VSymbol s -> s
-          | other -> failwith (where ^ ": env value must be a string, got " ^ string_of_value other) in
+        let ks = match string_like (Backend.r.force k) with Some s -> s | None -> failwith (where ^ ": env key must be a string, got " ^ string_of_value k) in
+        let vs = match string_like (Backend.r.force v) with Some s -> s | None -> failwith (where ^ ": env value must be a string, got " ^ string_of_value v) in
         (ks, vs))
         envkvs
   | Some other -> failwith (where ^ ": " ^ key ^ " must be a map, got " ^ string_of_value other)
@@ -268,14 +244,11 @@ let domain_io_dir () : string =
 let out_file name = Filename.concat (domain_io_dir ()) ("svc-" ^ Hasher.hash_string name ^ ".out")
 let err_file name = Filename.concat (domain_io_dir ()) ("svc-" ^ Hasher.hash_string name ^ ".err")
 
-(* (perform proc-spawn spec) — spec is a map with "name"/"cmd"/"args"/"env"/
-   "cwd" fields (mirrors the old Supervisor spec shape exactly); returns the
-   child's pid immediately. Requires CapProcess. *)
 let proc_spawn (spec : value) : value =
   require_no_node_body "proc-spawn";
   if not (has_process_cap ()) then
     raise (Capability_error "proc-spawn: capability error: no process authority");
-  let kvs = match !Runtime.force_hook spec with
+  let kvs = match Backend.r.force spec with
     | VMap kvs -> kvs
     | other -> failwith ("proc-spawn: spec must be a map, got " ^ string_of_value other)
   in
@@ -288,7 +261,7 @@ let proc_spawn (spec : value) : value =
     | Some p -> p
     | None -> failwith ("proc-spawn: command not found for service " ^ name ^ ": " ^ cmd)
   in
-  let spec_hash = Hasher.hash_value (force_deep spec) in
+  let spec_hash = Hasher.hash_value (Force_deep.force_deep_plain spec) in
   Journal.append (Journal.ProcStartIntent { name; spec_hash });
   Store.ensure_dir (domain_io_dir ());
   let argv = resolved :: args in
