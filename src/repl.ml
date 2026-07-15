@@ -1,6 +1,5 @@
 (* pp REPL — Read-Eval-Print Loop
 
-   ROADMAP §1 REPL quality / M7 S4 (docs/M7-SYNTAX.md "Flip the default"):
    - reads the brace surface, like every `.pp` file (Reader_braces);
    - multi-line input: a form left open (brace/paren/bracket/string nesting,
      comment- and infix-continuation-aware — see Reader_braces
@@ -25,13 +24,13 @@ let init () =
   Evaluator.init ();
   global_env := Primitives.initial_env ()
 
-(* LAW 29 / D12: a runtime error escaping a top-level form reports that
+(* LAW 29: a runtime error escaping a top-level form reports that
    form's source location — unless its message already carries one (a
    " at …:<line>" suffix), so located errors are never double-located.
    Runtime.with_form_location is the ONE implementation, shared by both
    backends' top-level drivers here AND by `load` (evaluator.ml
    eval_expressions, vm.ml LOAD_FILE) — so an error inside a `load`ed file
-   is decorated with THAT file's line, not the loading form's (D12). *)
+   is decorated with THAT file's line, not the loading form's. *)
 let with_toplevel_location = Runtime.with_form_location
 
 (* Tree-walker: process a single expression *)
@@ -41,16 +40,16 @@ let process_expr (e : expr) : value =
     | VEnvMap _ as v -> v
     | v -> v)
 
-(* Tree-walker: execute a source string. M3 defmacro: the WHOLE file's forms
+(* Tree-walker: execute a source string. The WHOLE file's forms
    are expanded together, in order, before any of them is evaluated — a
    `defmacro` earlier in the string must be visible to a use later in the
    SAME string, even though process_expr below evaluates one form at a
    time. *)
 let execute_string ?(source : string = "<?>") (input : string) : value list =
   init ();
-  (* M7 S1: `.ppb` sources read with the brace reader (Reader_braces
-     dispatches on the extension; every other source is byte-for-byte the
-     sexpr reader as before). *)
+  (* `.ppb` sources read with the brace reader (Reader_braces
+     dispatches on the extension; every other source uses the
+     sexpr reader). *)
   let exprs =
     Macro.expand_toplevel_list
       (Reader_braces.read_dispatch ~source ~path:source input) in
@@ -87,7 +86,7 @@ let execute_file_bytecode (use_vm : bool) (path : string) : value list =
   close_in ch;
   execute_string_bytecode ~source:path use_vm source
 
-(* ---- Q13: run several sources under ONE init (main.ml's domain-glue
+(* ---- Run several sources under ONE init (main.ml's domain-glue
    wiring) ----
 
    `execute_string`/`execute_string_bytecode` each call `init()`
@@ -128,7 +127,7 @@ let execute_sources_bytecode (use_vm : bool) (sources : (string * string) list) 
 (*  Input machinery                                                     *)
 (* =================================================================== *)
 
-(* M7 S4: multi-line continuation is brace/paren/bracket/string-nesting
+(* Multi-line continuation is brace/paren/bracket/string-nesting
    aware via the ACTUAL brace reader (Reader_braces.needs_more_input),
    not a hand-rolled bracket counter — see that function's header comment
    for why. *)
@@ -343,10 +342,10 @@ let repl_loop ~(use_vm : bool) =
         else begin
           if tty then append_history input;
           (try
-             (* M3 defmacro: the macro table persists across REPL turns
+             (* The macro table persists across REPL turns
                 (reset only by init ()/Vm.init () at repl_loop's start), so
                 a macro defined on one line is usable on a later one — same
-                sequential-top-level rule as a file. M7 S4: the interactive
+                sequential-top-level rule as a file. The interactive
                 REPL reads braces directly (not via read_dispatch's
                 extension sniffing — there is no file here at all). *)
              let exprs =

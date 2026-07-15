@@ -1,8 +1,8 @@
 (* pp brace printer — renders a `Types.expr` (as produced by the s-expression
    reader) as brace-surface text (SPEC Appendix B) that the brace reader
    (src/reader_braces.ml) re-reads to the structurally IDENTICAL expr — same
-   `ELocated` placement, hence the same LAW-20 hash. This is S1's fuzz-gate
-   printer and the layer S2's `pp fmt` (and later `pp why`/`pp graph`/REPL
+   `ELocated` placement, hence the same LAW-20 hash. This is the fuzzer's round-trip-gate
+   printer and the layer `pp fmt` (and `pp why`/`pp graph`/REPL
    display) builds on.
 
    Location preservation: `ELocated ((file, line), _)` drives layout — the
@@ -11,7 +11,7 @@
    break is needed where the grammar forbids one (that is a bug in this
    printer's layout, and the fuzz gate would surface it).
 
-   Layout quality (M7 S2 — the migrated files are what humans read after S3):
+   Layout quality matters — this printer's output is what humans read:
    the printer runs TWO passes. Pass 1 prints without location enforcement,
    recording every line the strict pass will demand, in demand order (the
    "anchor stream" — demand order is a traversal property, independent of
@@ -528,7 +528,8 @@ and print_pattern st (p : pattern) : unit =
        | Some r ->
            (* Only separate the spread from PRECEDING elements; a spread-only
               pattern [...r] must not emit a leading comma ([, ...r] fails to
-              re-read — "expected pattern, got ,"). Caught by A″2 (tests/071). *)
+              re-read — "expected pattern, got ,"). Caught by the printer
+              round-trip property (tests/071). *)
            if pats <> [] then emit st ", ";
            emit st "..."; print_pattern st r
        | None -> ());
@@ -540,7 +541,7 @@ and print_pattern st (p : pattern) : unit =
          re-parses as a LIST pattern whose head is the keyword literal :tag,
          which then fails on the space before the next element: a broken
          `pp fmt --to-braces` round-trip for every tagged match arm, caught by
-         A″2's printer round-trip property (pinned in tests/071). *)
+         the printer round-trip property (pinned in tests/071). *)
       emit st "(:";
       emit st tag;
       List.iter (fun p ->

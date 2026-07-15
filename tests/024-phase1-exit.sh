@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# ROADMAP Phase-1 exit criteria, run for real on a generated 100-TU C project
-# built by a real build.pp (nodes + run-dep! + blobs + reconcile).
+# A generated 100-translation-unit C project, built for real by a real
+# build.pp (nodes + run-dep! + blobs + reconcile), proves these rebuild
+# guarantees:
 #
 #   1. Null rebuild executes ZERO external processes (the journal proves it)
 #      and completes in <1s.
@@ -36,8 +37,8 @@ execs() { grep -c "^exec " "$J" 2>/dev/null; true; }
 links() { grep -c "cc -o prog" "$J" 2>/dev/null; true; }
 now_ms() { perl -MTime::HiRes=time -e 'printf "%d", time()*1000'; }
 
-# ---- generate the project — in pp (ROADMAP §2 milestone: the fixture
-# generator is a pp program; the pass/fail oracle in this file stays shell) ----
+# ---- generate the project: the fixture generator is a pp program; the
+# pass/fail oracle in this file stays shell ----
 if ! "$PP" --grant "fs:$SRC:rw" tests/gen-cproject.pp -- "$N" "$SRC" 2>"$TMP/gen.err"; then
   echo "FAIL fixture-generator (pp)"; cat "$TMP/gen.err"; exit 1
 fi
@@ -47,17 +48,15 @@ TU=$((N + 1))
 
 # ---- build.pp — the real thing: manifest-driven, nodes all the way ----
 #
-# Phase 3 (docs/PLAN-phase3-parallel.md): `compile` builds but does NOT
-# force its node — the pairing-trap-safe pattern is `(map compile names)`
-# (map applies compile to each name via the apply hook WITHOUT forcing the
-# result, per Wall A), `force-deep` THAT batch (the scheduler's fork
-# fan-out point sees every sibling node before any of them runs), and only
-# THEN pair names back up with the now-hit results via `zip2`. Do NOT
-# rewrite this as `(map2 (fn (n) (cons n (compile n))) names)` — pairing
-# `(compile n)` into `cons` there is an argument position, so EApply would
-# force each node eagerly and in order right there, silently serializing
-# the whole build back to one-at-a-time (the pairing trap the design
-# review caught).
+# `compile` builds but does NOT force its node — the pairing-trap-safe
+# pattern is `(map compile names)` (map applies compile to each name via the
+# apply hook WITHOUT forcing the result), `force-deep` THAT batch (the
+# scheduler's fork fan-out point sees every sibling node before any of them
+# runs), and only THEN pair names back up with the now-hit results via
+# `zip2`. Do NOT rewrite this as `(map2 (fn (n) (cons n (compile n))) names)`
+# — pairing `(compile n)` into `cons` there is an argument position, so
+# EApply would force each node eagerly and in order right there, silently
+# serializing the whole build back to one-at-a-time.
 cat > "$TMP/build.pp" <<EOF
 def each(f, lst) { if nil?(lst) { nil } else { f(car(lst)); each(f, cdr(lst)) } }
 def foldl2(f, acc, lst) { if nil?(lst) { acc } else { foldl2(f, f(acc, car(lst)), cdr(lst)) } }
@@ -131,7 +130,7 @@ if [ "$e2" -eq "$e1" ]; then ok "c2-touch-zero-recompiles"
 else bad "c2-touch-zero-recompiles: $((e2 - e1)) new execs"; fi
 
 # ---- criterion 3: edit one f5.c — exactly f5.o + link re-run ----
-# (drift mutation in pp — ROADMAP §2 milestone)
+# (the source mutation runs as a pp program, not inline shell)
 "$PP" --grant "fs:$SRC:rw" tests/mutate-cproject.pp -- edit-tu "$SRC" 5 \
   || { echo "FAIL mutate edit-tu (pp)"; exit 1; }
 l_before=$(links)
@@ -153,7 +152,7 @@ if cmp -s "$BUILD/prog" "$TMP/prog.c3"; then ok "c4-binary-byte-identical"
 else bad "c4-binary-byte-identical"; fi
 
 # ---- criterion 5: comment-only header edit — dependents recompile, link cut off ----
-# (drift mutation in pp — ROADMAP §2 milestone)
+# (the source mutation runs as a pp program, not inline shell)
 "$PP" --grant "fs:$SRC:rw" tests/mutate-cproject.pp -- append-comment "$SRC" shared.h \
   || { echo "FAIL mutate append-comment (pp)"; exit 1; }
 l_before=$(links)
@@ -184,8 +183,8 @@ ev2=$(execs)
 if [ "$ev2" -eq "$ev" ]; then ok "vm-null-zero-processes"
 else bad "vm-null-zero-processes: $((ev2 - ev)) new execs"; fi
 
-# ---- Phase 3 exit criterion 1 (docs/PLAN-phase3-parallel.md): the same
-# 101-TU build, cold, under --schedule parallel:N vs serial (the DEFAULT —
+# ---- the same 101-TU build, cold, under --schedule parallel:N vs serial
+# (the DEFAULT —
 # byte-identical program text, only the CLI flag differs): same desired-
 # state hash, same materialized tree bytes, same cold exec count, measured
 # speedup. Uses fresh store + build dirs so it doesn't disturb the
@@ -207,8 +206,8 @@ if [ "$es" -eq $((TU + 1)) ]; then ok "p3-serial-cold-exec-count ($es)"
 else bad "p3-serial-cold-exec-count: expected $((TU + 1)), got $es" "$(tail -5 "$TMP/out")"; fi
 
 rm -rf "$TMP/.pp" "$BUILD_P"
-# Deterministic fan-out proof (load-independent, unlike wall-clock): the M1
-# claim is that compile nodes FORK to workers. PP_FORK_LOG records one line
+# Deterministic fan-out proof (load-independent, unlike wall-clock): compile
+# nodes are claimed to FORK to workers. PP_FORK_LOG records one line
 # per fork. A --reconcile build must fork for its TU compiles under
 # parallel:N>1 — this is the assertion that would have caught the shadowed-
 # `map` regression a timing check silently passed. Only meaningful with
@@ -239,8 +238,7 @@ else
   bad "p3-same-tree-bytes" "$(cat /tmp/p3-tree-diff.out)"
 fi
 
-# "Measured speedup" (MASTERPLAN M1 exit) via best-of-3 MINIMUM wall-clock,
-# not a single sample: a lone parallel-vs-serial comparison flakes whenever
+# Measured speedup, via best-of-3 MINIMUM wall-clock, not a single sample: a lone parallel-vs-serial comparison flakes whenever
 # the machine is momentarily contended (a loaded dev box, a busy CI runner),
 # because one spiked sample inverts a razor-thin margin. The minimum of a few
 # runs is each configuration's least-contended, most-representative time —
@@ -263,10 +261,10 @@ min_of_3() {  # BUILD_ROOT CMD... -> min wall-clock ms over 3 cold runs
 serial_min=$(min_of_3 "$BUILD_S" "$PP" "${GS[@]}" --reconcile "$BUILD_S" "$TMP/build.pp")
 parallel_min=$(min_of_3 "$BUILD_P" "$PP" "${GP[@]}" --schedule "parallel:$NPROC" --reconcile "$BUILD_P" "$TMP/build.pp")
 echo "     [timing] serial(min/3)=${serial_min}ms parallel:$NPROC(min/3)=${parallel_min}ms (first-run: serial=${serial_ms}ms parallel=${parallel_ms}ms)"
-# Three honest outcomes, not two. The exit criterion is "parallelism produces
-# a speedup WHEN SPARE CORES EXIST" — a capability of pp, demonstrated on an
-# idle multi-core machine (witnessed 4x: 2174ms->539ms, recorded in the M1
-# commit). A correctness suite must not hard-fail merely because THIS runner
+# Three honest outcomes, not two. Parallelism is expected to produce a
+# speedup WHEN SPARE CORES EXIST, demonstrated on an idle multi-core machine
+# (witnessed 4x: 2174ms->539ms). A correctness suite must not hard-fail
+# merely because THIS runner
 # had no spare cores to give (a saturated dev box, a 1-2 core CI runner):
 # that measures the machine, not pp. But it MUST fail on a real scheduler
 # defect — one that serializes or deadlocks would make parallel PATHOLOGICALLY
@@ -295,9 +293,9 @@ else bad "p3-parallel-null-zero-execs: $((ep_null - ep)) new execs"; fi
 # above just replayed hits), so --check's schedule-transparency audit
 # (main.ml) re-runs the program forced Serial against this SAME store and
 # compares Types.hash_value of the desired-state value — all hits, so this
-# adds no execs and exercises exactly LAW 34/35's "schedule is result-
-# transparent" promise, not the (unrelated) LAW 38 per-node volatility
-# double-run (which only triggers on a Miss).
+# adds no execs and exercises the "schedule is result-transparent" promise
+# (SPEC laws 34 and 35), not the unrelated per-node volatility double-run
+# (SPEC law 38, which only triggers on a Miss).
 run "${GP[@]}" --schedule "parallel:$NPROC" --check --reconcile "$BUILD_P" "$TMP/build.pp"
 ep_check=$(execs)
 if [ "$ep_check" -eq "$ep" ] && ! grep -q "schedule non-transparent" "$TMP/out"; then

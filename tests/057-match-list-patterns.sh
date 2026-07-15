@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# tests/057 — Differential test for match list patterns (Phase 3.1). Kept as a
-# shell script (not a .pp file) for its expected-output oracle; since C4 the
-# sexpr surface DOES represent match, and tests/084 covers its round-trip.
-# Also pins two match soundness fixes surfaced during Phase C:
+# tests/057 — Differential test for match list patterns. Kept as a shell
+# script (not a .pp file) for its expected-output oracle; the sexpr surface
+# also represents match, and tests/084 covers its round-trip.
+# Also pins two match soundness fixes:
 #   - matching a list/tagged pattern against a non-pair scalar falls through
 #     (the compiler's `car`/`cdr` are now cons-guarded, matching the
 #     tree-walker) instead of crashing the VM;

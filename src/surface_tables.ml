@@ -1,4 +1,4 @@
-(* surface_tables — the closed surface sets as data (MASTER-PLAN A′1).
+(* surface_tables — the closed surface sets as data.
 
    The recurring defect class on this branch was the same closed list written
    out by hand in N places — the `$` observation heads in the normal reader and
@@ -11,7 +11,7 @@
 
    1. [obs_heads]      — the `$KIND(...)` observation sigils. Both readers
                          (normal and `quasiquote{}`) parse a head's arguments as
-                         an ordinary expression list (A6: computed paths, not
+                         an ordinary expression list (computed paths, not
                          string literals only) and then call the head's [lower].
    2. [with_clauses]   — the `with { caps:/config:/handlers: }` clause kinds.
    3. [grant_sugar]    — the dotted grant descriptors (`fs.read`/`fs.write`/
@@ -28,8 +28,9 @@
 
 (* A head's lowering is a small template, not an OCaml closure — because it must
    be produced in TWO shapes: real AST nodes in the normal reader, and quoted
-   list-building data in the quasiquote reader (A3 deferred `$`-head qq parity
-   to A′1 precisely so the shape would live in one place). Both readers walk the
+   list-building data in the quasiquote reader — `$`-head parity between the
+   two readers lives in this one shape rather than two hand-kept copies.
+   Both readers walk the
    same [tmpl] with their own interpreter, so a head added here exists in both
    with the SAME lowering by construction — no second copy to drift. *)
 type tmpl =
@@ -44,7 +45,7 @@ type tmpl =
        a bare application to a primitive symbol cannot express. *)
   | Config of tmpl * tmpl option
     (* (config KEY [DEFAULT]) — a scoped config read (records a `config:` cell).
-       $config lowers to the EConfig AST node, not a plain call (B5): the read
+       $config lowers to the EConfig AST node, not a plain call: the read
        is a distinct special form, like [Perform]. *)
 
 type obs_head = {
@@ -114,8 +115,8 @@ let check_arity (h : obs_head) (n : int) : (unit, string) result =
    greppable in exactly one place. *)
 type with_wrapper = WCaps | WConfig | WHandlers
 
-(* Every clause is a `KEY: value` clause ([colon] = true for all three since
-   B9). `handlers:` takes a map literal `{ :name -> fn, ... }` — the reader
+(* Every clause is a `KEY: value` clause ([colon] = true for all three).
+   `handlers:` takes a map literal `{ :name -> fn, ... }` — the reader
    extracts its `:name -> fn` pairs into the handler install (the regularized
    form replacing the old two-token `handler NAME: fn` key). *)
 type with_clause = { clause : string; wrapper : with_wrapper; colon : bool; wdoc : string }
@@ -142,7 +143,9 @@ let with_clauses_message () : string =
 
 (* The dotted descriptors are sugar over `cap-restrict`; `needs` itself is
    value-open (any expression evaluating to a capability is accepted — see the
-   lowering's passthrough and MASTER-PLAN A′3). This table is only the sugar. *)
+   lowering's passthrough; a named or composed grant, e.g.
+   `let k8s-prod = cap-compose(net("k8s.prod.internal"), process)`, works
+   identically). This table is only the sugar. *)
 type grant_sugar = { descriptor : string; restrict_mode : string; gdoc : string }
 
 let grant_sugar : grant_sugar list = [
@@ -154,11 +157,11 @@ let grant_sugar : grant_sugar list = [
 let find_grant_sugar (name : string) : grant_sugar option =
   List.find_opt (fun g -> g.descriptor = name) grant_sugar
 
-(* ---- observation-exclusivity primitives (B4) ------------------------- *)
+(* ---- observation-exclusivity primitives ------------------------------- *)
 
 (* The bare world-read primitives the `$` family wraps, each paired with the
    `$` head that should be used instead. `pp lint`'s observation-exclusivity
-   check (B4) flags a bare use of one of these outside `stdlib/`, pointing at
+   check flags a bare use of one of these outside `stdlib/`, pointing at
    its head. One list, next to [obs_heads], so the lint set can never drift
    from the family. `tree-observe` is a perform effect (behind `$glob`); the
    rest are plain primitives. Note the family's own tmpl helpers (e.g. `nil?`
@@ -173,10 +176,11 @@ let observation_primitives : (string * string) list =
 let observation_primitive (name : string) : string option =
   List.assoc_opt name observation_primitives
 
-(* ---- SPEC rendering (MASTER-PLAN A′2) --------------------------------- *)
+(* ---- SPEC rendering ---------------------------------------------------- *)
 
 (* The tables above are the ONLY hand-authored copy of these closed sets. SPEC
-   used to hand-list them in prose (the D10 drift class); instead it now carries
+   used to hand-list them in prose, which went stale as the tables changed;
+   instead it now carries
    a *generated* block that [tests/067] regenerates from here and diffs. A table
    edit that isn't mirrored into SPEC is therefore a red build, not a stale
    paragraph — the doc-sync failure mode becomes mechanical. This function emits

@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# tests/080 — Phase B lints (`pp lint`):
-#   B4  observation exclusivity — bare slurp/env-get/probe/config/tree-observe
-#       outside stdlib/ warn, pointing at the $ form. Runs PRE-lowering (a
-#       token scan): after lowering, $file and bare slurp are the same AST.
-#   B11 dot-identifier — an identifier containing '.' (a dot-method trap);
-#       grant descriptors (fs.read) lower away, so they never trip it.
-#   B12 tagged-value convention — a function mixing [:err, _] and a bare value
-#       across branches; car/cdr applied to a tagged result literal.
+# tests/080 — lints from `pp lint`:
+#   observation exclusivity (case B4 below) — bare slurp/env-get/probe/config/
+#       tree-observe outside stdlib/ warn, pointing at the $ form. Runs
+#       PRE-lowering (a token scan): after lowering, $file and bare slurp are
+#       the same AST.
+#   dot-identifier (case B11 below) — an identifier containing '.' (a
+#       dot-method trap); grant descriptors (fs.read) lower away, so they
+#       never trip it.
+#   tagged-value convention (case B12 below) — a function mixing [:err, _]
+#       and a bare value across branches; car/cdr applied to a tagged result
+#       literal.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -39,7 +42,7 @@ no_needle() {
   else bad "$name" "did not expect '$needle'" "got: $out"; fi
 }
 
-# ---- B4 ----
+# ---- observation exclusivity (case B4) ----
 printf 'def read-it(p) { slurp(p) }\n'          > "$TMP/b4-slurp.pp"
 warns "B4-bare-slurp"  "$TMP/b4-slurp.pp"  "bare \`slurp\` reads the world"
 printf 'def cc() { env-get("CC") }\n'           > "$TMP/b4-env.pp"
@@ -56,7 +59,7 @@ mkdir -p "$TMP/stdlib"
 printf 'def read-it(p) { slurp(p) }\n' > "$TMP/stdlib/x.pp"
 no_needle "B4-stdlib-exempt" "$TMP/stdlib/x.pp" "reads the world"
 
-# ---- B11 ----
+# ---- dot-identifier (case B11) ----
 printf 'def f(src) { src.replace-ext(".o") }\n' > "$TMP/b11-dot.pp"
 warns "B11-dot-identifier" "$TMP/b11-dot.pp" "contains '.'"
 # a `->` conversion name has no dot — must not warn.
@@ -66,7 +69,7 @@ no_needle "B11-arrow-name-ok" "$TMP/b11-arrow.pp" "contains '.'"
 printf 'node n() needs fs.read("p") { 1 }\n' > "$TMP/b11-grant.pp"
 no_needle "B11-grant-descriptor-ok" "$TMP/b11-grant.pp" "contains '.'"
 
-# ---- B12 ----
+# ---- tagged-value convention (case B12) ----
 printf 'def bad(x) { if x { 42 } else { [:err, "no"] } }\n' > "$TMP/b12-mixed.pp"
 warns "B12-mixed-shape" "$TMP/b12-mixed.pp" "inconsistent result shape"
 # a consistent [:ok]/[:err] function must not warn.

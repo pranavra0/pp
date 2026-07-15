@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
-# tests/071 — A″2: derived-generator kernel properties.
+# tests/071 — property tests over randomly generated ASTs and values, proving
+# three things always hold.
 #
 # src/kernel_props.ml holds one QuickCheck-style generator each for
 # Types.value / pattern / expr, written so that adding an AST constructor
 # cascades compile errors (expr_kind -> gen_of_tag -> expr_surface) until the
-# new form is generated and classified — coverage is derived, never enumerated
-# (DESIGN §1 principle 8). Under those generators three kernel properties run:
+# new form is generated and classified — coverage is derived, never
+# enumerated, from the generator's own exhaustiveness match. Under those
+# generators three kernel properties run:
 #
 #   (i)   INJECTIVITY  distinct ASTs => distinct content hash (hash_value /
-#         hash_pattern / hash_expr — the LAW-20 key). A collision is a
-#         wrong-cache-serve bug, the class A″1 length-framed hash_concat to
-#         close. Also checks a pinned near-miss corpus.
+#         hash_pattern / hash_expr, the value's node cache key, SPEC law 20).
+#         A collision is a wrong-cache-serve bug — the same failure mode
+#         closed for observation encodings by tests/070-hash-injective-nearmiss.sh.
+#         Also checks a pinned near-miss corpus.
 #   (ii)  QUOTE RT     value_to_expr . quote_to_value is total and idempotent
-#         (the macro reflect/reify projection reaches a fixpoint) — M3/D10.
+#         (the macro reflect/reify projection reaches a fixpoint) — pp's
+#         metaprogramming is served by total quote/quasiquote plus defmacro,
+#         never fexprs.
 #   (iii) PRINT RT     read . print is hash-preserving on both surfaces for the
 #         reader-image subset (documented per-form in the surface table).
 #

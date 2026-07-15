@@ -1,13 +1,14 @@
-(* cell — the closed variant of observation-cell kinds (MASTER-PLAN A′4 seam).
+(* cell — the closed variant of observation-cell kinds.
 
-   [Cell.t] is the single source of truth for "what kinds of world-reads pp can
-   record" (A′1 builds the surface story on top of it via
-   [Surface_tables.surface_decision], an exhaustive match over this type). The
-   constructors are intentionally public: the runtime builds them and the
-   surface layer matches on them exhaustively — that exhaustiveness is the
-   ratchet, so hiding the constructors would defeat A′1. The interface exists to
-   fix the boundary (only [t], [to_string], [of_string] cross it) so no future
-   code grows a private cell helper that other modules reach into. *)
+   [Cell.t] is the single source of truth for "what kinds of world-reads pp
+   can record"; [Surface_tables.surface_decision] matches over this type
+   exhaustively to derive each kind's surface story. The constructors are
+   intentionally public: the runtime builds them and the surface layer
+   matches on them exhaustively — that exhaustiveness is the ratchet (adding
+   a constructor without deciding its surface story fails the build), so
+   hiding the constructors would defeat it. The interface exists to fix the
+   boundary (only [t], [to_string], [of_string] cross it) so no future code
+   grows a private cell helper that other modules reach into. *)
 
 type t =
     File of string

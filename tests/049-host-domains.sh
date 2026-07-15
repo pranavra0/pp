@@ -1,26 +1,25 @@
 #!/usr/bin/env bash
-# M5 stage C: host-qualified domain distribution
-# (docs/PLAN-m5-distribution.md "Host-qualified domain distribution").
+# Host-qualified domain distribution: the desired map generalizes ONE
+# level, {host -> {domain -> desired}}.
 #
-#   The desired map generalizes ONE level: {host -> {domain -> desired}}.
 #   `--member-name <n>` (explicit, never inferred from hostname or value
-#   shape — the least-magic detection rule the contract asks for) makes
-#   main.ml index desired[<n>]'s slice and hand it to the UNCHANGED
-#   Domains.run_all. Without --member-name, main.ml's [all_desired] passes
-#   through completely untouched — this is the whole back-compat proof;
-#   tests/018/033/046 (which never pass --member-name) are the existing,
-#   unchanged-byte-for-byte evidence for that half, exercised every run of
-#   this suite. This file adds the NEW half: host-keying itself, plus one
-#   dedicated back-compat check of its own so the claim doesn't rest on
-#   "some other file didn't regress" alone.
+#   shape — the least-magic rule) makes main.ml index desired[<n>]'s slice
+#   and hand it to the UNCHANGED Domains.run_all. Without --member-name,
+#   main.ml's [all_desired] passes through completely untouched — this is
+#   the whole back-compat proof; tests/018/033/046 (which never pass
+#   --member-name) are the existing, unchanged-byte-for-byte evidence for
+#   that half, exercised every run of this suite. This file adds the NEW
+#   half: host-keying itself, plus one dedicated back-compat check of its
+#   own so the claim doesn't rest on "some other file didn't regress"
+#   alone.
 #
 #   - --member-name A converges ONLY host A's fs slice; --member-name B
 #     converges ONLY host B's (each a SEPARATE process/$HOME, simulating
 #     two cluster members exactly like tests/047/048's convention).
 #   - a member's kill -9 recovery is the LOCAL supervisor's existing
 #     per-machine story, unchanged — a member is just `pp --watch` on its
-#     OWN slice (docs/PLAN-m5-distribution.md: "M5 adds a new SOURCE for
-#     the value, no new mechanism").
+#     OWN slice: host-keying adds a new SOURCE for the desired value, not
+#     a new convergence mechanism.
 #   - back-compat: a flat {domain -> desired} program with NO --member-name
 #     behaves exactly as it does without this feature at all.
 #
@@ -114,8 +113,8 @@ HOME="$HOSTA_HOME" "$PP" --bytecode --grant "fs:${ROOT_A}:rw" --member-name A "$
 
 # ===========================================================================
 # Part 2: kill -9 convergence still works on a member's OWN slice — the
-# LOCAL supervisor's existing per-machine story, unchanged (contract:
-# "M5 adds a new SOURCE for the value, no new mechanism").
+# LOCAL supervisor's existing per-machine story, unchanged. Host-keying
+# adds a new SOURCE for the desired value, not a new convergence mechanism.
 # ===========================================================================
 HOSTC_HOME="$TMP/homeC"; mkdir -p "$HOSTC_HOME"
 mkdir -p "$TMP/svc"

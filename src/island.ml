@@ -1,4 +1,4 @@
-(* pp islands — content-addressed remote/local modules (D2).
+(* pp islands — content-addressed remote/local modules.
 
    An island is a module that lives elsewhere, referenced by URI and pinned
    INLINE in the island form by the canonical content hash of its source
@@ -282,7 +282,7 @@ let resolve ~(uri : string) ~(pin : string option) : string =
             end
       end
 
-(* The module root inside a pinned tree. M7 S3: entry.pp is brace surface
+(* The module root inside a pinned tree. entry.pp is brace surface
    (the default), entry.ppb a permanent brace alias, entry.ppl the sexpr/AST
    surface — all fully supported; entry.pp wins when several exist. The
    reader is chosen by extension (Reader_braces.read_dispatch), so a pinned
@@ -410,7 +410,7 @@ let update_file (path : string) : int * int =
          | Some (at, len) ->
              (match String.index_from_opt !text (at + len) ')' with
               | Some close ->
-                  (* M7 S3: the argument separator is surface-specific —
+                  (* The argument separator is surface-specific —
                      brace files (island("URI", "PIN")) take a comma, sexpr
                      files ((island URI "PIN")) plain whitespace. *)
                   let sep =

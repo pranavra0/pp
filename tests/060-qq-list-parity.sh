@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# tests/060 — A2: quasiquote/list parity.
+# tests/060 — quasiquote/list parity.
 #
-# In the brace surface, `[ ... ]` is the list literal (L9): ordinary code
-# lowers it to a cons-chain list value. Inside `quasiquote { }` the SAME
+# In the brace surface, `[ ... ]` is the list literal: ordinary code lowers
+# it to a cons-chain list value. Inside `quasiquote { }` the SAME
 # bracket syntax must build the SAME value — not a vector. Before this fix
 # the quasiquote path built a `(vector ...)`, so a macro template `[a, b]`
 # produced a different value (a vector) than the code `[a, b]` it stands in

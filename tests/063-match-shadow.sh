@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/063 — A5: match lowering must be unaffected by user shadowing of the
+# tests/063 — match lowering must be unaffected by user shadowing of the
 # primitives it compiles down to (car/cdr/=/nil?/not/error).
 #
 # The VM compiler lowers `match` to a nested let+if chain built from

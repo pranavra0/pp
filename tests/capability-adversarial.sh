@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # pins: LAW-22 LAW-22b LAW-25 LAW-27
-# Adversarial capability suite — Phase 0 exit (3); extended for M3 in-language
-# attenuation (docs/PLAN-m3-attenuation.md, D18 lineage).
+# Adversarial capability suite: capabilities can only enter a program through
+# --grant (filesystem/network/process are not user-code constructors any
+# more), and in-language attenuation (cap-restrict/cap-compose/with-caps) can
+# only narrow what's already held, never widen or invent authority.
 # Runs both backends and compares their verdicts.
 set -euo pipefail
 PP=${PP:-bin/pp}
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
-# M3 additions use (node ...); isolate the store like tests/011/013/017 do.
-# Harmless for the pre-existing scripting-tier cases above, which never touch
-# ~/.pp/store.
+# The node-boundary cases below use (node ...); isolate the store like
+# tests/011/013/017 do. Harmless for the pre-existing scripting-tier cases
+# above, which never touch ~/.pp/store.
 export HOME="$TMP"
 
 run_case() {
@@ -65,8 +67,8 @@ EOF
 run_case cap-ops "restricted:" "$TMP/cap-ops.pp"
 
 # ============================================================
-# M3 additions: in-language capability attenuation
-# (docs/PLAN-m3-attenuation.md "Adversarial suite additions")
+# In-language capability attenuation: narrowing, composing, and the node
+# boundary can never be used to gain authority beyond what was granted.
 # ============================================================
 
 # --- forge-from-print: a printed capability is inert text; nothing reads a
@@ -118,7 +120,7 @@ with-caps(cap-restrict(broad, \"$TMP/wwr/sub\", :ro)) {
 run_case with-caps-widen-rejected "requested capability is not a subset" \
   -e "$WWR_SRC" --grant "fs:$TMP/wwr:ro"
 
-# --- with-caps tail-safe / exception-safe (LAW 27 pattern): a narrowed
+# --- with-caps tail-safe / exception-safe (SPEC law 27): a narrowed
 #     with-caps extent, whether it exits via a tail call or a raised error,
 #     must not leak the narrowing past the form. Both need multiple
 #     top-level forms observing each other's ambient, which requires a

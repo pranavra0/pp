@@ -1,4 +1,4 @@
-(* pp journal — the append-only intent/done audit log (Q4 / LAW 31).
+(* pp journal — the append-only intent/done audit log (LAW 31).
 
    One typed entry variant owns every line shape; [to_line]/[of_line] live
    together so a writer cannot invent a dialect the scanner does not read.
@@ -14,9 +14,9 @@
 type entry =
   | Exec of string list
       (* every external process execution — "null rebuild executes zero
-         processes" is proved by these lines (Phase-1 exit criterion 1) *)
+         processes" is proved by these lines, not merely asserted *)
   | DomainIntent of { hash : string; fields : (string * string) list }
-      (* Q13 generic per-pass bracket, shared by every registered write-domain
+      (* Generic per-pass bracket, shared by every registered write-domain
          (fs, proc, and third-party). [fields] is an ORDERED k=v list the
          domain's own diff assembled (its :summary) — core does not know or
          care what the keys mean, only how to print/journal them, which is
@@ -36,9 +36,9 @@ type entry =
   | FencedIntent of { key : string; epoch : string; kind : string; spec_hash : string }
   | FencedDone of { key : string; result_hash : string }
   | IslandFetch of { uri : string; pin : string }
-      (* every island fetch/re-pin — procurement is auditable (D2) *)
+      (* every island fetch/re-pin — procurement is auditable *)
   | Epoch of { hash : string }
-      (* M5 stage C (docs/PLAN-m5-distribution.md "Store GC"): recorded once
+      (* Recorded once
          per SUCCESSFUL Domains.run_all pass — [hash] is the desired-state
          root object's content hash (Hasher.hash_value of the fully-forced
          `all_desired` value that pass converged). This is the audit-log
@@ -109,7 +109,7 @@ let of_line (line : string) : entry option =
 let journal_dir = Filename.concat Store.store_root "journal"
 let log_path () = Filename.concat journal_dir "log"
 
-(* Phase 3 hardening: one line is one Unix.write_substring on an O_APPEND fd.
+(* Concurrent-writer safety: one line is one Unix.write_substring on an O_APPEND fd.
    A buffered out_channel's [output_string]+[close_out] is two syscalls (a
    write from the buffer, then the close's flush of whatever didn't fit) and
    nothing stops the OCaml runtime from splitting a long line across more
@@ -145,7 +145,7 @@ let fold (f : 'a -> entry -> 'a) (init : 'a) : 'a =
     !acc
   end
 
-(* ---- Fenced-effect scanners (Q3 / LAW 31) ---- *)
+(* ---- Fenced-effect scanners (LAW 31) ---- *)
 
 type fenced_entry = {
   fe_key : string;

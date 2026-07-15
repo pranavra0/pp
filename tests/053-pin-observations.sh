@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
-# tests/053-pin-observations.sh — M6 Stage B (docs/PLAN-m6-demo.md "Stage B
-# — the pin seam"): the observation-pinning seam that generalizes Q11-bis's
+# tests/053-pin-observations.sh — the observation-pinning seam: a
+# standalone --pin-file/--dump-pins pair that generalizes the existing
 # --remote-node pin machinery (src/remote.ml's preseed_pins_from_file /
-# parse_pin_line) into a standalone --pin-file/--dump-pins pair, plus a new
-# `(pin-probe "NAME" <codec-value>)` line kind that pins a register-probe's
-# OWN value directly into Runtime.probe_values, short-circuiting its
-# observe-fn entirely (Primitives.probe_value_for consults probe_values
-# FIRST, unconditionally, before ever calling a registered probe's fn).
+# parse_pin_line) used for forked workers, plus a new `(pin-probe "NAME"
+# <codec-value>)` line kind that pins a register-probe's OWN value
+# directly into Runtime.probe_values, short-circuiting its observe-fn
+# entirely (Primitives.probe_value_for consults probe_values FIRST,
+# unconditionally, before ever calling a registered probe's fn).
 #
 # demo/volatile-deploy.pp is a DELIBERATELY adversarial program, separate
 # from demo/deploy.pp (whose OWN diagonal oracle, tests/052, needs no
-# pinning at all — Stage A's whole point): it folds `(probe
-# "replica-count")` directly into its returned desired-state value, so the
-# published hash tracks metrics-file's CURRENT content whenever the probe
-# is left unpinned — the one shape that makes the masterplan's literal
-# "probe cells are pinned inputs" claim falsifiable outside Stage A's demo.
+# pinning at all): it folds `(probe "replica-count")` directly into its
+# returned desired-state value, so the published hash tracks
+# metrics-file's CURRENT content whenever the probe is left unpinned — the
+# one shape that makes "probe cells are pinned inputs" falsifiable.
 #
 #   unpinned control — publish twice with DIFFERENT metrics-file content:
 #                       the two hashes must DIFFER (proves the probe is
@@ -32,13 +31,11 @@
 # Push/materialization combos (the other half of the 12-way shape
 # tests/052's oracle exercises for demo/deploy.pp) are NOT wired here:
 # demo/volatile-deploy.pp deliberately registers no domain at all — it is
-# the minimal adversarial shape the contract asks for (a bare probe folded
-# into a returned value, nothing to materialize onto disk) — so a --watch
-# --stabilize "push" pass has no tree to converge/diff against. Documented
-# per the plan's own escape hatch ("if push+remote combos are impractical
-# to wire for a hash comparison ... cover at least the 6 pull combos for
-# the hash-equality core; document any combo you approximate"): the 6 pull
-# (--publish-object) combos below are exactly that hash-equality core.
+# the minimal adversarial shape (a bare probe folded into a returned
+# value, nothing to materialize onto disk) — so a --watch --stabilize
+# "push" pass has no tree to converge/diff against. Push+remote combos are
+# impractical to wire for a hash comparison here, so the 6 pull
+# (--publish-object) combos below cover the hash-equality core instead.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac

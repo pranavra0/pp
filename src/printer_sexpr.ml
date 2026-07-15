@@ -2,7 +2,7 @@
    src/reader.ml or src/reader_braces.ml) as s-expression text that the
    sexpr reader (src/reader.ml) re-reads to the structurally IDENTICAL expr
    — same `ELocated` placement, hence the same LAW-20 hash. This is the
-   other half of `pp fmt` (M7 S2; src/printer_braces.ml is the first half),
+   other half of `pp fmt` (src/printer_braces.ml is the first half),
    built with the same location-preserving discipline: pad newlines so
    every construct's recorded (file, line) lands exactly, and raise
    [Unprintable] if a located line was already passed.

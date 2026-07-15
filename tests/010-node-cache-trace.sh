@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# Regression: node-cache validity is a VERIFYING TRACE, not just the node key.
+# Regression: node-cache validity is a VERIFYING TRACE, not just the node key
+# (SPEC law 21).
 #
 # Two facts about the persistent node cache (~/.pp/store) motivated this:
-#   1. it was tree-walker-only (the VM has no store — D7), and
+#   1. it was tree-walker-only (the VM had no store of its own), and
 #   2. it served STALE results: `(node (slurp path))` returned the old file
 #      contents after the file changed, because the node key hashes the path
 #      STRING, not what was read.
 #
 # The fix records each world-read as a (cell-id, observed-hash) pair in the
 # node's trace and re-verifies every pair on a cache hit. This is pp's dynamic
-# answer to Haskell's static IO type (SPEC LAW 21, DESIGN Q2/Q8): a "pure-enough"
+# answer to Haskell's static IO type: a "pure-enough"
 # heuristic cannot make caching sound in a dynamically-typed language — only
 # recording what a run actually observed can.
 #
@@ -30,7 +31,7 @@ fail=0
 
 # A node that logs "COMPUTE" (an ephemeral effect) then returns the file it
 # read. On a MISS the body runs, so stderr shows "COMPUTE"; on a HIT the body
-# is skipped and — per LAW 17 — "COMPUTE" is NOT replayed. The outer log always
+# is skipped and — per SPEC law 17 — "COMPUTE" is NOT replayed. The outer log always
 # emits the resulting content, so we can read the served value every run.
 cat > "$PROG" <<EOF
 perform log(force(node {
@@ -76,7 +77,7 @@ run > /dev/null
 assert "tw-run4-revert-hit"   "COMPUTE" absent
 assert "tw-run4-value-V1"     "V1"      present
 
-# The VM is now wired to the same store (D7 closed): a fresh-store run misses and
+# The VM is now wired to the same store: a fresh-store run misses and
 # computes, an unchanged re-run hits, and editing the file re-computes — the same
 # trace-verified caching as the tree-walker.
 rm -rf "$TMP/.pp"

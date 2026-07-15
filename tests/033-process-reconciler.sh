@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Phase 2: process-domain reconciler.
+# Process-domain reconciler.
 #
 #   pp --supervise prog.pp treats the program's final value as a desired
 #   process map {service-name -> spec-map}. The supervisor starts/stops/

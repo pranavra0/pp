@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# M4 probes (docs/PLAN-m4-cells.md "Probes"; SPEC LAW 37/38).
+# A probe is a named, deliberately nondeterministic input: nondeterminism
+# must be declared (SPEC law 37), and a probe's volatility stays contained
+# and in-memory only (SPEC law 38).
 #
 # A probe is registered once (`register-probe name observe-fn read-cap`,
 # script-tier) and read inside a node via `(probe name)`. The observe-fn runs
@@ -91,15 +93,16 @@ done
 # (2) probe value never lands under ~/.pp/store's objects/traces — a probe
 #     is re-evaluated every pass (Runtime.probe_values is in-memory-only,
 #     cleared per pass; there is no separate "probe cache" on disk the way
-#     there is a node objects/traces store) — LAW 38's volatility exclusion.
-#     traces/ records only (cell-id, HASH) pairs, never the raw value; the
-#     reading node here returns a fixed string, never the payload itself, so
-#     objects/ has no legitimate way to contain it either. (blobs/ is
-#     deliberately EXCLUDED from this check: the observe-fn reads the
-#     payload file via ordinary `slurp`, which content-addresses it into
-#     blobs/ exactly as any fs read would — that is the generic Q11 CAS
-#     ingest path, orthogonal to and unaffected by the probe mechanism; only
-#     `secret:`-covered reads exclude blobs/, tests/044.)
+#     there is a node objects/traces store), per SPEC law 38's volatility
+#     exclusion. traces/ records only (cell-id, HASH) pairs, never the raw
+#     value; the reading node here returns a fixed string, never the
+#     payload itself, so objects/ has no legitimate way to contain it
+#     either. (blobs/ is deliberately EXCLUDED from this check: the
+#     observe-fn reads the payload file via ordinary `slurp`, which
+#     content-addresses it into blobs/ exactly as any fs read would — every
+#     file read is content-addressed on the way in, so this is orthogonal
+#     to and unaffected by the probe mechanism; only `secret:`-covered
+#     reads exclude blobs/, tests/044.)
 # =====================================================================
 PAYLOAD="PROBE-PAYLOAD-9f3d2a1c"
 rm -rf "$TMP/.pp"

@@ -10,8 +10,9 @@ let sp = ref 0
 
 (* handler_stack, current_capabilities, config_stack, thunk_store are in Runtime. *)
 (* Save-stack so PUSH_HANDLER can restore the EXACT prior scope on
-   POP_HANDLER regardless of how many handlers were pushed (D9: PUSH_HANDLER
-   pushed n but one POP_HANDLER popped 1). Mirrors the tree-walker's
+   POP_HANDLER regardless of how many handlers were pushed (a naive
+   PUSH_HANDLER-pushes-n/POP_HANDLER-pops-1 scheme would leak handlers past
+   the construct that installed them). Mirrors the tree-walker's
    saved/restore pattern. (with-caps' WITH_CAPS opcode below needs no
    analogous save-stack: it restores current_capabilities via an ordinary
    OCaml local + try/with around its nested run_isolated call, which is also
@@ -230,8 +231,10 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
          | VThunk th ->
              th.thunk_persist <- true;
              th.node_fv <- fv_descs;
-             (* Node capture (Q11): the ambient at THIS creation, unconditionally
-                — never left at the [] default (see Types.thunk.node_caps). *)
+             (* Node capture: populate node_caps from the ambient at THIS
+                creation, unconditionally — never left at the [] default
+                (see Types.thunk.node_caps); force_node later reads this
+                back as the node's fixed authority. *)
              th.node_caps <- !current_capabilities
          | _ -> ());
         push t;
@@ -371,7 +374,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
                [fun args -> apply handler_val args env] (evaluator.ml
                EWithHandler). [hv] is now the real handler function (the
                compiler no longer wraps it in a 0-param region). Save/restore
-               the operand stack exactly like CALL (D20): [run] shares the
+               the operand stack exactly like CALL: [run] shares the
                module-global operand_stack/sp. *)
             match hv with
             | VClosure c when c.vm_bc == Types.dummy_bytecode ->
@@ -381,7 +384,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
             | VBuiltin (_, f) -> f args
             | _ -> failwith ("VM: handler is not a function: " ^ string_of_value hv)
            ),
-           hash_value hv)   (* D17: handler identity in the key *)
+           hash_value hv)   (* handler identity in the key *)
         ) !pairs in
         handler_save_stack := !handler_stack :: !handler_save_stack;
         handler_stack := new_handlers @ !handler_stack;
@@ -389,7 +392,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
         loop ()
 
     | POP_HANDLER ->
-        (* Restore the pre-PUSH handler stack exactly, not pop-one (D9). *)
+        (* Restore the pre-PUSH handler stack exactly, not pop-one. *)
         (match !handler_save_stack with
          | [] -> ()
          | saved :: rest ->
@@ -441,13 +444,14 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
           | VString s -> s
           | _ -> failwith "VM: LOAD_FILE constant is not a string"
         in
-        (* Loader authority: bounded + runtime-cell recorded (Q6/D8c) —
+        (* Loader authority: bounded to source roots + ~/.pp, recorded as a
+           runtime-cell —
            same helper as the tree-walker's ELoad/EIsland, so both backends
            fail identically outside the source roots. `~source:path`: the
            loaded file's OWN path, so its forms are located against it, not
            the reader's "<?>" default. *)
         let contents = Runtime.loader_read path in
-        (* M3 defmacro: shared expansion hook, before compile_program ever
+        (* Shared macro-expansion hook, before compile_program ever
            sees these forms — Macro.ml is compiled after Vm.ml's
            dependencies (evaluator), so this is a direct call, not the
            Primitives-ref indirection evaluator.ml needs. *)
@@ -455,7 +459,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
                       (Reader_braces.read_dispatch ~source:path ~path contents) in
         (* Compile and run ONE top-level form at a time (mirroring
            repl.ml's execute_file_bytecode for the outer file), each wrapped
-           in ITS OWN location (LAW 29/D12): an error escaping a form here
+           in ITS OWN location (LAW 29): an error escaping a form here
            is decorated with the LOADED file's file:line before it can
            unwind past this LOAD_FILE, so it never surfaces as the loading
            `(load ...)` form's line. `run_isolated` (not run_program_expr)
@@ -483,7 +487,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
         loop ()
 
     | ISLAND (uri_i, pin_i) ->
-        (* D2: resolve the inline pin to the verified cached tree, then
+        (* Resolve the inline pin to the verified cached tree, then
            module-evaluate its entry.pp — mirrors the tree-walker's EIsland. *)
         let const_string i what =
           match (!bc_ref).consts.(i) with
@@ -532,7 +536,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
 
 (* Evaluate a module file: run it against fresh globals and package the
    bindings it added as a VEnvMap. Shared by LOAD_MODULE_FILE and ISLAND.
-   D20: does NOT merge into caller globals — the tree-walker's ELoadModule
+   Does NOT merge into caller globals — the tree-walker's ELoadModule
    only returns the module value; statement-position merging is an explicit
    compiler-emitted IMPORT. *)
 and eval_module_from (path : string) (frames : frame list) : value =
@@ -540,7 +544,7 @@ and eval_module_from (path : string) (frames : frame list) : value =
     try Runtime.loader_read path
     with Sys_error msg -> failwith ("VM: cannot load module file: " ^ msg)
   in
-  (* M7 S1: dispatch on [path]'s extension; label stays the "<?>" default. *)
+  (* Dispatch on [path]'s extension; label stays the "<?>" default. *)
   let exprs = Macro.expand_toplevel_list (Reader_braces.read_dispatch ~path source) in
   let prog = Compiler.compile_program exprs in
   let saved_globals = Hashtbl.copy globals in
@@ -612,8 +616,8 @@ and vm_force (v : value) : value =
    the SAME key in both backends and shares the store entry; closures hash per
    backend, so those key separately but each remains sound.
 
-   M3 free-var ban (LAW 20 node-boundary, import side; extended M4/LAW 39 to
-   VSealed): if a free variable's forced value contains a VCapability or
+   Free-var ban (LAW 20 node-boundary, import side; also covers VSealed per
+   LAW 39): if a free variable's forced value contains a VCapability or
    VSealed (Hasher.contains_authority — never forces an already-Unevaluated
    thunk, so this can't force the same value twice or invalidate the "each is
    forced" note above; it just inspects whatever [vm_force] already
@@ -702,7 +706,7 @@ let rec init () =
   (* Config-cell observations (LAW 33) hash the forced value; under the VM the
      forcing is vm_force (Evaluator.init is not run on this path). *)
   Backend.r.vm_run_thunk <- run_isolated;
-  (* Phase 3: let Primitives' scheduler-aware force-deep compute VM node keys
+  (* Let Primitives' scheduler-aware force-deep compute VM node keys
      without a dependency cycle (Primitives is compiled before Vm). *)
   Backend.r.vm_node_key <- vm_node_key;
   Backend.r.vm_run_bytecode <- (fun bc ->

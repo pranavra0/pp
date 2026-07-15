@@ -1,39 +1,42 @@
 # Releasing pp
 
-How to cut a tagged release, and how to prove the tarball actually builds
-for a stranger on a clean opam switch.
+This explains how to cut a tagged release, and how to prove the tarball
+builds for a stranger on a clean opam switch.
 
 ## Version wiring (how it works)
 
-`pp --version` and the REPL banner both read `Version.string`
-(`src/version.ml`), which calls `Build_info.V1.version ()` from the
-`dune-build-info` library. Dune embeds the version at build time from
-`dune-project`'s top-level `(version ...)` field, because `src/dune` ties
-the `main` executable to the `pp` package via `(public_name pp)`. This
-works identically:
+`pp --version` and the REPL banner both read `Version.string` in
+`src/version.ml`. This calls `Build_info.V1.version ()` from the
+`dune-build-info` library. Dune embeds the version at build time from the
+top-level `(version ...)` field in `dune-project`, because `src/dune` ties
+the `main` executable to the `pp` package through `(public_name pp)`.
 
-- from a git checkout (no `git describe` involved — the version is the
-  literal string in `dune-project`, not VCS-derived), and
-- from an unpacked release tarball with **no `.git` present** (verified
-  below).
+This works the same way in two cases:
 
-`src/version.ml`'s `fallback` value only fires if the executable is ever
-built outside dune's package machinery (e.g. `public_name` removed); it
-should track the same string as `dune-project`'s `(version ...)` but is not
-itself the source of truth.
+- from a git checkout, where the version is the literal string in
+  `dune-project`, not something `git describe` derives
+- from an unpacked release tarball with no `.git` present, verified by the
+  smoke test below
+
+The `fallback` value in `src/version.ml` only fires if someone builds the
+executable outside dune's package machinery, for example by removing
+`public_name`. It should track the same string as `(version ...)` in
+`dune-project`, but it is not the source of truth.
 
 ## Cutting vX.Y.Z
 
-1. Update the version:
-   - `dune-project`: bump `(version ...)` to `X.Y.Z` (drop `-dev`).
-   - Run `dune build` once so the generated `pp.opam` (dune writes it into
-     the repo root because `(generate_opam_files true)` is set) picks up
-     the new version; check in the regenerated `pp.opam`.
-2. Update `CHANGELOG.md`: rename the `[Unreleased]` section to
-   `[X.Y.Z] — YYYY-MM-DD`, start a fresh empty `[Unreleased]` above it.
-3. Update `docs/ROADMAP.md` / `docs/STATUS.md` where
-   they reference version numbers or unchecked exit criteria that this
-   release closes.
+1. Update the version. In `dune-project`, bump `(version ...)` to `X.Y.Z`
+   and drop the `-dev` suffix. Then run `dune build` once, so dune
+   regenerates `pp.opam` in the repo root (it does this because
+   `(generate_opam_files true)` is set) with the new version, and check in
+   the regenerated file.
+2. Write the release notes from git history. This repo has no CHANGELOG
+   file: commits follow Conventional Commits, so `git log --oneline
+   <last-tag>..HEAD` grouped by type (`feat:`, `fix:`, and so on) is the
+   changelog. Put the result in the tag annotation, and in the GitHub
+   release body if you make one.
+3. Update `docs/STATUS.md` and `docs/PLAN.md` wherever they reference
+   version numbers or open items that this release closes.
 4. Run the full local gate before tagging:
    ```sh
    eval "$(opam env)"
@@ -44,23 +47,24 @@ itself the source of truth.
    scripts/build-self.sh
    scripts/build-lua.sh
    ```
-5. Commit: `git commit -am "release vX.Y.Z"`.
-6. Tag: `git tag -a vX.Y.Z -m "vX.Y.Z"`.
-7. Push: `git push && git push --tags`.
+5. Commit your changes: `git commit -am "release vX.Y.Z"`.
+6. Tag the release: `git tag -a vX.Y.Z -m "vX.Y.Z"`.
+7. Push the commit and the tag: `git push && git push --tags`.
 8. Build the release tarball from the tag:
    ```sh
    git archive --format=tar.gz -o pp-X.Y.Z.tar.gz vX.Y.Z
    ```
-   `dune subst` is unnecessary here: pp does not use the `%%VERSION%%`
-   watermarking convention (source files never contain that placeholder),
-   because the version comes from `dune-project`'s `(version ...)` field
-   directly. `git archive` on the tag is sufficient — no separate subst
-   step, no `.git` needed downstream.
+   You do not need to run `dune subst`. pp does not use the `%%VERSION%%`
+   watermarking convention, and no source file contains that placeholder,
+   because the version comes directly from the `(version ...)` field in
+   `dune-project`. `git archive` on the tag is enough: there is no
+   separate subst step, and no `.git` directory needed downstream.
 
 ## From-tarball smoke test (do this before every release)
 
-Prove a stranger can build from the tarball alone, with no `.git` and no
-pre-existing opam packages beyond `dune`/`cryptokit`/`dune-build-info`:
+Do this to prove that a stranger can build from the tarball alone, with no
+`.git` directory and no opam packages beyond `dune`, `cryptokit`, and
+`dune-build-info` already installed:
 
 ```sh
 # From the tagged commit (or working tree for a dry run):
@@ -78,14 +82,14 @@ dune runtest --force
 ./_build/default/src/main.exe --version   # must print the real version, not 0.1.0/None
 ```
 
-If `--version` prints the correct `vX.Y.Z` with no `.git` directory present
-and `dune runtest` passes, the release is buildable from the tarball alone
-(ROADMAP maturity §4).
+If `--version` prints the correct `vX.Y.Z` with no `.git` directory
+present, and `dune runtest` passes, the release builds from the tarball
+alone.
 
-### What this repo's CI proves vs. what it doesn't
+### What this repo's CI proves, and what it does not prove
 
-`.github/workflows/ci.yml` runs `dune build` / `dune runtest --force` / the
-fuzzer / `scripts/build-lua.sh` on Linux and macOS on every push and PR to
-`master`, from a **git checkout** (via `actions/checkout`). It does not, by
-itself, re-run the from-tarball smoke test above — do that by hand (or add
-a release workflow) before tagging.
+`.github/workflows/ci.yml` runs `dune build`, `dune runtest --force`, the
+fuzzer, and `scripts/build-lua.sh` on Linux and macOS, on every push and
+pull request to `master`, from a git checkout using `actions/checkout`. It
+does not re-run the from-tarball smoke test above. Do that by hand before
+tagging, or add a release workflow that does it for you.

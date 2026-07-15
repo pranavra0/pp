@@ -15,44 +15,43 @@ let main () =
   let supervise = ref false in
   let fenced_policy = ref Runtime.Abort in
   let island_pins_file = ref None in
-  (* M5 stage A: cluster transport/token CLI seam (docs/PLAN-m5-distribution.md). *)
+  (* Cluster transport/token CLI seam. *)
   let cluster_init_mode = ref false in
   let mint_token_args = ref None in    (* (out-file, ttl-seconds) *)
   let transport_push_args = ref None in (* (kind, hash-or-key, root) *)
   let transport_pull_args = ref None in (* (kind, hash-or-key, root) *)
   let serve_hit_args = ref None in     (* (key, token-file, shared-root, reply-file) *)
   let recv_hit_args = ref None in      (* (reply-file, shared-root) *)
-  (* M5 stage B: the cluster-member side of remote placement
-     (docs/PLAN-m5-distribution.md "Remote placement" / "Q11-bis").
-     Internal — the dispatcher (src/remote.ml) invokes a member `pp` with
-     this flag; not meant to be typed by hand. *)
+  (* The cluster-member side of remote placement: internal — the
+     dispatcher (src/remote.ml) invokes a member `pp` with this flag; not
+     meant to be typed by hand. *)
   let remote_node_args = ref None in   (* (token-file, pins-file, shared-root, keys-file, reply-file) *)
-  (* M5 stage C: host-qualified domain distribution + store GC
-     (docs/PLAN-m5-distribution.md "Host-qualified domain distribution" /
-     "Store GC"). *)
+  (* Host-qualified domain distribution + store GC. *)
   let member_name = ref None in            (* --member-name NAME: explicit opt-in host-keying *)
   let desired_object_args = ref None in    (* --desired-object HASH SHARED-ROOT (the by-hash pull seam) *)
   let publish_object_root = ref None in    (* --publish-object SHARED-ROOT (the by-hash publish seam) *)
   let gc_mark_out = ref None in            (* --gc-mark OUTFILE: internal, `pp gc`'s own replay subprocess *)
   let gc_mode = ref false in               (* `pp gc`: explicit, never automatic *)
   let gc_grace_seconds = ref Store_gc.default_grace_seconds in
-  (* M6 stage B: the observation-pinning seam (docs/PLAN-m6-demo.md
-     "Stage B — the pin seam") — a standalone top-level generalization of
-     Q11-bis's --remote-node pin machinery, for pinning a DIFFERENT
-     (adversarial) program's probe-in-desired-state reads, sans the
-     token/keys/reply ceremony that flag also carries. *)
+  (* The observation-pinning seam — a standalone top-level generalization
+     of --remote-node's pin machinery (which pre-seeds Store.run_pins from
+     the dispatcher's own granted fs-read scope before the disk is ever
+     touched for a pinned cell), for pinning a DIFFERENT (adversarial)
+     program's probe-in-desired-state reads, sans the token/keys/reply
+     ceremony that flag also carries. *)
   let pin_file = ref None in               (* --pin-file PATH: preseed run_pins/probe_values before run_files *)
   let dump_pins_file = ref None in         (* --dump-pins PATH: write run_pins/probe_values after run_files *)
-  (* M7 S1: the brace-surface seams (docs/M7-SYNTAX.md, SPEC Appendix B).
-     `--emit-braces FILE` prints FILE's forms as location-preserving brace
-     text; `--roundtrip-braces FILE` asserts sexpr-read -> brace-print ->
+  (* The brace-surface CLI seams (SPEC Appendix B). `--emit-braces FILE`
+     prints FILE's forms as location-preserving brace text;
+     `--roundtrip-braces FILE` asserts sexpr-read -> brace-print ->
      brace-re-read gives structurally equal, LAW-20-hash-equal forms (the
      fuzzer's per-program gate, tools/fuzz.ml). *)
   let emit_braces_file = ref None in
   let roundtrip_braces_file = ref None in
-  (* M7 S2: `pp fmt` — the lossless transpiler/formatter (docs/M7-SYNTAX.md
-     "S2 — pp fmt"). `--to-braces`/`--to-sexpr FILE [-i]` dispatch by FLAG,
-     never by extension (files keep their names through the S3 migration).
+  (* `pp fmt` — the lossless transpiler/formatter between the two reader
+     surfaces (SPEC Appendix B). `--to-braces`/`--to-sexpr FILE [-i]`
+     dispatch by FLAG, never by extension, so a file keeps its own name
+     regardless of which surface it's written in.
      `--compare-hash`/`--list-comments` are internal test seams for
      tests/055-fmt.sh (per-form LAW-20 hash comparison across two files;
      dumping the comment side-channel for count/content checks) — not
@@ -99,10 +98,10 @@ let main () =
         parse rest
     | "island-pins" :: f :: rest -> island_pins_file := Some f; parse rest
     | "--grant" :: grant :: rest -> grants := grant :: !grants; parse rest
-    (* ---- M5 stage A: cluster transport/token CLI seam ----
+    (* ---- Cluster transport/token CLI seam ----
        `cluster-init` mints ~/.pp/cluster/{secret,id}; the rest are
        internal test entries the exit tests drive directly (a real ssh
-       transport, stage B, will get an ambient membership-driven CLI —
+       transport will get an ambient membership-driven CLI —
        these flags are deliberately low-level and explicit). *)
     | "cluster-init" :: rest -> cluster_init_mode := true; parse rest
     | "--mint-token" :: out :: ttl :: rest ->
@@ -123,7 +122,7 @@ let main () =
         parse rest
     | "--reconcile" :: root :: rest -> reconcile_root := Some root; parse rest
     | "--supervise" :: rest -> supervise := true; parse rest
-    (* ---- M5 stage C: host-qualified domain distribution + store GC ---- *)
+    (* ---- Host-qualified domain distribution + store GC ---- *)
     | "--member-name" :: n :: rest -> member_name := Some n; parse rest
     | "--desired-object" :: hash :: root :: rest ->
         desired_object_args := Some (hash, root); parse rest
@@ -140,13 +139,13 @@ let main () =
          | _ -> failwith ("invalid --gc-grace-seconds: " ^ s));
         parse rest
     | "gc" :: rest -> gc_mode := true; parse rest
-    (* ---- M6 stage B: the pin seam ---- *)
+    (* ---- The observation-pinning seam ---- *)
     | "--pin-file" :: path :: rest -> pin_file := Some path; parse rest
     | "--dump-pins" :: path :: rest -> dump_pins_file := Some path; parse rest
-    (* ---- M7 S1: brace-surface seams ---- *)
+    (* ---- Brace-surface seams ---- *)
     | "--emit-braces" :: f :: rest -> emit_braces_file := Some f; parse rest
     | "--roundtrip-braces" :: f :: rest -> roundtrip_braces_file := Some f; parse rest
-    (* ---- M7 S2: `pp fmt` seams ---- *)
+    (* ---- `pp fmt` seams ---- *)
     | "fmt" :: rest ->
         (* `fmt` owns the rest of argv itself (its own small flag set); it
            does not recurse back into the general `parse` loop. *)
@@ -186,11 +185,11 @@ let main () =
     | "--version" :: _ | "-v" :: _ ->
         Printf.printf "pp v%s\n" Version.string; exit 0
     | "--dump-surface-tables" :: _ ->
-        (* MASTER-PLAN A′2: emit the surface tables as the SPEC-generated block;
+        (* Emit the surface tables as the SPEC-generated block;
            tests/067 diffs this against the block committed to docs/SPEC.md. *)
         print_string (Surface_tables.render_spec_tables ()); exit 0
     | "--check-kernel-props" :: rest ->
-        (* MASTER-PLAN A″2: run the derived-generator kernel properties
+        (* Run the derived-generator kernel properties
            (hash injectivity, quote round-trip, printer round-trip). tests/071
            drives this with a fixed seed. Optional: --seed N, --count K. *)
         let seed = ref 1 and count = ref 3000 in
@@ -262,7 +261,7 @@ let main () =
   in
   parse args;
 
-  (* ---- M7 S1: brace-surface seams — each does its one thing and exits.
+  (* ---- Brace-surface seams — each does its one thing and exits.
      Both read the ORIGINAL (pre-macro-expansion) forms: surface identity is
      a reader-level property, and LAW 20 keys hash the located AST these
      produce. *)
@@ -318,7 +317,7 @@ let main () =
        exit 0
    | None -> ());
 
-  (* M7 S2: `pp fmt` — read one surface, print the other, carrying comments
+  (* `pp fmt` — read one surface, print the other, carrying comments
      via the Comments side channel (never touching the AST/eval path: the
      comment scanners run over the raw source text independently of
      whichever reader is invoked). *)
@@ -355,20 +354,20 @@ let main () =
        end else print_string out;
        exit 0
    | None -> ());
-  (* M7 S2 test seam: per-top-level-form LAW-20 hash comparison between two
+  (* Test seam: per-top-level-form LAW-20 hash comparison between two
      sexpr files (tests/055-fmt.sh's round-trip-hash check). Both are read
      with f1's path as the location label: LAW-20 hashes include the
-     `ELocated` file name, and the round-trip contract this checks
-     (docs/M7-SYNTAX.md S2) is specifically that transpiling IN PLACE (same
+     `ELocated` file name, and the round-trip contract this checks is
+     specifically that transpiling IN PLACE (same
      path throughout, per `-i`'s contract) preserves every hash — a
      scratch second path is just where this test seam keeps the
      "before" copy, not a real distinct source location. *)
   (match !compare_hash_args with
    | Some (f1, f2) ->
-       (* M7 S3: each side dispatches by its OWN extension (a brace `.pp`
+       (* Each side dispatches by its OWN extension (a brace `.pp`
           can be compared against a sexpr `.ppl` scratch copy and vice
-          versa); the location label stays f1 for both, per the contract
-          above. *)
+          versa); the location label stays f1 for both, per the round-trip
+          contract described above. *)
        let forms1 =
          Reader_braces.read_dispatch ~source:f1 ~path:f1 (read_whole f1) in
        let forms2 =
@@ -385,7 +384,7 @@ let main () =
          (List.combine forms1 forms2);
        exit 0
    | None -> ());
-  (* M7 S2 test seam: dump the comment side channel (one "LINE: TEXT" line
+  (* Test seam: dump the comment side channel (one "LINE: TEXT" line
      per comment, TEXT trimmed) so a shell test can diff count/content
      across a transpilation, independent of the `;`/`#` delimiter. *)
   (match !list_comments_args with
@@ -409,11 +408,10 @@ let main () =
   in
 
 
-  (* Parse --grant specs into capabilities (Capabilities.parse_grant — M5
-     moved this out of a local closure here so the signed-token verifier
-     can reuse the exact same parser; see capabilities.ml). Under
-     --remote-node (the cluster-member side of remote placement, M5 stage
-     B), authority instead comes from a VERIFIED cluster token — never
+  (* Parse --grant specs into capabilities (Capabilities.parse_grant lives
+     in capabilities.ml, not a local closure here, so the signed-token
+     verifier can reuse the exact same parser). Under
+     --remote-node (the cluster-member side of remote placement), authority instead comes from a VERIFIED cluster token — never
      plain --grant strings — so a tampered/expired/wrong-secret token fails
      this member process outright (Failure -> the top-level handler ->
      exit 1), which the dispatcher (src/remote.ml) reads as "member
@@ -442,26 +440,26 @@ let main () =
     gc_keep_epochs = !gc_keep_epochs;
     fenced_policy = !fenced_policy;
   };
-  (* Loader authority bound (Q6/D8c): the interpreter may load source from
+  (* Loader authority bound: the interpreter may load source from
      the CLI-named programs' directories, the cwd, and ~/.pp — nothing else.
-     Q13 loader reachability: also the resolved stdlib/ dir next to the
+     Also reachable: the resolved stdlib/ dir next to the
      running executable, so `--reconcile`/`--supervise`'s auto-loaded
      stdlib/domain-fs.pp / domain-proc.pp work from ANY cwd. *)
   Store.init ();
   Remote.init ();
-  (* M5 stage C: `--gc-mark` (internal — only `pp gc`'s own replay
+  (* `--gc-mark` (internal — only `pp gc`'s own replay
      subprocess, src/store_gc.ml, sets this) turns on Store.hit's
      mark-by-replay side channel for the whole remainder of this process. *)
   (match !gc_mark_out with Some _ -> Store.gc_marking := true | None -> ());
-  (* M5 stage C: the by-hash desired-value pull seam (docs/PLAN-m5-
-     distribution.md "Host-qualified domain distribution") — given a hash
+  (* The by-hash desired-value pull seam — given a hash
      already published (via `--publish-object`) into a shared local-dir
      root, pull the object AND every "blob:" ref it names (Blobref.blob_refs_in,
      shared with src/remote.ml's identical need) before anything else runs.
      Every pull re-hash-verifies before accepting (Transport.LocalDir.pull_*
      -> ingest_object/ingest_blob), the same choke point every other synced
-     artifact goes through — T1 unchanged. Does NOT sync fenced actions or
-     journals (per the contract): only the value object and its blob: refs
+     artifact goes through — re-hash-on-receive, same as every other synced
+     artifact. Does NOT sync fenced actions or
+     journals: only the value object and its blob: refs
      ever cross here. *)
   (match !desired_object_args with
    | Some (hash, root) ->
@@ -472,7 +470,7 @@ let main () =
               (Blobref.blob_refs_in v)
         | None -> ())
    | None -> ());
-  (* M5 stage B / Q11-bis: pre-seed Store.run_pins from the dispatcher's
+  (* Pre-seed Store.run_pins from the dispatcher's
      wire BEFORE run_files ever executes a single expression — this member
      process must never observe its own disk for a pre-seeded cell, and
      the only way to make that structural (not just conventional) is to
@@ -481,9 +479,8 @@ let main () =
    | Some (_, pins_file, _, _, _) ->
        Remote.preseed_pins_from_file ~pins_file
    | None -> ());
-  (* M6 stage B: `--pin-file <path>` — the SAME preseed logic, standalone,
-     no --remote-node ceremony (docs/PLAN-m6-demo.md "Stage B — the pin
-     seam"). Also runs before run_files ever executes anything, for the
+  (* `--pin-file <path>` — the SAME preseed logic, standalone,
+     no --remote-node ceremony. Also runs before run_files ever executes anything, for the
      same structural reason as above. Composes with --remote-node
      harmlessly (both would just preseed from their own file; not a
      supported/needed combination in practice, but neither excludes the
@@ -497,8 +494,7 @@ let main () =
   (* Collect every cell observation made by the program: needed for
      stratification (LAW 30) and for --watch polling. Unconditional (not
      gated on --reconcile/--watch/--supervise): a program may call
-     register-domain itself with neither flag set (Q13's "programs may
-     call register-domain themselves" mode) — main.ml cannot know in
+     register-domain itself with neither flag set — main.ml cannot know in
      advance whether the program it is about to run will do that, so
      collection must always be live for the stratification check
      domains.ml performs after root evaluation to see anything at all.
@@ -506,7 +502,7 @@ let main () =
      converges. *)
   Runtime.observe_all := true;
   (* Recover any unknown-status fenced actions from a prior crash before
-     applying new state (Q3 / LAW 31). Skipped under `--gc-mark`: a GC
+     applying new state (LAW 31). Skipped under `--gc-mark`: a GC
      replay must never perform a real recovery action — see the --gc-mark
      branch below, which also skips run_domains_pass/Fenced.drain for the
      same reason (mark-by-replay is read-only on the world by construction,
@@ -515,14 +511,12 @@ let main () =
     Fenced.recover_unknown ~policy:!fenced_policy;
 
 
-  (* ---- Q13 driver wiring (PLAN-m4-cells.md §Q13, the exit criterion) ----
+  (* ---- Domain driver wiring ----
 
      `--reconcile ROOT` auto-loads stdlib/domain-fs.pp and registers it with
      a write-cap cap-restrict'd to ROOT, wrapping the program's final value
      as {"fs" -> v}; `--supervise` likewise with stdlib/domain-proc.pp,
-     {"proc" -> v}; both compose (the same v feeds both, exactly as the
-     pre-Q13 code ran Reconciler.reconcile and Supervisor.reconcile on the
-     SAME `last` when both flags were given). A program that calls
+     {"proc" -> v}; both compose (the same v feeds both). A program that calls
      register-domain itself needs none of this glue — it returns
      {name -> desired} directly, one evaluation, N domains. *)
   let read_file_content (path : string) : string =
@@ -569,8 +563,8 @@ let main () =
             | None -> []
             | Some r ->
                 let canon = Runtime.canonical_path r in
-                (* :wo, not :rw (a documented deviation from the contract's
-                   literal wording): tests/023 grants only `fs:ROOT:wo` and
+                (* :wo, not :rw — write-only is the minimum sufficient
+                   grant here: tests/023 grants only `fs:ROOT:wo` and
                    expects a full build+restore cycle to work — the single
                    writer reading its OWN managed tree to converge is not a
                    distinct authority concern (Domain_prims.tree_observe
@@ -625,8 +619,7 @@ let main () =
   let should_run_domains () =
     uses_domains () || Domains.any_write_domain_registered ()
   in
-  (* M5 stage C by-hash desired-value seam (docs/PLAN-m5-distribution.md
-     "Host-qualified domain distribution"): `--desired-object HASH ROOT`
+  (* The by-hash desired-value seam: `--desired-object HASH ROOT`
      substitutes the DERIVATION of the desired-state root entirely — the
      object was already pulled (and its blob: refs with it) above, so this
      process never runs a program to compute what to converge, only to
@@ -649,12 +642,11 @@ let main () =
          | Some v -> build_all_desired v
          | None -> failwith "reconcile: the program produced no value")
   in
-  (* M5 stage C host-qualified domain distribution: the LEAST-MAGIC
-     detection rule the contract asks for — host-keying is opt-in ONLY via
+  (* Host-qualified domain distribution: host-keying is opt-in ONLY via
      an explicit `--member-name <n>` flag, never inferred from a value's
      shape. Without it, [all_desired] passes through completely unchanged,
      so a program/flags that never mention --member-name (tests/018,
-     tests/033, every pre-M5-stage-C test) behave byte-identically — this
+     tests/033, and every test predating this feature) behave byte-identically — this
      is the whole back-compat proof. With it, [all_desired] MUST be a map
      keyed by host name (string or keyword) and this indexes exactly one
      entry, handing the UNCHANGED Domains.run_all only that host's own
@@ -690,10 +682,10 @@ let main () =
     end
   in
 
-  (* ---- Phase 2: pp graph — delegates to Store.print_graph ---- *)
+  (* ---- pp graph — delegates to Store.print_graph ---- *)
   let print_graph ?(verbose = false) () = Store.print_graph ~verbose () in
 
-  (* ---- Phase 2: --watch polling loop ----
+  (* ---- --watch polling loop ----
      Run the program, snapshot observed cell hashes, poll for changes,
      re-run on change. Uses the pull scheduler in a loop — the persistent
      store's trace verification naturally skips unchanged nodes (hits)
@@ -713,8 +705,8 @@ let main () =
          calls Vm.init ()/Repl.init () (via execute_sources_bytecode /
          execute_file_bytecode). *)
       Hashtbl.clear Store.run_pins;  (* clear pinned cell observations *)
-      Hashtbl.clear Runtime.probe_values;  (* M4: probes re-evaluate fresh each pass *)
-      Hashtbl.clear Runtime.sealed_pins;   (* M4: sealed bytes never survive a pass *)
+      Hashtbl.clear Runtime.probe_values;  (* probes re-evaluate fresh each pass *)
+      Hashtbl.clear Runtime.sealed_pins;   (* sealed bytes never survive a pass *)
       Runtime.observed_all := [];     (* clear collected observations *)
       Runtime.current_capabilities := (Runtime.invocation_get ()).initial_capabilities;
       (* Re-read and execute the program (plus, if --reconcile/--supervise
@@ -732,8 +724,8 @@ let main () =
       Stabilize.reset_dirty dirty;
       Runtime.keep_thunks := true;  (* set BEFORE run_files's internal init *)
       Hashtbl.clear Store.run_pins;  (* fresh world observations, not last run's pins *)
-      Hashtbl.clear Runtime.probe_values;  (* M4: probes re-evaluate fresh each pass *)
-      Hashtbl.clear Runtime.sealed_pins;   (* M4: sealed bytes never survive a pass *)
+      Hashtbl.clear Runtime.probe_values;  (* probes re-evaluate fresh each pass *)
+      Hashtbl.clear Runtime.sealed_pins;   (* sealed bytes never survive a pass *)
       Runtime.observed_all := [];
       Runtime.current_capabilities := (Runtime.invocation_get ()).initial_capabilities;
       let last = run_files files in
@@ -755,10 +747,11 @@ let main () =
       begin try Unix.sleepf interval
         with _ -> Unix.sleep 1 end;
       (* Clear run pins so observe_cell reads the current world, not the
-         snapshot from the last run (Q11 CAS-ingest pins the first read). *)
+         snapshot from the last run (CAS-ingest pins the first read of a
+         cell for the rest of a run). *)
       Hashtbl.clear Store.run_pins;
-      Hashtbl.clear Runtime.probe_values;  (* M4: probes re-evaluate fresh each pass *)
-      Hashtbl.clear Runtime.sealed_pins;   (* M4: sealed bytes never survive a pass *)
+      Hashtbl.clear Runtime.probe_values;  (* probes re-evaluate fresh each pass *)
+      Hashtbl.clear Runtime.sealed_pins;   (* sealed bytes never survive a pass *)
       (* Detect cell changes FIRST, before reconcile work, so config edits
          are noticed promptly. Then reconcile processes only when no cell
          changed — this still restarts killed services within one interval. *)
@@ -796,7 +789,7 @@ let main () =
   in
   (* pp graph: just scan and print, no file needed. *)
   if !graph_mode then (print_graph (); exit 0);
-  (* ---- M5 stage A: cluster transport/token CLI seam ----
+  (* ---- Cluster transport/token CLI seam ----
      Administrative/test entries: each does its one thing and exits.
      Errors (bad token, corrupt/tampered artifact, missing secret) propagate
      as Failure/Transport.Transport_integrity_error to the top-level handler
@@ -846,11 +839,10 @@ let main () =
             Printf.printf "recv-hit: deny key=%s reason=%s\n" key reason);
        exit 0
    | None -> ());
-  (* ---- M5 stage C: `pp gc` (explicit, never automatic) ---- *)
+  (* ---- `pp gc` (explicit, never automatic) ---- *)
   if !gc_mode then (Store_gc.run ~grace_seconds:!gc_grace_seconds; exit 0);
-  (* ---- M5 stage C: `--publish-object <shared-root>` — the by-hash
-     desired-value PUBLISH seam's dispatcher side (docs/PLAN-m5-
-     distribution.md "Host-qualified domain distribution"): run the program
+  (* ---- `--publish-object <shared-root>` — the by-hash
+     desired-value PUBLISH seam's dispatcher side: run the program
      normally, store its (fully-forced) value as an ordinary content-
      addressed object, push it AND every "blob:" ref it names (Blobref
      .blob_refs_in — shared with src/remote.ml's identical need) into
@@ -879,7 +871,7 @@ let main () =
             Printf.printf "publish-object: %s\n" hash);
        exit 0
    | None -> ());
-  (* ---- M5 stage C: `--gc-mark <outfile>` — internal, only `pp gc`'s own
+  (* ---- `--gc-mark <outfile>` — internal, only `pp gc`'s own
      replay subprocess (src/store_gc.ml) sets this. Runs the recorded root
      program EXACTLY as a live pass would (registration glue, the user's
      file(s), the same --grant/--bytecode/--reconcile/--supervise/
@@ -953,12 +945,11 @@ let main () =
       end else begin
         let last = run_files files in
         run_domains_pass last;
-        (* M6 stage B: `--dump-pins <path>` — after the canonical run
+        (* `--dump-pins <path>` — after the canonical run
            completes (this plain non-watch, non-remote-node branch only;
            the other branches have their own, different, run shapes),
            write every Store.run_pins entry as a `(pin ...)` line and every
-           Runtime.probe_values entry as a `(pin-probe ...)` line
-           (docs/PLAN-m6-demo.md "Stage B — the pin seam"). A probe value
+           Runtime.probe_values entry as a `(pin-probe ...)` line. A probe value
            Codec.encode_value can't encode (code/a handle/a sealed secret)
            is skipped — mirrors how a node's RESULT value already treats
            non-data (--publish-object's own "cannot be published as data"
@@ -982,7 +973,7 @@ let main () =
                Runtime.probe_values;
              Store.atomic_write path (Buffer.contents buf)
          | None -> ());
-        (* Phase 3 schedule-transparency audit (D17 class 1 / LAW 26/34's
+        (* Schedule-transparency audit (LAW 26/34's
            promised --check): a result-transparent handler must never change
            WHAT a program computes, only where/when it runs. Under --check
            with a non-serial policy, re-run the SAME program forced Serial
@@ -1027,11 +1018,10 @@ let main () =
                     end))
       end);
 
-  (* M5 stage B: after running the program (whatever nodes that forced,
+  (* After running the program (whatever nodes that forced,
      including — but not limited to — the dispatcher's assigned batch keys;
-     duplicate/extra computation here is sound, contract's "advisory
-     responsibility partition"), serve each assigned key back to the
-     dispatcher via the UNCHANGED stage-A Transport.serve_hit, once per key,
+     duplicate/extra computation here is sound), serve each assigned key back to the
+     dispatcher via Transport.serve_hit, once per key,
      against THIS process's own now-populated store. *)
   (match !remote_node_args with
    | Some (token_file, _, shared_root, keys_file, reply_file) ->
@@ -1047,7 +1037,7 @@ let main () =
   end
 
 (* Uncaught runtime errors print as one clean line, not an OCaml backtrace
-   header (ROADMAP §1 error-message ergonomics). Exit 1. *)
+   header. Exit 1. *)
 let () =
   try main () with
   | Types.Pp_exit n -> exit n

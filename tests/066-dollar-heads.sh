@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# tests/066 — A6 + A′1: observation `$KIND` heads are table-driven
-# (Surface_tables) and parse arbitrary expression arguments.
+# tests/066 — observation `$KIND` heads are table-driven (Surface_tables)
+# and parse arbitrary expression arguments.
 #
-# A6: `$file`/`$env`/`$glob`/`$secret`/`$probe` accepted a STRING LITERAL only;
+# `$file`/`$env`/`$glob`/`$secret`/`$probe` accepted a STRING LITERAL only;
 # real code computes paths/names. All heads now parse an ordinary expression
 # list, so a computed name/default works — on both backends.
 #
-# A′1: the SAME table drives the normal reader and the quasiquote reader, so a
+# The SAME table drives the normal reader and the quasiquote reader, so a
 # `$head(...)` inside a quasiquote template builds a value equal to what the
-# bare form lowers to (the parity A3 deferred to A′1).
+# bare form lowers to.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -36,14 +36,14 @@ run_both() {
 
 export A6_VAR="present"
 
-# (a) $env with a COMPUTED name expression (not a string literal). A6.
+# (a) $env with a COMPUTED name expression (not a string literal).
 cat > "$TMP/name.pp" <<'EOF'
 def mk(s) { string-append("A6_", s) }
 print($env(mk("VAR")))
 EOF
 run_both "env-computed-name" "$TMP/name.pp" '"present"'
 
-# (b) $env with a computed DEFAULT expression, variable unset. A6.
+# (b) $env with a computed DEFAULT expression, variable unset.
 cat > "$TMP/def.pp" <<'EOF'
 print($env("A6_MISSING", string-append("de", "fault")))
 EOF

@@ -1,6 +1,5 @@
 (* pp cluster tokens — signed capability grants for cross-machine authority
-   (M5 stage A: docs/PLAN-m5-distribution.md "Signed capability tokens";
-   docs/THREAT-MODEL-cluster.md is the gate this implements against).
+   (docs/THREAT-MODEL-cluster.md is the gate this implements against).
 
    A token is (caps in the --grant CLI grammar, cluster id, issued, expires,
    HMAC-SHA256 MAC) as CANONICAL TEXT — never a pp value. It is minted and

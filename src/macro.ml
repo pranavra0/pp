@@ -1,4 +1,5 @@
-(* pp macro expansion — defmacro (M3, D10's promise)
+(* pp macro expansion — defmacro: a function from syntax-as-values to
+   syntax-as-values.
 
    Architecture (LAW 20/36): expansion is the ONE shared step both backends
    pass through before their own machinery ever sees a form — hash_expr
@@ -18,8 +19,7 @@
    node_key_of/vm_node_key have no idea macros exist — they only ever see
    the expr trees this module already rewrote.
 
-   Scope/phasing (documented decisions — MASTERPLAN M3 poses these as open
-   questions; these are the answers, chosen for the simplest sound rule):
+   Scope/phasing (the simplest sound rule for each):
 
    - A `defmacro` is recognized ONLY as a direct element of the outermost
      list handed to a top-level driver — a file's or REPL input's top-level
@@ -37,17 +37,16 @@
      this module without a cycle, through `Primitives.expand_toplevel_ref`,
      which this module installs below).
    - `defmacro` is NOT specially recognized inside `do`/`module`/`fn`/`def`/
-     `node`/`delay`/... bodies, answering MASTERPLAN's "(and in modules?)"
-     question NO: only the true top level (of a file, a REPL input, or a
-     loaded file) counts. Anywhere else in the tree, a raw `(defmacro ...)`
-     is simply left alone by the expander below (its own head symbol,
-     "defmacro", is never itself a registered macro), so it reaches
-     eval/compile as an ordinary application of an unbound symbol and fails
-     with the exact same "unbound symbol: defmacro" every other stray call
-     would. This is the simplest sound rule for MASTERPLAN's explicit ask
-     ("macro definitions inside node bodies: error") — it falls out for
-     free, with no special-cased detection code, and it generalizes to
-     every other non-top-level position instead of just nodes. (Nodes
+     `node`/`delay`/... bodies: only the true top level (of a file, a REPL
+     input, or a loaded file) counts. Anywhere else in the tree, a raw
+     `(defmacro ...)` is simply left alone by the expander below (its own
+     head symbol, "defmacro", is never itself a registered macro), so it
+     reaches eval/compile as an ordinary application of an unbound symbol
+     and fails with the exact same "unbound symbol: defmacro" every other
+     stray call would — in particular, a `defmacro` inside a node body is
+     always an error. This falls out for free, with no special-cased
+     detection code, and it generalizes to every other non-top-level
+     position instead of just nodes. (Nodes
      specifically: a node's body is deferred/cached across process runs,
      and letting a `defmacro` inside it register into the ambient,
      eagerly-populated-at-expansion-time table would be confusing —
@@ -55,8 +54,8 @@
      node ever forces, when in truth expansion is unconditional and
      ahead-of-time. Refusing it entirely avoids the footgun.)
 
-   Hygiene (documented, not automatic — MASTERPLAN M3 does not require full
-   hygiene): macros are UNHYGIENIC. A variable a macro's expansion
+   Hygiene is manual, not automatic: macros are UNHYGIENIC. A variable a
+   macro's expansion
    INTRODUCES can capture, or be captured by, a binding at the call site,
    exactly as in any Lisp-1 macro system without a hygiene pass. The
    discipline is manual: call `(gensym ["prefix"])` (primitives.ml) for
@@ -137,7 +136,7 @@ let match_defmacro (e : expr) : (string * string list * expr) option =
   | _ -> None
 
 (* Apply a macro to its (unevaluated!) argument FORMS: quote each form to a
-   value (Types.quote_to_value — the total base, D10/D19), bind the macro's
+   value (Types.quote_to_value, total over every expr form), bind the macro's
    parameters to those values (plain values, not thunks — they are already
    fully-realized quoted data, and the macro body is expansion-time code,
    not the program proper), run the body through the TREE-WALKER (LAW 36:
@@ -195,7 +194,7 @@ let apply_macro ~(name : string) ~(params : string list) ~(body : expr)
    fallthrough).
 
    [loc] is the innermost enclosing source location seen so far (best-
-   effort LAW 29 preservation, MASTERPLAN M3 point 6): re-stamped whenever
+   effort LAW 29 preservation): re-stamped whenever
    the walk passes an ELocated node (the reader, and assemble_fn_body,
    attach these at more than just the top level — parameter type checks,
    typed bodies), and attached to the top of every expansion so an error

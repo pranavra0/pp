@@ -1,4 +1,4 @@
-(* pp shared reader-level desugars (M7 consequence 3, SPEC Appendix B).
+(* pp shared reader-level desugars (SPEC Appendix B).
 
    Every reader-level sugar whose OUTPUT participates in LAW-20 hashing lives
    here, downstream of BOTH parsers (src/reader.ml, the s-expression surface;
@@ -8,8 +8,7 @@
    `assert` -> `if`+`error` desugar (whose message string — including the
    s-expression rendering of the condition and the `at file:line` suffix — is
    part of the desugared expression and therefore of every enclosing hash;
-   Appendix B §B.4). Extracted verbatim from reader.ml; the s-expression
-   reader's output is bit-for-bit unchanged.
+   Appendix B §B.4).
 
    [err] is each caller's own located-parse-error raiser, so error text keeps
    that reader's exact `msg at file:line` format (LAW 29). *)

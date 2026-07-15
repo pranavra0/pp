@@ -26,7 +26,7 @@ let invocation_get () : invocation =
 
 (* Handler stack for algebraic effects.
    Each entry is (effect-name, handler-fn, handler-value-hash). The third
-   component (D17) lets a thunk's content-addressed key depend on the ambient
+   component lets a thunk's content-addressed key depend on the ambient
    handlers, since the handler-fn itself is an opaque OCaml closure. *)
 let handler_stack : (string * (value list -> value) * string) list ref = ref []
 
@@ -65,8 +65,7 @@ let with_ref (r : 'a ref) (v : 'a) (f : unit -> 'b) : 'b =
    Haskell's static IO type: instead of a type that says "this MAY touch the
    world," a trace records what the node actually DID touch — each read as a
    (cell-id, observed-hash) pair — and a cache hit re-verifies every pair
-   against the current world before serving the stored result (SPEC LAW 21,
-   DESIGN Q2/Q8).
+   against the current world before serving the stored result (SPEC LAW 21).
 
    Each node force pushes a fresh frame; every world-read during its evaluation
    is recorded into *all* active frames, so a parent's trace transitively
@@ -94,7 +93,7 @@ let record_read (cell_id : string) (observed_hash : string) : unit =
     !trace_stack;
   if !observe_all then observed_all := (cell_id, observed_hash) :: !observed_all
 
-(* ---- Per-node sandbox (LAW 18, DESIGN Q2 sandbox v1) ----
+(* ---- Per-node sandbox (LAW 18) ----
 
    One slot per active node force, parallel to trace_stack. The directory is
    created lazily on the first `run` or scratch write inside the node and
@@ -170,22 +169,21 @@ let pop_trace_frame () : unit =
    hit check), so the two can never disagree. *)
 
 
-(* Process-domain cell observation hook — pre-Q13 vestige. Was set by the
-   now-deleted Supervisor.init; nothing wires it anymore, and (checked
-   while landing Q13) nothing ever called record_read with a Cell.Proc id
-   either, so Store.observe_cell's `Cell.Proc` arm was already
-   unreachable dead weight before this refactor — a pre-existing gap, not
-   introduced by it. stdlib/domain-proc.pp's observe reads domain-state
-   directly instead of going through a proc: cell at all. Left as the
-   default no-op rather than removed: Cell.Proc itself stays (fs/proc
-   "keep their existing cell kinds," PLAN-m4-cells.md), so this hook stays
-   as its dormant counterpart rather than an asymmetric partial removal. *)
+(* Process-domain cell observation hook — currently dormant. Nothing wires
+   it, and nothing ever calls record_read with a Cell.Proc id either, so
+   Store.observe_cell's `Cell.Proc` arm is unreachable dead weight:
+   stdlib/domain-proc.pp's observe reads domain-state directly instead of
+   going through a proc: cell at all. Left as the
+   default no-op rather than removed: Cell.Proc itself stays as a cell
+   kind (fs and proc keep their existing cell kinds even though only fs's
+   is live), so this hook stays as its dormant counterpart rather than an
+   asymmetric partial removal. *)
 let proc_observer : (string -> string option) ref = ref (fun _ -> None)
 
 let observe_proc (name : string) : string option =
   !proc_observer name
 
-(* M4 probes: Store-facing re-observation hook, wired in main.ml
+(* Probes: Store-facing re-observation hook, wired in main.ml
    (`Runtime.probe_observer := Primitives.probe_observe_for_store`) exactly
    like [proc_observer] above and for the same reason — Store.ml cannot
    depend on Primitives.ml directly (Primitives already depends on Store, so
@@ -242,7 +240,7 @@ let record_handler_observation (name : string) : unit =
   if !trace_stack <> [] then
     record_read (handler_cell_id name) (observe_handler name)
 
-(* ---- Loader authority — the runtime/traced split (DESIGN Q6, D8c) ----
+(* ---- Loader authority — the runtime/traced split ----
 
    `load`/`load-module`/`island` run with the INTERPRETER's authority, not the
    user capability set: they are the loader, not user effects. That authority
@@ -256,7 +254,7 @@ let record_handler_observation (name : string) : unit =
 
 
 
-(* Q13 loader reachability: stdlib/domain-fs.pp and stdlib/domain-proc.pp
+(* stdlib/domain-fs.pp and stdlib/domain-proc.pp
    must load from ANY cwd (--reconcile/--supervise are meant to work from
    wherever the user invokes pp, not just the repo root) — resolved
    relative to the RUNNING EXECUTABLE, not the cwd: dirname(realpath(argv0))
@@ -276,12 +274,12 @@ let stdlib_root () : string option =
     else None
   with _ -> None
 
-(* SPEC LAW 23 / DESIGN §2.1: the ONE cell-id canonicalization function,
+(* SPEC LAW 23: the ONE cell-id canonicalization function,
    applied at every file:/tree:/stat:/tool:/runtime:file: construction site,
    every --grant path, and the loader bound — so two syntactically different
-   paths naming the same inode collapse to one cell (the D8 path-prefix bug
-   class, now closed at the cell layer: macOS /var vs /private/var, a
-   symlinked source tree, and a trailing slash all name the same cell).
+   paths naming the same inode collapse to one cell, closed at the cell
+   layer: macOS /var vs /private/var, a
+   symlinked source tree, and a trailing slash all name the same cell.
 
    Existing paths: made absolute, then realpath (symlinks resolved). Paths
    that do not (yet) exist — a write-target before its file is created —
@@ -338,14 +336,15 @@ let loader_read (path : string) : string =
   if not (loader_authorized path) then
     failwith ("load: " ^ path
               ^ " is outside the interpreter's source roots (loader authority \
-                 is bounded — DESIGN Q6/D8c)");
+                 is bounded to the CLI-named programs' directories, the cwd, \
+                 and ~/.pp)");
   let ic = open_in canon in
   let content = really_input_string ic (in_channel_length ic) in
   close_in ic;
   record_read (Cell.(to_string (RuntimeFile canon))) (hash_string content);
   content
 
-(* ---- LAW 29 / D12: source locations on runtime errors, never doubled ----
+(* ---- LAW 29: source locations on runtime errors, never doubled ----
 
    A runtime error escaping a form's evaluation should report THAT form's
    own file:line — unless its message already carries one (a trailing
@@ -358,7 +357,7 @@ let loader_read (path : string) : string =
    execute_file/execute_file_bytecode, both backends), the tree-walker's
    `load` (evaluator.ml eval_expressions), and the VM's LOAD_FILE opcode
    (vm.ml). Applying it at `load` granularity too (not just the outermost
-   top level) is what closes the D12 residual: an error inside a `load`ed
+   top level) means an error inside a `load`ed
    file is decorated with THAT file's line before it ever unwinds past the
    loading form, so the `(load ...)` call site's own decorator (seeing a
    message that already has a location) leaves it alone. *)
@@ -394,7 +393,7 @@ let with_form_location (e : expr) (f : unit -> 'a) : 'a =
    Set false for cold runs and --once; true for stabilize iterations. *)
 let keep_thunks = ref false
 
-(* ---- Fenced-effect registry (Q3 / LAW 31) ----
+(* ---- Fenced-effect registry (LAW 31) ----
    Scripting-tier `(fenced KIND SPEC)` registers an action here.  The
    reconciler/supervisor drains this list after convergent work, one action at
    a time, journaling intent/done around each. *)
@@ -412,7 +411,7 @@ let fenced_policy_name = function
   | Abort -> "abort"
   | Ask -> "ask"
 
-(* ---- Q13: the in-language reconciler-domain protocol (PLAN-m4-cells.md) ----
+(* ---- The in-language reconciler-domain protocol ----
 
    ONE registry for both hats of "a domain": a probe is a domain with BOTTOM
    write authority (dm_diff/dm_apply = None, dm_namespace = [] — nothing to
@@ -443,7 +442,7 @@ type domain_entry = {
 
 let domain_registry : (string, domain_entry) Hashtbl.t = Hashtbl.create 16
 
-(* Q13: which domain's observe/diff/apply is currently executing — set by
+(* Which domain's observe/diff/apply is currently executing — set by
    Domains.run_pass via with_ref for the extent of each call, so
    domain-state-get/put (core-trusted, per-domain-scoped bookkeeping) know
    where to read/write without an explicit domain-name argument at every
@@ -467,17 +466,17 @@ let observe_domain_cell (name : string) (sub : string) : string option =
    watch loop clears Store.run_pins (main.ml) — probes are LAW 38's declared-
    nondeterminism mechanism, so a value must never survive past the pass
    that observed it (unlike sealed_pins below, which share the same clearing
-   points for a completely different reason — Q11 per-run read consistency,
+   points for a completely different reason — per-run read consistency,
    not volatility). *)
 let probe_values : (string, value) Hashtbl.t = Hashtbl.create 16
 
-(* ---- M4 sealed cells: in-memory-only bytes for a CapSecret-covered read ----
+(* ---- Sealed cells: in-memory-only bytes for a CapSecret-covered read ----
 
    A read covered by CapSecret and NOT by CapFilesystem returns VSealed and
    pins the raw bytes here (cell-id -> bytes), keyed exactly like
    Store.run_pins but NEVER touching store_blob/the CAS — that is the whole
-   point (PLAN-m4-cells.md "Sealed cells": secret bytes must never land under
-   ~/.pp/store). Q11 per-run consistency: the first read of a sealed cell in
+   point: secret bytes must never land under
+   ~/.pp/store. Per-run consistency: the first read of a sealed cell in
    a run pins its bytes; later reads of the SAME cell in the SAME run serve
    the pin, so one run can never observe two versions of one secret. Cleared
    at exactly the three points Store.run_pins is cleared (main.ml's watch

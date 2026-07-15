@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/025 — (def x v) / (defnode x e) value-binding semantics (ROADMAP §1).
+# tests/025 — (def x v) / (defnode x e) value-binding semantics.
 #
 # The differential suite only proves the backends AGREE; this oracle pins what
 # they agree ON:

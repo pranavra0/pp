@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# M5 stage B: remote placement (--schedule remote:<member>), over the
-# stage-A transport (docs/PLAN-m5-distribution.md "Remote placement" /
-# "Q11-bis"; stage A is tests/047-cluster-sync.sh).
+# Remote placement: --schedule remote:<member> dispatches data-closed
+# node bodies to another cluster member over the same transport as
+# tests/047-cluster-sync.sh.
 #
 # Two SIMULATED cluster members are two `pp` process invocations differing
 # only in $HOME (Store.store_root is a process-wide singleton — same CI
@@ -11,45 +11,45 @@
 # (--remote-node, PP_REMOTE_TEST_HOOK[_AFTER]) are exercised directly here,
 # the way tests/047 drives --serve-hit/--recv-hit directly.
 #
-# WALL (found building this test, reported per the walls protocol, NOT
-# fixed here — out of M5 stage B's scope): `--reconcile` unconditionally
-# preloads stdlib/list.pp as domain glue (main.ml's stdlib_glue_sources),
-# and list.pp defines its OWN pp-level `(def (map f lst) ...)`, which
-# SHADOWS the batching-aware `map` BUILTIN Phase 3 added (PLAN-phase3-
-# parallel.md's "Wall A" primitive — the one thing that can build a
-# compound value without forcing its elements). Once shadowed, `(map
-# compile names)` recurses through `cons`, whose EApply argument-forcing
-# (Q1) forces each node inline as list.pp's `map` builds each cons cell —
-# the exact "pairing trap" tests/024's own build.pp comment warns against,
-# just entered from a different direction. This silently defeats
-# collect_unevaluated_nodes for EVERY non-serial policy (parallel/race,
-# and now remote) whenever a build uses `--reconcile` — verified directly
-# (a --schedule parallel:3 --reconcile run of 3 slow nodes executes them
-# strictly one at a time, zero forking, collect_unevaluated_nodes always
-# `[]`). tests/024's own parallel exit criterion never caught this because
-# its assertions are exec-COUNT (identical either way) plus a SOFT timing
+# WALL (found building this test, reported as a known limitation, NOT
+# fixed here): `--reconcile` unconditionally preloads stdlib/list.pp as
+# domain glue (main.ml's stdlib_glue_sources), and list.pp defines its OWN
+# pp-level `(def (map f lst) ...)`, which shadows the batching-aware `map`
+# builtin — the one primitive that can build a compound value without
+# forcing its elements. Once shadowed, `(map compile names)` recurses
+# through `cons`, whose argument-forcing on application forces each node
+# inline as list.pp's `map` builds each cons cell — the exact "pairing
+# trap" tests/024's own build.pp comment warns against, just entered from
+# a different direction. This silently defeats collect_unevaluated_nodes
+# for EVERY non-serial scheduling policy (parallel/race, and now remote)
+# whenever a build uses `--reconcile` — verified directly (a --schedule
+# parallel:3 --reconcile run of 3 slow nodes executes them strictly one
+# at a time, zero forking, collect_unevaluated_nodes always `[]`).
+# tests/024's own parallel exit criterion never caught this because its
+# assertions are exec-COUNT (identical either way) plus a SOFT timing
 # check that already accepts "no speedup, not pathological" as a pass. This
 # test therefore does NOT use `--reconcile` for the N-TU build below —
 # materialization is done directly (plain top-level `write-file` calls,
 # outside any node body, into a granted :wo/:rw dir) so it exercises the
-# scheduler correctly. Flagged in the M5 stage B report; a real fix
-# (list.pp not shadowing `map`, or reconcile-glue not force-loading it)
-# belongs to Phase 3/reconcile territory, not remote placement.
+# scheduler correctly. A real fix (list.pp not shadowing `map`, or
+# reconcile-glue not force-loading it) is tracked separately from remote
+# placement.
 #
 #   T6      — an N-TU real-cc build under --schedule remote:B: byte-
 #             identical desired-state hash + materialized tree vs serial.
 #   cross-machine hit — a data-closed compile node forced on the member
 #             produces a trace the dispatcher hits (no local recompute).
-#   Q11-bis — a shared data file that DIFFERS, at the moment the member
-#             actually runs, from what the dispatcher pre-observed/pinned:
-#             the member's result reflects the dispatcher's PINNED bytes,
-#             never its own current disk.
+#   pinned bytes, not live disk — a shared data file that DIFFERS, at the
+#             moment the member actually runs, from what the dispatcher
+#             pre-observed/pinned: the member's result reflects the
+#             dispatcher's PINNED bytes, never its own current disk.
 #   non-data-closed — a node whose free var is a closure stays local; no
 #             remote dispatch attempted at all (member's store untouched).
 #   unreachable member — a bad members-file target degrades to local
 #             compute; the build still succeeds with the correct result.
-#   tool: not pre-seeded — the member's own `cc` legitimately runs (its own
-#             observation, per the M2 posture), proven via ITS journal.
+#   tool: not pre-seeded — the member's own `cc` legitimately runs (a
+#             member always makes its own local observations), proven via
+#             ITS journal.
 #   VM parity — the same remote build under --bytecode.
 set -uo pipefail
 PP=${PP:-bin/pp}
@@ -126,9 +126,11 @@ fn(o) {
 EOF
   # \$BUILD is a per-run placeholder the shell fills in below (each cold
   # build gets its own BUILD dir, so the SAME build.pp text is reused
-  # byte-for-byte across serial/remote/degrade/vm runs — LAW 20/T6 needs
-  # identical source, and a literal path baked in per-run would change the
-  # program's hash between runs for no reason).
+  # byte-for-byte across serial/remote/degrade/vm runs). The node key is a
+  # hash of code plus argument values (SPEC law 20), so identical source
+  # text is required for the byte-identical comparison below (case T6); a
+  # literal path baked in per-run would change the program's hash between
+  # runs for no reason.
 
   BUILD_S="$TMP/build-serial"; BUILD_R="$TMP/build-remote"
   mkdir -p "$BUILD_S" "$BUILD_R"
@@ -159,18 +161,19 @@ EOF
   if [ -x "$BUILD_R/prog" ] && "$BUILD_R/prog"; then ok "remote-binary-runs"
   else bad "remote-binary-runs" "$(tail -8 "$TMP/remote.out")"; fi
 
-  # T6: byte-identical materialized tree, serial vs remote.
+  # Materialized tree is byte-identical, serial vs remote (case T6 below).
   if diff -rq "$BUILD_S" "$BUILD_R" > "$TMP/tree-diff.out" 2>&1; then
     ok "T6-same-tree-bytes (serial vs remote:B)"
   else
     bad "T6-same-tree-bytes" "$(cat "$TMP/tree-diff.out")"
   fi
 
-  # T6: byte-identical desired-state hash. --check re-runs the SAME program
-  # forced Serial against the SAME (now-warm) store and compares
-  # Types.hash_value of the desired-state value (main.ml's existing Phase-3
-  # schedule-transparency audit, extended to Remote by policy_name); a
-  # mismatch would print "schedule non-transparent" and fail the audit.
+  # Desired-state hash is byte-identical, serial vs remote (case T6
+  # below). --check re-runs the SAME program forced Serial against the
+  # SAME (now-warm) store and compares Types.hash_value of the
+  # desired-state value (main.ml's existing schedule-transparency audit,
+  # extended to Remote by policy_name); a mismatch would print "schedule
+  # non-transparent" and fail the audit.
   HOME="$NODEA" "$PP" "${GR[@]}" --schedule remote:B --check "$TMP/build.pp" \
     > "$TMP/check.out" 2>&1
   CODE=$?
@@ -242,8 +245,8 @@ EOF
 fi
 
 # ===========================================================================
-# Part 2: Q11-bis — the member must observe the DISPATCHER's pinned bytes,
-# never its own (possibly-drifted) disk, for a pre-seeded cell. Uses the
+# Part 2: the member must observe the DISPATCHER's pinned bytes, never
+# its own (possibly-drifted) disk, for a pre-seeded cell. Uses the
 # PP_REMOTE_TEST_HOOK[_AFTER] seam (src/remote.ml) to force a deterministic
 # window a real dispatcher/member network round-trip would occupy anyway:
 # HOOK runs right after the dispatcher pushes pins (bytes = "V1") but
@@ -320,8 +323,8 @@ NF_TRACES=$(ls "$NODEF/.pp/store/traces" 2>/dev/null | wc -l | tr -d ' ')
 if [ "$NF_TRACES" -eq 0 ]; then ok "non-data-closed-member-never-touched (0 traces on F)"
 else bad "non-data-closed-member-never-touched" "F has $NF_TRACES trace(s)"; fi
 
-# Diagonal (docs/PLAN-m5-distribution.md exit test 5): `remote` is a
-# recognized --schedule value alongside serial/parallel:N/race:N.
+# Diagonal check: `remote` is a recognized --schedule value alongside
+# serial/parallel:N/race:N.
 if "$PP" --help 2>&1 | grep -q "remote:<member>"; then ok "diagonal-remote-in-help"
 else bad "diagonal-remote-in-help"; fi
 

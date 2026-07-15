@@ -1,4 +1,4 @@
-(* runtime — the shared execution-state hub (MASTER-PLAN A′4 seam).
+(* runtime — the shared execution-state hub.
 
    pp's per-pass mutable state and the coordination API the backends drive it
    through: the ambient capability/config/handler stacks, the trace machinery
@@ -6,7 +6,8 @@
    into cell observations (LAW 21/23), the sandbox and loader seams, the
    observer hooks, and the program-invocation globals. This is deliberately a
    wide surface — it IS the shared state — but the .mli still fixes the
-   boundary: the coordination functions cross it, their internals do not
+   boundary: only the coordination functions listed below are reachable from
+   outside this module; their internals do not
    ([record_read] stays; [config_cell_id]/[handler_cell_id]/[config_absent_hash]/
    [builtin_handler_hash] behind [observe_config]/[observe_handler]/[config_lookup];
    [sandbox_stack]/[sandbox_counter] behind [current_sandbox]/[sandbox_resolve];

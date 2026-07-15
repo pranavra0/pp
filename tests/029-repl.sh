@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# tests/029 — REPL quality (ROADMAP §1; M7 S4 "flip the default" — the REPL
-# now reads the brace surface, docs/M7-SYNTAX.md): the scriptable parts.
+# tests/029 — REPL quality: the REPL now reads the brace surface by
+# default. Covers the scriptable parts:
 #   (a) multi-line input: a form left open continues onto following lines
 #       (brace/paren/bracket/string nesting, comment-aware — see
 #       Reader_braces.needs_more_input), both backends;
@@ -12,9 +12,9 @@
 #   (e) exit(N) exits the REPL with status N;
 #   (f) results print deep-forced (a delay shows its value, not #<thunk>).
 # (Arrow-key editing and ~/.pp/history need a pty; verified by hand.)
-# No .ppl/sexpr case here: the interactive REPL reads ONLY braces now (that
-# IS this stage's flip) — sexpr input has no interactive entry point to gate;
-# cross-surface FILE loading is covered by tests/054.
+# No .ppl/sexpr case here: the interactive REPL reads ONLY braces now —
+# sexpr input has no interactive entry point to gate; cross-surface FILE
+# loading is covered by tests/054.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac

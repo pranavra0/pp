@@ -1,4 +1,6 @@
-(* pp evaluator — lazy, call-by-need evaluator with thunks *)
+(* pp evaluator — strict (call-by-value) tree-walking evaluator; thunks are
+   used only for `let`/`node`/`delay` bindings and node memoization, never
+   for ordinary argument passing *)
 
 open Types
 open Hasher
@@ -66,7 +68,7 @@ let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
    exhaustive over Cell.t so adding a cell kind forces an authority decision
    here. Parameterized on the capability set (rather than reading
    !current_capabilities directly) because "the caller's capabilities" for a
-   node hit-gate is, per M3's redefinition of LAW 23b, the forcing thunk's
+   node hit-gate is the forcing thunk's
    node_caps — its ambient AT CREATION — not necessarily whatever is live in
    current_capabilities at force time (with-caps can have narrowed the
    dynamic ambient in between). *)
@@ -76,8 +78,8 @@ let cell_authorized_for (caps : capability list) (cell_id : string) : bool =
   in
   match Cell.of_string cell_id with
   | Cell.File path -> has_fs_read path
-  (* A coarse tree observation (run effect, Q2) is covered by an fs-read
-     grant over the root. *)
+  (* A coarse tree observation (the `run` effect's coarse-cell soundness
+     floor) is covered by an fs-read grant over the root. *)
   | Cell.Tree root -> has_fs_read root
   (* A tool observation came from a `run`; serving a result that embeds
      one requires process authority, not an fs grant over the binary. *)
@@ -87,15 +89,16 @@ let cell_authorized_for (caps : capability list) (cell_id : string) : bool =
      so serving it requires the same fs-read authority as recording it. *)
   | Cell.Stat path -> has_fs_read path
   (* No user authority attaches: config/handler are ambient (LAW 33/26),
-     runtime:file loader reads ran under interpreter authority (Q6/D8c),
+     runtime:file loader reads ran under interpreter authority bounded to
+     source roots + ~/.pp, never the user's own capabilities,
      env/argv/proc are program-level inputs. Unknown cells never verify, so
      authorizing them is moot. *)
   | Cell.RuntimeFile _ | Cell.Env _ | Cell.Argv
   | Cell.Config _ | Cell.Handler _ | Cell.Proc _ | Cell.Unknown _ -> true
-  (* M4 probes: authority-exempt at the hit gate, like runtime:/config:/
+  (* Probes: authority-exempt at the hit gate, like runtime:/config:/
      handler:/proc: above — deliberately, not an oversight. The read_cap's
      authority was already consumed ONCE, at probe evaluation time (under
-     with_ref current_capabilities [read_cap], PLAN-m4-cells.md), not at
+     with_ref current_capabilities [read_cap]), not at
      every read; gating a CACHE HIT on it again would re-require an
      authority the reading caller structurally cannot hold any other way
      (probe reads are capability-free at the read site by design — LAW 37's
@@ -107,7 +110,7 @@ let cell_authorized_for (caps : capability list) (cell_id : string) : bool =
      Cell.Probe never gates on CapSecret. Any caller who can force the node
      at all may observe what the probe produced. *)
   | Cell.Probe _ -> true
-  (* M4 sealed cells: the opposite choice from Probe above — a sealed read
+  (* Sealed cells: the opposite choice from Probe above — a sealed read
      is confidential, so a hit requires the caller to independently hold a
      covering CapSecret grant over the path, exactly like Cell.File requires
      fs-read authority. This is what makes LAW 23b's transitive-closure
@@ -117,7 +120,7 @@ let cell_authorized_for (caps : capability list) (cell_id : string) : bool =
      aggregator (tests/044's narrow-caller case). *)
   | Cell.Sealed path ->
       List.exists (fun cap -> Capabilities.check_secret cap path) caps
-  (* Q13: a third-party domain's own sub-cell. Authorization is
+  (* A third-party domain's own sub-cell. Authorization is
      cap_subseteq of the REGISTERED write-cap against the caller's held
      set — zero new authority code, the same narrowing check with-caps
      uses. An unregistered (in THIS process) domain name never verifies —
@@ -144,10 +147,10 @@ let replay_node_reads (t : thunk) (key_of : thunk -> string) : unit =
    however it is demanded. [run] executes the body; the caller owns any
    backend-specific bookkeeping (force_depth, operand-stack isolation). *)
 let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
-  (* Node capture (Q11): the miss recompute — and everything it forces —
-     runs under the FORCING THUNK's captured ambient, not whatever is live
-     in current_capabilities right now (with-caps may have narrowed the
-     dynamic ambient between this node's creation and this force). with_ref
+  (* The ambient capability set captured when this node value was created.
+     force_node uses this — never the live ambient set — for both the hit
+     gate and the miss recompute: a node's authority is fixed at creation,
+     exactly as a closure's environment is (SPEC law 23b). with_ref
      restores current_capabilities on every exit, exception included, so
      this composes cleanly with the try/with below. *)
   with_ref current_capabilities t.node_caps (fun () ->
@@ -166,10 +169,11 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
         Runtime.pop_trace_frame ();
         (* LAW 28: store a FAILING trace — the error value plus the reads made
            up to the failure — so a re-force with unchanged inputs re-serves the
-           failure, and re-runs only when a read changes. D16: reset the status
+           failure, and re-runs only when a read changes. Reset the status
            off `Evaluating` so the next force reports the real error, not a fake
-           "infinite recursion". A Capability_error is not a Failure and is
-           never memoized (LAW 15/20). *)
+           "infinite recursion" (which would happen if a raising thunk were
+           left marked as still being evaluated). A Capability_error is not
+           a Failure and is never memoized (LAW 15/20). *)
         let errval = VString msg in
         let err_hash = Hasher.hash_value errval in
         (try Store.store_object ~key:err_hash ~value:errval with _ -> ());
@@ -182,8 +186,8 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
         t.thunk_status <- Unevaluated;
         raise e
   in
-  (* Result ban (LAW 20 node-boundary, export side — adversarial-review
-     amendment; extended M4/LAW 39 to VSealed): a node may not RETURN a
+  (* Result ban (LAW 20 node-boundary, export side; also covers VSealed per
+     LAW 39): a node may not RETURN a
      capability or a sealed value. Checked before any store write, so a
      would-be-cached VCapability/VSealed never reaches the store; not
      memoized as a failure either (mirrors Capability_error's own
@@ -247,8 +251,7 @@ let serve_hit ~(t : thunk) (h : Store.hit_result) : value option =
    the caller's authority over the trace's read closure, LAW 23b), re-serve a
    memoized failure (LAW 28), or run and store on a miss.
 
-   Phase 3 miss-arm integration (docs/PLAN-phase3-parallel.md, "singleton,
-   width from policy"): under [Race n] with n > 1, a singleton miss is worth
+   Miss-arm scheduling: under [Race n] with n > 1, a singleton miss is worth
    forking — n redundant (key, run) forks of the SAME job race each other
    (sound: LAW 37 nodes are deterministic), the parent never reads a value
    from any of them, and re-enters Store.hit afterward exactly as the batch
@@ -261,12 +264,13 @@ let serve_hit ~(t : thunk) (h : Store.hit_result) : value option =
    reaches this function as a Miss. *)
 let force_node ~(key : string) ~(run : unit -> value) (t : thunk) : value =
   Stabilize.register_node_key ~key ~thunk:t;
-  (* LAW 23b (M3 redefinition): "the caller's capabilities" for the hit gate
+  (* LAW 23b: "the caller's capabilities" for the hit gate
      is THIS thunk's node_caps — captured at this process's creation of this
      `(node e)` occurrence — not necessarily current_capabilities right now.
      Absent with-caps the two are always equal (node_caps is populated from
      current_capabilities at creation and current_capabilities never changes
-     without with-caps), so this is byte-for-byte the pre-M3 behavior for
+     without with-caps), so this collapses to the plain per-process
+     `--grant` set whenever with-caps goes unused, exactly matching
      tests/011/013/017. *)
   let authorized = cell_authorized_for t.node_caps in
   match serve_hit ~t (Store.hit ~key ~authorized) with
@@ -386,7 +390,7 @@ and evaluate_and_store_no_key (t : thunk) : value =
       | None ->
           eval t.thunk_expr t.thunk_env
     with e ->
-      (* D16: an ephemeral thunk that raised must not be left `Evaluating`, or
+      (* An ephemeral thunk that raised must not be left `Evaluating`, or
          the next force misreports "infinite recursion". Reset and re-raise the
          real error (ephemeral thunks are not failure-cached). *)
       t.thunk_status <- Unevaluated;
@@ -415,8 +419,8 @@ and node_key_of (t : thunk) : string =
     |> List.map (fun name ->
          match lookup_env t.thunk_env name with
          | Some v ->
-             (* M3 free-var ban (LAW 20 node-boundary, import side; extended
-                M4/LAW 39 to VSealed): if the forced value contains a
+             (* Free-var ban (LAW 20 node-boundary, import side; also covers
+                VSealed per LAW 39): if the forced value contains a
                 VCapability or VSealed (Hasher.contains_authority — never
                 forces an already-Unevaluated thunk, LAW 14), the key can
                 never be computed — raise Capability_error naming the
@@ -445,7 +449,7 @@ and node_key_of (t : thunk) : string =
   in
   hash_concat (["node-key"; Hasher.hash_expr e] @ fv_parts)
 
-(* Remote placement (docs/PLAN-m5-distribution.md "Remote placement"): a
+(* Remote placement: a
    node is data-closed iff every free var's FORCED value re-encodes under
    Codec.encode_value — the store's own non-data predicate (codec.ml),
    reused verbatim at this new decision point rather than duplicated.
@@ -540,7 +544,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       k (make_closure ~name:None params body (ref env))
 
   | EApply (fn_expr, arg_exprs) ->
-      (* Strict application (Q1): force fn and all args before calling.
+      (* Strict application: force fn and all args before calling.
          This is call-by-value: arguments are evaluated before the body runs. *)
       let fn_val = force (eval fn_expr env) in
       let arg_vals = List.map (fun arg_expr -> force (eval arg_expr env)) arg_exprs in
@@ -562,8 +566,10 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       (match thunk_val with
        | VThunk t ->
            t.thunk_persist <- true;
-           (* Node capture (Q11): the ambient at THIS creation, unconditionally
-              — never left at the [] default (see Types.thunk.node_caps). Safe
+           (* Node capture: populate node_caps from the ambient at THIS
+              creation, unconditionally — never left at the [] default (see
+              Types.thunk.node_caps); force_node later reads this back as
+              the node's fixed authority. Safe
               to re-assign even when make_thunk_ca returned an ALREADY-cached
               physical thunk (its content hash folds in caps_hash, so a hit
               here only happens when the ambient at that prior creation
@@ -618,9 +624,9 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
         | (ELoad path) :: rest ->
             (* `~source:path`: the loaded file's OWN path, so its top-level
                forms are located against it (not the reader's "<?>"
-               default) — LAW 29/D12, closed via eval_expressions below,
+               default) — LAW 29, via eval_expressions below,
                which per-form-locates each of the loaded file's forms.
-               Macro expansion (M3): routed through the shared hook so a
+               Macro expansion: routed through the shared hook so a
                `load`ed file's macros are visible to the rest of THIS
                file's forms and vice versa (load is sequential evaluation,
                one shared macro table — Macro.ml's documented decision). *)
@@ -649,10 +655,10 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
 
   | EWithCaps (cap_expr, body) ->
       (* REPLACES the dynamic ambient with exactly the requested cap for the
-         body's extent (never a union — that was `effect`'s widening
-         backdoor, removed in M3), gated by cap_subseteq against the CURRENT
+         body's extent (never a union — that was the removed `effect` form's
+         widening backdoor), gated by cap_subseteq against the CURRENT
          ambient (not the root grant), so narrowing composes even when code
-         lexically retains a broader value (PLAN-m3-attenuation.md). with_ref
+         lexically retains a broader value. with_ref
          restores current_capabilities on every exit, exception included
          (LAW 27). *)
       let cap_val = force (eval cap_expr env) in
@@ -676,7 +682,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
         let handler_val = force (eval handler_expr env) in
         (name,
          (fun args -> apply handler_val args env),
-         hash_value handler_val)   (* D17: handler identity in the key *)
+         hash_value handler_val)   (* handler identity in the key *)
       ) handlers in
       with_ref handler_stack (new_handlers @ !handler_stack)
         (fun () -> eval_tail body env k)
@@ -744,7 +750,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       k mod_val
 
   | ELoad path ->
-      (* M3 defmacro: same shared-expansion-hook treatment as EDo's ELoad
+      (* Same shared-expansion-hook treatment as EDo's ELoad
          arm above. *)
       let contents = Runtime.loader_read path in
       let exprs = Backend.r.expand_toplevel
@@ -766,7 +772,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
          emit_thunk_region + vm.ml FORCE/check_type). *)
       k (make_thunk_ca_typed e ty None env)
   | EIsland (uri, pin) ->
-      (* D2: resolve the inline pin to the immutable cached tree (verified
+      (* Resolve the inline pin to the immutable cached tree (verified
          against the pin on every resolve), then evaluate its entry.pp as a
          module. The pin is part of this expression's hash, so island
          identity is structural (LAW 20) — no trace cell. *)
@@ -803,7 +809,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
              | Some binds ->
                  let env' = List.fold_left (fun e (n, v) -> Types.extend_env e n v) env binds in
                  (* A guard is evaluated under the arm's bindings; a falsy guard
-                    falls through to the next arm (C3). Only nil/false are falsy. *)
+                    falls through to the next arm. Only nil/false are falsy. *)
                  let fires = match guard with
                    | None -> true
                    | Some g -> (match force (eval g env') with VBool false | VNil -> false | _ -> true)
@@ -935,9 +941,9 @@ and perform_builtin_effect (name : string) (args : value list) : value =
        | [VString path] ->
            (* Node-local sandbox scratch reads are capability-free and
               unrecorded (LAW 18) — scratch is the node's working memory.
-              Outside a sandbox: an fs-read grant returns plain data (Q11
-              CAS-ingested, pinned for the run), a CapSecret-only grant
-              returns VSealed (M4); see Process.read_dispatch. *)
+              Outside a sandbox: an fs-read grant returns plain data
+              (CAS-ingested, pinned for the run), a CapSecret-only grant
+              returns VSealed; see Process.read_dispatch. *)
            Process.read_dispatch ~tag:"read-file"
              ~cap_err:(fun p -> "read-file: capability error: no read access for " ^ p) path
        | _ -> failwith "read-file expects a string path")
@@ -951,13 +957,15 @@ and perform_builtin_effect (name : string) (args : value list) : value =
        | _ -> failwith "write-file expects path and content strings")
 
   | "run" ->
-      (* D13: process execution — capability-gated, trace-recorded, sandboxed
+      (* Process execution — capability-gated, trace-recorded, sandboxed
          (process.ml). *)
       Process.run_effect args
 
   | "run-dep!" ->
-      (* Q2 refinement: run + depfile → precise cells, no coarse tree cells.
-         B10: `!`-suffixed — the effect name carries the effect marker. *)
+      (* run + depfile → precise cells, no coarse tree cells.
+         `!`-suffixed — the effect name carries the effect marker, since
+         this effect trusts the tool's own report of what it read rather
+         than observing a whole granted tree. *)
       Process.run_dep_effect args
 
   | "http-get" ->
@@ -981,7 +989,7 @@ and perform_builtin_effect (name : string) (args : value list) : value =
            VNil
        | _ -> failwith "log expects a message string")
 
-  (* ---- Q13 domain primitives (PLAN-m4-cells.md; src/domain_prims.ml) ---- *)
+  (* ---- Domain primitives (src/domain_prims.ml) ---- *)
 
   | "tree-observe" ->
       (match args with
@@ -1049,8 +1057,8 @@ and has_fs_write (path : string) : bool =
    evaluator and EDo. *)
 and eval_module_file (path : string) : value =
   let source = Runtime.loader_read path in
-  (* M7 S1: dispatch on [path]'s extension; the location label stays the
-     reader's "<?>" default, exactly as before. *)
+  (* Dispatch on [path]'s extension; the location label stays the
+     reader's "<?>" default. *)
   let exprs = Backend.r.expand_toplevel
                 (Reader_braces.read_dispatch ~path source) in
   let mod_ref = ref (Primitives.initial_env ()) in
@@ -1064,7 +1072,7 @@ and eval_module_file (path : string) : value =
 and eval_expressions (exprs : expr list) (env : env ref) : value =
   let unwrap e = match e with ELocated (_, e') -> e' | _ -> e in
   (* Evaluate ONE form, mutating `env` for defs/imports; wrapped in ITS OWN
-     location (LAW 29/D12): an error escaping this form is decorated with
+     location (LAW 29): an error escaping this form is decorated with
      this form's file:line before it can unwind past a `load` that brought
      it in — never doubled if a deeper form already located it. *)
   let step (e : expr) : value =
@@ -1095,8 +1103,8 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
       | ELoad path ->
           (* `~source:path`: the loaded file's OWN path (not the reader's
              "<?>" default), so ITS forms are in turn correctly located.
-             M3 defmacro: shared expansion hook, same as every other
-             Reader.read_string call site. *)
+             Routed through the shared macro-expansion hook, same as every
+             other Reader.read_string call site. *)
           let contents = Runtime.loader_read path in
           let sub_exprs = Backend.r.expand_toplevel
                             (Reader_braces.read_dispatch ~source:path ~path contents) in
@@ -1133,7 +1141,7 @@ let init () =
   handler_stack := [];
   current_capabilities := (Runtime.invocation_get ()).initial_capabilities;
   if not !Runtime.keep_thunks then Hashtbl.clear thunk_store;
-  (* M4 probes: the registry is script-tier registration state, re-established
+  (* Probes: the registry is script-tier registration state, re-established
      by the program's own top-level `(register-probe ...)` forms on every
      fresh evaluation — reset it here unconditionally (like the macro table
      below), never gated on keep_thunks: a --watch pass always re-executes
@@ -1142,7 +1150,7 @@ let init () =
      results (Runtime.probe_values) are a separate lifetime, cleared at the
      three points main.ml's watch loop clears Store.run_pins. *)
   Hashtbl.reset Runtime.domain_registry;
-  (* M3 defmacro: reset the macro table AND the gensym counter at the start
+  (* Reset the macro table AND the gensym counter at the start
      of every fresh run — the counter matters for LAW 20 stability (a
      gensym'd name can be baked into an expanded node's code, so re-running
      the SAME source must reproduce the SAME counter sequence, or the same
@@ -1154,13 +1162,13 @@ let init () =
   Backend.r.force <- force;
   Backend.r.eval <- eval;
   Backend.r.apply <- apply;
-  (* Phase 3: let Primitives' scheduler-aware force-deep compute tree-walker
+  (* Let Primitives' scheduler-aware force-deep compute tree-walker
      node keys and run node bodies without a dependency cycle (Primitives is
      compiled before Evaluator). *)
   Backend.r.node_key_of <- node_key_of;
   Backend.r.run_node_body <- (fun ~key ~run t -> run_node_body ~key ~run t);
   Backend.r.resolve_if_hit <- (fun t key ->
-    (* Same node_caps-gated authority as force_node (M3 LAW 23b) — this is
+    (* Same node_caps-gated authority as force_node (LAW 23b) — this is
        the force-deep collect pass's own pre-check of the same key. *)
     match Store.hit ~key ~authorized:(cell_authorized_for t.node_caps) with
     | Store.HitOk v -> t.thunk_status <- Evaluated v; true

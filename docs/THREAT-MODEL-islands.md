@@ -1,73 +1,89 @@
-# Threat model: island fetching (D2, network half)
+# Threat model: island fetching
 
-Scope: what running `pp --fetch-islands` / `pp --update` trusts when it
-procures a `git:`/`github:` island. This is **package-procurement trust**
-(the Bazel/Nix-fetcher class), deliberately narrower than the Phase-4
-cluster-forcing threat model (SPEC LAW 34/35), which remains unwritten and
-gating for that feature.
+This document sets out what pp trusts when `pp --fetch-islands` or
+`pp --update` fetches a `git:` or `github:` island from a remote host.
+This is package-procurement trust, the same class of trust a build tool
+places in a fetcher such as Bazel's or Nix's.
 
-## The invariant that carries everything
+This threat model is deliberately narrower than
+`docs/THREAT-MODEL-cluster.md`, which covers a different surface: trust
+between machines in the same pp cluster, not trust in a remote source
+host.
 
-**Identity is the pinned content, never the ref.** The pin in the island
-form is the canonical tree hash of the source tree. After first pin, pp
-never trusts the remote again: a resolve serves only a cached tree that
-re-hashes to the pin (verified on every resolve), and a fetch that produces
-different content than the pin is a hard error, never a silent accept. A
-malicious or compromised host can therefore affect *availability* (refuse to
-serve, serve garbage that fails the hash) but not *integrity* of an
-already-pinned dependency.
+## Invariants
 
-The trust-on-first-use moment is `pp --update` (or the first
-`--fetch-islands` for a new pin): whatever the ref resolves to *then* is
-what gets hashed and frozen into the source. That moment is explicit,
-user-initiated, and journaled (`island fetch <uri> <pin>` in
-`~/.pp/store/journal/log`); review of the update diff is review of the
-dependency bump.
+Identity is the pinned content, never the ref. The pin in an island form is
+the canonical tree hash of the source tree. Once pp has pinned a
+dependency, it never trusts the remote host again: a resolve serves only a
+cached tree that re-hashes to the pin, checked on every resolve, and a
+fetch that produces different content than the pin is a hard error, never
+a silent accept. A malicious or compromised host can therefore affect
+availability — it can refuse to serve, or serve garbage that fails the
+hash check — but it cannot affect the integrity of a dependency that is
+already pinned.
+
+The moment of trust-on-first-use is `pp --update`, or the first
+`--fetch-islands` run for a new pin. Whatever the ref resolves to at that
+moment is what pp hashes and freezes into the source. This moment is
+explicit, started by the user, and recorded in the journal (`island fetch
+<uri> <pin>` in `~/.pp/store/journal/log`). Reviewing the update diff is
+how the user reviews the dependency bump.
 
 ## What fetching executes
 
-- `git clone --quiet --template= <url> <tmpdir>`, then (if a ref was given)
-  `git -C <tmpdir> checkout --quiet <ref>`.
-- `--template=` (empty template) ensures no hook files are installed into
-  the fresh clone; git does not execute hooks from the *remote* repository
-  during clone/checkout — hooks are local files, and this clone starts with
-  none. pp never runs any file from the fetched tree during fetch.
-- The clone happens in a temp directory; `.git` is stripped before hashing;
-  only regular files and directories are copied into the cache (symlinks and
-  special files are a hard error, so the hash cannot be confused by
-  path-escaping links).
-- The fetched tree's code runs only when the *program* evaluates the island
-  — under pp's normal capability regime (no ambient authority; effects need
-  `--grant`).
+Fetching runs these steps and applies these limits:
+
+- pp runs `git clone --quiet --template= <url> <tmpdir>`, then, if a ref
+  was given, `git -C <tmpdir> checkout --quiet <ref>`
+- the empty `--template=` value stops git installing hook files into the
+  fresh clone. Git does not execute hooks from the remote repository
+  during clone or checkout in any case, since hooks are local files and
+  this clone starts with none, so pp never runs any file from the fetched
+  tree while fetching
+- the clone happens in a temporary directory, `.git` is stripped before
+  hashing, and only regular files and directories are copied into the
+  cache. Symlinks and other special files are a hard error, so a
+  path-escaping link can never confuse the hash
+- the fetched tree's code runs only when the program evaluates the
+  island, under pp's normal capability rules: there is no ambient
+  authority, and any effect needs a `--grant`
 
 Residual risks accepted for v1:
 
-- **git itself** is trusted (its parsers see hostile bytes during clone).
-  Mitigation: none beyond using the system git; same posture as every
-  fetcher that shells out to git.
-- **DNS/TLS** for `github:`/`https://` URLs is the platform's trust store;
-  a network MITM at first-pin time can supply malicious content that then
-  gets honestly pinned. Mitigation: the update diff shows the pin change;
-  pin provenance is the user's review responsibility at update time.
-- **Availability/rollback**: a host can serve an *old* commit for a ref at
-  update time (refs are mutable by design). The pin freezes whatever was
-  served; there is no freshness guarantee, only integrity.
+- git itself is trusted, since its parsers see hostile bytes during
+  clone. Mitigation: none beyond using the system git, the same posture
+  as any fetcher that shells out to git
+- DNS and TLS, for `github:` and `https://` URLs, rely on the platform's
+  trust store. A network attacker sitting between pp and the host at
+  first-pin time can supply malicious content that then gets honestly
+  pinned. Mitigation: the update diff shows the pin change, and checking
+  where a pin came from is the user's responsibility at update time
+- availability and rollback: a host can serve an old commit for a ref at
+  update time, since refs are mutable by design. The pin freezes whatever
+  the host served at that moment. pp guarantees integrity of the pinned
+  content, never freshness
 
 ## What fetching is not
 
-- Not a user capability: fetch authority is the loader's (LAW 24), granted
-  by the CLI flag, not by `--grant net`. User code cannot trigger a fetch;
-  only resolution of a form the user wrote, under a flag the user passed.
-- Not ambient: with the flag off (default), resolution never touches the
-  network — a missing pin or cache entry is a hard error naming the fix.
-  Hermetic builds stay hermetic by refusal, not by luck.
-- Not evaluation: no fetched code runs as part of fetch.
+Fetching is not:
+
+- a user capability. Fetch authority belongs to the loader (LAW 24),
+  granted by the `--fetch-islands` command-line flag, not by
+  `--grant net`. User code cannot trigger a fetch — only resolving a form
+  the user wrote, under a flag the user passed, can
+- ambient. With the flag off, which is the default, resolution never
+  touches the network. A missing pin or cache entry is a hard error that
+  names the fix. Hermetic builds stay hermetic because pp refuses to
+  fetch, not by luck
+- evaluation. No fetched code runs as part of fetching
 
 ## Cache integrity
 
-`~/.pp/islands/src/<pin>/` is verified against `pin` on **every** resolve
-(O(tree) re-hash; see PLAN §9 for the accepted cost). Local tampering is
-detected and is a hard error — never a silent re-fetch, so an attacker with
-write access to the cache can break builds but cannot substitute code
-undetected. (An attacker with write access to `$HOME` owns the user anyway;
-the check's value is against accidental corruption and casual tampering.)
+pp verifies `~/.pp/islands/src/<pin>/` against its pin on every resolve.
+This re-hashes the whole tree each time, a cost pp accepts deliberately in
+exchange for catching tampering immediately. Local tampering is a hard
+error, never a silent re-fetch, so an attacker with write access to the
+cache can break builds but cannot substitute code without detection. An
+attacker with write access to `$HOME` already controls the user's account,
+so this check's real value is against accidental corruption and casual
+tampering, not against a determined attacker with that level of access.

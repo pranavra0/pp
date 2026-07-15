@@ -1,8 +1,9 @@
-# pp ARCHITECTURE — the moving parts
+# pp architecture
 
-How a pp program flows through the system, and what each source file is
-responsible for. For term definitions see [GLOSSARY.md](GLOSSARY.md); for the
-semantics these parts must honor see [SPEC.md](SPEC.md).
+This describes the moving parts of pp: how a program flows through the
+system, and what each source file is responsible for. See
+[GLOSSARY.md](GLOSSARY.md) for term definitions and [SPEC.md](SPEC.md) for
+the semantics these parts must honor.
 
 ## The pipeline
 
@@ -26,211 +27,233 @@ semantics these parts must honor see [SPEC.md](SPEC.md).
                  └──────────┘            └──────────────┘
 ```
 
-One front end, two back ends. The **reader** turns source into an `expr` AST.
-That AST is then either interpreted directly by the **tree-walker** or compiled
-to bytecode and run on the **VM**. Both back ends share one pool of runtime
-state and one set of data-type and hashing definitions, so they can be run
-against each other (`--diff`, the fuzzer) and must agree.
+pp has one front end and two back ends: the reader turns source text into
+an `expr` AST, the tree-walker interprets it directly, and the compiler
+instead turns it into bytecode for the VM.
 
-Why two back ends: the tree-walker is the simple, obviously-correct reference —
-the **oracle**. The VM is the faster execution model. Any disagreement between
-them is a bug, caught by differential testing ([TESTING.md](TESTING.md)). This
-is the single most valuable correctness asset in the project.
+Both back ends share one pool of runtime state and one set of data types
+and hashing definitions, letting pp run them against each other — using
+`--diff` and the fuzzer — and check that they agree.
+
+The tree-walker is the simple, obviously correct reference — the oracle.
+The VM is the faster execution model. Any disagreement between the two is
+a bug. Differential testing catches it (see [TESTING.md](TESTING.md)):
+the project's most valuable correctness check.
 
 ## The data model (`types.ml`)
 
-Everything hangs off a few mutually-recursive types:
+Everything hangs off a few mutually recursive types:
 
-- **`expr`** — the AST. Literals, symbols, `if`, `let`/`let*`, `fn`, application,
-  `quote`/`force`/`delay`, `effect`/`perform`/`with-handler`, `node`/`defnode`,
-  `module`/`import`/`load`, `island`, `with-config`/`config`, type annotations,
-  source locations.
-- **`value`** — the runtime representation: nil, bool, int, float, string,
-  keyword, symbol, pair, vector, map, set, **closure**, builtin, **capability**,
-  **thunk**, module-env-map, bytecode.
-- **`thunk`** — a suspended computation with a mutable status
-  (`Unevaluated`/`Evaluating`/`Evaluated`), a precomputed content hash, its
-  expression and captured environment, and a `persist` flag (true for `node`,
-  false for `let`/`delay`).
-- **`env`** — an environment node: a list of `(name, value)` bindings plus a
-  **precomputed `env_hash`** and a stable id. The hash is computed once,
-  incrementally, and never changes — this is what makes environment identity
-  O(1) instead of a recursive traversal.
-- **`closure`** — captured params + body + env (tree-walker), or bytecode
-  offset + captured frames (VM).
-- **`capability`** — an authority token (filesystem/network/process/compose/
-  restrict/none).
-- **`frame`** — the VM's mutable, growable local-variable array.
+- `expr`: the AST. Covers literals, symbols, `if`, `let`/`let*`, `fn`,
+  application, `quote`/`force`/`delay`, `effect`/`perform`/`with-handler`,
+  `node`/`defnode`, `module`/`import`/`load`, `island`, `with-config`/`config`,
+  and type annotations and source locations.
+- `value`: the runtime representation. Covers nil, bool, int, float, string,
+  keyword, symbol, pair, vector, map, set, closure, builtin, capability,
+  thunk, module-env-map, and bytecode.
+- `thunk`: a suspended computation. It holds a mutable status
+  (`Unevaluated`, `Evaluating`, or `Evaluated`), a precomputed content hash,
+  its expression and captured environment, and a persist flag (true for
+  `node`, false for `let`/`delay`).
+- `env`: an environment node. It holds a list of `(name, value)` bindings,
+  a precomputed, incrementally built `env_hash`, and a stable id, giving
+  environment identity constant-time lookup instead of a recursive
+  traversal.
+- `closure`: captured parameters, body, and environment in the tree-walker;
+  a bytecode offset and captured frames in the VM.
+- `capability`: an authority token for filesystem, network, process,
+  compose, restrict, or none.
+- `frame`: the VM's mutable, growable array of local variables.
 
-`types.ml` also holds the **content-addressing** logic: `hash_value`,
-`hash_expr`, `hash_capability`, and the incremental `env_hash` construction.
-This is load-bearing — see below.
+`types.ml` also holds the content-addressing logic: `hash_value`,
+`hash_expr`, `hash_capability`, and the incremental `env_hash`
+construction.
 
-## Content-addressing (the heart)
+## Content addressing
 
-Identity in pp is a content hash (SHA-256, via `hasher.ml` → Cryptokit).
+Identity in pp is a content hash, SHA-256, computed by `hasher.ml` via
+Cryptokit. This is the single idea most of the rest of the system depends on.
 
-- **`env_hash`** is built incrementally: extending an env with `(name, value)`
-  hashes `(parent_hash, name, hash_value value)`. So an environment's identity
-  folds in the hashes of everything bound in it.
-- A **thunk's key** = `hash(expr, env_hash, capabilities, config, handlers)`.
-  Two thunks with the same key *are* the same thunk — the tree-walker memoizes
-  them in a shared `thunk_store`, so equal computations run once.
-- A **closure's** hash folds in its captured `env_hash` (so different captures
-  give different identities — this is the D6 fix; see [STATUS.md](STATUS.md)).
+- `env_hash` builds incrementally: extending an environment with
+  `(name, value)` hashes `(parent_hash, name, hash_value value)`.
+- A thunk's key is `hash(expr, env_hash, capabilities, config, handlers)`.
+  Two thunks with the same key are the same thunk. The tree-walker
+  memoizes them in a shared `thunk_store`.
+- A closure's hash folds in its captured `env_hash`.
 
-The subtlety that has bitten twice: the key must include *everything the
-computation depends on*. Omitting the captured environment (D6) or the ambient
-handler stack (D17) let distinct computations collide in `thunk_store` and
-return stale results. Both are fixed and pinned by `tests/009`.
+The key must include everything the computation depends on, or distinct
+computations collide. Leaving out the captured environment, or the
+ambient handler stack, once let distinct computations collide in
+`thunk_store` and return stale results; both are now fixed and pinned by
+`tests/009`.
 
-This in-memory dedup is the same idea as the **persistent** store, now live for
-`node { e }` (see "The persistent node cache" below): keyed soundly and written to
-`~/.pp/store` so cache hits survive across runs and machines
-([ROADMAP.md](ROADMAP.md), DESIGN Q8).
+This in-memory dedup mirrors the persistent store described below in "The
+persistent node cache".
 
 ## Evaluation and `force`
 
-A `let` binding or `delay` produces a **thunk**; `force` drives it to a value.
-`force` memoizes (`Evaluating` → `Evaluated`), detects self-reference
-(infinite-recursion error), and switches from the native OCaml stack to a
-heap-allocated **trampoline** past a depth threshold so deep chains don't
-overflow. Application is **strict** (call-by-value): a function's arguments are
-forced before its body runs. Tail calls run in constant stack in both back ends
-(CPS continuations in the tree-walker; a `TAIL_CALL` frame-swap in the VM).
+A `let` binding or `delay` produces a thunk. `force` drives a thunk to a
+value. It memoizes the result (`Evaluating` moves to `Evaluated`), detects
+self-reference as an infinite-recursion error, and switches from the native
+OCaml stack to a heap-allocated trampoline past a depth threshold, so deep
+chains do not overflow.
+
+Application is strict — call-by-value: a function's arguments are forced
+before its body runs. Tail calls run in constant stack space in both back
+ends. The tree-walker uses CPS continuations; the VM uses a `TAIL_CALL`
+frame-swap.
 
 ## Effects and capabilities
 
-- **Effects**: `perform` looks up a dynamic **handler stack**; unhandled effects
-  fall back to builtins (`read-file`/`write-file`/`log`). `with-handler`,
-  `effect`, and `with-config` push/pop that state and restore it on normal
-  return, exception, and tail call — in both back ends.
-- **Capabilities** (`capabilities.ml`): authority tokens for filesystem/network/
-  process. They enter **only** at the root via `--grant` (parsed in `main.ml`
-  into the initial capability set); user code cannot construct them, only
-  `cap-restrict`/`cap-compose` to narrow or union. Filesystem reads/writes and
-  `slurp` are checked at perform time with full-path, component-aware scope.
+- Effects: `perform` looks up a dynamic handler stack, falling back to
+  builtins such as `read-file`, `write-file`, and `log` when unhandled.
+  `with-handler`, `effect`, and `with-config` push and pop that state,
+  restoring it on normal return, on exception, and on tail call, in both
+  back ends.
+- Capabilities (`capabilities.ml`): authority tokens for filesystem,
+  network, and process access. They enter the system only at the root,
+  through `--grant`, which `main.ml` parses into the initial capability set.
+  User code cannot construct a capability, only narrow or combine one,
+  using `cap-restrict` or `cap-compose`. Filesystem reads, writes, and
+  `slurp` calls are checked at perform time, against the full path, matched
+  component by component.
 
-## The VM path (`compiler.ml` + `vm.ml`)
+## The VM path (`compiler.ml`, `vm.ml`)
 
-`compiler.ml` lowers the `expr` AST to a flat array of **29 opcodes** operating
-on a stack machine with `LOAD_LOCAL (depth, slot)` / `STORE_LOCAL slot` against
-mutable **frames**. Locals get O(1) indexed access instead of name lookup. The
-compiler tracks a compile-time environment (`cenv`) to resolve names to
-`(depth, slot)`; a subtlety here — reusing a slot across binding lifetimes while
-a captured frame is still live — was the D21 bug (fixed, pinned by `tests/008`).
-`vm.ml` executes the opcodes, creating thunks (`MAKE_THUNK`) and closures
-(`MAKE_CLOSURE`) that capture live frames; effect dispatch, capability
-extraction, type checks, and node forcing delegate to `evaluator.ml`, so the
-semantics exist once. The VM compiles `ENode` to a dedicated `MAKE_NODE` opcode
-(carrying the body AST + free-var descriptors) and forces it through the same
-persistent store as the tree-walker (D7 closed; see below). A `.ppc`
-bytecode-serialization module existed through Phase 2 but was dead code —
-deleted; the persistent value/trace store supersedes it.
+`compiler.ml` lowers the `expr` AST to a flat array of 29 opcodes. These
+run on a stack machine, using `LOAD_LOCAL (depth, slot)` and
+`STORE_LOCAL slot` against mutable frames.
+
+The compiler tracks a compile-time environment, `cenv`, to resolve names to
+`(depth, slot)` pairs. Reusing a slot across binding lifetimes while a
+captured frame is still live caused a bug, now fixed and pinned by
+`tests/008`.
+
+`vm.ml` executes the opcodes. It creates thunks with `MAKE_THUNK` and
+closures with `MAKE_CLOSURE` that capture live frames. Effect dispatch,
+capability extraction, type checks, and node forcing all delegate to
+`evaluator.ml`.
+
+The VM compiles `ENode` to a dedicated `MAKE_NODE` opcode, carrying the body
+AST and free-variable descriptors, and forces it through the same
+persistent store as the tree-walker — superseding the since-deleted `.ppc`
+bytecode-serialization module.
 
 ## Shared state (`runtime.ml`)
 
-Both back ends read and write one set of module-global refs: the handler stack,
-the current capability set, the config stack, the thunk store, the trace-frame
-stack (the collector nodes push while forcing, so world-reads land in the right
-trace), the initial `--grant` capabilities, the registry of scripting-tier
-fenced actions (`Runtime.fenced_actions`), and the unknown-status policy
-(`Runtime.fenced_policy`). Consolidating these into one `Runtime` module (done
-in Phase 0) removed a class of parity bugs where the two back ends kept separate
-copies. It is also what a future process-pool parallelism (Phase 3) must
-refactor, since global mutable state can't be shared across worker processes.
+Both back ends read and write one set of module-global references: the
+handler stack, the current capability set, the config stack, the thunk
+store, and the trace-frame stack nodes push while forcing so world-reads
+land in the right trace. This also covers the initial `--grant`
+capabilities, the registry of scripting-tier fenced actions
+(`Runtime.fenced_actions`), and the unknown-status policy
+(`Runtime.fenced_policy`).
+
+Consolidating this state into one `Runtime` module removed a class of
+parity bugs from separate per-backend copies drifting apart.
 
 ## The persistent node cache (`store.ml`)
 
-The persistent CAS (`~/.pp/store/objects` + `traces`) is **wired into the
-tree-walker's `force`** for `node { e }` thunks. On a miss, `force` pushes a trace
-frame, runs the node, and — because `slurp`/`read-file` call
-`Store.record_file_read` — collects the `(file-cell, content-hash)` reads it
-made; it then stores the result blob (keyed by result hash) and appends a trace
-to the node key's SET. On the next force, `Store.hit` re-observes each recorded
-cell and serves the stored result only if some trace still verifies, so a
-changed input forces a recompute instead of serving stale data. Reads propagate
-to every enclosing node frame, giving parents a transitive read closure. This is
-pp's dynamic answer to Haskell's static IO type (SPEC LAW 21). The node key is
-LAW 20 — `node_key_of` hashes the code structure plus the value hashes of the
-free variables the node references (via `Types.free_vars`, forced call-by-value),
-excluding the whole-env hash and the capability set. A node that raises a
-`Failure` stores a *failing* trace and re-serves the same error until a recorded
-read changes (LAW 28), and a raising thunk resets off `Evaluating` (D16). A hit
-is served only if the caller is authorized to read the trace's whole closure
-(`Store.hit ~authorized` + `cell_authorized`; LAW 23b), and a capability denial
-(`Capability_error`) is never memoized. **The VM shares this store** (D7 closed):
-`MAKE_NODE` records the free-var descriptors the compiler resolved, `vm_node_key`
-rebuilds the LAW 20 key from the captured frames/globals (byte-identical to the
-tree-walker for data free vars, so entries are shared), and `force_node_thunk`
-runs the same hit/verify/trace/failure/cap logic. With `pp --watch --stabilize`,
-the reverse-edge index (`Store.build_reverse_index`) maps changed cells to dirty node keys,
-`Stabilize.reset_dirty` marks only those in-memory thunks `Unevaluated`, and `Runtime.keep_thunks`
-keeps the `thunk_store` alive across watch iterations so clean nodes remain `Evaluated` and skip
-`Store.hit` entirely. Still narrow: file cells only, config/handlers still folded into the key,
-no inline-nested cutoff.
+The persistent content-addressed store lives at `~/.pp/store/objects` and
+`traces`. It is wired into the tree-walker's `force` for `node { e }`
+thunks.
 
-## Islands (`island.ml`, D2)
+On a cache miss, `force` pushes a trace frame and runs the node. Because
+`slurp` and `read-file` call `Store.record_file_read`, this collects every
+`(file-cell, content-hash)` pair the node read. `force` then stores the
+result blob, keyed by its hash, and appends a trace to the node key's set
+of traces.
 
-`island("<uri>", "64-hex-pin")` is a content-addressed module: the **inline
-pin** is the canonical tree hash of the island's source, and — because
-`hash_expr` folds uri+pin — it is part of any enclosing node's LAW-20 key:
-island identity is structural, so there is no lockfile and no synthetic
-trace cell. Resolution serves only the immutable cached tree at
-`~/.pp/islands/src/<pin>/`, re-verified against the pin on every resolve
-(tamper is a hard error). Both backends evaluate the pinned `entry.pp` as a
-module (`VEnvMap` exports) — the tree-walker via `EIsland`, the VM via the
-dedicated `ISLAND` opcode. Unpinned forms are a hard error naming the fix;
-`pp --update` re-resolves (file: re-hash; git: fetch) and rewrites the pins
-in the source text, refusing rather than half-writing on any ambiguity.
-`git:`/`github:` fetching is opt-in runtime authority (`--fetch-islands`,
-LAW 24 — not a user capability), journaled as `island fetch` entries, and
-governed by [THREAT-MODEL-islands.md](THREAT-MODEL-islands.md).
+On the next force, `Store.hit` re-observes each recorded cell and serves
+the stored result only if some trace still verifies against the world.
+Reads propagate to every enclosing node frame, so a parent node gets the
+transitive closure of everything its children read. What a node observed
+governs validity (SPEC law 21) — pp's dynamic answer to Haskell's static
+IO type.
+
+The node key, from `node_key_of`, hashes the code structure plus the
+value hashes of the free variables the node references (`Types.free_vars`),
+forced call-by-value. It leaves out the whole-environment hash and the
+capability set (SPEC law 20).
+
+A node that raises a `Failure` stores a failing trace and re-serves the
+same error until a recorded read changes (SPEC law 28). A raising thunk
+resets away from `Evaluating` rather than getting stuck there. A hit is
+served only if the caller is authorized to read the whole closure of cells
+the trace depends on, checked by `Store.hit ~authorized` and
+`cell_authorized` (SPEC law 23b). A capability denial, `Capability_error`,
+is never memoized.
+
+The VM shares this store. `MAKE_NODE` records the free-variable
+descriptors the compiler resolved. `vm_node_key` rebuilds the same node key
+from the captured frames and globals; for data free variables this is
+byte-identical to the tree-walker's key, so the two back ends share
+entries. `force_node_thunk` runs the same hit, verify, trace, failure, and
+capability logic as the tree-walker.
+
+With `pp --watch --stabilize`, the reverse-edge index built by
+`Store.build_reverse_index` maps changed cells to dirty node keys.
+`Stabilize.reset_dirty` marks only those in-memory thunks `Unevaluated`.
+`Runtime.keep_thunks` keeps the `thunk_store` alive across watch
+iterations, so clean nodes skip `Store.hit` entirely.
+
+This is still narrow. It covers file cells only, folds config and handlers
+into the key rather than tracking them as separate traces, and has no
+cutoff for inline-nested nodes.
+
+## Islands (`island.ml`)
+
+`island("<uri>", "64-hex-pin")` is a content-addressed module. The inline
+pin is the canonical tree hash of the island's source. Because `hash_expr`
+folds the uri and the pin together, the pin becomes part of any enclosing
+node's key. Island identity is structural, needing no lockfile or
+synthetic trace cell.
+
+Resolution serves only the immutable cached tree at
+`~/.pp/islands/src/<pin>/`, re-verified against the pin on every resolve;
+tampering is a hard error.
+
+Both back ends evaluate the pinned `entry.pp` as a module, with `VEnvMap`
+exports: the tree-walker through `EIsland`, the VM through a dedicated
+`ISLAND` opcode. An unpinned form is a hard error that names the fix.
+`pp --update` re-resolves the source, re-hashing a file island or fetching
+a git island, and rewrites the pins, refusing to run rather than
+half-write the source on any ambiguity.
+
+Fetching over `git:` or `github:` is opt-in runtime authority, through
+`--fetch-islands`, not a capability a user's own code can hold. Every fetch
+is journaled as an `island fetch` entry and governed by
+[THREAT-MODEL-islands.md](THREAT-MODEL-islands.md) (SPEC law 24).
 
 ## File-by-file responsibilities
 
 | File | Role |
 |---|---|
-| `src/types.ml` | All core types (`expr`/`value`/`thunk`/`env`/`closure`/`capability`/`frame`/opcodes) **and** content-addressed hashing. The foundation. |
+| `src/types.ml` | All core types: `expr`, `value`, `thunk`, `env`, `closure`, `capability`, `frame`, and opcodes, plus the content-addressed hashing — the foundation of the codebase. |
 | `src/hasher.ml` | Thin re-export of the hashing functions from `types.ml`. |
-| `src/paths.ml` | The one component-boundary path-containment predicate (`Paths.under`) behind capability scopes, loader authority, and reconciler domain bounds. |
-| `src/cell.ml` | The typed cell taxonomy: `Cell.t` variant + `of_string`/`to_string` (on-disk strings frozen). Naming only; observation and authority live in `store.ml`/`evaluator.ml`. |
-| `src/reader.ml` | Lexer + parser: source text → `expr` AST. Also desugars `and`/`or`, quasiquote. |
+| `src/paths.ml` | The one component-boundary path-containment check, `Paths.under`, behind capability scopes, loader authority, and domain bounds. |
+| `src/cell.ml` | The typed cell taxonomy: the `Cell.t` variant plus `of_string` and `to_string`, with the on-disk strings frozen — naming only; observation and authority live in `store.ml` and `evaluator.ml`. |
+| `src/reader.ml` | Lexer and parser: turns source text into an `expr` AST, also desugaring `and`, `or`, and quasiquote. |
 | `src/runtime.ml` | Shared mutable runtime state used by both back ends. |
-| `src/journal.ml` | The append-only intent/done audit log: typed `entry` variant, `to_line`/`of_line`, fenced-effect scanners (Q4/LAW 31). |
-| `src/evaluator.ml` | The tree-walking evaluator — the oracle. `force`, `eval`, effects, the `thunk_store`, and the shared node rebuilder (`force_node`/`run_node_body`) both back ends use. |
-| `src/compiler.ml` | `expr` AST → bytecode; compile-time environment / slot allocation. |
-| `src/vm.ml` | The bytecode stack machine. Effect dispatch, type checks, and node forcing delegate to `evaluator.ml` — one implementation, two back ends. |
-| `src/capabilities.ml` | Capability scope checks (path-component-aware). |
+| `src/journal.ml` | The append-only intent and done audit log: a typed `entry` variant, `to_line` and `of_line`, and the scanners that find fenced-effect entries (SPEC law 31). |
+| `src/evaluator.ml` | The tree-walking evaluator, and the project's oracle, holding `force`, `eval`, effects, the `thunk_store`, and the shared node rebuilder (`force_node`, `run_node_body`) both back ends use. |
+| `src/compiler.ml` | Turns the `expr` AST into bytecode, also running the compile-time environment and slot allocation. |
+| `src/vm.ml` | The bytecode stack machine: effect dispatch, type checks, and node forcing all delegate to `evaluator.ml`, so one implementation serves both back ends. |
+| `src/capabilities.ml` | Capability scope checks, matched path component by component. |
 | `src/primitives.ml` | Built-in functions and the initial environment. |
-| `src/island.ml` | Islands (D2): URI parse (file/git/github), content-addressed cache + tamper verification, `--update` pin rewriter, `island-pins`, opt-in git fetch. |
-| `src/store.ml` | Persistent content-addressed store + verifying traces; wired into `force` for `node { e }` in both back ends. |
-| `src/domain_prims.ml` | Q13 trusted mechanics: atomic `materialize-file`/`remove-file`, `tree-observe`, `proc-spawn`/`proc-alive?`/`proc-stop`/`proc-reap`, and `domain-state-get/put` (a generic per-domain KV store). Moved out of the deleted `reconciler.ml`/`supervisor.ml`; owns no policy. |
-| `src/domains.ml` | Q13 generic domain orchestration: the journal bracket, `observed_all` suspension, cap threading into observe/apply, plan caching (direct `Store` calls, no synthetic node), verify-after-write, and stratification. Domain-agnostic — replaces `reconciler.ml`/`supervisor.ml`'s driver logic; `stdlib/domain-fs.pp`/`domain-proc.pp` hold the fs/proc POLICY as pp source, then `main.ml` drains fenced actions. |
-| `src/fenced.ml` | Fenced-effect executor (Q3/LAW 31): registers scripting-tier actions, journals intent/done, resolves unknown-status entries by policy. |
+| `src/island.ml` | Islands: parses file, git, and github URIs; runs the content-addressed cache and tamper verification; rewrites pins for `--update`; provides `island-pins`; and fetches over git only when asked. |
+| `src/store.ml` | The persistent content-addressed store and its verifying traces, wired into `force` for `node { e }` in both back ends. |
+| `src/domain_prims.ml` | The trusted mechanics that back in-language domains: atomic `materialize-file` and `remove-file`, `tree-observe`, `proc-spawn`, `proc-alive?`, `proc-stop`, `proc-reap`, and `domain-state-get`/`put`, a generic per-domain key-value store — moved out of the deleted `reconciler.ml` and `supervisor.ml`, owning no policy of its own. |
+| `src/domains.ml` | Generic domain orchestration: the journal bracket, `observed_all` suspension, threading capabilities into observe and apply, plan caching through direct `Store` calls with no synthetic node, verify-after-write, and stratification — domain-agnostic, replacing the driver logic once in `reconciler.ml` and `supervisor.ml`. `stdlib/domain-fs.pp` and `domain-proc.pp` hold the filesystem and process policy as pp source; `main.ml` then drains fenced actions. |
+| `src/fenced.ml` | The fenced-effect executor: registers scripting-tier actions, journals intent and done entries, and resolves unknown-status entries by policy (SPEC law 31). |
 | `src/repl.ml` | REPL and file-execution helpers for both back ends. |
-| `src/stabilize.ml` | Push scheduler: side-table (`node_key` → `thunk`) + dirty reset; the reverse-edge index is in `store.ml`. |
-| `src/main.ml` | CLI entry point: flag parsing, `--grant`, dispatch to REPL/file/`-e`/`--diff`. |
-| `tools/fuzz.ml` | The differential fuzzer ([TESTING.md](TESTING.md)). |
+| `src/stabilize.ml` | The push scheduler: a side table from `node_key` to `thunk`, plus dirty reset. The reverse-edge index itself lives in `store.ml`. |
+| `src/main.ml` | The CLI entry point: flag parsing, `--grant`, and dispatch to the REPL, a file, `-e`, or `--diff`. |
+| `tools/fuzz.ml` | The differential fuzzer, described in [TESTING.md](TESTING.md). |
 
 ## CLI surface (`main.ml`)
 
-```
-pp                       start the REPL (tree-walker)
-pp <file.pp>             run a file (tree-walker)
-pp --bytecode <file>     run via the bytecode VM
-pp --diff <file>         run both back ends, exit 1 if returned values differ
-pp -e '<expr>'           evaluate one expression
-pp --grant <spec>        grant a capability (fs:/path:ro|rw|wo, net:<proto>, process)
-pp --once <file.pp>      run once and exit (explicit; default behavior)
-pp --watch <file.pp>     run, then watch cell changes and re-evaluate (polling)
-pp --watch-interval <s>  poll interval for --watch (default 1.0)
-pp --watch --stabilize <file.pp>  watch with push stabilize (dirty-propagation)
-pp --supervise <file.pp>  reconcile program's process-map value (use with --watch)
-pp --fenced-policy retry|abort|ask  unknown-status fenced-action policy (default: abort)
-pp graph <file.pp>       print the cell→node dependency graph from traces
-pp island-pins <file.pp> list island forms with pin + cache status
-pp --update <file.pp>    re-resolve islands, rewrite inline pins (implies --fetch-islands)
-pp --fetch-islands       allow git fetch for uncached island pins (default: off)
-pp --version | --help
-```
+Run `pp --help` for the canonical flag list. This document does not
+duplicate it, since an earlier copy here drifted out of date. A single
+typed table drives help text, parsing, and dispatch together, so they
+cannot disagree.

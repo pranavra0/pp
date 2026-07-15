@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# D13: the `run` process effect + per-node sandbox (LAW 18, DESIGN Q2).
+# The `run` process effect and its per-node sandbox.
 #
 #   (perform run CMD ARG...) executes a process and returns
 #   {"exit" int, "out" string, "err" string}. Authority enters only via
-#   `--grant process` (LAW 22): no grant, no exec.
+#   `--grant process` (SPEC law 22): no grant, no exec.
 #
-#   Trace soundness (Q2's coarse-cell floor): inside a node, a run records
+#   Trace soundness (the coarse-cell floor): inside a node, a run records
 #     - `tool:<resolved-binary>` — the command's content hash, and
 #     - `tree:<root>`           — a whole-tree content hash for EVERY
 #                                 fs-read-granted root,
@@ -13,7 +13,7 @@
 #   tree changes — even files pp itself never read. Coarse but sound;
 #   depfile adapters refine later.
 #
-#   Sandbox (LAW 18): inside a node, `run` executes in a per-node scratch
+#   Sandbox (SPEC law 18): inside a node, `run` executes in a per-node scratch
 #   directory; relative slurp/write-file resolve there (unrecorded,
 #   capability-free — scratch is node-local memory); absolute write-file
 #   inside a node is an error. Scripting-tier write-file is unchanged.
@@ -102,8 +102,8 @@ run --grant process "$TMP/d.pp"
 assert "sandbox-run2-hit"  "RUN"    absent
 assert "sandbox-run2-OBJ"  "OBJ"    present
 
-# --- (e) LAW 18: absolute write-file inside a node errors (even with rw
-#         grant); scripting-tier write-file is unchanged ---
+# --- (e) absolute write-file inside a node errors (even with rw grant, per
+#         SPEC law 18); scripting-tier write-file is unchanged ---
 cat > "$TMP/e1.pp" <<EOF
 force(node { perform write-file("$TMP/evil.txt", "X") })
 EOF

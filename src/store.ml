@@ -2,13 +2,14 @@
 
    Layout:
      ~/.pp/store/
-       VERSION                 — "pp-store 1\n"; stamps the format below (M2.2)
+       VERSION                 — "pp-store 1\n"; stamps the format below
        objects/<result-hash>   — immutable value blobs, canonical s-expr TEXT
                                  (Codec.encode_value), content-addressed by
                                  the hash of the value. DATA only — see LAW
                                  below.
        blobs/<sha256>          — raw file bytes, content-addressed by the same
-                                 hash a file cell observes (Q11 ingest; also
+                                 hash a file cell observes (via
+                                 snapshot-as-CAS-ingest; also
                                  the reconciler's blob-ref source). Format-
                                  independent: survives a VERSION wipe.
        traces/<node-key>       — a SET of verifying traces, canonical s-expr
@@ -22,15 +23,15 @@
        fenced-specs/<hash>     — canonical s-expr TEXT (Codec.encode_value);
                                  DATA only, enforced at registration (fenced.ml).
        procs/<svc-hash>        — supervisor proc state, canonical s-expr TEXT.
-       journal/                — reconciler + exec journal (Q4): append-only
+       journal/                — reconciler + exec journal: append-only
                                  line text, untouched by this module, survives
                                  a VERSION wipe (it's an audit log, not a cache).
 
    Concurrency: temp file + atomic rename; immutable objects ⇒ benign races.
 
    Serialization: a canonical, versioned TEXT codec (Codec, src/codec.ml) —
-   byte-stable across OS/arch/compiler, replacing OCaml Marshal (ROADMAP §3,
-   M2.2). THE NON-DATA LAW: the persistent store holds DATA; code values
+   byte-stable across OS/arch/compiler; nothing in the store uses OCaml
+   Marshal. THE NON-DATA LAW: the persistent store holds DATA; code values
    (closures, thunks, environments) are process-local. [Codec.encode_value]
    returns [None] for anything containing code, and [store_object] silently
    declines to write in that case — the in-memory memoization already served
@@ -76,7 +77,7 @@ let obj_path hash =
 let trace_path hash =
   Filename.concat traces_dir hash
 
-(* ---- A″4 crash-injection oracle ----
+(* ---- Crash-injection harness support ----
    Every durable write funnels through [atomic_write] (store.mli hides the path
    plumbing, so there is no other way to touch the store on disk). One counter
    here, bumped per call, therefore lets a harness kill the process at the N-th
@@ -239,7 +240,7 @@ let load_traces ~key : trace list =
   ) else
     []
 
-(* ---- Phase 3 hardening: per-key lock around the traces/<key> RMW ----
+(* ---- Concurrent-writer safety: per-key lock around the traces/<key> RMW ----
 
    Two workers computing DIFFERENT nodes never contend (distinct lock
    files); two workers computing the SAME node (a Race, or two independent
@@ -319,7 +320,7 @@ let stat_kind_hash (kind : string) : string =
    absent cases carry DISTINCT hash_concat tags so a variable whose value is the
    literal string "absent" cannot hash-collide with an unset variable (the old
    `hash_string ("env:" ^ s)` vs `hash_string "env:absent"` did exactly that,
-   an A″1-class observation collision that let a node hit a result cached under
+   an observation collision that let a node hit a result cached under
    the wrong world-state); framing via hash_concat also makes any value bytes,
    including ':' , injective. *)
 let env_cell_id (name : string) : string = Cell.(to_string (Env name))
@@ -342,7 +343,7 @@ let hash_file_opt (path : string) : string option =
     Some (hash_string content)
   with _ -> None
 
-(* Whole-tree content hash — DESIGN Q2's coarse-cell soundness floor for the
+(* Whole-tree content hash — the coarse-cell soundness floor for the
    `run` effect: every regular file under [root] contributes its relative path
    and content hash (sorted); symlinks contribute their target, other kinds a
    marker. Coarse — ANY change under the root invalidates — but sound and
@@ -401,17 +402,17 @@ let unpin_file (path : string) : unit =
 let observe_cell (cell_id : string) : string option =
   match Cell.of_string cell_id with
   | Cell.File path ->
-      (* Q11: a pinned cell re-observes its run snapshot, keeping validity
+      (* A pinned cell re-observes its run snapshot, keeping validity
          decisions consistent with what this run's nodes actually read. *)
       (match Hashtbl.find_opt run_pins cell_id with
        | Some h -> Some h
        | None -> hash_file_opt path)
   | Cell.RuntimeFile path ->
-      (* A loader read (Q6): re-observed like a file cell; authority-exempt
+      (* A loader read: re-observed like a file cell; authority-exempt
          at hit time (the read was the interpreter's, not the user's). *)
       hash_file_opt path
   | Cell.Tool path ->
-      (* The command binary a `run` resolved to (D13): re-observed as its
+      (* The command binary a `run` resolved to: re-observed as its
          current content hash, like a file cell under a different authority
          rule (process grant, not fs — see cell_authorized). *)
       hash_file_opt path
@@ -424,23 +425,23 @@ let observe_cell (cell_id : string) : string option =
   | Cell.Config key -> (try Some (Runtime.observe_config key) with _ -> None)
   | Cell.Handler name -> (try Some (Runtime.observe_handler name) with _ -> None)
   | Cell.Proc name -> (try Runtime.observe_proc name with _ -> None)
-  (* M4 probes: re-observing evaluates the probe (once per pass, pinned in
+  (* Probes: re-observing evaluates the probe (once per pass, pinned in
      Runtime.probe_values — the SAME cache `(probe name)` reads) via the
      Runtime.probe_observer hook (Primitives.probe_observe_for_store, wired
      in main.ml — Store cannot depend on Primitives directly). A probe this
      process never registered returns None: cannot re-observe, never
      verifies, forces a miss (the sound, conservative answer). *)
   | Cell.Probe name -> (try Runtime.observe_probe name with _ -> None)
-  (* M4 sealed cells: re-hash the CURRENT bytes without ingesting — mirrors
+  (* Sealed cells: re-hash the CURRENT bytes without ingesting — mirrors
      the read-path logic (read_sealed_cell below) but never writes a pin or
-     touches the CAS; a pin from THIS run (Q11 consistency) is preferred
+     touches the CAS; a pin from THIS run is preferred
      over a fresh disk read so a re-observation inside the same pass never
      contradicts what was actually read. *)
   | Cell.Sealed path ->
       (match Hashtbl.find_opt Runtime.sealed_pins cell_id with
        | Some bytes -> Some (hash_string bytes)
        | None -> hash_file_opt path)
-  (* Q13: a third-party domain's own sub-cell, via the domain's own
+  (* A third-party domain's own sub-cell, via the domain's own
      :observe-cell closure (Runtime.domain_cell_observer, wired in main.ml —
      the proc_observer/probe_observer indirection, generalized: Store
      cannot depend on Primitives directly). A domain with no :observe-cell,
@@ -461,7 +462,7 @@ let trace_verifies (tr : trace) : bool =
 let record_file_read (path : string) (content : string) : unit =
   Runtime.record_read (file_cell_id path) (hash_string content)
 
-(* ---- Q11: snapshot-as-CAS-ingest — torn reads are dead ----
+(* ---- Snapshot-as-CAS-ingest — torn reads are dead ----
 
    blobs/<sha256> holds raw file bytes, content-addressed by the same hash a
    file cell observes. The first observation of a file cell
@@ -505,14 +506,14 @@ let read_file_cell (path : string) : string =
       Hashtbl.replace run_pins cell h;
       serve content h
 
-(* ---- M4 sealed cells: read as a CONFIDENTIAL cell observation ----
+(* ---- Sealed cells: read as a CONFIDENTIAL cell observation ----
 
    A read covered by CapSecret and NOT by CapFilesystem (the read-dispatch
    decision lives in the caller — Process.ml's slurp/read-file paths) never
    calls [store_blob]/[read_file_cell]: the bytes must never reach
-   ~/.pp/store, by design (PLAN-m4-cells.md "Sealed cells"). Bytes instead
+   ~/.pp/store, by design. Bytes instead
    pin in Runtime.sealed_pins, in-memory only, keyed by the "sealed:<path>"
-   cell id exactly like [run_pins] keys a "file:<path>" cell id — same Q11
+   cell id exactly like [run_pins] keys a "file:<path>" cell id — same
    per-run consistency (first read of a run pins; later reads of the SAME
    cell in the SAME run serve the pin), different storage (never the CAS).
    The cell records via ordinary [Runtime.record_read] with hash_string of
@@ -541,18 +542,17 @@ type hit_result =
   | HitFailed of value   (* the stored error value, to be re-raised *)
   | Miss
 
-(* ---- Phase-1 tooling switches (set by main.ml from the CLI) ---- *)
+(* ---- Tooling switches (set by main.ml from the CLI) ---- *)
 
 let no_cache = ref false      (* --no-cache: skip cache READS; still write *)
 let why_mode = ref false      (* pp why / --why: explain hits and misses *)
 let check_mode = ref false    (* --check: double-run determinism audit *)
 let volatile_count = ref 0    (* nodes flagged volatile by --check *)
 
-(* ---- M5 stage C: GC mark-by-replay hook (docs/PLAN-m5-distribution.md
-   "Store GC") ----
+(* ---- GC mark-by-replay hook ----
 
-   Since traces do not record child-keys (no on-disk node graph to walk —
-   the contract's load-bearing finding), the only way to discover which
+   Since traces do not record child-keys (no on-disk node graph to walk),
+   the only way to discover which
    objects/traces/blobs a root program's closure actually touches is to
    re-run it and watch which cache entries get consulted. [gc_marking],
    set true only inside a `--gc-mark` replay (main.ml), makes every
@@ -579,7 +579,7 @@ let why fmt =
    trace both (a) still verifies against the current world and (b) is one whose
    entire recorded read closure the caller is [authorized] to read — the LAW 23b
    transitive check that stops a narrow-capability caller from laundering a broad
-   read through a cached aggregator (DESIGN Q6). Because reads propagate to
+   read through a cached aggregator. Because reads propagate to
    enclosing nodes, `tr_reads` already IS the transitive closure. A verified
    success is preferred over a verified failure. On a hit the trace's reads are
    replayed into the active trace frames so a parent's trace transitively
@@ -656,7 +656,7 @@ let hit ~key ~authorized : hit_result =
                (match tr.tr_outcome with Ok -> "ok" | Failed -> "failing")
                (List.length tr.tr_reads);
              List.iter (fun (c, h) -> Runtime.record_read c h) tr.tr_reads;
-             (* M5 stage C GC mark (see [gc_marking]'s header comment above):
+             (* GC mark (see [gc_marking]'s header comment above):
                 a verified hit means this trace/object/blob(s) are LIVE for
                 whichever root program is currently being replayed. *)
              mark_live ("trace:" ^ key);
@@ -696,7 +696,7 @@ let load_fenced_spec (hash : string) : Types.value option =
   else None
 
 
-(* ---- Phase 2: reverse-edge index for push stabilize ----
+(* ---- Reverse-edge index for push stabilize ----
    Scans ~/.pp/store/traces/ and builds cell-id → node-key list.
    Includes ALL cell types (no handler:log filter) so dirty
    propagation is complete. *)
@@ -728,7 +728,7 @@ let dirty_keys_for (changed_cell_ids : string list)
     | None -> ()) changed_cell_ids;
   Hashtbl.fold (fun k () acc -> k :: acc) dirty []
 
-(* ---- Phase 2: pp graph — print the cell→node dependency graph ----
+(* ---- pp graph — print the cell→node dependency graph ----
    Scans ~/.pp/store/traces/ and shows which cells each node reads,
    and which nodes depend on each cell (the reverse-edge index).
    By default filters out handler:log cells (internal noise); pass
@@ -766,7 +766,7 @@ let print_graph ?(verbose = false) () =
       (Hashtbl.length key_to_cells) (Hashtbl.length cell_to_keys)
   end
   
-(* ---- Version stamp (M2.2) ----
+(* ---- Version stamp ----
    ~/.pp/store/VERSION pins the codec above. [procs_dir] is defined here (not
    in supervisor.ml, which reads it as [Store.procs_dir]) so this module can
    name every format-versioned directory in one place. *)

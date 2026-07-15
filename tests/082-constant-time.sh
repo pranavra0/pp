@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/082 — F0: constant-time string comparison (Constant_time.equal).
+# tests/082 — constant-time string comparison (Constant_time.equal).
 # Verifies that the constant-time equality function is correct:
 #   (a) equal strings → true
 #   (b) same-length, different content → false

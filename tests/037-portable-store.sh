@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# M2.2: versioned portable store format (ROADMAP maturity §3).
+# Versioned portable store format.
 #
 #   ~/.pp/store serializes with a canonical, byte-stable TEXT codec
 #   (src/codec.ml) instead of OCaml Marshal, stamped by store/VERSION
 #   ("pp-store 1"). The bytes must be identical on any OS/arch/compiler.
 #
-#   Covers (task spec, five clauses; both backends where applicable):
+#   Covers, both backends where applicable:
 #     (a) golden bytes — a fixed program's stored object file and trace file
 #         are byte-identical (names AND content) to fixtures checked into
 #         tests/fixtures/store-v1/, from both backends: the single-machine

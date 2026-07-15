@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/061b — A3 CI rule: every parse_head arm has quasiquote parity (is
+# tests/061b — CI rule: every parse_head arm has quasiquote parity (is
 # handled in parse_qq_head) or is an explicitly documented exclusion here.
 #
 # This is deliberately lightweight (a grep-based structural check over
@@ -11,25 +11,26 @@
 # directly after a bare `|`, so they don't get picked up) and asserts the
 # normal-parser set is a subset of the qq-parser set, modulo EXCLUDED below.
 #
-# The point (A3's ask): a future PR that adds a new block/sugar form to
-# parse_head without EITHER lifting it into parse_qq_head OR adding it here
-# should fail this test, not silently ship an unrepresentable form.
+# The point: a future PR that adds a new block/sugar form to parse_head
+# without EITHER lifting it into parse_qq_head OR adding it here should
+# fail this test, not silently ship an unrepresentable form.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="$ROOT/src/reader_braces.ml"
 fail=0
 
-# Known, PRE-EXISTING qq gaps — not part of A3's mandate (try/match/m[k]/
-# list-spread), so not implemented here. Each is a real parse_head arm with
-# no parse_qq_head counterpart today:
+# Known, PRE-EXISTING qq gaps — not covered by the try/match/m[k]/
+# list-spread quasiquote work, so not implemented here. Each is a real
+# parse_head arm with no parse_qq_head counterpart today:
 #   fenced   — fenced :kind { ... } (lowers to perform("fenced", ...))
 #   with     — with { caps: C, config: M, handlers: M } { body } combo
 #              sugar (the PRIMITIVE forms with-caps/with-config/with-handler
 #              it desugars to already have qq arms; this convenience
 #              wrapper itself does not)
 #   vec      — vec[...] vector literal with spread (only the bracket LIST
-#              literal `[...]` got A2/A3 qq parity, not `vec[...]`)
-# (B6 removed `cond` and B2 removed `collect` from parse_head — both dropped.)
+#              literal `[...]` got quasiquote parity, not `vec[...]`)
+# (`cond` and `collect` were later removed from parse_head entirely — both
+# dropped.)
 # A future fix that lifts one of these should DELETE it from this list —
 # the extraction below will then find it covered and the assertion holds.
 EXCLUDED="fenced with vec"

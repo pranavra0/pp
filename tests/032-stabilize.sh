@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Phase 2 exit criterion 6: push stabilize differential test.
+# Push stabilize differential test.
 #
 #   A 4-node program with a reverse-edge dependency graph:
 #     a reads f1

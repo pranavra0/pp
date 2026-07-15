@@ -1,11 +1,11 @@
-# tests/mutate-cproject.pp — ROADMAP §2 milestone: the Phase-1 proof's
-# DRIFT-MUTATION steps, written in pp. (The mtime-only `touch` step stays in
-# shell — writing content would defeat its purpose.)
+# tests/mutate-cproject.pp — DRIFT-MUTATION steps for the incremental-build
+# proof, written in pp. (The mtime-only `touch` step stays in shell — writing
+# content would defeat its purpose.)
 #
 # pp --grant fs:<src>:rw tests/mutate-cproject.pp -- edit-tu <src> <i>
-# rewrite f<i>.c with a changed body (criterion 3: one compile + link)
+# rewrite f<i>.c with a changed body (forces one compile + link)
 # pp --grant fs:<src>:rw tests/mutate-cproject.pp -- append-comment <src> <file>
-# append a comment-only line (criterion 5: recompiles, link cut off)
+# append a comment-only line (forces a recompile but the link stage is cut off)
 load("stdlib/list.pp")
 load("stdlib/string.pp")
 

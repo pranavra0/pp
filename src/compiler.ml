@@ -234,7 +234,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       ignore (emit_closure_region st params body)
 
   | EApply (fn_expr, arg_exprs) ->
-      (* Strict application (Q1): compile_expr already emits FORCE for symbols;
+      (* Strict application: compile_expr already emits FORCE for symbols;
          literals are self-values. *)
       compile_expr st fn_expr false;
       List.iter (fun arg -> compile_expr st arg false) arg_exprs;
@@ -260,7 +260,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
          (evaluator.ml EDo) threads a local `env_ref` forked from the
          surrounding env; its defs are never merged back into the caller's
          env, so a bare top-level `(do (def x ...) ...)` must not leak `x`
-         to later top-level forms (D22a). Top-level def VISIBILITY ACROSS
+         to later top-level forms. Top-level def VISIBILITY ACROSS
          FORMS is a property of the top-level driver (EDef/EDefValue below,
          and eval_expressions in the tree-walker), not of `do` — so `do`
          must bind its own defs as local slots unconditionally, exactly like
@@ -300,7 +300,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
             emit st (LOAD_MODULE_FILE (intern_name st path));
             (* Statement position: tree-walker merges the module's bindings
                into the enclosing env (EDo/eval_expressions); IMPORT matches
-               (D20), then POP discards the statement's value. *)
+               that merge, then POP discards the statement's value. *)
             emit st IMPORT;
             emit st POP;
             compile_subs rest
@@ -381,7 +381,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       ) handlers;
       emit st (PUSH_HANDLER (List.length handlers));
       (* Body NON-tail (was [tail]) so control returns to run POP_HANDLER;
-         a tail call would frame-swap past POP and leak the handler (D9). *)
+         a tail call would frame-swap past POP and leak the handler. *)
       compile_expr st body false;
       emit st POP_HANDLER
 
@@ -395,7 +395,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
          defs (function AND value) are visible to later module-body
          expressions, including sibling exports and bare statements
          (evaluator.ml EModule folds `env_acc` left-to-right, so `final_env`
-         sees every def that came before it) — D22(b). The VM must resolve
+         sees every def that came before it). The VM must resolve
          those sibling references via LOCAL slots, not the globals table
          (a name is only stored into `globals` later, by IMPORT, once the
          caller merges the finished module — during construction the names
@@ -485,8 +485,8 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       emit st FORCE;
       emit st PUSH_CONFIG;
       (* Body NON-tail (was [tail]) so control returns to run POP_CONFIG;
-         a tail call would frame-swap past POP and leak the config scope
-         (D9). Matches the tree-walker's dynamic extent (evaluator.ml
+         a tail call would frame-swap past POP and leak the config scope.
+         Matches the tree-walker's dynamic extent (evaluator.ml
          EWithConfig restores [config_stack] after the body). *)
       compile_expr st body false;
       emit st POP_CONFIG
@@ -528,7 +528,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
          literal/tag equality, and the then-branch binds pattern variables.
          This mirrors Types.match_pattern used by the tree-walker.
 
-         A5: the lowering below is ordinary generated code — EApply (ESymbol
+         The lowering below is ordinary generated code — EApply (ESymbol
          name, ...) — which on the VM compiles to LOAD_GLOBAL name and so
          resolves whatever the CURRENT global binding of `name` is. If user
          code shadows car/cdr/=/nil?/not/error (e.g. `def car(x) { ... }`),
@@ -631,7 +631,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
             let then_e = if binds = [] then body else ELet (binds, body) in
             EIf (cond, then_e, lower_arms rest)
         | (pat, Some guard, body) :: rest ->
-            (* C3: a guarded arm fires only when the pattern matches AND the
+            (* A guarded arm fires only when the pattern matches AND the
                guard is truthy under the pattern's bindings; otherwise control
                falls to the remaining arms. Fold the guard INTO the arm
                condition — `pat_cond AND (guard under binds)` — so the structure
@@ -667,8 +667,8 @@ let compile_program (exprs : expr list) : bytecode =
          | ELoadModule _ | EIsland _ ->
              (* Tree-walker merges a statement-position load-module's (and
                 island's) bindings into the top-level env (eval_expressions);
-                emit an explicit IMPORT to match, now that LOAD_MODULE_FILE
-                itself no longer merges (D20). *)
+                emit an explicit IMPORT to match, since LOAD_MODULE_FILE
+                itself does not merge. *)
              compile_expr st e true;
              emit st IMPORT;
              emit st POP

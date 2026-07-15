@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# tests/026 — per-parameter type annotations are CHECKED (ROADMAP §1: they
-# used to parse and then be silently discarded). The reader desugars
-# `(def (f x : int) body)` into a located type check on `x` ahead of the
-# body, so both backends enforce identically (LAW 32's oracle rule):
+# tests/026 — per-parameter type annotations are CHECKED: they used to
+# parse and then be silently discarded. The reader desugars `(def (f x :
+# int) body)` into a located type check on `x` ahead of the body, so both
+# backends enforce identically (SPEC law 32's oracle rule):
 #   (a) a well-typed call passes and returns the body's value;
 #   (b) an ill-typed call raises the same "type mismatch" error, with the
 #       definition-site location, in BOTH backends (byte-identical);

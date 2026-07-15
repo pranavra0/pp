@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
 # pins: LAW-26 LAW-33 LAW-20
-# LAW 33 / LAW 26: config and the handler stack are OBSERVATIONS, not identity.
+# Config and the handler stack are OBSERVATIONS, not identity
+# (SPEC laws 33 and 26).
 #
-# The node key must cover code + free-var value hashes ONLY (LAW 20). Config
+# The node key must cover code + free-var value hashes ONLY (SPEC law 20). Config
 # and handlers used to be folded into the key conservatively, so changing an
 # ambient config value or swapping any handler re-keyed every node under it —
 # even nodes that never read config or performed the effect. The trace-cell
 # treatment fixes this:
 #   - (config k) inside a node records a `config:<k>` cell whose observed hash
 #     is the resolved value (or an absent marker); a hit re-observes it against
-#     the caller's current config stack (LAW 33).
+#     the caller's current config stack (SPEC law 33).
 #   - every `perform` inside a node records a `handler:<effect>` cell whose
 #     observed hash is the intercepting handler's value hash (or a builtin
 #     marker); a hit re-observes it against the caller's handler stack, so a
-#     mock read-file and the real one never cross-contaminate (LAW 26).
+#     mock read-file and the real one never cross-contaminate (SPEC law 26).
 #
 # Runs under an isolated HOME. COMPUTE in output = the node body ran (miss);
-# per LAW 17 a hit does not replay it.
+# per SPEC law 17 a hit does not replay it.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -35,7 +36,7 @@ assert() {  # NAME PATTERN present|absent
 
 run() { "$PP" "$@" > "$TMP/out" 2>&1; }
 
-# --- (a) ambient config a node never reads must NOT re-key it (LAW 33) ---
+# --- (a) ambient config a node never reads must NOT re-key it (SPEC law 33) ---
 rm -rf "$TMP/.pp"
 cat > "$TMP/a1.pp" <<'EOF'
 with-config({"amb" -> "A"}) {
@@ -107,7 +108,7 @@ run "$TMP/c1.pp"; assert "cfg-absent-revert-hit" "COMPUTE" absent
                   assert "cfg-absent-revert-DEF" "DEF"     present
 
 # --- (d) a handler for an effect the node never performs must NOT re-key it
-#         (LAW 26: handlers are not identity) ---
+#         (SPEC law 26: handlers are not identity) ---
 rm -rf "$TMP/.pp"
 cat > "$TMP/d1.pp" <<'EOF'
 with-handler(ask = fn(n) { "H1" }) {
@@ -155,7 +156,7 @@ run "$TMP/e1.pp"; assert "hnd-sem-revert-hit" "COMPUTE" absent
                   assert "hnd-sem-revert-A1"  "A1"      present
 
 # --- (f) mock read-file vs the builtin: two traces under one key, no
-#         cross-contamination (the LAW 26 acceptance test) ---
+#         cross-contamination (the SPEC law 26 acceptance test) ---
 rm -rf "$TMP/.pp"
 printf 'REAL\n' > "$TMP/f.txt"
 cat > "$TMP/f-real.pp" <<EOF

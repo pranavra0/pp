@@ -1,5 +1,5 @@
-(* pp GC roots manifest — M5 stage C Store GC (docs/PLAN-m5-distribution.md
-   "Store GC"): "roots: the last N epochs' desired-state root hashes".
+(* pp GC roots manifest — explicit `pp gc`'s roots: the last N epochs'
+   desired-state root hashes.
 
    NOT the frozen journal grammar: journal.ml's `Epoch` entry is the
    append-only, never-rotated, greppable audit-log record of a pass's root
@@ -7,10 +7,10 @@
    [Runtime.gc_keep_epochs] entries, recording enough to REPLAY a root
    program (files, --grant specs, --bytecode, --reconcile/--supervise/
    --member-name/--desired-object) — mark-by-replay's load-bearing
-   precondition (the contract's own finding: traces do not record
-   child-keys, so there is no on-disk node graph to walk; the only way to
-   discover which store artifacts a root's closure actually touches is to
-   re-run the SAME program, not merely remember a hash).
+   precondition: traces do not record child-keys, so there is no on-disk
+   node graph to walk; the only way to discover which store artifacts a
+   root's closure actually touches is to re-run the SAME program, not
+   merely remember a hash.
 
    One line per root, a plain Codec-encoded (Types.value) VMap — reusing
    the store's own canonical text codec rather than inventing a third

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Islands (D2): content-addressed modules with INLINE pins.
+# Islands: content-addressed modules with INLINE pins.
 #
 #   (island file:./lib "64-hex-pin") resolves to an immutable cached tree
 #   under ~/.pp/islands/src/<pin>/, verified against the pin on every
-#   resolve. The pin is part of the code hash (LAW 20), so island identity
+#   resolve. The pin is part of the code hash (SPEC law 20), so island identity
 #   is structural: no lockfile, no synthetic cell. An unpinned form is a
 #   hard error; `pp --update` re-resolves and rewrites pins in the source.
 #
@@ -38,9 +38,8 @@ both() {  # NAME ARGS... — run under both backends, diff, leave output in $TMP
 }
 
 # --- fixture island ---
-# M7 S3: `.pp` now dispatches to the brace reader, so every embedded
-# program below is brace syntax (`island("URI"[, "PIN"])` per the L55
-# lowering table — braces spell URIs as strings).
+# `.pp` now dispatches to the brace reader, so every embedded program below
+# is brace syntax (`island("URI"[, "PIN"])` — braces spell URIs as strings).
 mkdir -p lib
 cat > lib/entry.pp <<'EOF'
 let isl-x = 42

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Q3 / LAW 31: fenced effects.
+# Fenced effects: (fenced KIND SPEC-MAP) registers a non-convergent action
+# in the scripting tier (SPEC law 31).
 #
-#   (fenced KIND SPEC-MAP) registers a non-convergent action in the scripting
-#   tier.  The reconciler/supervisor sequences it after convergent work,
-#   journaling intent/done around each action.  Fenced effects may not appear
-#   inside node bodies.  A crash between intent and done leaves an unknown-
-#   status entry that is resolved by --fenced-policy (retry | abort | ask),
-#   never by silent retry.
+#   The reconciler/supervisor sequences it after convergent work, journaling
+#   intent/done around each action.  Fenced effects may not appear inside
+#   node bodies.  A crash between intent and done leaves an unknown-status
+#   entry that is resolved by --fenced-policy (retry | abort | ask), never
+#   by silent retry.
 #
 # Runs under an isolated HOME; both backends.
 set -uo pipefail

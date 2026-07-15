@@ -6,7 +6,7 @@
 #   contents: it diffs by hash WITHOUT loading bytes, materializes from the
 #   store, and errors if a referenced blob is missing.
 #
-#   This is what makes ROADMAP exit criterion 4 real: `rm -rf build/` then
+#   This means `rm -rf build/` then
 #   re-reconcile restores the tree from the store with ZERO tool re-runs —
 #   the desired map (node-cached) carries refs, the store carries bytes.
 #
@@ -48,7 +48,7 @@ check_file "blob-txt" "$OUT/plain.txt" "INLINE"
 run --grant "fs:$OUT:rw" --reconcile "$OUT" "$TMP/d.pp"
 assert "blob-null"    "create=0" present
 
-# --- (b) exit criterion 4 at unit scale: the desired map comes from a
+# --- (b) rebuild-from-store at unit scale: the desired map comes from a
 #         tool-running node; rm -rf build ⇒ restored from the store with
 #         ZERO tool re-runs ---
 cat > "$TMP/b.pp" <<'EOF'

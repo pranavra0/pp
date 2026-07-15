@@ -1,9 +1,11 @@
-(* store — the durability kernel's public face (MASTER-PLAN A′4 seam).
+(* store — the durability kernel's public face.
 
    The content-addressed object store and the verifying-trace journal (LAW
    20/21/23/28): the write choke points ([store_object], [store_trace],
-   [store_blob], [atomic_write]) that A″4's crash harness will kill around, the
-   read/verify path ([load_object], [load_traces], [hit], [observe_cell]), the
+   [store_blob], [atomic_write]) — the only places a durable write happens, so
+   a crash-injection harness that kills the process at each of these calls and
+   restarts can assert the store is always valid-or-invalidated, never wrong —
+   the read/verify path ([load_object], [load_traces], [hit], [observe_cell]), the
    cell-id/observation helpers, and the audit/GC surface. The .mli fixes the
    boundary so durable writes route ONLY through these choke points — the path
    plumbing ([obj_path]/[trace_path]/[version_path]/[locks_dir]/…), the lock

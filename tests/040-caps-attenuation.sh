@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # pins: LAW-22b LAW-25
-# M3: in-language capability attenuation (docs/PLAN-m3-attenuation.md).
+# In-language capability attenuation: with-caps narrows the current
+# capability set, and a node captures whatever capability set was in force
+# when it was CREATED, not whatever is live when it is later forced.
 #
-# The differential test that is IMPOSSIBLE to write before with-caps exists
-# (node capture, DESIGN Q11's promise, made real and falsifiable by M3):
+# The differential test below proves that capture-at-creation model, not
+# merely that narrowing exists:
 #
 #   (a) a node CREATED under a NARROWED ambient, forced OUTSIDE that ambient
 #       (under the full grant), is STILL DENIED — the node's authority was

@@ -81,7 +81,7 @@ let rec has_effect (e : expr) : bool =
            || has_effect body) arms
   | _ -> false
 
-(* ---- B12: tagged-value convention helpers ---- *)
+(* ---- tagged-value convention helpers ---- *)
 
 (** The keyword tag of a tagged-list literal `[:tag, …]` (which lowers to
     `(list :tag …)`), if [e] is one. *)
@@ -117,7 +117,7 @@ let rec branch_tails (e : expr) : expr list =
   | EDo es -> (match List.rev es with last :: _ -> branch_tails last | [] -> [])
   | other -> [other]
 
-(** B12(1): a function body that returns `[:err, _]` on one branch and a bare
+(** A function body that returns `[:err, _]` on one branch and a bare
     value on another mixes result and non-result shapes — flag it. *)
 let check_result_shape file line (body : expr) : unit =
   let tails = branch_tails body in
@@ -126,7 +126,7 @@ let check_result_shape file line (body : expr) : unit =
       "inconsistent result shape: one branch returns [:err, _] but another \
        returns a bare value — return [:ok, v] on the success branch (SYNTAX §2)"
 
-(** B11: an identifier containing '.' (a dot-method-call trap or stray dotted
+(** An identifier containing '.' (a dot-method-call trap or stray dotted
     name). Grant descriptors (the dotted `fs` shorthands) lower away before
     lint sees the AST, so any surviving dotted ESymbol is a real violation. *)
 let check_dot_identifier file line (s : string) : unit =
@@ -220,7 +220,7 @@ let rec check_expr ?(line=0) file (e : expr) : unit =
       check_expr ~line file body
 
   | EApply (fn, args) -> (
-      (* L9 sweep (SPEC A7): `[…]` reads as a list, not a vector, so
+      (* L9 sweep: `[…]` reads as a list, not a vector, so
          vector-get/vector-length applied directly to a bracket literal is a
          leftover from the vector era and is now a type error at runtime. Flag
          it statically. A bracket literal lowers to `(list …)`; peel any
@@ -237,7 +237,7 @@ let rec check_expr ?(line=0) file (e : expr) : unit =
                       vector with `vector(…)`" op)
             | _ -> ())
        | _ -> ());
-      (* B12(2): `car`/`cdr` (or `first`/`rest`) applied to a tagged result
+      (* `car`/`cdr` (or `first`/`rest`) applied to a tagged result
          literal `[:ok, _]`/`[:err, _]` — destructure results with `match` or
          `<-`, never by position (SYNTAX §15). *)
       (match fn, args with
@@ -329,11 +329,11 @@ let rec check_expr ?(line=0) file (e : expr) : unit =
       check_expr ~line file t
 
   | ESymbol s ->
-      check_dot_identifier file line s   (* B11 *)
+      check_dot_identifier file line s
 
   | ELiteral _ | ELoad _ | ELoadModule _ | EIsland (_, _) -> ()
 
-(* ---- B4: observation-exclusivity (a PRE-lowering token scan) ---- *)
+(* ---- Observation-exclusivity (a PRE-lowering token scan) ---- *)
 
 (** Does [path] live under a `stdlib/` directory? The `$` family lowers to the
     bare primitives, and stdlib is where those primitives are legitimately
@@ -346,7 +346,7 @@ let is_stdlib_path (path : string) : bool =
   in
   re_has "stdlib/" || re_has "/stdlib"
 
-(** B4: warn on a bare world-read primitive (`slurp`, `env-get`, `probe`,
+(** Warn on a bare world-read primitive (`slurp`, `env-get`, `probe`,
     `config`, `perform tree-observe`) used outside `stdlib/`, pointing at the
     `$` head. This MUST run pre-lowering: after lowering, `$file` and a bare
     `slurp` are the identical AST, so the distinction only exists in the token
@@ -392,7 +392,7 @@ let lint_file (path : string) : unit =
   let len = in_channel_length ch in
   let src = really_input_string ch len in
   close_in ch;
-  (* B4: pre-lowering token scan (before the reader lowers $file -> slurp). *)
+  (* Pre-lowering token scan (before the reader lowers $file -> slurp). *)
   check_observation_exclusivity path src;
   (* Parse *)
   let forms =

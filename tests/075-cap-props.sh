@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# tests/075 — A″6: capability-algebra properties.
+# tests/075 — property tests proving capabilities can only be narrowed, never
+# widened or invented, and can never leak across a node boundary.
 # pins: LAW-22b LAW-23 LAW-39
 #
 # src/kernel_props.ml carries a generator over capability VALUES, exhaustive
@@ -11,20 +12,21 @@
 #                               cap already granted — attenuation never widens.
 #   (b) cap-compose-union       a CapCompose grants EXACTLY the union of its
 #                               parts (invents no authority; loses none).
-#   (c) cap-subseteq-sound      the with-caps ⊆ gate (cap_subseteq, LAW 22b)
+#   (c) cap-subseteq-sound      the with-caps ⊆ gate (cap_subseteq, SPEC law 22b)
 #                               never approves a request that grants authority
 #                               the ambient lacks — the "narrow only" gate is
 #                               sound against the check_* functions each effect
 #                               actually enforces.
-#   (d) node-boundary ban       Hasher.contains_authority (LAW 39 / M3 kill-list)
+#   (d) node-boundary ban       Hasher.contains_authority (SPEC law 39, the ban
+#                               on capabilities crossing a node boundary)
 #                               catches a capability OR sealed value buried at
 #                               any depth, and does not false-positive on a
 #                               capability-free value.
 #
 # Coverage is derived, not enumerated: a new capability kind extends all four
-# properties at once (DESIGN §1 principle 8). This test is the runtime gate — it
-# runs the suite across several seeds and asserts the caps properties hold with
-# full kind coverage and a non-trivial check count.
+# properties at once, from the generator's own exhaustiveness match. This test
+# is the runtime gate — it runs the suite across several seeds and asserts the
+# caps properties hold with full kind coverage and a non-trivial check count.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac

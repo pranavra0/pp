@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# Regression: the bytecode VM shares the persistent node cache (D7 closed).
+# Regression: the bytecode VM shares the persistent node cache with the
+# tree-walker.
 #
 # The VM used to compile `(node e)` exactly like `(delay e)` and never touch the
 # store, so it recomputed every run while the tree-walker cached — a shipped
-# feature in one backend only (LAW 36). The VM now routes node forcing through
-# the same store with the same LAW 20 key, verifying traces (LAW 21), failure
-# memoization (LAW 28), and hit-time capability gating (LAW 23b). Because the VM
+# feature in one backend only, when the two backends are meant to be one
+# language (SPEC law 36). The VM now routes node forcing through the same
+# store with the same node key, verifying traces, memoizing failures, and
+# gating hits on capability, exactly like the tree-walker
+# (SPEC laws 20, 21, 28, and 23b). Because the VM
 # key is byte-identical to the tree-walker's for data free variables, the two
 # backends even SHARE store entries.
 #
-# Isolated HOME. "COMPUTE" present ⇒ body ran (miss); absent ⇒ hit (LAW 17).
+# Isolated HOME. "COMPUTE" present ⇒ body ran (miss); absent ⇒ hit (SPEC law 17).
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -48,7 +51,7 @@ EOF
 printf 'V2\n' > "$TMP/d.txt"
 "$PP" --bytecode --grant "fs:$TMP:ro" "$TMP/rd.pp" > "$TMP/o" 2>&1; assert "vm-read-run3-stale" "$TMP/o" present
 
-# --- (3) VM LAW 20: unrelated global ∉ key; referenced free var ∈ key ---
+# --- (3) VM node key: unrelated global ∉ key; referenced free var ∈ key ---
 rm -rf "$TMP/.pp"
 cat > "$TMP/g1.pp" <<'EOF'
 let unrelated = 1

@@ -1,8 +1,8 @@
-(* pp brace reader — the M7 surface syntax (SPEC Appendix B), parsing to the
+(* pp brace reader — the brace surface syntax (SPEC Appendix B), parsing to the
    IDENTICAL `Types.expr` the s-expression reader produces for the equivalent
    program: same AST, same `ELocated` placement (§B.4), same shared desugars
    (src/desugar.ml), hence the same LAW-20 keys. The grammar implemented here
-   is exactly the one Appendix B froze in S0 — the 7-level precedence table,
+   is exactly the one Appendix B specifies — the 7-level precedence table,
    the whitespace-sensitive infix rule (`a - b` subtracts, `a-b` is one
    identifier), `#` comments, `;`/newline statement separators with
    syntactic-incompleteness continuation, expression-position `{}` always a
@@ -26,7 +26,7 @@ open Types
 (* ---- Tokens ---- *)
 
 (* An f-string is lexed into ordered segments: literal text and interpolation
-   holes (C1). A hole carries its RAW source text, re-lexed and parsed by the
+   holes. A hole carries its RAW source text, re-lexed and parsed by the
    reader (in whichever context the f-string appears — normal or quasiquote) so
    a hole is an arbitrary expression, not a restricted sub-grammar. *)
 type fseg = FLit of string | FHole of string
@@ -37,7 +37,7 @@ type btok =
   | TLBrace | TRBrace
   | TComma | TSemi | TNewline
   | TString of string
-  | TFString of fseg list    (* f"…{expr}…" — interpolated string (C1) *)
+  | TFString of fseg list    (* f"…{expr}…" — interpolated string *)
   | TInt of int
   | TFloat of float
   | TName of string          (* identifiers AND operator spellings (+ - |> ->) *)
@@ -119,7 +119,7 @@ let lex ~(file : string) (input : string) : tok list =
     in
     loop ()
   in
-  (* f-string body (C1): the f-prefixed quote. Scans literal text and {expr}
+  (* f-string body: the f-prefixed quote. Scans literal text and {expr}
      holes into [fseg] segments. Doubled braces are literal braces; a hole runs
      until its MATCHING close brace (nested braces balanced, and string literals
      inside a hole copied verbatim so their braces/quotes do not confuse the
@@ -263,7 +263,7 @@ let lex ~(file : string) (input : string) : tok list =
     | Some ':' ->
         (* Glued to a preceding name or ')': annotation colon (`x: ty`).
            At token start (not glued): ':'+namechar is a keyword.
-           (B1: the fused cell-literal token `file:"P"` is removed — the `$`
+           (The fused cell-literal token `file:"P"` is removed — the `$`
            family is the one observation surface.) *)
         let glued_prev =
           start = !last_end
@@ -296,7 +296,7 @@ let lex ~(file : string) (input : string) : tok list =
         run ()
     | Some c when is_digit c -> read_number start start_line; run ()
     | Some 'f' when peek_at 1 = Some '"' ->
-        (* C1: `f"…"` — the f-prefix is a lone `f` glued to the quote. A longer
+        (* `f"…"` — the f-prefix is a lone `f` glued to the quote. A longer
            name like `foo"…"` still lexes as TName "foo" then TString. *)
         read_fstring start start_line; run ()
     | Some c when is_name_char c ->
@@ -349,17 +349,18 @@ type ctx = { nl : bool; cond : bool }
 
 let free_ctx = { nl = true; cond = false }
 
-(* A′5: one precedence-climbing spine, two contexts. The normal reader and the
+(* One precedence-climbing spine, two contexts. The normal reader and the
    `quasiquote{}` reader parse the SAME 7-level operator grammar (pipe/or/and/
    cmp/add/mul, then call/index postfix); they differ only in (i) what each
    binary/short-circuit/postfix combination *builds* — normal makes AST nodes,
    qq makes quoted list-building data — and (ii) newline significance (normal
    threads its caller's `c.nl`; qq peeks infix transparently but its postfix
-   must NOT swallow a next-line `(`/`[`, the A3 fix). Both are captured as
+   must NOT swallow a next-line `(`/`[`). Both are captured as
    fields here, so `climb_*` below exists once and a form added to the spine
-   exists in both contexts by construction — A3's CI head-coverage rule becomes
+   exists in both contexts by construction — a CI rule checking every normal
+   parse-head has a quasiquote counterpart becomes
    a backstop rather than the mechanism. *)
-(* Bracket/argument spread element (used by list literals and, since C2, by
+(* Bracket/argument spread element (used by list literals and by
    call-argument lists). Defined here so [spine] below can reference it. *)
 type bracket_elem = BElem of expr | BSpread of expr
 
@@ -371,10 +372,10 @@ type spine = {
   s_or         : expr -> expr -> expr;          (* short-circuit `or` *)
   s_and        : expr -> expr -> expr;          (* short-circuit `and` *)
   s_pipe       : (ps -> expr -> expr -> expr) option;  (* None ⇒ `|>` illegal here *)
-  s_argv       : ps -> bracket_elem list;       (* `(a, …)` argument list, spread-aware (C2) *)
+  s_argv       : ps -> bracket_elem list;       (* `(a, …)` argument list, spread-aware *)
   s_index      : ps -> expr;                    (* the `[…]` index expression *)
   s_int_index  : expr -> bool;                  (* is the index a literal int? (vector-get) *)
-  s_call       : expr -> bracket_elem list -> expr;  (* build `E(args…)`, lowering spread through `apply` (C2) *)
+  s_call       : expr -> bracket_elem list -> expr;  (* build `E(args…)`, lowering spread through `apply` *)
   s_get        : string -> expr -> expr -> expr;(* build `E[idx]` via [accessor] *)
 }
 
@@ -442,7 +443,7 @@ let peek_infix ps ~nl (ops : string list) : string option =
       else Some s
   | _ -> None
 
-(* Map-literal entry: a spread `...m` or a `k -> v` pair (B3) *)
+(* Map-literal entry: a spread `...m` or a `k -> v` pair *)
 type map_entry = MSpread of expr | MPair of expr * expr
 (* Counter for fresh temp variables in try-block lowering *)
 let try_counter = ref 0
@@ -452,7 +453,7 @@ let fresh_try_var () =
 
 type try_stmt = TryBind of string * expr | TryExpr of expr
 
-(* A parsed handler name (A′5): the `with-handler(name = fn, …)` name slot
+(* A parsed handler name: the `with-handler(name = fn, …)` name slot
    accepts a symbol or a keyword, in BOTH the normal and quasiquote readers.
    [parse_handler_pairs] parses the shared pair syntax once and returns these
    raw names; each reader maps them to its own representation (normal keeps the
@@ -460,7 +461,7 @@ type try_stmt = TryBind of string * expr | TryExpr of expr
 type hname = HName of string | HKeyword of string
 
 
-(* C2 call-spread helpers. [group_call_segments] collapses a bracket-element
+(* Call-spread helpers. [group_call_segments] collapses a bracket-element
    list into ordered segments: each maximal run of plain args becomes one
    `Run, each spread its own `Spread — the shape both spines render into an
    `apply(f, seg…)` call (segments are concatenated by the `apply` primitive). *)
@@ -500,7 +501,7 @@ and normal_spine (c : ctx) : spine = {
   s_index      = (fun ps -> parse_expr ps free_ctx);
   s_int_index  = (function ELiteral (VInt _) -> true | _ -> false);
   s_call       = (fun e elems ->
-    (* C2: a spread anywhere in the argument list lowers `f(a, ...rest, b)` to
+    (* A spread anywhere in the argument list lowers `f(a, ...rest, b)` to
        `apply(f, list(a), rest, list(b))` — consecutive plain args grouped into
        one `list(...)` segment, each spread its own segment; the `apply`
        primitive concatenates the segments and calls f. Spread-free calls keep
@@ -665,7 +666,7 @@ and fstring_hole_expr ~(file : string) (src : string) ~(parse : ps -> expr) : ex
             (string_of_btok t) file));
   e
 
-(* Lower f-string segments (C1): each non-empty literal → a string literal,
+(* Lower f-string segments: each non-empty literal → a string literal,
    each hole → `->string(<hole>)`; join with `string-append`. A single part
    (one literal `f"abc"`, or one hole `f"{x}"`) is emitted bare (no wrapper),
    so `f"abc"` is byte-for-byte the same AST as `"abc"`. The [lit]/[hole]/
@@ -681,7 +682,7 @@ and lower_fstring ~(lit : string -> expr) ~(hole : string -> expr)
   | [one] -> one
   | many -> append many
 
-(* Spread-aware call-argument list (C2): like [parse_arglist] but a `...x`
+(* Spread-aware call-argument list: like [parse_arglist] but a `...x`
    element is captured as a [BSpread] rather than parsed as a bogus symbol.
    `...rest` (glued) takes its target from the token suffix; a bare `...`
    parses the following expression, mirroring [parse_bracket_elems]. *)
@@ -709,7 +710,7 @@ and parse_call_args ps ~(elem : ps -> expr) : bracket_elem list =
     loop []
   end
 
-(* Shared `with-handler(name = value, …)` pair parser (A′5). The pair syntax —
+(* Shared `with-handler(name = value, …)` pair parser. The pair syntax —
    a symbol/keyword name, `=`, a value, comma-separated, up to `)` — is
    identical in both readers; only the value parser and the built shape differ,
    so each caller passes its [parse_value] and maps the returned raw pairs. One
@@ -793,7 +794,7 @@ and parse_primary ps c : expr =
   | TName "nil" -> advance ps; ELiteral VNil
   | TName n when String.length n > 0 && n.[0] = '$' ->
       (* $KIND(args...) — observation sigils, table-driven (Surface_tables).
-         Every head parses its arguments as an ordinary expression list (A6),
+         Every head parses its arguments as an ordinary expression list,
          so a computed path such as $file(build <> "/out") works; per-head
          string-literal restrictions no longer exist. An unknown $foo is left
          as the bare symbol (postfix application still applies to it). *)
@@ -814,7 +815,7 @@ and parse_primary ps c : expr =
   | TName n -> parse_head ps c n
 
 (* { k1 -> v1, k2 -> v2, ... } -> (hash-map k1 v1 k2 v2 ...)
-   { ...m, k -> v, ... } -> spread/update: map-merge / map-insert (B3).
+   { ...m, k -> v, ... } -> spread/update: map-merge / map-insert.
    The old `{ base | k -> v }` update form is removed — `{ ...base, k -> v }`
    is the one spelling; multiple spreads merge, rightmost wins.
    cur = '{' *)
@@ -887,7 +888,7 @@ and build_map_literal (entries : map_entry list) : expr =
          | MPair (k, v) -> EApply (ESymbol "map-insert", [acc; k; v]))
       init rest
 
-(* B9: parse the `handlers: { :name -> fn, ... }` clause map into (name, fn)
+(* Parse the `handlers: { :name -> fn, ... }` clause map into (name, fn)
    pairs for EWithHandler. Keys must be keyword literals (`:name`) or bare
    names; spread is not accepted. cur is the opening '{'. *)
 and parse_handler_map ps : (string * expr) list =
@@ -1066,7 +1067,7 @@ and parse_head ps c (n : string) : expr =
                  (* Dotted grant descriptors are table-driven sugar
                     (Surface_tables.grant_sugar); `needs` itself stays
                     value-open — any other expression passes through to
-                    cap-compose unchanged (A′3). *)
+                    cap-compose unchanged. *)
                  let lower_item = function
                    | EApply (ESymbol d, [e]) as orig ->
                        (match Surface_tables.find_grant_sugar d with
@@ -1098,7 +1099,7 @@ and parse_head ps c (n : string) : expr =
       EDo (check_defs ps stmts)
   | "if" when starts_expr next_t ->
       parse_if ps
-  (* B6: `cond {}` removed — flat `else if` chains and `match` with guards
+  (* `cond {}` removed — flat `else if` chains and `match` with guards
      cover it (DESIGN §6). `cond` is now an ordinary identifier. *)
   | "try" when next_t = TLBrace ->
       (* try { name <- expr; ...; final-expr } — error propagation
@@ -1107,7 +1108,7 @@ and parse_head ps c (n : string) : expr =
       skip_nl ps;
       let stmts = parse_try_stmts ps in
       lower_try_block stmts
-  (* B2: `collect {}` block form removed — `collect` is now an ordinary
+  (* `collect {}` block form removed — `collect` is now an ordinary
      function (the renamed `collect-results` primitive) used in pipelines:
      `srcs |> map(compile) |> collect`. The monad(`try`)/validation(`collect`)
      distinction lives in the library, not the grammar (DESIGN §6). *)
@@ -1167,7 +1168,7 @@ and parse_head ps c (n : string) : expr =
                 parse_error ps ("duplicate " ^ cl.Surface_tables.clause ^ ": clause in with block");
               parse_clauses caps_opt (Some m) handlers
           | Some { wrapper = Surface_tables.WHandlers; _ } when (peek2 ps).t = TColon ->
-              (* B9: `handlers: { :name -> fn, ... }` — a map-valued clause
+              (* `handlers: { :name -> fn, ... }` — a map-valued clause
                  replacing the old two-token `handler NAME: fn` key. Its
                  `:name -> fn` pairs are extracted into the handler install. *)
               advance ps; advance ps; skip_nl ps;  (* consume 'handlers' ':' *)
@@ -1202,7 +1203,7 @@ and parse_head ps c (n : string) : expr =
       in
       body
   | n when String.length n > 0 && n.[0] = '@' ->
-      (* B8: `@` attributes are removed from the language. `@cache` was a second
+      (* `@` attributes are removed from the language. `@cache` was a second
          spelling of `node`; an `@needs` that parses without narrowing authority
          is a lie in a capability language (DESIGN §6). `node` is the one, always
          structural, spelling of node-ness. *)
@@ -1500,7 +1501,7 @@ and parse_try_stmts ps : try_stmt list =
           let rhs = parse_expr ps { nl = false; cond = false } in
           loop (TryBind (name, rhs) :: acc)
       | _ ->
-          (* B7: postfix `?` is removed. `<-` is the one propagation spelling.
+          (* Postfix `?` is removed. `<-` is the one propagation spelling.
              A plain `let x = expr` here is an ordinary sequential binding
              (EDefValue) scoping to the rest of the try block. *)
           let e = parse_expr ps { nl = false; cond = false } in
@@ -1550,7 +1551,7 @@ and parse_match_arms ps : (Types.pattern * expr option * expr) list =
     else if (cur ps).t = TEOF then parse_error ps "unterminated match block"
     else begin
       let pat = parse_pattern ps in
-      (* C3: an optional `if <guard>` sits between the pattern and `=>`; the
+      (* An optional `if <guard>` sits between the pattern and `=>`; the
          guard is parsed brace-free (cond) like an `if` condition, stopping at
          the `=>` arrow (not a spine infix, so parse_expr leaves it alone). *)
       let guard =
@@ -1712,15 +1713,15 @@ and parse_binding_group ps ~(allow_ty : bool) : (string * expr) list =
 
    A brace form denotes the s-expression DATA of its lowering: atoms quoted,
    `[ ... ]` list literals as cons chains (L9 — the same VNil-terminated value
-   the equivalent code builds, NOT a vector; see A2), maps as hash-map builds.
+   the equivalent code builds, NOT a vector), maps as hash-map builds.
    unquote(E)/splice(E) escape to a normally-parsed E. Desugars
    (and/or/assert/...) never apply here: quoted data is data.
 
    Coverage: atoms, names (reserved words included), calls, the infix operator
    levels, grouping, list literals, maps, quote/quasiquote nesting, fn/def/if/
    let/let*/do/perform/with-caps/with-config/with-handler/module/import/force/
-   delay/config/load/load-module/island/assert/node and cell literals. A3
-   added: try { ... } (parse_qq_try_stmts/qq_lower_try_block, the same
+   delay/config/load/load-module/island/assert/node and cell literals,
+   try { ... } (parse_qq_try_stmts/qq_lower_try_block, the same
    nested let/if data lower_try_block builds as real nodes), match E { pat
    => body; ... } (parse_qq_match_arms/parse_qq_pattern, the same arm/
    pattern data quote_to_value's EMatch case builds — value_to_expr gained
@@ -1731,14 +1732,14 @@ and parse_binding_group ps ~(allow_ty : bool) : (string * expr) list =
    `[a, ...rest]` (parse_qq_primary's TLBracket arm, same cons(a, rest)
    shape build_spread_list builds).
 
-   S5 ergonomics (was S1's deviation #2): `unquote(E)` is now legal in a
+   `unquote(E)` is legal in a
    let/let* BINDING NAME and a def's FUNCTION NAME (parse_qq_name_slot) —
    the two "computed name" shapes real macro templates need: a gensym'd
    hygienic temporary (`let (unquote(g) = unquote(a)) { if unquote(g) ... }`)
    and a macro-generated def name (`def unquote(name)(x) { ... }`).
-   splice(e) already worked in any list/argument/block position (parse_qq_*
-   already routed every element through parse_qq, which dispatches splice at
-   parse_qq_head) — it needed no reader change, only exercising. A3's match
+   splice(e) works in any list/argument/block position (parse_qq_*
+   routes every element through parse_qq, which dispatches splice at
+   parse_qq_head). Match
    arms are the one exception to "every element routes through parse_qq":
    patterns are always literal (parse_qq_pattern, not parse_qq) — the same
    judgment as parse_qq_name_slot's param-list restriction below, and an
@@ -1751,7 +1752,7 @@ and parse_binding_group ps ~(allow_ty : bool) : (string * expr) list =
    definition or a `needs` clause is not a shape any test exercises); node
    DEFINITIONS `node name { ... }` / `node f(p) { ... }` (only the bare node
    EXPRESSION `node { E }` is data-representable) — the workaround for all
-   three is the pre-S5 one: build the application via `list`/`cons` calls
+   three is to build the application via `list`/`cons` calls
    directly, exactly as `apply_macro`'s callers always could. Type
    annotations (fn/def param types, let binding types, return types) inside
    quasiquote{} are also still parse errors — no macro test needs a
@@ -1765,7 +1766,7 @@ and qq_chain (items : expr list) : expr =
   qq_chain_tail items qq_nil
 
 (* Like qq_chain, but the cons-chain ends in [tail] instead of qq_nil — the
-   list-literal SPREAD case (A3): `[a, ...rest]`'s data must be the SAME
+   list-literal SPREAD case: `[a, ...rest]`'s data must be the SAME
    `cons(a, rest)` shape the ordinary bracket-literal spread builds
    (build_spread_list), not always nil-terminated. *)
 and qq_chain_tail (items : expr list) (tail : expr) : expr =
@@ -1801,7 +1802,7 @@ and parse_qq ps : expr =
 (* The quasiquote reader's spine ops (see [spine] / [climb_*]). Combinations
    build quoted list-building data (`qq_chain`/`qq_sym`) instead of AST nodes;
    `|>` is illegal (not representable as data); infix peeks are transparent to
-   newlines (nl=true) but the postfix peek is NOT (nl=false, the A3 fix): a
+   newlines (nl=true) but the postfix peek is NOT (nl=false): a
    bare `(`/`[` opening the NEXT line must never be swallowed as this primary's
    postfix call/index — a qq match-arm body or try-statement rhs sits in
    exactly such a position (`v + 1` on one line, `[:err, e] => 0` on the next
@@ -1821,7 +1822,7 @@ and qq_spine () : spine = {
   s_index      = parse_qq;
   s_int_index  = (function EQuote (ELiteral (VInt _)) -> true | _ -> false);
   s_call       = (fun e elems ->
-    (* C2 in quasiquote: build the SAME `(apply f (list …) rest …)` data the
+    (* In quasiquote: build the SAME `(apply f (list …) rest …)` data the
        normal reader lowers to, in quoted form — `apply`/`list` are ordinary
        symbols, so value_to_expr reconstructs the identical EApply after macro
        expansion (parity is free, no special reflection case). *)
@@ -1897,9 +1898,9 @@ and parse_qq_primary ps : expr =
   | TLBracket ->
       (* L9: [ ... ] is the list literal — lists are the default collection.
          The template must build the SAME value the equivalent code builds
-         (a cons-chain list, VNil-terminated), not a vector (A2). A3 adds
-         surface spread `[a, ...rest]`: mirrors parse_bracket_elems /
-         build_spread_list (:1209-1253) exactly, only routing every
+         (a cons-chain list, VNil-terminated), not a vector. Also
+         handles surface spread `[a, ...rest]`: mirrors parse_bracket_elems /
+         build_spread_list exactly, only routing every
          element (and the spread target) through parse_qq instead of
          parse_expr, so unquote/splice work in any position — including
          `...unquote(xs)` to splice a REAL runtime list value as the tail,
@@ -1956,7 +1957,7 @@ and parse_qq_primary ps : expr =
             ~parse_elem:(fun () -> parse_qq ps)
             ~mk_spread_sym:(fun s -> qq_sym s)
         in
-        (* B3: map SPREAD is a documented quasiquote exclusion (SPEC B.7).
+        (* Map SPREAD is a documented quasiquote exclusion (SPEC B.7).
            A quasiquote map is built eagerly (quasiquote_walk does not descend
            into a VMap), so a spread's `map-merge` would run before unquotes
            are substituted. Plain `{ k -> v }` literals parse unchanged. *)
@@ -1971,10 +1972,10 @@ and parse_qq_primary ps : expr =
   | TName "nil" -> advance ps; EQuote (ELiteral VNil)
   | TName n -> parse_qq_head ps n
 
-(* S5 ergonomics: a "name slot" inside a qq_head shape (a let/let* binding
+(* A "name slot" inside a qq_head shape (a let/let* binding
    name, or a def's function name) — ordinarily a bare identifier, quoted
-   verbatim (qq_sym), OR `unquote(E)`, lifting S1's deviation #2 to the
-   extent macros actually need it: the canonical gensym hygiene pattern
+   verbatim (qq_sym), OR `unquote(E)`, to
+   the extent macros actually need it: the canonical gensym hygiene pattern
    `let (unquote(g) = unquote(a)) { ... }` (a macro's temp binding, named at
    expansion time) and a macro-computed def name (`def unquote(name)(x)
    { ... }`, e.g. `defadder`). Parameter LISTS stay literal-names-only —
@@ -2079,15 +2080,15 @@ and parse_qq_head ps (n : string) : expr =
                                    ^ string_of_btok t))
        | _ -> ps.pos <- save; qq_chain [qq_sym "if"; cond; then_b])
   | "try" when next_t = TLBrace ->
-      (* A3: try { ... } — build the SAME nested let/if DATA shape
-         lower_try_block builds as real expr nodes (:1322-1342), just with
+      (* try { ... } — build the SAME nested let/if DATA shape
+         lower_try_block builds as real expr nodes, just with
          qq_chain/qq_sym instead of ELet/EIf/EApply, and every
          bind/statement rhs routed through parse_qq (so unquote/splice
          work in a try statement's expression position). fresh_try_var is
          the SAME global counter the normal path uses (reset once per
          top-level form, read_string's try_counter := 0) — sharing it here
-         keeps A1's determinism guarantee (a form's LAW-20 hash depends
-         only on the form, not on how many try blocks preceded it) intact
+         keeps a form's LAW-20 hash depending
+         only on the form, not on how many try blocks preceded it, intact
          whether the try block was written directly or inside a
          quasiquote template. *)
       advance ps;
@@ -2095,13 +2096,12 @@ and parse_qq_head ps (n : string) : expr =
       let stmts = parse_qq_try_stmts ps in
       qq_lower_try_block stmts
   | "match" when starts_expr next_t ->
-      (* A3: match E { pat => body; ... } — build the SAME DATA shape
+      (* match E { pat => body; ... } — build the SAME DATA shape
          quote_to_value's OWN EMatch case builds (types.ml, `(match
          scrutinee ((pat1 body1) ...))`, arm patterns encoded exactly as
          quote_pattern does), so a macro-expanded template reconstructs a
-         real EMatch via the matching value_to_expr "match" case added
-         alongside this (A3 also had to add that inverse — it didn't
-         exist before, since EMatch is a first-class AST node, not sugar
+         real EMatch via the matching value_to_expr "match" case (this had
+         to add that inverse, since EMatch is a first-class AST node, not sugar
          over existing forms, unlike try/if/do). Patterns stay fully
          literal (parse_qq_pattern) — no unquote in pattern position, same
          judgment as parse_qq_name_slot's param-list restriction: no macro
@@ -2196,7 +2196,8 @@ and parse_qq_head ps (n : string) : expr =
   | _ when String.length n > 0 && n.[0] = '$'
            && (match Surface_tables.find_head (String.sub n 1 (String.length n - 1)) with
                | Some h -> h.Surface_tables.qq_legal | None -> false) ->
-      (* $KIND(args) inside quasiquote — A′1 parity. Same table, same template,
+      (* $KIND(args) inside quasiquote, same table, same template as the
+         normal reader, so a head added once exists in both by construction.
          args routed through parse_qq so unquote/splice work in argument
          position; the built value equals what the bare form lowers to. *)
       let kind = String.sub n 1 (String.length n - 1) in
@@ -2218,8 +2219,8 @@ and parse_qq_cond ps : expr =
   (* reuse the qq precedence chain; a top-level '{' simply stops it *)
   parse_qq ps
 
-(* A3: try { ... } inside quasiquote — parse_try_stmts's exact grammar
-   (:1259-1317), with every rhs/bare-expr routed through parse_qq instead
+(* try { ... } inside quasiquote — parse_try_stmts's exact grammar,
+   with every rhs/bare-expr routed through parse_qq instead
    of parse_expr (unquote/splice work in a statement's expression
    position; bind NAMES stay bare identifiers, same convention as
    parse_qq_name_slot — no macro test needs a computed try-bind name). *)
@@ -2244,7 +2245,7 @@ and parse_qq_try_stmts ps : try_stmt list =
           let rhs = parse_qq ps in
           loop (TryBind (name, rhs) :: acc)
       | _ ->
-          (* B7: postfix `?` removed; parity with the normal try path. *)
+          (* Postfix `?` removed; parity with the normal try path. *)
           let e = parse_qq ps in
           if (cur ps).t = TName "?" && (cur ps).glued then
             parse_error ps
@@ -2254,7 +2255,7 @@ and parse_qq_try_stmts ps : try_stmt list =
   in
   loop []
 
-(* A3: the qq analogue of lower_try_block (:1322-1342) — SAME nested
+(* The qq analogue of lower_try_block — SAME nested
    let/if structure, built as quoted DATA (qq_chain/qq_sym) instead of
    literal ELet/EIf/EApply nodes, so `value_to_expr` (or the runtime
    `quasiquote` builtin, for a non-macro use) reconstructs exactly what
@@ -2282,9 +2283,9 @@ and qq_lower_try_block (stmts : try_stmt list) : expr =
   in
   build stmts
 
-(* A3: a single pattern inside a qq `match` arm — parse_pattern's exact
-   grammar (:1375-1440), built as the quoted-DATA shape quote_pattern
-   produces for that pattern (types.ml :860-875: `_`/`(lit v)`/`(var
+(* A single pattern inside a qq `match` arm — parse_pattern's exact
+   grammar, built as the quoted-DATA shape quote_pattern
+   produces for that pattern (types.ml: `_`/`(lit v)`/`(var
    "name")`/`(list (pats...) rest)`/`(tagged "tag" pats...)`), so
    value_to_pattern (its inverse, added alongside the "match" case in
    value_to_expr) reconstructs the identical Types.pattern after macro
@@ -2360,8 +2361,8 @@ and parse_qq_pattern ps : expr =
   | _ ->
       parse_error ps ("expected pattern, got " ^ string_of_btok k.t)
 
-(* A3: match arms inside quasiquote — parse_match_arms's grammar
-   (:1352-1372), built as a qq list of (pattern body) 2-element arms,
+(* Match arms inside quasiquote — parse_match_arms's grammar,
+   built as a qq list of (pattern body) 2-element arms,
    exactly the shape quote_to_value's EMatch case builds for `arms`. *)
 and parse_qq_match_arms ps : expr =
   let rec skip_seps () =
@@ -2375,7 +2376,7 @@ and parse_qq_match_arms ps : expr =
     else if (cur ps).t = TEOF then parse_error ps "unterminated match block in quasiquote"
     else begin
       let pat = parse_qq_pattern ps in
-      (* C3: optional `if guard` before `=>`, built as the 3-element arm
+      (* Optional `if guard` before `=>`, built as the 3-element arm
          (pat guard body) quote_to_value's EMatch case emits for a guarded arm
          (a guardless arm stays the 2-element (pat body)). *)
       let guard =
@@ -2415,7 +2416,7 @@ let read_string ?(source : string = "<?>") (input : string) : expr list =
     match (cur ps).t with
     | TEOF -> ()
     | _ ->
-        (* A1: fresh temp-var numbering per top-level form, so a form's
+        (* Fresh temp-var numbering per top-level form, so a form's
            LAW-20 hash depends only on the form (and its location), never on
            how many `try` blocks were parsed earlier in the process/file. *)
         try_counter := 0;
@@ -2439,17 +2440,16 @@ let read_one ?(source : string = "<?>") (input : string) : expr =
   | [] -> failwith (Printf.sprintf "empty input at %s:1" source)
   | _ -> failwith (Printf.sprintf "multiple expressions at %s:1" source)
 
-(* ---- Extension dispatch (M7 S3: flipped; M7 S4: `-e` joins the default) ----
+(* ---- Extension dispatch ----
 
-   `.pp` and `.ppb` read with the brace reader (`.pp` is now the default
+   `.pp` and `.ppb` read with the brace reader (`.pp` is the default
    surface; `.ppb` remains a permanent alias — tests/054's fixtures use it).
    `.ppl` ("the AST form") reads with the sexpr reader — sexpr is demoted
    from "the syntax" to "the AST", still fully supported forever (it is the
    macro layer: `quote`/`defmacro` still traffic in sexpr data). The reader's
    own "<?>" default label — reached ONLY by `pp -e` (repl.ml's
    execute_string/execute_string_bytecode, called with no ~source, i.e. no
-   real file at all) — now also reads braces, per M7 S4 "-e takes braces"
-   (docs/M7-SYNTAX.md). Synthetic glue source tags main.ml builds for itself
+   real file at all) — also reads braces. Synthetic glue source tags main.ml builds for itself
    (e.g. "<stdlib:list.pp>", "<domain-glue:fs>" — literally sexpr text,
    `(load ...)`) are NOT this label and keep falling through to the sexpr
    reader untouched. The interactive REPL no longer reaches this dispatcher
@@ -2473,7 +2473,7 @@ let read_dispatch ?(source : string option) ~(path : string) (input : string)
       if file_uses_braces path then read_string input
       else Reader.read_string input
 
-(* ---- REPL multi-line continuation (M7 S4) ----
+(* ---- REPL multi-line continuation ----
 
    Whether [input] is still an open form that needs more lines before it can
    be read — used by repl.ml's read_form to decide whether to keep

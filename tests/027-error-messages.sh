@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# tests/027 — error-message ergonomics (ROADMAP §1, LAW 29 / D12):
+# tests/027 — error-message ergonomics: errors carry source locations,
+# byte-identical across both backends (SPEC law 29):
 #   (a) a runtime error escaping ANY top-level form reports that form's
 #       file:line (not just def/fn bodies), identically in both backends;
 #   (b) arity errors name the function being called;
@@ -88,7 +89,7 @@ if [ "$ec" -eq 1 ] && grep -q '^pp: error: ' "$TMP/e1" && ! grep -q "Fatal error
 else bad "clean-error-line" "exit=$ec" "stderr: $(cat "$TMP/e1")"; fi
 
 # ---- (g) an error inside a `load`ed file cites THAT file's line, not the
-# loading form's (D12 residual, closed) — both backends, byte-identical ----
+# loading form's — both backends, byte-identical ----
 cat > "$TMP/g-inner.pp" <<'EOF'
 print("inner-before")
 car(5)
@@ -102,10 +103,10 @@ load("$TMP/g-inner.pp")
 EOF
 assert_err_both "loaded-file-location" "$TMP/g-outer.pp" 'car expects a pair at .*g-inner\.pp:2'
 
-# ---- (h) M7 S4: LAW 29 error text is byte-identical across surfaces — the
-# SAME program (case (a)'s toplevel-location), authored in .ppl (the sexpr/
-# AST surface, still fully supported) instead of the now-default brace
-# surface, produces the identical message text modulo only the file name ----
+# ---- (h) error text is byte-identical across surfaces — the SAME program
+# (case (a)'s toplevel-location), authored in .ppl (the sexpr/AST surface,
+# still fully supported) instead of the now-default brace surface, produces
+# the identical message text modulo only the file name (SPEC law 29) ----
 cat > "$TMP/a.ppl" <<'EOF'
 (def (f x) (+ x 1))
 (print (f 1))

@@ -1,9 +1,9 @@
-# demo/deploy.pp — M6 devops-complete demo: the dispatcher.
+# demo/deploy.pp — the dispatcher for a devops deploy demo.
 #
 # ONE pure function from input cells — the greeter C source (`file:`),
 # each host's greeting fixture (`file:`), each host's secret key
-# (`sealed:`) — to a `{host -> {domain -> desired}}` value (M5 stage C's
-# host-qualified shape). Registers NO domains itself: it is run only via
+# (`sealed:`) — to a `{host -> {domain -> desired}}` value, keyed first by
+# host and then by domain. Registers NO domains itself: it is run only via
 # `--publish-object`, so it never holds write authority — a pure plan
 # step, published by hash for every host's agent.pp to pull
 # (`--desired-object`, the tests/051 dispatcher/agent split).
@@ -14,8 +14,9 @@
 # FIXTURES-ROOT — FIXTURES-ROOT/<host>/greeting.txt          (fs:ro)
 # SECRETS-ROOT  — SECRETS-ROOT/<host>/secret.key             (secret:ro
 # — deliberately NEVER also fs:-granted on the same
-# path: M4's "both grants -> plain fs wins" rule would
-# silently un-seal it, tests/044 clause 6)
+# path: granting both fs and secret on the same path
+# would silently un-seal it, since a plain fs grant
+# wins when both are present (tests/044 clause 6)
 # HOSTS-ROOT    — HOSTS-ROOT/<host>/ is that host's fs-domain-managed
 # root (bin/, etc/) — deploy.pp never writes there
 # itself, only computes strings naming it
@@ -61,7 +62,7 @@ def greeter-build-node(greeter-c) {
 # (Runtime.sealed_pins, cleared every pass) and on the original secret
 # fixture file itself. Rotating the secret changes the `sealed:<path>`
 # cell's hash, which is what invalidates exactly THIS node's trace
-# (LAW 23b) — never another host's, whose sealed cell is a different
+# (SPEC law 23b) — never another host's, whose sealed cell is a different
 # path entirely.
 def config-node(host, fixtures-root, secrets-root) {
   node {
@@ -96,8 +97,9 @@ let (greeter-c = nth(0, argv()), fixtures-root = nth(1, argv()), secrets-root = 
 
 
 # Fan out: the shared build + every host's render, batched via the
-# batching-aware `map` BUILTIN (never list.pp's — it deliberately
-# does not shadow it, D26) so a non-serial --schedule forces them
+# batching-aware `map` BUILTIN (never list.pp's — a stdlib override used to
+# shadow this builtin and serialize what should fork in parallel, so list.pp
+# deliberately does not redefine it) so a non-serial --schedule forces them
 # all together instead of one at a time.
 
 

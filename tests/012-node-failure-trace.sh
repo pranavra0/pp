@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # pins: LAW-28
-# Regression: a node failure is a value with a trace (LAW 28), and a raising
-# thunk is not left `Evaluating` (D16).
+# Regression: a node failure is a value with a trace (SPEC law 28), and a
+# raising thunk is not left `Evaluating`.
 #
 # When a node body raises, the store records a FAILING trace — the error plus the
 # reads made up to the failure. A later force with unchanged inputs re-serves the
@@ -42,14 +42,14 @@ force(node {
 EOF
 "$PP" "$TMP/f.pp" > "$TMP/o" 2>&1; check "fail-run1-miss"  "$TMP/o" present "car expects a pair"
 "$PP" "$TMP/f.pp" > "$TMP/o" 2>&1; check "fail-run2-reserved" "$TMP/o" absent "car expects a pair"
-# D16: the re-served error must be the ORIGINAL, never "infinite recursion".
+# The re-served error must be the ORIGINAL, never "infinite recursion".
 if grep -qi "infinite recursion" "$TMP/o"; then
   echo "FAIL d16-no-fake-recursion: re-serve reported infinite recursion"; fail=1
 else
   echo "ok   d16-no-fake-recursion"
 fi
 
-# --- (2) LAW 28: failure re-runs when a recorded input changes ---
+# --- (2) a failure re-runs when a recorded input changes ---
 rm -rf "$TMP/.pp"
 printf 'V1\n' > "$TMP/d.txt"
 cat > "$TMP/fr.pp" <<EOF

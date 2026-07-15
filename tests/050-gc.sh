@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# M5 stage C: Store GC (docs/PLAN-m5-distribution.md "Store GC") — `pp gc`,
-# explicit, never automatic.
+# `pp gc` reclaims unreferenced store entries; it never runs automatically.
 #
 #   Roots = the last N recorded epochs (a NEW journal `epoch HASH` line per
 #   successful Domains.run_all pass, plus GC's own replayable manifest,
@@ -17,7 +16,7 @@
 #     visibly grows without it.
 #   - `pp gc` never deletes a live root's closure: after GC, re-running the
 #     LAST (kept) program is a pure cache hit (zero new execs) and produces
-#     the byte-identical materialized tree — the T7 claim.
+#     the byte-identical materialized tree.
 #   - a live build racing `pp gc` (a long grace period stands in for "the
 #     concurrent write is still in flight"): no crash, no wrong result,
 #     subsequent rebuild byte-identical.
@@ -104,11 +103,11 @@ else
 fi
 
 # ===========================================================================
-# (3) T7 — a live parallel build (tests/038 shape) racing `pp gc`: no crash,
-# no wrong result, subsequent rebuild byte-identical. A long grace period
-# stands in for "genuinely still in flight" (over-retention is always safe;
-# the assertion is about SAFETY under the race, not about reclaiming
-# maximally in this one adversarial window).
+# (3) a live parallel build (tests/038 shape) racing `pp gc`: no crash, no
+# wrong result, subsequent rebuild byte-identical (case T7 below). A long
+# grace period stands in for "genuinely still in flight" (over-retention is
+# always safe; the assertion is about SAFETY under the race, not about
+# reclaiming maximally in this one adversarial window).
 # ===========================================================================
 rm -rf "$TMP/.pp" "$OUT"; mkdir -p "$OUT"
 for i in $(seq 1 3); do run_iter "$i"; done
@@ -147,13 +146,12 @@ else
 fi
 
 # ===========================================================================
-# (3b) MASTERPLAN M5 exit criterion 4, literally: "store size stays bounded
-# across N --watch iterations under GC" — one long-running `pp --watch
-# --reconcile` process (a real long-running substrate, not just repeated
-# one-shot invocations) with churn (a trigger file's content changes each
-# tick), while `pp gc` runs CONCURRENTLY from a separate process against
-# the SAME store — a genuine watch-loop/GC race, not merely simulated by
-# separate invocations like (1)/(3) above.
+# (3b) store size stays bounded across N --watch iterations under GC: one
+# long-running `pp --watch --reconcile` process (a real long-running
+# substrate, not just repeated one-shot invocations) with churn (a trigger
+# file's content changes each tick), while `pp gc` runs CONCURRENTLY from a
+# separate process against the SAME store — a genuine watch-loop/GC race,
+# not merely simulated by separate invocations like (1)/(3) above.
 # ===========================================================================
 rm -rf "$TMP/.pp" "$OUT"; mkdir -p "$OUT"
 TRIGGER="$TMP/trigger.txt"; echo "0" > "$TRIGGER"

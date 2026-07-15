@@ -1,40 +1,43 @@
 #!/usr/bin/env bash
-# M5 exit battery (docs/PLAN-m5-distribution.md "Exit tests"), M5 stage C
-# closing.
+# Verifies cluster distribution end to end, alongside tests/047 and
+# tests/048. Each of the following is already covered elsewhere and is not
+# repeated in this file:
 #
-#   1. 101-TU (scaled) 2-machine build, local-dir transport, byte-identical
-#      to serial — COVERED: tests/048-remote-placement.sh (an 8-TU real-cc
+#   1. A scaled 2-machine build over local-dir transport is byte-identical
+#      to a serial build — tests/048-remote-placement.sh (an 8-TU real-cc
 #      build; T6-same-tree-bytes / T6-same-desired-state-hash).
-#   2. Cross-machine hit + `pp why` redaction on the non-origin machine —
-#      COVERED: tests/047-cluster-sync.sh (B-hits-after-sync, T4-*).
-#   3. Tampered token refused (T2); LAW 23b across the wire (T3) —
-#      COVERED: tests/047-cluster-sync.sh (T2-*, T3-*).
-#   4. GC bound + T7 concurrency stress — COVERED: tests/050-gc.sh
+#   2. A cross-machine hit, and `pp why` redaction on the non-origin
+#      machine — tests/047-cluster-sync.sh (B-hits-after-sync, T4-*).
+#   3. A tampered token is refused, and authority is re-checked against
+#      the trace's read closure across the wire (SPEC law 23b) —
+#      tests/047-cluster-sync.sh (T2-*, T3-*).
+#   4. A GC size bound holds under concurrency stress — tests/050-gc.sh
 #      (gc-bounds-store-size, t7-*).
-#   5. Diagonal gains `remote` as a placement value — COVERED:
-#      tests/048-remote-placement.sh (diagonal-remote-in-help).
+#   5. `remote` is accepted as a placement value alongside the other
+#      scheduling policies — tests/048-remote-placement.sh
+#      (diagonal-remote-in-help).
 #
-# The GAP this file closes: stage C's OWN new cross-machine seam — the
-# by-hash desired-value publish/pull path (--publish-object /
-# --desired-object) — had only ever been exercised within a single $HOME in
-# manual verification; every assertion below runs it across TWO SEPARATE
-# $HOME dirs (the tests/047/048 convention for "two machines"), combined
-# with host-qualified --member-name distribution and `pp gc` on the
-# receiving member's own store — the three stage-C pieces integrated
-# together, which no other test file does end to end.
+# The gap this file closes: the by-hash desired-value publish/pull path
+# (--publish-object / --desired-object) had only ever been exercised
+# within a single $HOME in manual verification; every assertion below
+# runs it across TWO SEPARATE $HOME dirs (the tests/047/048 convention
+# for "two machines"), combined with host-qualified --member-name
+# distribution and `pp gc` on the receiving member's own store — the
+# three pieces integrated together, which no other test file does end to
+# end.
 #
 #   - dispatcher (A) computes a host-qualified desired-state value and
 #     PUBLISHES it (value object + its blob: refs, never fenced actions or
 #     journals) into a shared local-dir root;
 #   - member (B), a genuinely separate $HOME, PULLS it by hash and
-#     converges ONLY its own slice — re-hash-verified (T1) the same as
-#     every other synced artifact;
+#     converges ONLY its own slice — re-hash-verified the same as every
+#     other synced artifact (case T1 below);
 #   - a blob: ref embedded in the published value (the `(blob ...)`
 #     pattern) actually ships its bytes, not just the small string
 #     reference — an unequivocal check that content, not merely metadata,
 #     crossed;
-#   - a tampered published object is rejected on pull (T1, this seam's own
-#     call site);
+#   - a tampered published object is rejected on pull (case T1 below, this
+#     seam's own call site);
 #   - `pp gc` on B's store (which now holds a --desired-object-sourced
 #     epoch) replays and sweeps correctly — the one Gcroots field
 #     (gr_desired_object) no other test exercises.
@@ -114,9 +117,9 @@ else
 fi
 
 # ---------------------------------------------------------------------
-# T1 on this seam's own call site: a tampered published object is rejected
-# on pull, never silently accepted (the same choke point as every other
-# synced artifact — transport.ml's ingest_object).
+# A tampered published object is rejected on pull, never silently
+# accepted (the same choke point as every other synced artifact —
+# transport.ml's ingest_object). Case T1 below.
 # ---------------------------------------------------------------------
 NODEC="$TMP/nodeC"; mkdir -p "$NODEC"
 SHARED2="$TMP/shared2"

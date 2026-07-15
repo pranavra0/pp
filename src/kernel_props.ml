@@ -1,4 +1,4 @@
-(* MASTER-PLAN A″2 — derived generators + kernel properties.
+(* Derived generators + kernel properties.
 
    Three QuickCheck-style generators (one each for [Types.value], [pattern]
    and [expr]) and the kernel properties that run under them:
@@ -6,19 +6,19 @@
      (i)   INJECTIVITY   distinct ASTs ⇒ distinct content hash
                          (hash_value / hash_pattern / hash_expr — the LAW-20
                          key; a collision is a wrong-cache-serve bug, the
-                         exact class A″1 length-framed hash_concat to kill).
+                         exact class the length-framed hash_concat below exists to kill).
      (ii)  QUOTE RT      rt = value_to_expr ∘ quote_to_value is TOTAL and
                          IDEMPOTENT — rt (rt e) ≡ rt e (hash-equal). The macro
                          reflect/reify projection reaches a fixpoint in one
                          pass, so a macro re-expanding its own output never
-                         drifts (M3/D10). Expr-level identity rt e ≡ e is NOT a
+                         drifts. Expr-level identity rt e ≡ e is NOT a
                          law — see quote_roundtrip.
      (iii) PRINT RT      read (print e) is hash-equal to e (locations stripped)
                          on each surface, over the reader-image subset the
                          per-form surface table declares round-trippable; a
                          printer Unprintable is a counted skip, a crash or drift
                          is a failure.
-     (iv)  CAPS (A″6)    a generator over capability VALUES, exhaustive over the
+     (iv)  CAPS          a generator over capability VALUES, exhaustive over the
                          kind variant (same ratchet), and the algebra
                          properties: no user-reachable attenuation widens
                          authority (cap_restrict ⊆ its input; cap-compose is the
@@ -27,7 +27,7 @@
                          ambient does not), and the node-boundary ban catches an
                          embedded capability/sealed value at any depth.
 
-   THE RATCHET (DESIGN §1 principle 8 — coverage derived, never enumerated).
+   THE RATCHET (coverage derived, never enumerated).
    Each type has a mirror tag enum and two EXHAUSTIVE matches:
 
      * [*_kind : t -> tag]        — adding a constructor makes this
@@ -58,7 +58,7 @@ let pick (st : rng) (a : 'a array) = a.(ri st (Array.length a))
 (* Two generation modes. [Adv]ersarial content stresses the hashers — ':'
    (the old hash_concat delimiter), the "absent" env sentinel, length-prefix
    look-alikes ("10:xx"), empty strings, multi-byte chars, the non-finite
-   floats — the exact shapes A″1's length-framing must keep distinct.
+   floats — the exact shapes hash_concat's length-framing must keep distinct.
    [Faithful] content is what the two surfaces can actually spell (valid
    identifiers, finite floats, no reserved call heads), so the printer
    round-trip property tests real reader-image ASTs rather than the printer's
@@ -156,7 +156,7 @@ let value_surface : value_tag -> value_surface = function
   | Vt_thunk -> Runtime_only "mutable evaluation cell"
   | Vt_envmap -> Runtime_only "module export table"
   | Vt_bytecode -> Runtime_only "compiled unit"
-  | Vt_sealed -> Runtime_only "M4 confidential bytes, redacted surface"
+  | Vt_sealed -> Runtime_only "confidential bytes, redacted surface"
 
 let all_value_tags =
   [ Vt_nil; Vt_bool; Vt_int; Vt_float; Vt_string; Vt_keyword; Vt_symbol;
@@ -228,7 +228,7 @@ and gen_value_of_tag ~(mode : mode) (st : rng) (depth : int) (tag : value_tag) :
 
 (* ========================================================= CAPABILITIES == *)
 
-(* MASTER-PLAN A″6 — the capability algebra as a property, not a unit test.
+(* The capability algebra as a property, not a unit test.
    The generator is exhaustive over the capability kind variant (same compiler
    ratchet as the AST generators: a new capability constructor makes [cap_kind]
    non-exhaustive, then [gen_cap_of_tag]), and every property below runs over
@@ -427,8 +427,9 @@ let expr_surface : expr_tag -> expr_surface = function
   | Et_literal | Et_symbol | Et_if | Et_let | Et_fn | Et_apply | Et_quote
   | Et_force | Et_with_caps | Et_perform | Et_with_handler | Et_delay | Et_node
   | Et_defnode | Et_do | Et_def | Et_defvalue | Et_letstar -> both
-  (* match: braces has surface + reader (A3); sexpr surface for match is C4,
-     still open — so the sexpr reader can't re-read a printed match. *)
+  (* match: the brace surface has both a printer and a reader for it; the
+     sexpr surface still has no match spelling defined, so the sexpr
+     reader can't re-read a printed match. *)
   | Et_match -> { print_sexpr = false; print_braces = true;
                   why = "sexpr match surface is C4 (open)" }
   (* forms with no round-trippable surface spelling on either side *)
@@ -591,7 +592,8 @@ let sub_exprs (e : expr) : expr list =
 type surface_kind = Sexpr | Braces
 
 (* An expr round-trips on [surface] only if it AND every sub-expr does — a let
-   whose body is a match is not sexpr-round-trippable (C4). *)
+   whose body is a match is not sexpr-round-trippable (match has no sexpr
+   surface spelling). *)
 let rec printable (surface : surface_kind) (e : expr) : bool =
   let s = expr_surface (expr_kind e) in
   let self = match surface with Sexpr -> s.print_sexpr | Braces -> s.print_braces in
@@ -656,7 +658,7 @@ type failure = { prop : string; detail : string }
 let failures : failure list ref = ref []
 let fail prop detail = failures := { prop; detail } :: !failures
 
-(* ---- (iv) capability algebra (A″6) -------------------------------------- *)
+(* ---- (iv) capability algebra --------------------------------------------- *)
 
 let cap_checks = ref 0
 
@@ -760,7 +762,7 @@ let injectivity (type a) ~(name : string) ~(hash : a -> string)
 
 (* ---- (ii) quote round-trip --------------------------------------------- *)
 
-(* The macro inverse law (M3/D10).  Let rt = value_to_expr ∘ quote_to_value —
+(* The macro inverse law.  Let rt = value_to_expr ∘ quote_to_value —
    the reflect-then-reify projection a macro applies to a captured form.  Two
    guarantees, both total and true for every generated expr:
 
@@ -850,10 +852,10 @@ let print_roundtrip (e : expr) : unit =
   one Braces ~name:"braces"
     ~print:Printer_braces.print_program ~read:Reader_braces.read_string
 
-(* ---- pinned near-miss corpus (A″1's collision witnesses, as ASTs) ------- *)
+(* ---- pinned near-miss corpus (collision witnesses, as ASTs) ------------- *)
 
-(* Shapes that collided (or would, absent length-framing) under the pre-A″1
-   delimiter joins. Each PAIR must hash distinctly. *)
+(* Shapes that collided (or would, absent length-framing) under a plain
+   delimiter join. Each PAIR must hash distinctly. *)
 let near_miss_pairs : (expr * expr) list =
   [ (* argv-style: ["a","b"] vs ["a:b"] — the ':' join ambiguity *)
     (EApply (ESymbol "f", [ELiteral (VString "a"); ELiteral (VString "b")]),
@@ -868,7 +870,7 @@ let near_miss_pairs : (expr * expr) list =
              [ (PList ([PVariable "a"; PVariable "b"], None), None, ESymbol "a") ]),
      EMatch (ESymbol "x",
              [ (PList ([PVariable "ab"], None), None, ESymbol "a") ]));
-    (* guardless vs guarded arm on the same pattern must not collide (C3) *)
+    (* guardless vs guarded arm on the same pattern must not collide *)
     (EMatch (ESymbol "x", [ (PVariable "a", None, ESymbol "a") ]),
      EMatch (ESymbol "x", [ (PVariable "a", Some (ESymbol "a"), ESymbol "a") ]));
     (* let binding name/value framing: {a: 1} vs a binding named "a:1" region *)
@@ -929,7 +931,7 @@ let run ~(seed : int) ~(count : int) : bool =
   (* (iii) printer round-trip (hash equality, both surfaces) *)
   List.iter print_roundtrip faith_exprs;
 
-  (* (iv) capability algebra (A″6) — narrowing, union, ⊆-gate soundness, ban *)
+  (* (iv) capability algebra — narrowing, union, ⊆-gate soundness, ban *)
   cap_properties st ~count;
 
   (* report *)

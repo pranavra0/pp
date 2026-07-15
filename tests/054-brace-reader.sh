@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# tests/054 — M7 S1: the brace reader (SPEC Appendix B), the location-
-# preserving sexpr->brace printer, and the 2-readers x 2-backends gate.
+# tests/054 — the brace reader (SPEC Appendix B): a location-preserving
+# sexpr<->brace printer, tested across both readers and both backends.
 #
 #   (a) a nontrivial .ppb program (infix precedence, pipeline, cell literals,
 #       and/or, map/vector literals, do/let/let*/if-else, node + needs,
@@ -9,14 +9,14 @@
 #       under both backends;
 #   (b) cross-surface loading: a .pp loads a .ppb and vice versa; a pinned
 #       island whose tree ships entry.ppb imports from a .pp program, and a
-#       .ppb program imports an island via the string-URI spelling (L55);
-#   (c) assert parity (LAW 29 / Appendix B §B.4): the SAME assert at the same
-#       line produces the same desugared message in both surfaces (condition
+#       .ppb program imports an island via the string-URI spelling;
+#   (c) assert parity (SPEC law 29): the SAME assert at the same line
+#       produces the same desugared message in both surfaces (condition
 #       rendered in s-expression notation), modulo only the file name;
 #   (d) `pp --emit-braces` on a real sexpr test file produces a .ppb whose
 #       output is byte-identical on both backends to the .pp original's;
-#   (e) `pp --roundtrip-braces` (AST + LAW-20 hash equality through the
-#       printer and the second reader) holds for every .pp in the tree;
+#   (e) `pp --roundtrip-braces` (AST + hash equality through the printer and
+#       the second reader, SPEC law 20) holds for every .pp in the tree;
 #   (f) the differential fuzzer's round-trip gate passes on a few hundred
 #       full-grammar programs (2 readers x 2 backends).
 set -uo pipefail
@@ -37,13 +37,12 @@ ok()  { echo "ok   $1"; }
 bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
 
 # ---- (a) the nontrivial .ppb program, both backends ----
-# covers: comments, ';' separators, infix precedence, pipeline (L18), infix
-# and/or (right-assoc desugar), operator-as-value (L7), n-ary call form
-# (B.7 #9), vector/map literals (L9/L10), quote{}/quasiquote{}/unquote/splice
-# (L56–L59), LAW-32 annotations (L30/L31), node+needs (L35), reconcile (L61),
-# do (L36), let*/let groups with newline continuation (L23/L25), with-handler/
-# with-config/config (L42/L44/L45), defmacro (L60), kebab identifiers vs the
-# whitespace rule, if/else-if/else (L37–L39), module/import (L51/L52).
+# covers: comments, ';' separators, infix precedence, pipeline, infix
+# and/or (right-assoc desugar), operator-as-value, n-ary call form,
+# vector/map literals, quote{}/quasiquote{}/unquote/splice, type annotations
+# (SPEC law 32), node+needs, reconcile, do, let*/let groups with newline
+# continuation, with-handler/with-config/config, defmacro, kebab identifiers
+# vs the whitespace rule, if/else-if/else, module/import.
 mkdir -p "$TMP/a"
 cat > "$TMP/a/main.ppb" <<EOF
 load("$STDLIB")
@@ -162,10 +161,10 @@ else
   bad "island-string-uri-from-ppb" "pin=$PIN" "$("$PP" "$TMP/b/useisl2.ppb" 2>&1)"
 fi
 
-# ---- (b, M7 S4) both cross-surface island directions with the LITERAL
-# .pp/.ppl extensions (not just their .ppb alias above) — docs/M7-SYNTAX.md
-# S4's exit criterion: "a .ppl island loads from a .pp program AND a .pp
-# island loads from a .ppl program" ----
+# ---- (b, continued) both cross-surface island directions with the
+# LITERAL .pp/.ppl extensions (not just their .ppb alias above): a .ppl
+# island loads from a .pp program AND a .pp island loads from a .ppl
+# program ----
 mkdir -p "$TMP/b/isl2"
 cat > "$TMP/b/isl2/entry.ppl" <<'EOF'
 (def isl2-x 41)
@@ -224,9 +223,9 @@ else
 fi
 
 # ---- (d) emit-braces on a real file: same output, both backends ----
-# M7 S3: the tree is brace-surface now; derive the sexpr (.ppl) form first,
-# then emit braces from IT — the emitted program must still behave
-# byte-identically to the original.
+# The tree is brace-surface; derive the sexpr (.ppl) form first, then emit
+# braces from IT — the emitted program must still behave byte-identically
+# to the original.
 "$PP" fmt --to-sexpr "$ROOT/tests/007-phase0-laws.pp" > "$TMP/007.ppl" 2>"$TMP/emit.err" \
   || bad "fmt-to-sexpr-007" "$(cat "$TMP/emit.err")"
 "$PP" --emit-braces "$TMP/007.ppl" > "$TMP/007.ppb" 2>"$TMP/emit.err"
@@ -242,11 +241,11 @@ for be in "" "--bytecode"; do
   fi
 done
 
-# ---- (e) round-trip (AST + LAW-20 hash) over the whole tree ----
-# M7 S3: the tree is brace-surface; --roundtrip-braces takes sexpr input
-# (it round-trips sexpr -> braces -> re-read), so derive each file's .ppl
-# form first — the property gated is unchanged: every tree file's AST
-# survives the printer/second-reader round trip with LAW-20 hash equality.
+# ---- (e) round-trip (AST + hash equality, SPEC law 20) over the whole tree ----
+# The tree is brace-surface; --roundtrip-braces takes sexpr input (it
+# round-trips sexpr -> braces -> re-read), so derive each file's .ppl form
+# first — the property gated is unchanged: every tree file's AST survives
+# the printer/second-reader round trip with hash equality.
 rt_fail=0
 mkdir -p "$TMP/rt"
 for f in "$ROOT"/tests/[0-9]*.pp "$ROOT"/tests/gen-cproject.pp \

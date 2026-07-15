@@ -1,4 +1,5 @@
-(* pp Q13 generic domain orchestration (PLAN-m4-cells.md §Q13).
+(* pp generic domain orchestration — a domain is an observe/diff/apply
+   triple of ordinary pp functions running under core-enforced discipline.
 
    Everything TRUSTED about running a registered write-domain lives here:
    the journal bracket, the observed_all suspension, cap threading into
@@ -85,7 +86,7 @@ let plan_summary (plan : value) : (string * string) list =
   | Some other -> failwith ("domain diff: :summary must be a list/vector of [key value] pairs, got "
                             ^ string_of_value other)
 
-(* ---- Plan caching (Q4's "plans cache", falling out of the existing store) ----
+(* ---- Plan caching (falls out of the existing store, no new mechanism) ----
 
    key = H("domain-plan", diff-code-hash, observed-hash, desired-hash).
    diff runs under EMPTY caps (purity), so every world-read it could
@@ -94,7 +95,8 @@ let plan_summary (plan : value) : (string * string) list =
    is sound: Store.hit's classify treats an empty reads list as vacuously
    `Usable forever, so a hit here means exactly "same key ⇒ same plan",
    which is exactly what a pure function's cache should mean. Wiring a
-   synthetic `(node ...)` AST here (the alternative the contract offers)
+   synthetic `(node ...)` AST here (the alternative of routing this through
+   the ordinary node-caching machinery)
    would need a fabricated thunk/env solely to get a key and a store slot
    this direct Store.hit/store_object/store_trace path already gives for
    free, with no AST to keep in sync with a node body that doesn't exist —
@@ -150,7 +152,7 @@ let with_domain (name : string) (cap : capability) (f : unit -> 'a) : 'a =
   Runtime.with_ref Runtime.current_domain (Some name) (fun () ->
     Runtime.with_ref Runtime.current_capabilities [cap] f)
 
-(* Q13's own load-bearing wall (found the hard way): observe (and, to be
+(* A load-bearing wall (found the hard way): observe (and, to be
    safe across --watch --stabilize's keep_thunks, apply) is a call to a
    FIXED closure with NO varying arguments — a 0-ary observe, or an apply
    whose closure/env never changes between a pass's own two calls that
@@ -195,7 +197,7 @@ let run_domain ~(name : string) ~(entry : Runtime.domain_entry) ~(desired : valu
     | Some a -> a
     | None -> assert false
   in
-  (* Load-bearing suspension (PLAN-m4-cells.md): a domain's own bookkeeping
+  (* Load-bearing suspension: a domain's own bookkeeping
      during observe/diff/apply must never trip its own stratification scan —
      exception-safe with_ref, never a hand-rolled save/restore. Does NOT
      suspend trace_stack: node caching inside a domain's fns keeps working. *)
@@ -225,7 +227,7 @@ let run_domain ~(name : string) ~(entry : Runtime.domain_entry) ~(desired : valu
    register-domain itself simply returns this shape directly, N domains,
    one evaluation). Every name must resolve to a registered WRITE domain
    (a probe named here is a hard error, not silently skipped). *)
-(* M5 stage C (docs/PLAN-m5-distribution.md "Store GC"): recorded ONCE per
+(* Recorded ONCE per
    SUCCESSFUL pass (after every domain's run_domain has completed without
    raising) — [forced] is the exact fully-forced {domain -> desired} (or,
    under host-qualified distribution, {host -> {domain -> desired}}) value

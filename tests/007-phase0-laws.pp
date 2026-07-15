@@ -1,5 +1,5 @@
-# Phase 0 semantic-law smoke tests.
-# Each section exercises one LAW that is claimed to hold.
+# Smoke tests for core semantic laws.
+# Each section runs a small program that demonstrates one law and checks it holds.
 
 print("=== LAW 1: mutual let sees siblings ===")
 let (y = x + 1, x = 1) { print("mutual let y =>", y) }

@@ -1,6 +1,9 @@
-(* pp domain primitives (Q13, PLAN-m4-cells.md "primitives gap list").
+(* pp domain primitives.
 
-   The TRUSTED MECHANICS moved out of the old reconciler.ml/supervisor.ml:
+   A domain is an observe/diff/apply triple of ordinary pp functions
+   (registered via `register-domain`) running under core-enforced discipline;
+   these are the TRUSTED MECHANICS that used to live in reconciler.ml/
+   supervisor.ml:
    atomic file materialization, fork/exec/reap, and domain-private state
    persistence. What is NOT here is policy — no tree-walk/diff decision, no
    start/stop/restart decision; those live in stdlib/domain-fs.pp and
@@ -36,8 +39,8 @@ let has_fs_write path =
    cap-restrict), so `current_capabilities` inside observe/apply is a
    ONE-ELEMENT list whose element is a CapCompose — a flat top-level
    `function CapProcess -> true | _ -> false` scan (as process.ml's
-   pre-M4 has_process_cap does, correctly, for the historically-flat
-   ambient) would miss it. *)
+   has_process_cap did before it needed to recurse through CapCompose)
+   would miss it. *)
 let has_process_cap () =
   List.exists Capabilities.check_process !Runtime.current_capabilities
 
@@ -128,9 +131,10 @@ let remove_file (path : string) : unit =
    Scoped implicitly to Runtime.current_domain ("core knows which domain is
    running" — set by Domains.with_domain for the extent of observe/diff/
    apply). Gated on cap_subseteq of the CURRENT domain's own registered cap
-   against the ambient: during diff (threaded EMPTY caps, PLAN-m4-cells.md
-   purity requirement) this can never hold (no capability is a subset of
-   nothing unless it grants nothing), so diff calling domain-state-get/put
+   against the ambient: during diff (which runs under a threaded EMPTY
+   capability set, since diff must be pure) this can never hold (no
+   capability is a subset of nothing unless it grants nothing), so diff
+   calling domain-state-get/put
    is a Capability_error automatically — closing that side-channel with the
    SAME mechanism diff's purity already uses, not a new checker. *)
 let require_domain_context (who : string) : Runtime.domain_entry * string =

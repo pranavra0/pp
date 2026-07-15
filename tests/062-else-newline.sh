@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/062 — A4: `if`/`else` across a newline must not misparse.
+# tests/062 — `if`/`else` across a newline must not misparse.
 #
 # `parse_if` (and the quasiquote `if` handler in parse_qq_head) checked for
 # `else` without first skipping a newline. Source written as:

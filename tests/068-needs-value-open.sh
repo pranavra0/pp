@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# tests/068 — A′3: `needs` is value-open (both backends).
+# tests/068 — `needs` is value-open (both backends).
 #
 # `needs` accepts ANY expression evaluating to a capability. The dotted
 # descriptors (`fs.read`/`fs.write`/`fs.rw`) are table-driven sugar
 # (Surface_tables.grant_sugar); everything else passes through to the node's
-# with-caps wrapper unchanged — "the reader adds nothing" (SPEC L35). So a
-# NAMED grant (`let g = cap-restrict(...)`) and a COMPOSED grant
-# (`cap-compose(...)`) are first-class `needs` items, identical to the sugar.
-# The capability *kind* set stays closed (DESIGN §1 principle 7); the
-# vocabulary of named grants is open at the value level.
+# with-caps wrapper unchanged — "the reader adds nothing". So a NAMED grant
+# (`let g = cap-restrict(...)`) and a COMPOSED grant (`cap-compose(...)`) are
+# first-class `needs` items, identical to the sugar. The capability *kind*
+# set stays closed; the vocabulary of named grants is open at the value
+# level.
 #
 # This pins: (a) sugar, named, and composed grants all run and agree across
-# backends; (b) a named grant genuinely NARROWS — the ⊆ gate (LAW 22b), not
-# the reader, does the enforcing — denying a read outside its scope identically
-# on both backends.
+# backends; (b) a named grant genuinely NARROWS — the subset gate (SPEC law
+# 22b), not the reader, does the enforcing — denying a read outside its
+# scope identically on both backends.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac

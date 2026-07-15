@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# Phase-1 tooling: `pp why` (capability-filtered), --no-cache, --check.
+# Introspection and cache-control flags: `pp why` (capability-filtered),
+# --no-cache, --check.
 #
 #   why       — per node force, report to stderr why it hit or missed:
 #               first build (no trace), stale (which cell changed), hit
 #               (which trace verified), or unauthorized. The report is
-#               CAPABILITY-FILTERED (LAW 23c): a cell the caller has no
+#               CAPABILITY-FILTERED (SPEC law 23c): a cell the caller has no
 #               authority over is redacted, so `why` cannot be used to probe
 #               what a broader caller read.
 #   --no-cache — skip cache READS (every node recomputes) but still write
 #               fresh results/traces.
-#   --check   — determinism audit (LAW 38): after computing a node, run its
+#   --check   — determinism audit (SPEC law 38): after computing a node, run its
 #               body a second time and compare result hashes; a divergence
 #               flags the node as volatile and the run exits nonzero.
 #

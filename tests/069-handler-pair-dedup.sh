@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# tests/069 — A′5: one `with-handler(name = fn, …)` pair parser, two contexts.
+# tests/069 — one `with-handler(name = fn, …)` pair parser, two contexts.
 #
 # The pair-parsing loop used to be copied in the normal reader and the
-# quasiquote reader (MASTER-PLAN A′5's cited example). They had drifted: the
-# quasiquote copy silently accepted a trailing comma while the normal copy
-# rejected it — like every other comma list in the grammar. They are now one
-# function (Reader_braces.parse_handler_pairs), so:
+# quasiquote reader. They had drifted: the quasiquote copy silently accepted
+# a trailing comma while the normal copy rejected it — like every other
+# comma list in the grammar. They are now one function
+# (Reader_braces.parse_handler_pairs), so:
 #   (a) with-handler runs, both backends, in ordinary code;
 #   (b) a with-handler quasiquote template expands and runs identically on both
 #       backends (the pair loop builds the same data either way);

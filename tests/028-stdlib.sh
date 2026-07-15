@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# tests/028 — stdlib oracle (ROADMAP §2): expected VALUES for the new
-# primitives, plus the pieces that need process-level setup:
+# tests/028 — stdlib oracle: expected VALUES for the new primitives, plus
+# the pieces that need process-level setup:
 #   (a) string/number primitives produce the right values (not just parity);
 #   (b) argv: everything after `--` on the CLI is (argv), a list of strings;
 #   (c) env-get reads the environment, nil when absent;

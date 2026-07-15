@@ -3,7 +3,7 @@
    A cell is one observable unit of the world a node can read; a trace records
    (cell, observed-hash) pairs and a hit re-observes them (SPEC LAW 21). Cells
    are persisted as quoted strings inside trace lines (store.ml's canonical
-   text format, M2.2), so [to_string]/[of_string] round-trip EXACTLY — the
+   text format), so [to_string]/[of_string] round-trip EXACTLY — the
    on-disk format is frozen; this module only replaces scattered
    "file:" ^ path concatenations and prefix-sniffing cascades with one
    constructor/parser pair.
@@ -13,10 +13,10 @@
    the naming.
 
    File-cell paths are canonicalized before they ever reach [to_string]
-   (Runtime.canonical_path — SPEC LAW 23 / DESIGN §2.1: absolute realpath,
+   (Runtime.canonical_path — SPEC LAW 23: absolute realpath,
    no trailing slash), so a canonical path always starts with '/'. That
    invariant RESERVES the grammar for a future host-qualified form,
-   "file:<host>:<canonical-path>" (M2/MASTERPLAN): the character right after
+   "file:<host>:<canonical-path>": the character right after
    "file:" unambiguously distinguishes them — '/' means a local canonical
    path, anything else is a host token — so parsing never has to special-case
    today's local-only cells to make room for it. No host cell is implemented
@@ -24,26 +24,26 @@
 
 type t =
   | File of string         (* file contents, by canonical path (LAW 23) *)
-  | RuntimeFile of string  (* a loader read (Q6): interpreter authority, not the user's *)
-  | Tool of string         (* the command binary a `run` resolved to (D13) *)
-  | Tree of string         (* whole-tree content hash — Q2's coarse soundness floor *)
+  | RuntimeFile of string  (* a loader read: interpreter authority, not the user's *)
+  | Tool of string         (* the command binary a `run` resolved to *)
+  | Tree of string         (* whole-tree content hash — the coarse soundness floor *)
   | Stat of string         (* file predicate: presence/kind, never contents *)
   | Env of string          (* environment variable, absence included *)
   | Argv                   (* the single program-argument-list cell *)
   | Config of string       (* ambient config key observation (LAW 33) *)
   | Handler of string      (* which handler intercepted an effect (LAW 26) *)
   | Proc of string         (* supervised service: running spec hash or stopped *)
-  | Probe of string        (* M4: observer-written volatile cell, "probe:<name>" —
+  | Probe of string        (* observer-written volatile cell, "probe:<name>" —
                                driver-evaluated at most once per pass, capability-
                                free at the read site (authority was consumed by
                                the probe's own evaluation, under its registered
                                read-cap) *)
-  | Sealed of string       (* M4: sealed (confidential) read, "sealed:<canonical-
+  | Sealed of string       (* sealed (confidential) read, "sealed:<canonical-
                                path>" — hash of the secret bytes only; the bytes
                                themselves never enter the CAS (Runtime.sealed_pins,
                                in-memory-only) *)
   | Domain of { name : string; sub : string }
-                           (* Q13: a third-party registered domain's own
+                           (* a third-party registered domain's own
                               sub-cell, "domain:<name>:<sub>" — fs/proc keep
                               their existing File/Tree/Stat/Proc kinds (no
                               store-format bump); this kind exists only for

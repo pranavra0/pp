@@ -1,7 +1,7 @@
-# tests/025-def-value.pp — def x = v with a non-list head is a VALUE binding
-# (the roadmap §1 footgun fix), not a nullary closure. Differential: both
-# backends must produce identical output. The expected-output oracle lives in
-# tests/025-def-value.sh; this file pins backend parity.
+# tests/025-def-value.pp — def x = v with a non-list head is a VALUE binding,
+# not a nullary closure. Differential: both backends must produce identical
+# output. The expected-output oracle lives in tests/025-def-value.sh; this
+# file pins backend parity.
 
 # simple value bindings, sequential visibility
 let x = 5

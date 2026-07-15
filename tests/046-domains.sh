@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Q13 in-language reconciler-domain protocol (docs/PLAN-m4-cells.md §Q13) —
-# the M4 stage-2 exit criterion, exercised by a THIRD-PARTY toy domain
-# ("kv": a directory of one-file-per-key values) that pp's OWN stdlib
-# never defines — proving register-domain/domains.ml are genuinely
-# generic, not fs/proc special-cased. The kv domain is defined entirely
+# A reconciler "domain" is an observe/diff/apply triple of pp functions
+# running under core-enforced discipline, not privileged OCaml code. This
+# suite proves that with a THIRD-PARTY toy domain ("kv": a directory of
+# one-file-per-key values) that pp's OWN stdlib never defines — proving
+# register-domain/domains.ml are genuinely generic, not fs/proc
+# special-cased. The kv domain is defined entirely
 # inside each test program below via `register-domain`; it reuses the
 # same trusted primitives (tree-observe/materialize-file/remove-file)
 # domain-fs.pp uses, because those are generic fs-write-gated mechanics,
@@ -99,7 +100,7 @@ run() { "$PP" "$@" > "$TMP/out" 2>&1; }
 # =====================================================================
 # (1) cap threading: apply without the grant is a Capability_error —
 #     cap-restrict itself refuses before the domain ever runs, register-
-#     domain never sees a widened cap (LAW 22).
+#     domain never sees a widened cap (SPEC law 22).
 # =====================================================================
 KV1="$TMP/kv1"
 { kv_domain_source "$KV1"
@@ -152,9 +153,9 @@ assert "null-updated" "updated=0" present "$TMP/why-out"
 assert "null-deleted" "deleted=0" present "$TMP/why-out"
 
 # =====================================================================
-# (3) stratification (LAW 30 full form): a desired-state computation
-#     that reads its OWN domain is refused, generalized to a domain pp's
-#     own stdlib never defines.
+# (3) stratification: a desired-state computation that reads its OWN
+#     domain is refused (SPEC law 30), generalized to a domain pp's own
+#     stdlib never defines.
 # =====================================================================
 KV3="$TMP/kv3"
 mkdir -p "$KV3"

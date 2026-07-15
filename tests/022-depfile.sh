@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Q2 refinement: the depfile adapter — precise cells below the coarse floor.
+# The depfile adapter — precise cells below the coarse floor.
 #
 #   (perform run-dep! DEPFILE CMD ARG...) runs like `run`, then parses the
 #   Makefile-style depfile the tool wrote (cc -MD -MF style) and records the

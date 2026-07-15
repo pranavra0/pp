@@ -1,6 +1,6 @@
 (* pp blob: refs — "blob:<sha256>" reference detection inside an ordinary
-   pp VALUE, shared by src/remote.ml (M5 stage B) and src/store.ml (M5
-   stage C GC mark-by-replay).
+   pp VALUE, shared by src/remote.ml (remote placement's dispatcher-side
+   pull) and src/store.ml (GC's live-set mark-by-replay).
 
    `blob`/`blob-get` (primitives.ml) are deliberately NOT a traced cell — a
    node's small metadata result carries a "blob:<sha256>" string reference
@@ -12,9 +12,9 @@
    bytes a `(blob (slurp ...))`-pattern node's result names.
 
    Originally two copies of this exact logic lived in remote.ml alone;
-   store.ml (M5 stage C) needs the identical scan and is compiled BEFORE
-   remote.ml, so this is factored out to the one place both can reach
-   (Types-only, no other dependency) rather than duplicated a second time. *)
+   store.ml (compiled before remote.ml) needs the identical scan, so this is
+   factored out to the one place both can reach (Types-only, no other
+   dependency) rather than duplicated a second time. *)
 
 open Types
 

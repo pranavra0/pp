@@ -1,4 +1,4 @@
-(* capabilities — the authority kernel's public face (MASTER-PLAN A′4 seam).
+(* capabilities — the authority kernel's public face.
 
    The capability algebra: the typed constructors (mirroring the pp-level
    mints), the attenuation operations ([cap_restrict], [cap_compose]), the

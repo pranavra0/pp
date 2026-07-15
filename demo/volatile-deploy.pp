@@ -1,16 +1,14 @@
-# demo/volatile-deploy.pp — M6 Stage B (docs/PLAN-m6-demo.md "Stage B —
-# the pin seam"): a DELIBERATELY adversarial program, separate from the
-# devops-complete demo, whose desired-state ROOT folds a genuinely
-# volatile probe directly into its return value (demo/deploy.pp
-# deliberately keeps probes report-only — Stage A's own diagonal oracle
-# needs no pinning at all). This is the ONE shape that makes the
-# masterplan's literal "probe cells are pinned inputs" claim falsifiable:
-# without --pin-file, the published hash tracks metrics-file's current
-# content; with --pin-file (a `(pin-probe "replica-count" <value>)` line),
-# the probe's observe-fn never runs at all — Primitives.probe_value_for
-# consults Runtime.probe_values FIRST and returns the pre-seeded value
-# unconditionally, so the desired-state hash reflects the PINNED reading,
-# never whatever metrics-file says right now.
+# demo/volatile-deploy.pp — a DELIBERATELY adversarial program, separate from
+# the devops deploy demo, whose desired-state ROOT folds a genuinely volatile
+# probe directly into its return value (demo/deploy.pp deliberately keeps
+# probes report-only, so it needs no pinning at all). This is the ONE shape
+# that makes the claim "probe cells are pinned inputs" falsifiable: without
+# --pin-file, the published hash tracks metrics-file's current content; with
+# --pin-file (a `(pin-probe "replica-count" <value>)` line), the probe's
+# observe-fn never runs at all — Primitives.probe_value_for consults
+# Runtime.probe_values FIRST and returns the pre-seeded value unconditionally,
+# so the desired-state hash reflects the PINNED reading, never whatever
+# metrics-file says right now.
 #
 # argv (after `--`): METRICS-FILE SENTINEL-FILE
 # METRICS-FILE  — holds a bare integer (replica count); tests/053
