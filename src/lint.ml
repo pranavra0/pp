@@ -16,12 +16,6 @@ let warn file line msg =
 
 (* ---- Helpers ---- *)
 
-(** Extract location from an expression, if it has one. *)
-let rec get_loc (e : expr) : (string * int) option =
-  match e with
-  | ELocated (loc, _) -> Some loc
-  | _ -> None
-
 (** Strip outer ELocated wrappers to get the underlying expression. *)
 let rec strip (e : expr) : expr =
   match e with
@@ -158,180 +152,189 @@ let rec let_ladder_depth (e : expr) : int =
 
 (** Check naming conventions for a named function. *)
 let check_naming file line name body =
-  (* 1. ?-suffix predicate: should return bool *)
+  (* A `?`-suffixed name is a predicate and should return bool. *)
   if ends_with_char name '?' then begin
-    (* 1a. is-? double convention *)
+    (* `is-…?` doubles the predicate convention. *)
     if starts_with_is name then
       warn file line
         (Printf.sprintf "'%s' uses both 'is-' prefix and '?' suffix (redundant convention)"
            name);
-    (* 1b. body should look boolean *)
+    (* The body should look boolean. *)
     if not (looks_bool body) then
       warn file line
         (Printf.sprintf "'%s' ends with ? but body does not appear to return bool" name)
   end;
-  (* 2. !-suffix effect: body should contain effectful operations *)
+  (* A `!`-suffixed name is effectful and its body should perform an effect. *)
   if ends_with_char name '!' then
     if not (has_effect body) then
       warn file line
         (Printf.sprintf "'%s' ends with ! but body appears pure (no perform/! calls)" name);
-  (* 6. "loop" helper name *)
+  (* `loop` is a generic helper name. *)
   if name = "loop" then
     warn file line
       "function named 'loop' is generic; consider a descriptive name"
 
-(** Extract the nearest source line from an expression or fallback. *)
-let line_of ?(fallback=0) (e : expr) : int =
-  match get_loc e with Some (_, l) -> l | None -> fallback
+(* ---- Rules ----
 
-(** Recursively walk [e] and emit warnings.
-    [~line] is the inherited line context for expressions without their own
-    ELocated wrapper (e.g. nested ELet forms inside a def body). *)
-let rec check_expr ?(line=0) file (e : expr) : unit =
-  let line = line_of ~fallback:line e in
-  match e with
-  | ELocated (_, e') -> check_expr ~line file e'
+   Each rule inspects one (already location-stripped) node and emits any
+   warnings it applies to; a rule that does not match the node does nothing.
+   [check_expr] runs every rule at every node, then recurses into children,
+   so adding a rule is appending one row here. Rules never recurse — the
+   single traversal below owns that — so a rule cannot double-visit a subtree.
 
-  | EDef (name, _params, body) ->
-      check_naming file line name body;
-      check_result_shape file line body;
-      check_expr ~line file body
+   Order matters only where two rules can fire on the same node and line:
+   `naming` before `result-shape` on a `def`. Every other rule keys off a
+   distinct node shape (or a distinct call head), so they never collide. *)
 
-  | EDefValue (name, rhs) ->
-      (match rhs with
-       | EFn (_, body) -> check_naming file line name body
-       | _ -> ());
-      check_expr ~line file rhs
+type rule = { id : string; check : string -> int -> expr -> unit }
 
-  | ELet (bindings, body) ->
-      let depth = let_ladder_depth e in
-      if depth >= 3 then
-        warn file line
-          (Printf.sprintf "let ladder: %d consecutive single-binding lets; consider parallel let" depth);
-      List.iter (fun (_, rhs) -> check_expr ~line file rhs) bindings;
-      check_expr ~line file body
-
-  | ELetStar (bindings, body) ->
-      let depth = let_ladder_depth e in
-      if depth >= 2 then
-        warn file line
-          (Printf.sprintf "let* ladder: %d consecutive single-binding let*s; consider single let*" depth);
-      List.iter (fun (_, rhs) -> check_expr ~line file rhs) bindings;
-      check_expr ~line file body
-
-  | EApply (fn, args) -> (
-      (* L9 sweep: `[…]` reads as a list, not a vector, so
-         vector-get/vector-length applied directly to a bracket literal is a
-         leftover from the vector era and is now a type error at runtime. Flag
-         it statically. A bracket literal lowers to `(list …)`; peel any
-         ELocated wrapper the reader attached. *)
-      let peel = function ELocated (_, e') -> e' | e -> e in
-      (match fn, args with
-       | ESymbol (("vector-get" | "vector-length") as op), (first :: _) ->
-           (match peel first with
-            | EApply (ESymbol "list", _) ->
-                warn file line
-                  (Printf.sprintf
-                     "%s applied to a bracket literal `[…]`, which is a list \
-                      (L9), not a vector — use `nth`/`length`, or build a \
-                      vector with `vector(…)`" op)
-            | _ -> ())
-       | _ -> ());
-      (* `car`/`cdr` (or `first`/`rest`) applied to a tagged result
-         literal `[:ok, _]`/`[:err, _]` — destructure results with `match` or
-         `<-`, never by position (SYNTAX §15). *)
-      (match fn, args with
-       | ESymbol (("car" | "cdr" | "first" | "rest") as op), [arg]
-         when tagged_tag arg <> None ->
+(** A bracket literal `[…]` reads as a list, not a vector, so
+    vector-get/vector-length applied straight to one is a type error at
+    runtime (L9). A bracket literal lowers to `(list …)`; peel any ELocated
+    wrapper the reader attached. *)
+let rule_vector_on_list_literal file line node =
+  let peel = function ELocated (_, e') -> e' | e -> e in
+  match node with
+  | EApply (ESymbol (("vector-get" | "vector-length") as op), (first :: _)) ->
+      (match peel first with
+       | EApply (ESymbol "list", _) ->
            warn file line
              (Printf.sprintf
-                "`%s` applied to a tagged result `[:%s, …]` — destructure a \
-                 result with `match` or `<-`, never `car`/`cdr` (SYNTAX §15)"
-                op (match tagged_tag arg with Some t -> t | None -> "?"))
-       | _ -> ());
-      match fn with
-      | ESymbol "if" ->
-          (* 5. if not(nil?(x)) → if x *)
-          (match args with
-          | [cond; _then; _else] ->
-              (match cond with
-              | EApply (ESymbol "not",
-                        [EApply (ESymbol "nil?", [_arg])]) ->
-                  warn file line
-                    "suggest: use `if x` instead of `if not(nil?(x))`"
-              | _ -> ())
-          | _ -> ());
-          List.iter (check_expr ~line file) args
-      | _ ->
-          check_expr ~line file fn;
-          List.iter (check_expr ~line file) args)
+                "%s applied to a bracket literal `[…]`, which is a list \
+                 (L9), not a vector — use `nth`/`length`, or build a \
+                 vector with `vector(…)`" op)
+       | _ -> ())
+  | _ -> ()
 
-  | EFn (_, body) ->
-      check_result_shape file line body;
+(** `car`/`cdr` (or `first`/`rest`) applied to a tagged result literal
+    `[:ok, _]`/`[:err, _]` — destructure results with `match` or `<-`, never
+    by position (SYNTAX §15). *)
+let rule_car_cdr_on_result file line node =
+  match node with
+  | EApply (ESymbol (("car" | "cdr" | "first" | "rest") as op), [arg])
+    when tagged_tag arg <> None ->
+      warn file line
+        (Printf.sprintf
+           "`%s` applied to a tagged result `[:%s, …]` — destructure a \
+            result with `match` or `<-`, never `car`/`cdr` (SYNTAX §15)"
+           op (match tagged_tag arg with Some t -> t | None -> "?"))
+  | _ -> ()
+
+(** `if not(nil?(x))` is just `if x`. *)
+let rule_if_not_nil file line node =
+  match node with
+  | EApply (ESymbol "if",
+            (EApply (ESymbol "not", [EApply (ESymbol "nil?", [_arg])]) :: _then :: _else :: [])) ->
+      warn file line "suggest: use `if x` instead of `if not(nil?(x))`"
+  | _ -> ()
+
+(** Naming conventions on a named function (`def`, or a `def`-value whose
+    right-hand side is a bare `fn`). *)
+let rule_naming file line node =
+  match node with
+  | EDef (name, _params, body) -> check_naming file line name body
+  | EDefValue (name, EFn (_, body)) -> check_naming file line name body
+  | _ -> ()
+
+(** A function body that mixes `[:err, _]` and bare-value branches. Fires on a
+    `def` body and on any `fn` body (so a `def`-value of a `fn` is covered via
+    the `fn` node itself). *)
+let rule_result_shape file line node =
+  match node with
+  | EDef (_, _, body) | EFn (_, body) -> check_result_shape file line body
+  | _ -> ()
+
+(** A ladder of single-binding `let`/`let*` rungs. *)
+let rule_let_ladder file line node =
+  match node with
+  | ELet _ ->
+      let depth = let_ladder_depth node in
+      if depth >= 3 then
+        warn file line
+          (Printf.sprintf "let ladder: %d consecutive single-binding lets; consider parallel let" depth)
+  | ELetStar _ ->
+      let depth = let_ladder_depth node in
+      if depth >= 2 then
+        warn file line
+          (Printf.sprintf "let* ladder: %d consecutive single-binding let*s; consider single let*" depth)
+  | _ -> ()
+
+(** A dotted identifier (there is no dot-method call). *)
+let rule_dot_identifier file line node =
+  match node with ESymbol s -> check_dot_identifier file line s | _ -> ()
+
+let rules : rule list = [
+  { id = "naming";                 check = rule_naming };
+  { id = "result-shape";           check = rule_result_shape };
+  { id = "let-ladder";             check = rule_let_ladder };
+  { id = "vector-on-list-literal"; check = rule_vector_on_list_literal };
+  { id = "car-cdr-on-result";      check = rule_car_cdr_on_result };
+  { id = "if-not-nil";             check = rule_if_not_nil };
+  { id = "dot-identifier";         check = rule_dot_identifier };
+]
+
+(** Walk [e]: run every rule against this node, then recurse into its
+    children. [~line] is the inherited line context for nodes without their
+    own ELocated wrapper (e.g. a nested `let` inside a `def` body); each
+    ELocated layer refreshes it, so a node's warnings carry the line of the
+    innermost wrapper around it. *)
+let rec check_expr ?(line=0) file (e : expr) : unit =
+  match e with
+  | ELocated ((_, l), inner) -> check_expr ~line:l file inner
+  | node ->
+      List.iter (fun r -> r.check file line node) rules;
+      recurse ~line file node
+
+and recurse ~line file (node : expr) : unit =
+  match node with
+  | EDef (_, _, body) -> check_expr ~line file body
+  | EDefValue (_, rhs) -> check_expr ~line file rhs
+  | ELet (bindings, body) | ELetStar (bindings, body) ->
+      List.iter (fun (_, rhs) -> check_expr ~line file rhs) bindings;
       check_expr ~line file body
-
-  | EDo exprs ->
-      List.iter (check_expr ~line file) exprs
-
+  | EApply (fn, args) ->
+      (* An `if` head is the literal symbol `if`, not a user reference, so it
+         is not itself walked; every other head is. *)
+      (match fn with
+       | ESymbol "if" -> ()
+       | _ -> check_expr ~line file fn);
+      List.iter (check_expr ~line file) args
+  | EFn (_, body) -> check_expr ~line file body
+  | EDo exprs -> List.iter (check_expr ~line file) exprs
   | EIf (c, t, f) ->
       check_expr ~line file c;
       check_expr ~line file t;
       check_expr ~line file f
-
   | EWithCaps (cap, body) ->
       check_expr ~line file cap;
       check_expr ~line file body
-
-  | EPerform (_, args) ->
-      List.iter (check_expr ~line file) args
-
+  | EPerform (_, args) -> List.iter (check_expr ~line file) args
   | EWithHandler (handlers, body) ->
       List.iter (fun (_, h) -> check_expr ~line file h) handlers;
       check_expr ~line file body
-
-  | ENode body ->
-      check_expr ~line file body
-
-  | EDefNode (_, _, body) ->
-      check_expr ~line file body
-
+  | ENode body -> check_expr ~line file body
+  | EDefNode (_, _, body) -> check_expr ~line file body
   | EMatch (scrutinee, arms) ->
       check_expr ~line file scrutinee;
       List.iter (fun (_, guard, body) ->
         (match guard with Some g -> check_expr ~line file g | None -> ());
         check_expr ~line file body) arms
-
-  | EModule exprs ->
-      List.iter (check_expr ~line file) exprs
-
-  | EImport e ->
-      check_expr ~line file e
-
-  | EQuote e ->
-      check_expr ~line file e
-
-  | EForce e ->
-      check_expr ~line file e
-
-  | EDelay e ->
-      check_expr ~line file e
-
+  | EModule exprs -> List.iter (check_expr ~line file) exprs
+  | EImport e -> check_expr ~line file e
+  | EQuote e -> check_expr ~line file e
+  | EForce e -> check_expr ~line file e
+  | EDelay e -> check_expr ~line file e
   | EWithConfig (cfg, body) ->
       check_expr ~line file cfg;
       check_expr ~line file body
-
   | EConfig (key, default) ->
       check_expr ~line file key;
       (match default with Some d -> check_expr ~line file d | None -> ())
-
   | ETyped (e, t) ->
       check_expr ~line file e;
       check_expr ~line file t
-
-  | ESymbol s ->
-      check_dot_identifier file line s
-
-  | ELiteral _ | ELoad _ | ELoadModule _ | EIsland (_, _) -> ()
+  | ELocated (_, e') -> check_expr ~line file e'
+  | ESymbol _ | ELiteral _ | ELoad _ | ELoadModule _ | EIsland (_, _) -> ()
 
 (* ---- Observation-exclusivity (a PRE-lowering token scan) ---- *)
 
