@@ -280,6 +280,8 @@ print(f"Hello, {name}! Built {n} targets.")
 display form. f-strings desugar to `string-append`/`->string` with no dedicated
 AST node, so they round-trip through `pp fmt` with the hash preserved.
 
+#example("ref-fstrings")
+
 == Type predicates
 
 Each predicate forces its argument and tests its shape. The full set is
@@ -328,6 +330,8 @@ The s-expression surface reads and writes the same form
 (`(match e (p body) (p if guard body) ...)`), so match files round-trip
 through `pp fmt`.
 
+#example("ref-match-guards")
+
 == Spread
 
 The `...` prefix is one concept in three places: list/vector construction, map
@@ -353,6 +357,8 @@ run!("cc", ...flags, "-c", src, "-o", obj)
 
 A spread whose target is a compound expression uses the spaced form
 (`... expr`), matching the list-literal spelling.
+
+#example("ref-call-spread")
 
 == Observation sigils
 

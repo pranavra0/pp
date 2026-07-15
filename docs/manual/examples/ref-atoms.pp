@@ -1,4 +1,4 @@
-# Integers, floats, strings, the booleans, nil, keywords, and quoted symbols.
+# Integers, floats, strings, booleans, nil, keywords, and quoted symbols.
 # `print` shows strings quoted; everything else prints as it reads.
 print(42)
 print(3.14)

@@ -1,7 +1,9 @@
 # `defmacro` receives its arguments as unevaluated forms (sexpr data) and
 # returns a new form, expanded before either back end sees it. The body of
-# quasiquote { ... } is a template in ordinary brace syntax.
+# `quasiquote { ... }` is a template in ordinary brace syntax.
 defmacro unless(test, body) {
-  quasiquote { if unquote(test) { nil } else { unquote(body) } } }
+  quasiquote { if unquote(test) { nil } else { unquote(body) } }
+}
+
 print(unless(false, "ran"))
 print(unless(true, "ran"))
