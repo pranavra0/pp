@@ -41,7 +41,7 @@ val record_config_read : string -> unit
 val record_handler_observation : string -> unit
 type fenced_policy = Retry | Abort | Ask
 type invocation = {
-  source_roots : string list;
+  source_roots : Paths.canonical list;
   initial_capabilities : Types.capability list;
   program_argv : string list;
   program_files : string list;
@@ -58,7 +58,7 @@ val invocation : invocation option ref
 val invocation_get : unit -> invocation
 
 val stdlib_root : unit -> string option
-val canonical_path : string -> string
+val canonical_path : string -> Paths.canonical
 val loader_read : string -> string
 val with_form_location : Types.expr -> (unit -> 'a) -> 'a
 val keep_thunks : bool ref

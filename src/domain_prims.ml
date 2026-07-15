@@ -56,7 +56,7 @@ let has_process_cap () =
    assoc list (the diff runs in pp, over pp values) and canonicalizes root
    the same way every other fs boundary does (LAW 23 / DESIGN §2.1). *)
 let tree_observe (root : string) : value =
-  let root = Runtime.canonical_path root in
+  let root = (Runtime.canonical_path root :> string) in
   (* A write-only domain grant (`fs:ROOT:wo`, tests/023) must still be able
      to observe its OWN managed tree — the single writer reading its own
      domain to converge is not a new authority concern (there is no other
@@ -90,8 +90,8 @@ let rec mkdir_p dir =
    check, so this primitive itself does not re-read after writing. *)
 let materialize_file (path : string) (content : string) (executable : bool) : unit =
   require_no_node_body "materialize-file";
-  let path = Runtime.canonical_path path in
-  if not (has_fs_write path) then
+  let path = (Runtime.canonical_path path :> string) in
+  if not (has_fs_write (path :> string)) then
     raise (Capability_error ("materialize-file: capability error: no write access for " ^ path));
   mkdir_p (Filename.dirname path);
   let tmp = path ^ ".pp-tmp." ^ string_of_int (Unix.getpid ()) in
@@ -119,8 +119,8 @@ let rec prune_empty_dirs (dir : string) : unit =
 
 let remove_file (path : string) : unit =
   require_no_node_body "remove-file";
-  let path = Runtime.canonical_path path in
-  if not (has_fs_write path) then
+  let path = (Runtime.canonical_path path :> string) in
+  if not (has_fs_write (path :> string)) then
     raise (Capability_error ("remove-file: capability error: no write access for " ^ path));
   (try Sys.remove path with _ -> ());
   Store.unpin_file path;

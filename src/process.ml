@@ -47,7 +47,7 @@ let resolve_cmd (cmd : string) : string option =
 
 let record_tool_cell (resolved : string) : unit =
   match Store.hash_file_opt resolved with
-  | Some h -> Runtime.record_read (Cell.(to_string (Tool (Runtime.canonical_path resolved)))) h
+  | Some h -> Runtime.record_read (Cell.(to_string (Tool ((Runtime.canonical_path resolved) :> string)))) h
   | None -> ()
 
 (* The coarse-cell soundness floor: one whole-tree hash per fs-read
@@ -57,7 +57,7 @@ let record_tree_cells () : unit =
   List.iter (function
     | CapFilesystem { path; mode = (Read | ReadWrite) } ->
         let cpath = Runtime.canonical_path path in
-        Runtime.record_read (Cell.(to_string (Tree cpath))) (Store.tree_hash cpath)
+        Runtime.record_read (Cell.(to_string (Tree (cpath :> string)))) (Store.tree_hash (cpath :> string))
     | _ -> ())
     !Runtime.current_capabilities
 
@@ -179,7 +179,7 @@ let record_depfile_cells (deps : string list) : unit =
       then ignore (Store.read_file_cell dep)
       else
         match Store.hash_file_opt dep with
-        | Some h -> Runtime.record_read (Cell.(to_string (Tool (Runtime.canonical_path dep)))) h
+        | Some h -> Runtime.record_read (Cell.(to_string (Tool ((Runtime.canonical_path dep) :> string)))) h
         | None -> ()
     end)
     deps

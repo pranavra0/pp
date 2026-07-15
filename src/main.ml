@@ -94,7 +94,7 @@ let stdlib_glue_sources () : (string * string) list =
               [("<domain-glue:fs>", Printf.sprintf
                   "(load %s)\n(register-fs-domain %s (cap-restrict (current-capabilities) %s :wo))\n"
                   (pp_quote (Filename.concat root "domain-fs.pp"))
-                  (pp_quote canon) (pp_quote canon))]
+                  (pp_quote (canon :> string)) (pp_quote (canon :> string)))]
         in
         let proc_glue =
           if not (Runtime.invocation_get ()).program_supervise then []
@@ -756,9 +756,12 @@ let main () =
 
 
   let source_roots =
-    Runtime.canonical_path (Sys.getcwd ())
-    :: List.map (fun f -> Filename.dirname (Runtime.canonical_path f)) !files
-    @ (match Runtime.stdlib_root () with Some d -> [d] | None -> [])
+    let raw_roots =
+      Sys.getcwd ()
+      :: List.map (fun f -> Filename.dirname f) !files
+      @ (match Runtime.stdlib_root () with Some d -> [d] | None -> [])
+    in
+    List.map Runtime.canonical_path raw_roots
   in
 
 

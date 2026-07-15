@@ -159,10 +159,10 @@ let rec list_fs_paths (cap : capability) : (string * fs_mode) list =
         | None -> None
         | Some ep ->
             (match mode with
-             | None -> Some (ep, m)
+             | None -> Some ((ep :> string), m)
              | Some rm ->
                  (match mode_intersect m rm with
-                  | Some m' -> Some (ep, m')
+                  | Some m' -> Some ((ep :> string), m')
                   | None -> None)))
         (list_fs_paths cap)
   | _ -> []
@@ -264,7 +264,7 @@ let parse_grant (spec : string) : capability =
       (* SPEC LAW 23 / DESIGN §2.1: canonicalize at the mint, so every
          downstream comparison (authority checks, `tree:` cells built from
          granted paths) already sees the same spelling a cell would. *)
-      CapFilesystem { path = Runtime.canonical_path path; mode = m }
+      CapFilesystem { path = (Runtime.canonical_path path :> string); mode = m }
   | ["net"; host] -> CapNetwork { host; port = None }
   | ["net"; host; port] ->
       (match int_of_string_opt port with
@@ -272,6 +272,6 @@ let parse_grant (spec : string) : capability =
        | None -> failwith ("invalid port in --grant net spec: " ^ spec))
   | ["secret"; path] ->
       (* Canonicalize at mint, exactly like fs grants (see above). *)
-      CapSecret { path = Runtime.canonical_path path }
+      CapSecret { path = (Runtime.canonical_path path :> string) }
   | ["process"] -> CapProcess
   | _ -> failwith ("invalid --grant spec: " ^ spec)

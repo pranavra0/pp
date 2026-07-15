@@ -33,6 +33,7 @@ open Types
 
 type t = {
   mutable force : value -> value;
+  mutable realpath : string -> string;
   mutable eval : expr -> env -> value;
   mutable apply : value -> value list -> env -> value;
   mutable node_key_of : thunk -> string;
@@ -71,4 +72,6 @@ let r : t = {
   compiler_finish =
     (fun _ -> failwith "Backend: compiler_finish hook not installed");
   compiler_state = None;
+  realpath = (fun p ->
+    failwith "Backend: realpath hook not installed");
 }

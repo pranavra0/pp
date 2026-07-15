@@ -4,7 +4,7 @@ open Types
 type fenced_policy = Retry | Abort | Ask
 
 type invocation = {
-  source_roots : string list;
+  source_roots : Paths.canonical list;
   initial_capabilities : capability list;
   program_argv : string list;
   program_files : string list;
@@ -291,7 +291,7 @@ let stdlib_root () : string option =
    NFC Unicode normalization is NOT implemented — a documented residual
    (SPEC LAW 23, STATUS.md); it would need a new dependency (uunf, DESIGN
    E6) and is orthogonal to the realpath fix this closes. *)
-let canonical_path (p : string) : string =
+let canonical_path_impl (p : string) : string =
   let abs = if Filename.is_relative p then Filename.concat (Sys.getcwd ()) p else p in
   let strip_trailing s =
     let n = String.length s in
@@ -310,8 +310,6 @@ let canonical_path (p : string) : string =
   in
   let (existing, remaining) = split_existing (List.length parts) in
   let real_existing = try Unix.realpath existing with _ -> existing in
-  (* Lexically normalize the nonexistent tail only; the existing prefix was
-     already resolved by realpath above. *)
   let normalized_tail =
     List.rev
       (List.fold_left (fun acc part ->
@@ -324,6 +322,9 @@ let canonical_path (p : string) : string =
   match normalized_tail with
   | [] -> real_existing
   | _ -> real_existing ^ "/" ^ String.concat "/" normalized_tail
+
+let canonical_path (p : string) : Paths.canonical =
+  Paths.canonicalize ~realpath:canonical_path_impl p
 
 let loader_authorized (path : string) : bool =
   let p = canonical_path path in
@@ -338,10 +339,10 @@ let loader_read (path : string) : string =
               ^ " is outside the interpreter's source roots (loader authority \
                  is bounded to the CLI-named programs' directories, the cwd, \
                  and ~/.pp)");
-  let ic = open_in canon in
+  let ic = open_in (canon :> string) in
   let content = really_input_string ic (in_channel_length ic) in
   close_in ic;
-  record_read (Cell.(to_string (RuntimeFile canon))) (hash_string content);
+  record_read (Cell.(to_string (RuntimeFile (canon :> string)))) (hash_string content);
   content
 
 (* ---- LAW 29: source locations on runtime errors, never doubled ----
