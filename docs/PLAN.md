@@ -346,11 +346,6 @@ lint rule.
   (SPEC laws 3, 11 and 20 on binding order and deep recursion; law 21 on
   inline-nested cutoff; laws 8 and 19 on the VM dedup mirror) stay
   honestly partial.
-- STATUS ledger hygiene: prune stale narrative. The cross-run caching
-  entry's "still open: no reconciler" note predates the in-language
-  reconciler-domain protocol described in DESIGN.md. The stage-B note
-  about a `map`-shadowing "wall" was superseded once the pp-level `map`
-  that shadowed the batching-aware builtin was removed.
 - NFC Unicode normalization for cell-id canonicalization is still
   unimplemented (`runtime.ml` says so): a documented residual until a
   dependency-free path exists.
@@ -381,6 +376,17 @@ lint rule.
 
   This dovetails with the test-harness rewrite described under "Render
   each surface from one typed table".
+- Docs into the manual site, considered at the docs sweep: the Typst
+  manual is the one doc property that cannot lie (pp runs every
+  example), so folding the other docs into that site would give one
+  rendered home and let Typst generate what is now hand-maintained —
+  for example a dependency DAG of plan items or features, rendered from
+  data pp itself emits (`pp graph` already prints the cell-to-node
+  graph). Two constraints decide the shape: the doc sources must stay
+  greppable plain text, because 3 tests parse them (tests/072 reads
+  SPEC.md's law headings, tests/067 its generated block, tests/074
+  DESIGN.md's honest edges); and diagrams join as generated artifacts,
+  never hand-drawn copies.
 - Stretch, explicitly deferred, re-argue before building: map patterns
   in `match`; one-shot resumable effects; tail-call modulo cons; LSP;
   self-hosting.
