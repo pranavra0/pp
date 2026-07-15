@@ -7,7 +7,7 @@
 # the examples nor the typesetter.
 #
 # Run from the repo root, outside dune. Needs `typst` on PATH.
-set -uo pipefail
+set -euo pipefail
 cd "$(dirname "$0")/.."
 PP=${PP:-"$PWD/bin/pp"}
 [ -x "$PP" ] || PP="$PWD/_build/default/src/main.exe"
