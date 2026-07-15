@@ -264,5 +264,5 @@ let expand_toplevel_list (exprs : expr list) : expr list =
     exprs
 
 let () =
-  Primitives.expand_toplevel_ref := expand_toplevel_list;
-  Primitives.macro_reset_ref := reset
+  Backend.r.expand_toplevel <- expand_toplevel_list;
+  Backend.r.macro_reset <- reset

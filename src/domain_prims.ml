@@ -48,7 +48,7 @@ let has_process_cap () =
    reason those two are already duplicated rather than shared (small, and
    each module's force_hook indirection is set up independently). *)
 let rec force_deep (v : value) : value =
-  match !Runtime.force_hook v with
+  match Backend.r.force v with
   | VPair (a, d) -> VPair (force_deep a, force_deep d)
   | VVector vs -> VVector (Array.map force_deep vs)
   | VMap kvs -> VMap (List.map (fun (k, v) -> (force_deep k, force_deep v)) kvs)
@@ -206,7 +206,7 @@ let domain_state_put (key : string) (v : value) : unit =
    primitives.ml's hash-map/map-insert): every lookup below forces the
    value via force_hook before matching. *)
 let find_field kvs key =
-  Option.map (fun (_, v) -> !Runtime.force_hook v)
+  Option.map (fun (_, v) -> Backend.r.force v)
     (List.find_opt (fun (k', _) ->
        match k' with VString s | VKeyword s | VSymbol s -> s = key | _ -> false) kvs)
 
@@ -225,7 +225,7 @@ let expect_opt_string_field where kvs key default_ =
   | None -> default_
 
 let expect_string_list_field where kvs key =
-  let one v = match !Runtime.force_hook v with
+  let one v = match Backend.r.force v with
     | VString s | VKeyword s | VSymbol s -> s
     | other -> failwith (Printf.sprintf "%s: %s elements must be strings, got %s"
                           where key (string_of_value other))
@@ -236,7 +236,7 @@ let expect_string_list_field where kvs key =
   | Some (VPair _ as lst) ->
       let rec collect = function
         | VNil -> []
-        | VPair (a, d) -> one a :: collect (!Runtime.force_hook d)
+        | VPair (a, d) -> one a :: collect (Backend.r.force d)
         | other -> failwith (Printf.sprintf "%s: %s must be a list/vector of strings, got %s"
                               where key (string_of_value other))
       in collect lst
@@ -248,9 +248,9 @@ let expect_env_field where kvs key =
   | None | Some VNil -> []
   | Some (VMap envkvs) ->
       List.map (fun (k, v) ->
-        let ks = match !Runtime.force_hook k with VString s | VKeyword s | VSymbol s -> s
+        let ks = match Backend.r.force k with VString s | VKeyword s | VSymbol s -> s
           | other -> failwith (where ^ ": env key must be a string, got " ^ string_of_value other) in
-        let vs = match !Runtime.force_hook v with VString s | VKeyword s | VSymbol s -> s
+        let vs = match Backend.r.force v with VString s | VKeyword s | VSymbol s -> s
           | other -> failwith (where ^ ": env value must be a string, got " ^ string_of_value other) in
         (ks, vs))
         envkvs
@@ -275,7 +275,7 @@ let proc_spawn (spec : value) : value =
   require_no_node_body "proc-spawn";
   if not (has_process_cap ()) then
     raise (Capability_error "proc-spawn: capability error: no process authority");
-  let kvs = match !Runtime.force_hook spec with
+  let kvs = match Backend.r.force spec with
     | VMap kvs -> kvs
     | other -> failwith ("proc-spawn: spec must be a map, got " ^ string_of_value other)
   in

@@ -1,6 +1,28 @@
 (* pp runtime — shared mutable state used by both backends *)
-
 open Types
+
+type fenced_policy = Retry | Abort | Ask
+
+type invocation = {
+  source_roots : string list;
+  initial_capabilities : capability list;
+  program_argv : string list;
+  program_files : string list;
+  program_bytecode : bool;
+  initial_grant_specs : string list;
+  program_reconcile_root : string option;
+  program_supervise : bool;
+  program_member_name : string option;
+  program_desired_object : (string * string) option;
+  gc_keep_epochs : int;
+  fenced_policy : fenced_policy;
+}
+
+let invocation : invocation option ref = ref None
+let invocation_get () : invocation =
+  match !invocation with Some i -> i | None -> failwith "invocation not set"
+
+
 
 (* Handler stack for algebraic effects.
    Each entry is (effect-name, handler-fn, handler-value-hash). The third
@@ -146,9 +168,6 @@ let pop_trace_frame () : unit =
    for both the record (during a node run) and the re-observation (during a
    hit check), so the two can never disagree. *)
 
-(* Set by Evaluator at startup: config values may be unforced thunks; their
-   observed hash is the hash of the forced value. *)
-let force_hook : (value -> value) ref = ref (fun v -> v)
 
 (* Process-domain cell observation hook — pre-Q13 vestige. Was set by the
    now-deleted Supervisor.init; nothing wires it anymore, and (checked
@@ -203,7 +222,7 @@ let config_lookup (key : string) : value option =
 
 let observe_config (key : string) : string =
   match config_lookup key with
-  | Some v -> hash_value (!force_hook v)
+  | Some v -> hash_value (Backend.r.force v)
   | None -> config_absent_hash
 
 let observe_handler (name : string) : string =
@@ -233,7 +252,8 @@ let record_handler_observation (name : string) : unit =
    nodes that loaded it) but is excluded from the caller's hit-time authority
    requirement (cell_authorized passes runtime: cells unconditionally). *)
 
-let source_roots : string list ref = ref []
+
+
 
 (* Q13 loader reachability: stdlib/domain-fs.pp and stdlib/domain-proc.pp
    must load from ANY cwd (--reconcile/--supervise are meant to work from
@@ -309,7 +329,7 @@ let canonical_path (p : string) : string =
 let loader_authorized (path : string) : bool =
   let p = canonical_path path in
   let home = try Sys.getenv "HOME" with Not_found -> "/tmp" in
-  let roots = canonical_path (Filename.concat home ".pp") :: !source_roots in
+  let roots = canonical_path (Filename.concat home ".pp") :: (invocation_get ()).source_roots in
   List.exists (fun r -> Paths.under ~root:r p) roots
 
 let loader_read (path : string) : string =
@@ -367,46 +387,6 @@ let with_form_location (e : expr) (f : unit -> 'a) : 'a =
        | Capability_error msg -> raise (Capability_error (relocate msg)))
   | _ -> f ()
 
-(* Initial capabilities from --grant (set by main.ml before init) *)
-let initial_capabilities : capability list ref = ref []
-
-(* Program arguments: everything after `--` on the pp command line (set by
-   main.ml). Read by the `argv` primitive, which records an `argv:` trace
-   cell so a node that observed them recomputes when they change. *)
-let program_argv : string list ref = ref []
-
-(* M5 stage B (docs/PLAN-m5-distribution.md "Remote placement"): the
-   top-level file arguments and --bytecode flag this invocation was given,
-   and the RAW --grant spec strings (pre-Capabilities.parse_grant) behind
-   initial_capabilities above — set once by main.ml right after CLI
-   parsing, alongside initial_capabilities/program_argv. Remote dispatch
-   (src/remote.ml) replicates these to spawn a cluster member as an
-   ordinary second `pp` invocation (own $HOME) of the SAME program, and
-   mints that member's token from the SAME spec strings `pp --grant`
-   itself already parsed — never wider than this process's own authority. *)
-let program_files : string list ref = ref []
-let program_bytecode : bool ref = ref false
-let initial_grant_specs : string list ref = ref []
-
-(* M5 stage C (docs/PLAN-m5-distribution.md "Host-qualified domain
-   distribution" / "Store GC"): the additional CLI shape this invocation was
-   given, alongside program_files/program_bytecode/initial_grant_specs above —
-   set once by main.ml right after parsing. Two independent consumers read
-   these: (1) src/domains.ml's epoch bookkeeping (Gcroots.record) captures
-   them so `pp gc`'s mark-by-replay can reconstruct an IDENTICAL `pp`
-   invocation later; (2) main.ml's own --gc-mark replay path reads them back
-   to rebuild the same {all_desired} shape (build_all_desired/
-   select_member_slice) a live pass would have computed. *)
-let program_reconcile_root : string option ref = ref None
-let program_supervise : bool ref = ref false
-let program_member_name : string option ref = ref None
-let program_desired_object : (string * string) option ref = ref None
-(* How many recent successful-pass root hashes `pp gc`'s roots manifest keeps
-   (Gcroots.record's rotation cap) — ambient, overridable via
-   `--gc-keep-epochs N`; read by both domains.ml (write side) and
-   store_gc.ml (informational only; the manifest is already capped at write
-   time, so the read side just replays whatever is there). *)
-let gc_keep_epochs : int ref = ref 5
 
 (* --stabilize: when true, init skips Hashtbl.clear thunk_store so
    clean thunks remain Evaluated and skip Store.hit on re-execute.
@@ -425,12 +405,6 @@ let fenced_actions : (string * value) list ref = ref []
    (the default) island resolution never touches the network. *)
 let island_fetch_enabled = ref false
 
-(* Unknown-status policy set by --fenced-policy: what to do with a journaled
-   fenced intent that has no matching done (a crash mid-action). Parsed once
-   in main.ml; everything downstream matches exhaustively. *)
-type fenced_policy = Retry | Abort | Ask
-
-let fenced_policy : fenced_policy ref = ref Abort
 
 let fenced_policy_name = function
   | Retry -> "retry"

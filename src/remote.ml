@@ -285,7 +285,7 @@ let rec walk_files (path : string) (acc : (string * string) list ref) : unit =
 
 let pre_observe_granted_scope () : (string * string * string) list =
   let roots =
-    Capabilities.list_fs_paths (CapCompose !Runtime.initial_capabilities)
+    Capabilities.list_fs_paths (CapCompose (Runtime.invocation_get ()).initial_capabilities)
     |> List.filter_map (fun (p, m) -> match m with
          | Read | ReadWrite -> Some p
          | Write -> None)
@@ -361,7 +361,7 @@ let ship_and_pull ~(member_home : string) (closed : Scheduler.job list) : unit =
       (String.concat "" (List.map (fun (c, h, _) -> pin_line c h) pins));
     let secret = Token.load_secret () and cluster_id = Token.load_cluster_id () in
     let token_text =
-      Token.mint ~secret ~cluster_id ~specs:!Runtime.initial_grant_specs
+      Token.mint ~secret ~cluster_id ~specs:(Runtime.invocation_get ()).initial_grant_specs
         ~ttl_seconds:remote_ttl_seconds
     in
     let token_file = Filename.concat scratch "token" in
@@ -385,8 +385,8 @@ let ship_and_pull ~(member_home : string) (closed : Scheduler.job list) : unit =
     let argv =
       ["--remote-node"; token_file; pins_file; shared_root; keys_file; reply_file;
        "--schedule"; "serial"]
-      @ (if !Runtime.program_bytecode then ["--bytecode"] else [])
-      @ !Runtime.program_files
+      @ (if (Runtime.invocation_get ()).program_bytecode then ["--bytecode"] else [])
+      @ (Runtime.invocation_get ()).program_files
     in
     let log_file = Filename.concat scratch "log" in
     let code = spawn_member ~exe ~argv ~env:(member_env member_home) ~log_file in

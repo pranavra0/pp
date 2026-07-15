@@ -36,12 +36,12 @@ open Types
 let find_kv (kvs : (value * value) list) (key : string) : value option =
   List.find_map (fun (k, v) ->
     match k with
-    | VKeyword k' | VString k' when k' = key -> Some (!Runtime.force_hook v)
+    | VKeyword k' | VString k' when k' = key -> Some (Backend.r.force v)
     | _ -> None)
     kvs
 
 let plan_map (plan : value) : (value * value) list =
-  match !Runtime.force_hook plan with
+  match Backend.r.force plan with
   | VMap kvs -> kvs
   | other -> failwith ("domain diff: plan must be a map with :items and :summary, got "
                        ^ string_of_value other)
@@ -64,16 +64,16 @@ let summary_pair (entry : value) : string * string =
       failwith "domain diff: :summary entries must be 2-element [key value] pairs"
     else (arr.(0), arr.(1))
   in
-  let (k, v) = match !Runtime.force_hook entry with
+  let (k, v) = match Backend.r.force entry with
     | VVector arr -> two_of arr
     | VPair (a, VPair (b, VNil)) -> (a, b)
     | other -> failwith ("domain diff: :summary entries must be [key value] pairs, got "
                          ^ string_of_value other)
   in
-  let ks = match !Runtime.force_hook k with
+  let ks = match Backend.r.force k with
     | VString s | VKeyword s -> s
     | other -> failwith ("domain diff: :summary key must be a string, got " ^ string_of_value other) in
-  let vs = match !Runtime.force_hook v with
+  let vs = match Backend.r.force v with
     | VString s -> s
     | other -> failwith ("domain diff: :summary value must be a string, got " ^ string_of_value other) in
   (ks, vs)
@@ -84,7 +84,7 @@ let plan_summary (plan : value) : (string * string) list =
   | Some (VPair _ as lst) ->
       let rec collect = function
         | VNil -> []
-        | VPair (a, d) -> summary_pair a :: collect (!Runtime.force_hook d)
+        | VPair (a, d) -> summary_pair a :: collect (Backend.r.force d)
         | other -> failwith ("domain diff: :summary must be a list/vector of pairs, got "
                              ^ string_of_value other)
       in collect lst
@@ -248,15 +248,15 @@ let record_epoch (forced : value) : unit =
     let hash = Hasher.hash_value forced in
     (try Store.store_object ~key:hash ~value:forced with _ -> ());
     Journal.append (Journal.Epoch { hash });
-    Gcroots.record ~keep:!Runtime.gc_keep_epochs
+    Gcroots.record ~keep:(Runtime.invocation_get ()).gc_keep_epochs
       { Gcroots.gr_hash = hash;
-        gr_bytecode = !Runtime.program_bytecode;
-        gr_grants = !Runtime.initial_grant_specs;
-        gr_files = !Runtime.program_files;
-        gr_reconcile_root = !Runtime.program_reconcile_root;
-        gr_supervise = !Runtime.program_supervise;
-        gr_member_name = !Runtime.program_member_name;
-        gr_desired_object = !Runtime.program_desired_object }
+        gr_bytecode = (Runtime.invocation_get ()).program_bytecode;
+        gr_grants = (Runtime.invocation_get ()).initial_grant_specs;
+        gr_files = (Runtime.invocation_get ()).program_files;
+        gr_reconcile_root = (Runtime.invocation_get ()).program_reconcile_root;
+        gr_supervise = (Runtime.invocation_get ()).program_supervise;
+        gr_member_name = (Runtime.invocation_get ()).program_member_name;
+        gr_desired_object = (Runtime.invocation_get ()).program_desired_object }
   with _ -> ()
 
 let run_all (all_desired : value) : unit =

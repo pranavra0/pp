@@ -251,7 +251,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
          | VClosure c when c.vm_bc == Types.dummy_bytecode ->
              (* Tree-walker closure invoked from bytecode — fall back to
                 the evaluator's apply. *)
-             let r = !Primitives.apply_ref fn_val args !Primitives.current_env_ref in
+             let r = Backend.r.apply fn_val args !Primitives.current_env_ref in
              push r;
              incr pc;
              loop ()
@@ -282,7 +282,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
         let fn_val = pop () in
         (match fn_val with
          | VClosure c when c.vm_bc == Types.dummy_bytecode ->
-             result := !Primitives.apply_ref fn_val args !Primitives.current_env_ref
+             result := Backend.r.apply fn_val args !Primitives.current_env_ref
          | VClosure c ->
              let nparams = List.length c.params in
              if n <> nparams then begin
@@ -379,7 +379,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
                module-global operand_stack/sp. *)
             match hv with
             | VClosure c when c.vm_bc == Types.dummy_bytecode ->
-                !Primitives.apply_ref hv args !Primitives.current_env_ref
+                Backend.r.apply hv args !Primitives.current_env_ref
             | VClosure c ->
                 let nparams = List.length c.params in
                 if List.length args <> nparams then begin
@@ -698,7 +698,7 @@ let run_program_expr (prog : bytecode) : value =
 
 let rec init () =
   Evaluator.init ();
-  saved_eval_force := !Primitives.force_ref;
+  saved_eval_force := Evaluator.force;
   Hashtbl.clear globals;
   let initial = Primitives.initial_env () in
   List.iter (fun (name, v) ->
@@ -712,20 +712,19 @@ let rec init () =
   config_stack := [];
   handler_save_stack := [];
   if not !Runtime.keep_thunks then Hashtbl.clear thunk_store;
-  Primitives.set_force vm_force;
+  Backend.r.force <- vm_force;
   (* Config-cell observations (LAW 33) hash the forced value; under the VM the
      forcing is vm_force (Evaluator.init is not run on this path). *)
-  Runtime.force_hook := vm_force;
-  Primitives.vm_run_thunk_ref := run_isolated;
+  Backend.r.vm_run_thunk <- run_isolated;
   (* Phase 3: let Primitives' scheduler-aware force-deep compute VM node keys
      without a dependency cycle (Primitives is compiled before Vm). *)
-  Primitives.vm_node_key_ref := vm_node_key;
-  Primitives.vm_run_bytecode_ref := (fun bc ->
+  Backend.r.vm_node_key <- vm_node_key;
+  Backend.r.vm_run_bytecode <- (fun bc ->
     run_program bc
   );
   (* Wire the VM global-definition hook so that eval-pp definitions
      become visible to subsequent bytecode. *)
-  Primitives.vm_define_ref := (fun name v ->
+  Backend.r.vm_define <- (fun name v ->
     Hashtbl.replace globals name v
   )
 

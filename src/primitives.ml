@@ -1,72 +1,16 @@
 (* pp primitives — built-in functions *)
 
 open Types
+open Backend
 
-(* Reference to the evaluator's force function — set by evaluator at init *)
-let force_ref : (value -> value) ref = ref (fun v -> v)
-let set_force (f : value -> value) = force_ref := f
 
 (* Reference to the current environment — updated by evaluator at eval entry *)
 let current_env_ref : env ref = ref Types.empty_env
 
-(* References to evaluator's eval and apply — set by evaluator at init *)
-let eval_ref : (expr -> env -> value) ref = ref (fun _ _ -> failwith "eval not initialized")
-let apply_ref : (value -> value list -> env -> value) ref = ref (fun _ _ _ -> failwith "apply not initialized")
-let set_eval (f : expr -> env -> value) = eval_ref := f
-let set_apply (f : value -> value list -> env -> value) = apply_ref := f
 
-(* Reference to the VM's thunk runner — set by VM at init *)
-let vm_run_thunk_ref : (Types.bytecode -> int -> Types.frame list -> Types.value) ref =
-  ref (fun _ _ _ -> failwith "VM not initialized")
-
-(* ---- Phase 3: hooks the scheduler-aware force-deep needs from the two
-   backends' node-key functions and the shared node-body runner. Set by
-   Evaluator.init (node_key_of_ref, run_node_body_ref) and Vm.init
-   (vm_node_key_ref) — mirrors the vm_run_thunk_ref pattern above. Primitives
-   is compiled before Evaluator/Vm, so these are the only way this module can
-   reach backend-specific code without a dependency cycle. *)
-let node_key_of_ref : (Types.thunk -> string) ref =
-  ref (fun _ -> failwith "node_key_of not initialized")
-let vm_node_key_ref : (Types.thunk -> string) ref =
-  ref (fun _ -> failwith "vm_node_key not initialized")
-let run_node_body_ref : (key:string -> run:(unit -> Types.value) -> Types.thunk -> Types.value) ref =
-  ref (fun ~key:_ ~run:_ _ -> failwith "run_node_body not initialized")
-(* True (and, for a real result, marks [t] Evaluated in place — same as
-   force_node's HitOk arm) when [key] is ALREADY a valid store hit or a
-   memoized failure; false on a genuine Miss. Set by Evaluator.init, which
-   owns [cell_authorized]. The scheduler-aware force-deep's collect pass
-   uses this to skip forking a job for a node the store can already serve —
-   without it, a "null rebuild" batch would re-run_node_body (and so
-   re-execute every external process) EVERY node on EVERY force-deep call,
-   because a fresh run's thunk_store always starts Unevaluated regardless
-   of what the on-disk store already has cached. *)
-let resolve_if_hit_ref : (Types.thunk -> string -> bool) ref =
-  ref (fun _ _ -> false)
-
-(* ---- M3 defmacro: the shared expansion hook (docs/PLAN, MASTERPLAN M3) ----
-
-   Set by Macro.ml (compiled after Evaluator, since expanding a macro call
-   runs its body through the tree-walker — LAW 36, "the tree-walker is the
-   oracle") once it loads. Primitives is compiled first, so this is the
-   same forward-reference trick as force_ref/eval_ref/apply_ref above: every
-   call site that turns a fresh Reader.read_string form list into something
-   either backend will actually see (repl.ml's top-level drivers, vm.ml's
-   LOAD_FILE/eval_module_from, evaluator.ml's ELoad/eval_module_file) MUST
-   route it through this ref first, so hash_expr and the compiler only ever
-   see already-expanded ASTs (LAW 20 needs no change elsewhere because of
-   this). Defaults to identity so a build that never links Macro (should
-   not happen — main.ml links everything) degrades to "macros do nothing"
-   rather than crashing. *)
-let expand_toplevel_ref : (Types.expr list -> Types.expr list) ref =
-  ref (fun exprs -> exprs)
-
-(* Reset the macro table (and anything else macro-expansion-related) at the
-   start of every fresh run — set by Macro.ml, called from Evaluator.init
-   alongside thunk_store/handler_stack's own resets. *)
-let macro_reset_ref : (unit -> unit) ref = ref (fun () -> ())
 
 (* Force helpers for builtins *)
-let force_val (v : value) : value = !force_ref v
+let force_val (v : value) : value = Backend.r.force v
 let force_args (args : value list) : value list = List.map force_val args
 
 (* ---- gensym (M3 / defmacro hygiene) ----
@@ -126,15 +70,15 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
   let jobs = ref [] in
   let race_width () = match !Scheduler.policy with Scheduler.Race n -> n | _ -> 1 in
   let key_of (t : thunk) : string =
-    if t.vm_code <> None then !vm_node_key_ref t else !node_key_of_ref t
+    if t.vm_code <> None then Backend.r.vm_node_key t else Backend.r.node_key_of t
   in
   let job_run (t : thunk) (key : string) () : value =
     let run () =
       match t.vm_code with
-      | Some (bc, offset, frames) -> !vm_run_thunk_ref bc offset frames
-      | None -> !eval_ref t.thunk_expr t.thunk_env
+      | Some (bc, offset, frames) -> Backend.r.vm_run_thunk bc offset frames
+      | None -> Backend.r.eval t.thunk_expr t.thunk_env
     in
-    !run_node_body_ref ~key ~run t
+    Backend.r.run_node_body ~key ~run t
   in
   let rec walk (v : value) : unit =
     match v with
@@ -146,7 +90,7 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
              let k = key_of t in
              if not (Hashtbl.mem seen_keys k) then begin
                Hashtbl.add seen_keys k ();
-               if not (!resolve_if_hit_ref t k) then
+               if not (Backend.r.resolve_if_hit t k) then
                  jobs := { Scheduler.j_key = k; j_run = job_run t k;
                            j_width = race_width (); j_thunk = t }
                          :: !jobs
@@ -224,14 +168,14 @@ let call_zero_arg (fn : value) : value =
           "probe: observe-fn expects 0 arguments, got a closure of %d"
           (List.length c.params));
       let new_frame = Types.make_frame 0 in
-      !vm_run_thunk_ref c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
+      Backend.r.vm_run_thunk c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
   | VClosure c ->
       if c.params <> [] then
         failwith (Printf.sprintf
           "probe: observe-fn expects 0 arguments, got a closure of %d"
           (List.length c.params));
-      !apply_ref fn [] !current_env_ref
-  | VBuiltin _ -> !apply_ref fn [] !current_env_ref
+      Backend.r.apply fn [] !current_env_ref
+  | VBuiltin _ -> Backend.r.apply fn [] !current_env_ref
   | _ -> failwith "probe: observe-fn is not a function"
 
 (* Call a function value with a fixed argument list, dispatching on
@@ -249,14 +193,14 @@ let call_with_args (fn : value) (args : value list) : value =
           (List.length c.params) (List.length args));
       let new_frame = Types.make_frame (List.length args) in
       List.iteri (fun i a -> Types.frame_set new_frame i a) args;
-      !vm_run_thunk_ref c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
+      Backend.r.vm_run_thunk c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
   | VClosure c ->
       if List.length c.params <> List.length args then
         failwith (Printf.sprintf
           "domain function expects %d argument(s), got %d"
           (List.length c.params) (List.length args));
-      !apply_ref fn args !current_env_ref
-  | VBuiltin _ -> !apply_ref fn args !current_env_ref
+      Backend.r.apply fn args !current_env_ref
+  | VBuiltin _ -> Backend.r.apply fn args !current_env_ref
   | _ -> failwith "domain function value is not a function"
 
 (* [Some v]: the probe's value for THIS pass — pinned in Runtime.probe_values
@@ -387,19 +331,6 @@ let initial_env () : env =
 (* ---- Register all primitives ---- *)
 
 
-(* Refs for compiler primitives — set by Compiler.init_primitives after compiler.ml loads *)
-let compiler_state_ref : Types.comp_state option ref = ref None
-let compiler_finish_ref : (Types.comp_state -> Types.bytecode) ref =
-  ref (fun _ -> failwith "compiler not initialized")
-
-(* Ref for VM bytecode runner — set by Vm.init after vm.ml loads *)
-let vm_run_bytecode_ref : (Types.bytecode -> Types.value) ref =
-  ref (fun _ -> failwith "VM not initialized")
-
-(* Ref for VM global definition hook — set by Vm.init after vm.ml loads.
-   Used by eval-pp so that definitions it returns are visible to the VM. *)
-let vm_define_ref : (string -> Types.value -> unit) ref =
-  ref (fun _ _ -> ())
 let () =
   (* Arithmetic — strict: force all args, variadic + and * with identity *)
   arith_fold "+" 0 ( + ) ( +. );
@@ -535,8 +466,8 @@ let () =
               end;
               let new_frame = Types.make_frame 1 in
               Types.frame_set new_frame 0 arg;
-              !vm_run_thunk_ref c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
-          | _ -> !apply_ref fn [arg] !current_env_ref
+              Backend.r.vm_run_thunk c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
+          | _ -> Backend.r.apply fn [arg] !current_env_ref
         in
         let rec go l =
           match force_val l with
@@ -681,7 +612,7 @@ let () =
            macro table, so it can use macros already defined by the calling
            program and any it defines here are visible to LATER eval-pp
            calls in the same run, but never resets between them. *)
-        let exprs = !expand_toplevel_ref (Reader.read_string code) in
+        let exprs = Backend.r.expand_toplevel (Reader.read_string code) in
         (* Capture the calling env into a local ref — avoid clobbering
            current_env_ref during inner evaluations. *)
         let local_env = ref !current_env_ref in
@@ -694,33 +625,33 @@ let () =
           | [EDef (name, params, body)] ->
               let closure = Types.make_closure ~name:(Some name) params body local_env in
               local_env := Types.extend_env !local_env name closure;
-              !vm_define_ref name closure;
+              Backend.r.vm_define name closure;
               new_defs := (name, closure) :: !new_defs;
               if !new_defs = [] then VNil else VEnvMap (List.rev !new_defs)
           | [EDefValue (name, rhs)] ->
-              let v = !eval_ref rhs !local_env in
+              let v = Backend.r.eval rhs !local_env in
               local_env := Types.extend_env !local_env name v;
-              !vm_define_ref name v;
+              Backend.r.vm_define name v;
               new_defs := (name, v) :: !new_defs;
               VEnvMap (List.rev !new_defs)
           | [last] ->
               (* Pure expression: evaluate and force *)
-              force_val (!eval_ref last !local_env)
+              force_val (Backend.r.eval last !local_env)
           | (ELocated (_, inner)) :: rest -> go (inner :: rest)
           | (EDef (name, params, body)) :: rest ->
               let closure = Types.make_closure ~name:(Some name) params body local_env in
               local_env := Types.extend_env !local_env name closure;
-              !vm_define_ref name closure;
+              Backend.r.vm_define name closure;
               new_defs := (name, closure) :: !new_defs;
               go rest
           | (EDefValue (name, rhs)) :: rest ->
-              let v = !eval_ref rhs !local_env in
+              let v = Backend.r.eval rhs !local_env in
               local_env := Types.extend_env !local_env name v;
-              !vm_define_ref name v;
+              Backend.r.vm_define name v;
               new_defs := (name, v) :: !new_defs;
               go rest
           | e :: rest ->
-              ignore (force_val (!eval_ref e !local_env));
+              ignore (force_val (Backend.r.eval e !local_env));
               go rest
         in go exprs
     | _ -> failwith "eval-pp expects a string"
@@ -740,9 +671,9 @@ let () =
          | VClosure c when Array.length c.vm_bc.code > 0 ->
              let new_frame = Types.make_frame (List.length c.params) in
              List.iteri (fun i arg -> Types.frame_set new_frame i arg) arg_values;
-             !vm_run_thunk_ref c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
+             Backend.r.vm_run_thunk c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
          | _ ->
-             !apply_ref fn arg_values !current_env_ref)
+             Backend.r.apply fn arg_values !current_env_ref)
     | _ -> failwith "apply-pp expects fn and list of args"
   );
 
@@ -931,7 +862,7 @@ let () =
   register "argv" (fun args ->
     match args with
     | [] ->
-        let av = !Runtime.program_argv in
+        let av = (Runtime.invocation_get ()).program_argv in
         Runtime.record_read Store.argv_cell_id (Store.argv_observed_hash ());
         List.fold_right (fun s acc -> VPair (VString s, acc)) av VNil
     | _ -> failwith "argv takes no arguments");
@@ -1193,10 +1124,10 @@ let () =
   );
 
   register "ppc-finish" (fun args ->
-    match !compiler_state_ref with
+    match Backend.r.compiler_state with
     | Some st ->
-        compiler_state_ref := None;
-        let bc = !compiler_finish_ref st in
+        Backend.r.compiler_state <- None;
+        let bc = Backend.r.compiler_finish st in
         Types.VBytecode bc
     | None ->
         failwith "ppc-finish: no active compiler state"
@@ -1206,7 +1137,7 @@ let () =
     let args = force_args args in
     match args with
     | [Types.VBytecode bc] ->
-        !vm_run_bytecode_ref bc
+        Backend.r.vm_run_bytecode bc
     | _ -> failwith "ppc-run expects a bytecode value"
   );
 

@@ -28,11 +28,11 @@ let action_key ~(epoch : string) ~(kind : string) ~(spec_hash : string) : string
   Hasher.hash_concat ["fenced"; epoch; kind; spec_hash]
 
 let hash_spec (spec : value) : string =
-  Hasher.hash_value (!Runtime.force_hook spec)
+  Hasher.hash_value (Backend.r.force spec)
 
 (* Deep-force and validate that the spec is a map. *)
 let force_spec_map (spec : value) : (value * value) list =
-  match !Runtime.force_hook spec with
+  match Backend.r.force spec with
   | VMap kvs -> kvs
   | other -> failwith ("fenced: spec must be a map, got " ^ string_of_value other)
 
@@ -46,7 +46,7 @@ let run_command (spec : value) : value =
   let kvs = force_spec_map spec in
   let find key =
     List.find_opt (fun (k, _) ->
-      match !Runtime.force_hook k with
+      match Backend.r.force k with
       | VString s | VKeyword s | VSymbol s -> s = key
       | _ -> false)
       kvs
@@ -55,13 +55,13 @@ let run_command (spec : value) : value =
   | None -> VMap []
   | Some (_, v) ->
       let argv =
-        match !Runtime.force_hook v with
+        match Backend.r.force v with
         | VNil -> []
         | VPair _ as lst ->
             let rec collect = function
               | VNil -> []
               | VPair (a, d) ->
-                  (match !Runtime.force_hook a with
+                  (match Backend.r.force a with
                    | VString s | VKeyword s | VSymbol s -> s
                    | other -> failwith ("fenced: run argv must be strings, got " ^ string_of_value other))
                   :: collect d
@@ -69,7 +69,7 @@ let run_command (spec : value) : value =
             in collect lst
         | VVector arr ->
             Array.to_list (Array.map (fun x ->
-              match !Runtime.force_hook x with
+              match Backend.r.force x with
               | VString s | VKeyword s | VSymbol s -> s
               | other -> failwith ("fenced: run argv must be strings, got " ^ string_of_value other)) arr)
         | VString s -> ["/bin/sh"; "-c"; s]
@@ -120,7 +120,7 @@ let result_hash (v : value) : string = Hasher.hash_value v
    otherwise misreport as non-data purely because its fields hadn't run
    yet. *)
 let rec force_deep (v : value) : value =
-  match !Runtime.force_hook v with
+  match Backend.r.force v with
   | VPair (a, d) -> VPair (force_deep a, force_deep d)
   | VVector vs -> VVector (Array.map force_deep vs)
   | VMap kvs -> VMap (List.map (fun (k, v) -> (force_deep k, force_deep v)) kvs)

@@ -743,4 +743,4 @@ let finish_comp_state (st : comp_state) : bytecode =
 
 (* Register with primitives *)
 let () =
-  Primitives.compiler_finish_ref := finish_comp_state
+  Backend.r.compiler_finish <- finish_comp_state

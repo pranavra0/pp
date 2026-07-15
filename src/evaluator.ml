@@ -363,7 +363,7 @@ let rec force (v : value) : value =
              let run () =
                match t.vm_code with
                | Some (bc, code_offset, frames) ->
-                   !Primitives.vm_run_thunk_ref bc code_offset frames
+                  Backend.r.vm_run_thunk bc code_offset frames
                | None ->
                    eval t.thunk_expr t.thunk_env
              in
@@ -382,7 +382,7 @@ and evaluate_and_store_no_key (t : thunk) : value =
     try
       match t.vm_code with
       | Some (bc, code_offset, frames) ->
-          !Primitives.vm_run_thunk_ref bc code_offset frames
+          Backend.r.vm_run_thunk bc code_offset frames
       | None ->
           eval t.thunk_expr t.thunk_env
     with e ->
@@ -625,7 +625,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
                file's forms and vice versa (load is sequential evaluation,
                one shared macro table — Macro.ml's documented decision). *)
             let contents = Runtime.loader_read path in
-            let exprs = !Primitives.expand_toplevel_ref
+            let exprs = Backend.r.expand_toplevel
                           (Reader_braces.read_dispatch ~source:path ~path contents) in
             ignore (eval_expressions exprs env_ref);
             go rest
@@ -747,7 +747,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       (* M3 defmacro: same shared-expansion-hook treatment as EDo's ELoad
          arm above. *)
       let contents = Runtime.loader_read path in
-      let exprs = !Primitives.expand_toplevel_ref
+      let exprs = Backend.r.expand_toplevel
                     (Reader_braces.read_dispatch ~source:path ~path contents) in
       let env_ref = ref env in
       k (eval_expressions exprs env_ref)
@@ -871,7 +871,7 @@ and trampoline_force (v : value) : value =
                   let run () =
                     match t.vm_code with
                     | Some (bc, code_offset, frames) ->
-                        !Primitives.vm_run_thunk_ref bc code_offset frames
+                        Backend.r.vm_run_thunk bc code_offset frames
                     | None ->
                         let saved = !force_depth in
                         force_depth := 0;
@@ -889,7 +889,7 @@ and trampoline_force (v : value) : value =
                   let result =
                     match t.vm_code with
                     | Some (bc, code_offset, frames) ->
-                        !Primitives.vm_run_thunk_ref bc code_offset frames
+                        Backend.r.vm_run_thunk bc code_offset frames
                     | None ->
                         let saved = !force_depth in
                         force_depth := 0;
@@ -1051,7 +1051,7 @@ and eval_module_file (path : string) : value =
   let source = Runtime.loader_read path in
   (* M7 S1: dispatch on [path]'s extension; the location label stays the
      reader's "<?>" default, exactly as before. *)
-  let exprs = !Primitives.expand_toplevel_ref
+  let exprs = Backend.r.expand_toplevel
                 (Reader_braces.read_dispatch ~path source) in
   let mod_ref = ref (Primitives.initial_env ()) in
   ignore (eval_expressions exprs mod_ref);
@@ -1098,7 +1098,7 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
              M3 defmacro: shared expansion hook, same as every other
              Reader.read_string call site. *)
           let contents = Runtime.loader_read path in
-          let sub_exprs = !Primitives.expand_toplevel_ref
+          let sub_exprs = Backend.r.expand_toplevel
                             (Reader_braces.read_dispatch ~source:path ~path contents) in
           eval_expressions sub_exprs env
       | _ ->
@@ -1131,7 +1131,7 @@ let eval_and_force (e : expr) : value =
 (* Initialize the evaluator state *)
 let init () =
   handler_stack := [];
-  current_capabilities := !initial_capabilities;
+  current_capabilities := (Runtime.invocation_get ()).initial_capabilities;
   if not !Runtime.keep_thunks then Hashtbl.clear thunk_store;
   (* M4 probes: the registry is script-tier registration state, re-established
      by the program's own top-level `(register-probe ...)` forms on every
@@ -1149,23 +1149,20 @@ let init () =
      program could hash differently run to run). Unconditional (not gated
      on Runtime.keep_thunks like thunk_store): both are derived fresh from
      source text each run, never persistent cache state. *)
-  !Primitives.macro_reset_ref ();
+  Backend.r.macro_reset ();
   Primitives.gensym_counter := 0;
-  Primitives.set_force force;
-  Primitives.set_eval eval;
-  Primitives.set_apply apply;
+  Backend.r.force <- force;
+  Backend.r.eval <- eval;
+  Backend.r.apply <- apply;
   (* Phase 3: let Primitives' scheduler-aware force-deep compute tree-walker
      node keys and run node bodies without a dependency cycle (Primitives is
      compiled before Evaluator). *)
-  Primitives.node_key_of_ref := node_key_of;
-  Primitives.run_node_body_ref := (fun ~key ~run t -> run_node_body ~key ~run t);
-  Primitives.resolve_if_hit_ref := (fun t key ->
+  Backend.r.node_key_of <- node_key_of;
+  Backend.r.run_node_body <- (fun ~key ~run t -> run_node_body ~key ~run t);
+  Backend.r.resolve_if_hit <- (fun t key ->
     (* Same node_caps-gated authority as force_node (M3 LAW 23b) — this is
        the force-deep collect pass's own pre-check of the same key. *)
     match Store.hit ~key ~authorized:(cell_authorized_for t.node_caps) with
     | Store.HitOk v -> t.thunk_status <- Evaluated v; true
     | Store.HitFailed _ -> true (* known outcome; the ordinary force path re-raises it *)
     | Store.Miss -> false);
-  (* Config values may be unforced thunks; their trace-cell observation (LAW 33)
-     hashes the forced value, both at record time and at hit re-observation. *)
-  Runtime.force_hook := force

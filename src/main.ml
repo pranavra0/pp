@@ -62,10 +62,13 @@ let main () =
   let compare_hash_args = ref None in  (* (file1, file2) *)
   let list_comments_args = ref None in (* (`Sexpr|`Brace, file) *)
 
+  let program_argv = ref [] in
+  let gc_keep_epochs = ref 5 in
+
   let rec parse = function
     | "--" :: rest ->
         (* Everything after `--` is the program's argv (the `argv` builtin). *)
-        Runtime.program_argv := rest
+        program_argv := rest
     | "--bytecode" :: rest -> bytecode := true; parse rest
     | "--diff" :: rest -> diff := true; bytecode := true; parse rest
     | "--update" :: rest ->
@@ -128,7 +131,7 @@ let main () =
     | "--gc-mark" :: out :: rest -> gc_mark_out := Some out; parse rest
     | "--gc-keep-epochs" :: n :: rest ->
         (match int_of_string_opt n with
-         | Some k when k > 0 -> Runtime.gc_keep_epochs := k
+         | Some k when k > 0 -> gc_keep_epochs := k
          | _ -> failwith ("invalid --gc-keep-epochs: " ^ n));
         parse rest
     | "--gc-grace-seconds" :: s :: rest ->
@@ -398,20 +401,13 @@ let main () =
        exit 0
    | None -> ());
 
-  (* M5 stage B (docs/PLAN-m5-distribution.md "Remote placement"): record
-     this invocation's own file list / --bytecode / raw --grant specs so
-     src/remote.ml can replicate them when spawning a cluster member as an
-     ordinary second `pp` invocation of the identical program. *)
-  Runtime.program_files := List.rev !files;
-  Runtime.program_bytecode := !bytecode;
-  Runtime.initial_grant_specs := List.rev !grants;
-  (* M5 stage C: the additional CLI shape this invocation was given, for the
-     SAME reason — Gcroots.record (domains.ml) needs it to reconstruct an
-     identical `pp` invocation later, for `pp gc`'s mark-by-replay. *)
-  Runtime.program_reconcile_root := !reconcile_root;
-  Runtime.program_supervise := !supervise;
-  Runtime.program_member_name := !member_name;
-  Runtime.program_desired_object := !desired_object_args;
+
+  let source_roots =
+    Runtime.canonical_path (Sys.getcwd ())
+    :: List.map (fun f -> Filename.dirname (Runtime.canonical_path f)) !files
+    @ (match Runtime.stdlib_root () with Some d -> [d] | None -> [])
+  in
+
 
   (* Parse --grant specs into capabilities (Capabilities.parse_grant — M5
      moved this out of a local closure here so the signed-token verifier
@@ -431,16 +427,26 @@ let main () =
          | Error reason -> failwith ("pp: --remote-node: token rejected: " ^ reason))
     | None -> List.map Capabilities.parse_grant (List.rev !grants)
   in
-  Runtime.initial_capabilities := initial_caps;
+
+  Runtime.invocation := Some {
+    source_roots;
+    initial_capabilities = initial_caps;
+    program_argv = !program_argv;
+    program_files = List.rev !files;
+    program_bytecode = !bytecode;
+    initial_grant_specs = List.rev !grants;
+    program_reconcile_root = !reconcile_root;
+    program_supervise = !supervise;
+    program_member_name = !member_name;
+    program_desired_object = !desired_object_args;
+    gc_keep_epochs = !gc_keep_epochs;
+    fenced_policy = !fenced_policy;
+  };
   (* Loader authority bound (Q6/D8c): the interpreter may load source from
      the CLI-named programs' directories, the cwd, and ~/.pp — nothing else.
      Q13 loader reachability: also the resolved stdlib/ dir next to the
      running executable, so `--reconcile`/`--supervise`'s auto-loaded
      stdlib/domain-fs.pp / domain-proc.pp work from ANY cwd. *)
-  Runtime.source_roots :=
-    Runtime.canonical_path (Sys.getcwd ())
-    :: List.map (fun f -> Filename.dirname (Runtime.canonical_path f)) !files
-    @ (match Runtime.stdlib_root () with Some d -> [d] | None -> []);
   Store.init ();
   Remote.init ();
   (* M5 stage C: `--gc-mark` (internal — only `pp gc`'s own replay
@@ -487,7 +493,7 @@ let main () =
    | None -> ());
   Runtime.probe_observer := Primitives.probe_observe_for_store;
   Runtime.domain_cell_observer := Primitives.domain_observe_cell_for_store;
-  Runtime.fenced_policy := !fenced_policy;
+
   (* Collect every cell observation made by the program: needed for
      stratification (LAW 30) and for --watch polling. Unconditional (not
      gated on --reconcile/--watch/--supervise): a program may call
@@ -710,7 +716,7 @@ let main () =
       Hashtbl.clear Runtime.probe_values;  (* M4: probes re-evaluate fresh each pass *)
       Hashtbl.clear Runtime.sealed_pins;   (* M4: sealed bytes never survive a pass *)
       Runtime.observed_all := [];     (* clear collected observations *)
-      Runtime.current_capabilities := !Runtime.initial_capabilities;
+      Runtime.current_capabilities := (Runtime.invocation_get ()).initial_capabilities;
       (* Re-read and execute the program (plus, if --reconcile/--supervise
          is active, the domain-registration glue — run_files/uses_domains). *)
       let last = run_files files in
@@ -729,7 +735,7 @@ let main () =
       Hashtbl.clear Runtime.probe_values;  (* M4: probes re-evaluate fresh each pass *)
       Hashtbl.clear Runtime.sealed_pins;   (* M4: sealed bytes never survive a pass *)
       Runtime.observed_all := [];
-      Runtime.current_capabilities := !Runtime.initial_capabilities;
+      Runtime.current_capabilities := (Runtime.invocation_get ()).initial_capabilities;
       let last = run_files files in
       last_desired := last;
       run_domains_pass last;
@@ -1002,7 +1008,7 @@ let main () =
                in
                Scheduler.policy := Scheduler.Serial;
                Hashtbl.clear Store.run_pins;
-               Runtime.current_capabilities := !Runtime.initial_capabilities;
+               Runtime.current_capabilities := (Runtime.invocation_get ()).initial_capabilities;
                (* Deliberately reuses run_files (so a --reconcile/--supervise
                   program's domain registration is available identically to
                   the scheduled run) but never calls run_domains_pass — this

@@ -335,7 +335,7 @@ let env_observed_hash (v : string option) : string =
 (* The single argv cell: the program-argument list after `--`. *)
 let argv_cell_id : string = Cell.to_string Cell.Argv
 let argv_observed_hash () : string =
-  hash_concat ("argv" :: !Runtime.program_argv)
+  hash_concat ("argv" :: (Runtime.invocation_get ()).program_argv)
 
 let hash_file_opt (path : string) : string option =
   try

@@ -29,7 +29,6 @@ val current_sandbox : create:bool -> string option
 val sandbox_resolve : ?create:bool -> string -> string option
 val push_trace_frame : unit -> (string * string) list ref
 val pop_trace_frame : unit -> unit
-val force_hook : (Types.value -> Types.value) ref
 val proc_observer : (string -> string option) ref
 val observe_proc : string -> string option
 val probe_observer : (string -> string option) ref
@@ -39,27 +38,33 @@ val observe_config : string -> string
 val observe_handler : string -> string
 val record_config_read : string -> unit
 val record_handler_observation : string -> unit
-val source_roots : string list ref
+type fenced_policy = Retry | Abort | Ask
+type invocation = {
+  source_roots : string list;
+  initial_capabilities : Types.capability list;
+  program_argv : string list;
+  program_files : string list;
+  program_bytecode : bool;
+  initial_grant_specs : string list;
+  program_reconcile_root : string option;
+  program_supervise : bool;
+  program_member_name : string option;
+  program_desired_object : (string * string) option;
+  gc_keep_epochs : int;
+  fenced_policy : fenced_policy;
+}
+val invocation : invocation option ref
+val invocation_get : unit -> invocation
+
 val stdlib_root : unit -> string option
 val canonical_path : string -> string
 val loader_read : string -> string
 val with_form_location : Types.expr -> (unit -> 'a) -> 'a
-val initial_capabilities : Types.capability list ref
-val program_argv : string list ref
-val program_files : string list ref
-val program_bytecode : bool ref
-val initial_grant_specs : string list ref
-val program_reconcile_root : string option ref
-val program_supervise : bool ref
-val program_member_name : string option ref
-val program_desired_object : (string * string) option ref
-val gc_keep_epochs : int ref
 val keep_thunks : bool ref
 val fenced_actions : (string * Types.value) list ref
 val island_fetch_enabled : bool ref
-type fenced_policy = Retry | Abort | Ask
-val fenced_policy : fenced_policy ref
 val fenced_policy_name : fenced_policy -> string
+
 type domain_entry = {
   dm_namespace : string list;
   dm_observe : Types.value;
