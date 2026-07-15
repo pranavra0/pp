@@ -26,8 +26,7 @@
 open Types
 
 let has_process_cap () =
-  List.exists (function CapProcess -> true | _ -> false)
-    !Runtime.current_capabilities
+  List.exists Capabilities.check_process !Runtime.current_capabilities
 
 (* Resolve a command to the binary that will execute: as-is when it contains
    a slash, else the first match on $PATH. The resolved path is what the

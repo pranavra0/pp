@@ -202,7 +202,7 @@ let verify ~(secret : string) ~(cluster_id : string) (token_text : string)
   | Some pt ->
       let payload = payload_text pt.pt_specs pt.pt_cluster_id pt.pt_issued pt.pt_expires in
       let expected_mac = mac_of secret payload in
-      if expected_mac <> pt.pt_mac then
+      if not (Constant_time.equal expected_mac pt.pt_mac) then
         Error "cluster token rejected: MAC mismatch (tampered, or minted \
                under a different cluster secret)"
       else if pt.pt_cluster_id <> cluster_id then

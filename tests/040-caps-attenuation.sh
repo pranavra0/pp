@@ -16,9 +16,10 @@
 # Both directions matter: (a) alone could be explained by "narrow wins", (b)
 # alone by "broad wins" — only capture-AT-CREATION explains both.
 #
-# Plus: with-caps' basic narrowing behavior on slurp (scripting tier) and run
-# (process capability, dropped entirely by an fs-only restrict). Both
-# backends, isolated HOME (a fresh ~/.pp/store per case, like tests/011/013).
+# (process capability PRESERVED through an fs-only restrict — CapRestrict
+# narrows filesystem authority only; non-fs channels (process, network,
+# secret) pass through transparently via the check_*/CapRestrict unwrap).
+# Both backends, isolated HOME (a fresh ~/.pp/store per case, like tests/011/013).
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -99,30 +100,25 @@ for bc in "" "--bytecode"; do
 done
 
 # =====================================================================
-# with-caps basic narrowing: run (process capability dropped by an
-# fs-only restrict — cap-restrict/CapRestrict is filesystem-scoped, so
-# restricting (current-capabilities) to a path strips process authority
-# entirely inside the with-caps extent, per check_process's CapRestrict-
-# less match).
+# with-caps basic narrowing: run (process capability PRESERVED through an
+# fs-only restrict — CapRestrict narrows filesystem authority only;
+# non-fs channels pass through transparently).
 # =====================================================================
-cat > "$TMP/wc-run-denied.pp" <<EOF
+cat > "$TMP/wc-run-restricted.pp" <<EOF
 with-caps(cap-restrict(current-capabilities(), "$TMP", :ro)) {
   print(hash-map-get(perform run("echo", "hi"), "out"))
 }
 EOF
-cat > "$TMP/wc-run-allowed.pp" <<EOF
+cat > "$TMP/wc-run-unrestricted.pp" <<EOF
 print(hash-map-get(perform run("echo", "hi"), "out"))
 EOF
 
 for bc in "" "--bytecode"; do
   tag=$([ -z "$bc" ] && echo tw || echo vm)
-  "$PP" $bc --grant process --grant "fs:$TMP:ro" "$TMP/wc-run-denied.pp" > "$TMP/o" 2>&1
-  if grep -qE "apability" "$TMP/o" && ! grep -q "hi" "$TMP/o"; then
-    echo "ok   $tag-wc-run-narrowed-denied"
-  else
-    echo "FAIL $tag-wc-run-narrowed-denied: expected a capability error and no exec"; cat "$TMP/o"; fail=1
-  fi
-  "$PP" $bc --grant process --grant "fs:$TMP:ro" "$TMP/wc-run-allowed.pp" > "$TMP/o" 2>&1
+  "$PP" $bc --grant process --grant "fs:$TMP:ro" "$TMP/wc-run-restricted.pp" > "$TMP/o" 2>&1
+  if grep -q "hi" "$TMP/o"; then echo "ok   $tag-wc-run-restricted-allowed"
+  else echo "FAIL $tag-wc-run-restricted-allowed: expected hi"; cat "$TMP/o"; fail=1; fi
+  "$PP" $bc --grant process --grant "fs:$TMP:ro" "$TMP/wc-run-unrestricted.pp" > "$TMP/o" 2>&1
   if grep -q "hi" "$TMP/o"; then echo "ok   $tag-wc-run-unrestricted-allowed"
   else echo "FAIL $tag-wc-run-unrestricted-allowed: expected hi"; cat "$TMP/o"; fail=1; fi
 done

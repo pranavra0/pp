@@ -52,7 +52,7 @@ let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
     | "string" -> (match v with VString _ -> true | _ -> false)
     | "bool" -> (match v with VBool _ -> true | _ -> false)
     | "nil" -> (match v with VNil -> true | _ -> false)
-    | _ -> true  (* unknown types pass for v1 *)
+    | _ -> false (* unknown type names are hard errors *)
   in
   if not ok then
     let loc_str = match loc with
@@ -82,7 +82,7 @@ let cell_authorized_for (caps : capability list) (cell_id : string) : bool =
   (* A tool observation came from a `run`; serving a result that embeds
      one requires process authority, not an fs grant over the binary. *)
   | Cell.Tool _ ->
-      List.exists (function CapProcess -> true | _ -> false) caps
+      List.exists (fun cap -> Capabilities.check_process cap) caps
   (* A file-predicate observation (file-exists?/dir?) discloses presence,
      so serving it requires the same fs-read authority as recording it. *)
   | Cell.Stat path -> has_fs_read path

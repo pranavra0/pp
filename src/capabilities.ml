@@ -81,6 +81,7 @@ let rec check_network (cap : capability) ~(host : string) ~(port : int option) :
           | None -> true
           | Some p -> (match port with Some q -> q = p | None -> false))
   | CapCompose caps -> List.exists (fun c -> check_network c ~host ~port) caps
+  | CapRestrict { cap; _ } -> check_network cap ~host ~port
   | _ -> false
 
 (* M4 sealed cells: does [cap] grant reading the secret at [target_path]?
@@ -93,12 +94,14 @@ let rec check_secret (cap : capability) (target_path : string) : bool =
   match cap with
   | CapSecret { path } -> path_grants ~scope:path target_path
   | CapCompose caps -> List.exists (fun c -> check_secret c target_path) caps
+  | CapRestrict { cap; _ } -> check_secret cap target_path
   | _ -> false
 
 let rec check_process (cap : capability) : bool =
   match cap with
   | CapProcess -> true
   | CapCompose caps -> List.exists check_process caps
+  | CapRestrict { cap; _ } -> check_process cap
   | _ -> false
 
 (* Intersection of two fs_modes: the narrower access both agree on, or None
@@ -204,7 +207,19 @@ let err_with_caps_widen =
    load-bearing: an incorrect containment answer there would let a narrowed
    value either smuggle out authority it doesn't actually have, or wrongly
    refuse a legitimate narrowing. *)
+(* cap_non_fs_subseteq cap held: check that the non-filesystem authority
+   of [cap] (network, secret) is a subset of what [held] grants.
+   Filesystem and process are handled separately by cap_subseteq's
+   CapRestrict arm (list_fs_paths + check_process). *)
+let rec cap_non_fs_subseteq (cap : capability) (held : capability) : bool =
+  match cap with
+  | CapNetwork { host; port } -> check_network held ~host ~port
+  | CapSecret { path } -> check_secret held path
+  | CapCompose caps -> List.for_all (fun c -> cap_non_fs_subseteq c held) caps
+  | CapRestrict { cap = inner; _ } -> cap_non_fs_subseteq inner held
+  | _ -> true
 let rec cap_subseteq (requested : capability) (ambient : capability list) : bool =
+
   let held = CapCompose ambient in
   match requested with
   | CapNone -> true
@@ -217,13 +232,14 @@ let rec cap_subseteq (requested : capability) (ambient : capability list) : bool
        | Write -> check_fs_write held path
        | ReadWrite -> check_fs_read held path && check_fs_write held path)
   | CapCompose caps -> List.for_all (fun c -> cap_subseteq c ambient) caps
-  | CapRestrict _ as r ->
-      List.for_all (fun (path, m) ->
+  | CapRestrict { cap; _ } as r ->
+      list_fs_paths r |> List.for_all (fun (path, m) ->
         match m with
         | Read -> check_fs_read held path
         | Write -> check_fs_write held path
         | ReadWrite -> check_fs_read held path && check_fs_write held path)
-        (list_fs_paths r)
+      && (not (check_process r) || check_process held)
+      && cap_non_fs_subseteq cap held
 
 (* ---- --grant spec parsing ----
 
