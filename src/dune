@@ -1,7 +1,7 @@
 (executable
  (name main)
  (public_name pp)
- (modules version types backend hasher blobref force_deep codec constant_time paths cell surface_tables fswalk runtime store journal gcroots desugar
+ (modules version types backend hasher node blobref force_deep codec constant_time paths cell surface_tables fswalk runtime store journal gcroots desugar
    reader reader_braces printer_braces printer_sexpr comments
    capability process scheduler domain_prims fenced island primitives domains evaluator macro
    compiler stabilize vm repl cap_token transport remote store_gc lint kernel_props main)

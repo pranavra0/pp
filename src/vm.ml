@@ -628,7 +628,7 @@ and vm_force (v : value) : value =
    the unforced thunk. *)
 and vm_node_key (t : thunk) : string =
   let frames = match t.vm_code with Some (_, _, fr) -> fr | None -> [] in
-  let fv_parts =
+  let fv_hashes =
     List.map (fun (name, depth, slot) ->
       let v =
         if depth < 0 then
@@ -636,27 +636,10 @@ and vm_node_key (t : thunk) : string =
         else
           (try frame_get (List.nth frames depth) slot with _ -> VNil)
       in
-      let hv =
-        match vm_force v with
-        | fv ->
-            if Types.contains_authority fv then
-              raise (Capability_error
-                (Printf.sprintf
-                   "node: free variable '%s' may not be or contain a %s" name
-                   (if Types.contains_sealed fv then "sealed value" else "capability")));
-            hash_value fv
-        | exception e ->
-            (match e with
-             | Capability_error _ -> raise e
-             | _ -> hash_value v)
-      in
-      hash_concat ["fv"; name; hv])
-      t.node_fv
+      Node.fv_hash ~name v vm_force)
+    t.node_fv
   in
-  (* Ambient config/handlers are deliberately NOT in the key: what a node
-     observed of them is recorded as config:/handler: trace cells and governs
-     validity, not identity (LAW 33/26) — same as the tree-walker. *)
-  hash_concat (["node-key"; hash_expr t.thunk_expr] @ fv_parts)
+  Node.node_key_skeleton ~expr_hash:(hash_expr t.thunk_expr) fv_hashes
 
 (* Force a persistent VM node through the store: hit verification, failure
    memoization, trace recording, and the --check audit all live in

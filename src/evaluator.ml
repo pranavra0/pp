@@ -414,40 +414,14 @@ and evaluate_and_store_no_key (t : thunk) : value =
    and governs validity, not identity (LAW 33/26). *)
 and node_key_of (t : thunk) : string =
   let e = t.thunk_expr in
-  let fv_parts =
+  let fv_hashes =
     Types.SS.elements (Types.free_vars e)
     |> List.map (fun name ->
-         match lookup_env t.thunk_env name with
-         | Some v ->
-             (* Free-var ban (LAW 20 node-boundary, import side; also covers
-                VSealed per LAW 39): if the forced value contains a
-                VCapability or VSealed (Hasher.contains_authority — never
-                forces an already-Unevaluated thunk, LAW 14), the key can
-                never be computed — raise Capability_error naming the
-                variable, rather than silently keying on (and thereby
-                smuggling identity information about) a capability or secret.
-                If forcing itself raises Capability_error, propagate it
-                as-is; any OTHER exception falls back to hashing the
-                unforced value (pre-existing behavior, unrelated to this
-                ban). *)
-             let hv =
-               match force v with
-               | fv ->
-                   if Types.contains_authority fv then
-                     raise (Capability_error
-                       (Printf.sprintf
-                          "node: free variable '%s' may not be or contain a %s" name
-                          (if Types.contains_sealed fv then "sealed value" else "capability")));
-                   Types.hash_value fv
-               | exception e ->
-                   (match e with
-                    | Capability_error _ -> raise e
-                    | _ -> Types.hash_value v)
-             in
-             hash_concat ["fv"; name; hv]
-         | None -> hash_concat ["fv-unbound"; name])
+      match lookup_env t.thunk_env name with
+      | Some v -> Node.fv_hash ~name v force
+      | None -> Node.unbound_fv_hash ~name)
   in
-  hash_concat (["node-key"; Types.hash_expr e] @ fv_parts)
+  Node.node_key_skeleton ~expr_hash:(Types.hash_expr e) fv_hashes
 
 (* Remote placement: a
    node is data-closed iff every free var's FORCED value re-encodes under
