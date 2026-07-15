@@ -777,7 +777,7 @@ let main () =
     match !remote_node_args with
     | Some (token_file, _, _, _, _) ->
         let token_text = Store.read_raw token_file in
-        (match Token.token_to_caps token_text with
+        (match Cap_token.token_to_caps token_text with
          | Ok caps -> caps
          | Error reason -> failwith ("pp: --remote-node: token rejected: " ^ reason))
     | None -> List.map (fun spec -> Capability.mint ~realpath:Backend.r.realpath spec) (List.rev !grants)
@@ -875,12 +875,12 @@ let main () =
      Errors (bad token, corrupt/tampered artifact, missing secret) propagate
      as Failure/Transport.Transport_integrity_error to the top-level handler
      below, printed uniformly as "pp: error: ...". *)
-  if !cluster_init_mode then (Token.init (); exit 0);
+  if !cluster_init_mode then (Cap_token.init (); exit 0);
   (match !mint_token_args with
    | Some (out, ttl) ->
-       let secret = Token.load_secret () in
-       let cluster_id = Token.load_cluster_id () in
-       let token = Token.mint ~secret ~cluster_id ~specs:(List.rev !grants) ~ttl_seconds:ttl in
+       let secret = Cap_token.load_secret () in
+       let cluster_id = Cap_token.load_cluster_id () in
+       let token = Cap_token.mint ~secret ~cluster_id ~specs:(List.rev !grants) ~ttl_seconds:ttl in
        Store.atomic_write out token;
        exit 0
    | None -> ());

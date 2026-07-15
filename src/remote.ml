@@ -349,9 +349,9 @@ let ship_and_pull ~(member_home : string) (closed : Scheduler.job list) : unit =
     let pins_file = Filename.concat scratch "pins" in
     Store.atomic_write pins_file
       (String.concat "" (List.map (fun (c, h, _) -> pin_line c h) pins));
-    let secret = Token.load_secret () and cluster_id = Token.load_cluster_id () in
+    let secret = Cap_token.load_secret () and cluster_id = Cap_token.load_cluster_id () in
     let token_text =
-      Token.mint ~secret ~cluster_id ~specs:(Runtime.invocation_get ()).initial_grant_specs
+      Cap_token.mint ~secret ~cluster_id ~specs:(Runtime.invocation_get ()).initial_grant_specs
         ~ttl_seconds:remote_ttl_seconds
     in
     let token_file = Filename.concat scratch "token" in

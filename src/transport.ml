@@ -301,7 +301,7 @@ type decision =
   | DDeny of string
 
 let decide ~(key : string) ~(token_text : string) : decision =
-  match Token.token_to_caps token_text with
+  match Cap_token.token_to_caps token_text with
   | Error reason -> DDeny reason
   | Ok caps ->
       let authorized = Evaluator.cell_authorized_for caps in
