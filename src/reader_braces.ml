@@ -86,6 +86,11 @@ let lex ~(file : string) (input : string) : tok list =
   let toks = ref [] in
   let last_end = ref (-1) in   (* char index just past the previous token *)
   let lex_error l msg = failwith (Printf.sprintf "%s at %s:%d" msg file l) in
+  (* A token that scanned off the end of the source — the lexer's out-of-input
+     signal, distinct from a genuine bad-character error. See
+     Types.Reader_incomplete. *)
+  let lex_incomplete l msg =
+    raise (Reader_incomplete (Printf.sprintf "%s at %s:%d" msg file l)) in
   let peek () = if !pos < len then Some input.[!pos] else None in
   let peek_at k = if !pos + k < len then Some input.[!pos + k] else None in
   let advance () = incr pos in
@@ -100,7 +105,7 @@ let lex ~(file : string) (input : string) : tok list =
     let buf = Buffer.create 16 in
     let rec loop () =
       match peek () with
-      | None -> lex_error start_line "unterminated string"
+      | None -> lex_incomplete start_line "unterminated string"
       | Some '"' -> advance (); Buffer.contents buf
       | Some '\\' ->
           advance ();
@@ -110,7 +115,7 @@ let lex ~(file : string) (input : string) : tok list =
            | Some '\\' -> advance (); Buffer.add_char buf '\\'; loop ()
            | Some '"' -> advance (); Buffer.add_char buf '"'; loop ()
            | Some c -> advance (); Buffer.add_char buf c; loop ()
-           | None -> lex_error start_line "unterminated escape")
+           | None -> lex_incomplete start_line "unterminated escape")
       | Some c ->
           if c = '\n' then incr line;
           advance ();
@@ -138,7 +143,7 @@ let lex ~(file : string) (input : string) : tok list =
     in
     let rec loop () =
       match peek () with
-      | None -> lex_error start_line "unterminated f-string"
+      | None -> lex_incomplete start_line "unterminated f-string"
       | Some '"' -> advance (); flush_lit ()
       | Some '\\' ->
           advance ();
@@ -148,7 +153,7 @@ let lex ~(file : string) (input : string) : tok list =
            | Some '\\' -> advance (); Buffer.add_char lit '\\'; loop ()
            | Some '"' -> advance (); Buffer.add_char lit '"'; loop ()
            | Some c -> advance (); Buffer.add_char lit c; loop ()
-           | None -> lex_error start_line "unterminated escape in f-string")
+           | None -> lex_incomplete start_line "unterminated escape in f-string")
       | Some '{' when peek_at 1 = Some '{' ->
           advance (); advance (); Buffer.add_char lit '{'; loop ()
       | Some '}' when peek_at 1 = Some '}' ->
@@ -162,7 +167,7 @@ let lex ~(file : string) (input : string) : tok list =
           let hbuf = Buffer.create 16 in
           let rec hole depth =
             match peek () with
-            | None -> lex_error start_line "unterminated interpolation in f-string"
+            | None -> lex_incomplete start_line "unterminated interpolation in f-string"
             | Some '}' when depth = 0 -> advance ()
             | Some '}' -> Buffer.add_char hbuf '}'; advance (); hole (depth - 1)
             | Some '{' -> Buffer.add_char hbuf '{'; advance (); hole (depth + 1)
@@ -171,13 +176,13 @@ let lex ~(file : string) (input : string) : tok list =
                 Buffer.add_char hbuf '"'; advance ();
                 let rec str () =
                   match peek () with
-                  | None -> lex_error start_line
+                  | None -> lex_incomplete start_line
                               "unterminated string inside f-string interpolation"
                   | Some '\\' ->
                       Buffer.add_char hbuf '\\'; advance ();
                       (match peek () with
                        | Some c -> Buffer.add_char hbuf c; advance (); str ()
-                       | None -> lex_error start_line "unterminated escape")
+                       | None -> lex_incomplete start_line "unterminated escape")
                   | Some '"' -> Buffer.add_char hbuf '"'; advance ()
                   | Some c -> Buffer.add_char hbuf c; advance (); str ()
                 in
@@ -324,8 +329,19 @@ let cur ps =
 
 let advance ps = ps.pos <- ps.pos + 1
 
+(* A parse failure is "incomplete" (the REPL should read more) iff the next
+   significant token is end-of-input — the honest definition of running out of
+   input, decided structurally rather than by message wording. Everything else
+   is a genuine error on a token that is present. next_sig scans without
+   mutating (unlike [peek ~nl], which consumes newlines via skip_nl). *)
 let parse_error ps msg =
-  failwith (Printf.sprintf "%s at %s:%d" msg ps.file (cur ps).tline)
+  let located = Printf.sprintf "%s at %s:%d" msg ps.file (cur ps).tline in
+  let rec next_sig i =
+    if i >= Array.length ps.toks then eof_tok
+    else match ps.toks.(i).t with TNewline -> next_sig (i + 1) | _ -> ps.toks.(i)
+  in
+  if (next_sig ps.pos).t = TEOF then raise (Reader_incomplete located)
+  else failwith located
 
 (* Skip newline tokens (used wherever the statement-continuation rule makes
    newlines insignificant: inside brackets, after an operator/'='/'->'/','
@@ -2342,35 +2358,23 @@ let read_dispatch ?(source : string option) ~(path : string) (input : string)
 
 (* ---- REPL multi-line continuation ----
 
-   Whether [input] is still an open form that needs more lines before it can
-   be read — used by repl.ml's read_form to decide whether to keep
-   accumulating under the "..> " prompt. Reused rather than reimplemented:
-   attempt the SAME parse the REPL will do to actually evaluate the input,
-   and classify the failure. A form still open always fails by running out
-   of tokens partway through — an unterminated string (the lexer's own
-   "unterminated string"/"unterminated escape"), a block/quasiquote reading
-   past its last token ("unterminated <what>"/"unterminated block in
-   quasiquote"), or the parser wanting one more token and finding none
-   (every "expected X, got <eof>"/"unexpected end of input[...]" message —
-   string_of_btok TEOF = "<eof>", and parse_primary's bare-EOF case says
-   "unexpected end of input"). This is the reader's actual bracket-nesting
-   AND infix/statement-continuation logic (skip_nl's transparency, e.g. a
-   trailing "+ " or a dangling `let`/`if`/`def` header awaiting its block) —
-   reimplementing it as a standalone bracket-counter would have to
-   rediscover every one of those "awaiting a block/paren/comma" shapes by
-   hand and inevitably drift from the grammar above. A genuine syntax error
-   (e.g. a stray extra ')') fails WITHOUT any of these markers, so it is
-   handed to the REPL's normal error path instead of stalling the prompt. *)
-let looks_incomplete (msg : string) : bool =
-  let contains sub =
-    let ls = String.length sub and lm = String.length msg in
-    let rec go i = i + ls <= lm && (String.sub msg i ls = sub || go (i + 1)) in
-    go 0
-  in
-  contains "<eof>" || contains "unterminated" || contains "unexpected end of input"
-
+   Whether [input] is still an open form that needs more lines before it can be
+   read — used by repl.ml's read_form to decide whether to keep accumulating
+   under the "..> " prompt. It runs the SAME parse the REPL will use to evaluate
+   the input and classifies the outcome by exception TYPE: Reader_incomplete
+   means the reader ran out of input (a form still open — an unterminated
+   string, a bracket/block awaiting its close, an infix/statement continuation),
+   so read more; a plain Failure is a genuine syntax error on a token that is
+   present, so hand it to the REPL's error path. Because the reader raises
+   Reader_incomplete exactly where it hits end of input (parser: next
+   significant token is EOF; lexer: an unterminated token), continuation no
+   longer depends on error-message wording, and an error whose text merely
+   contains "unterminated"/"<eof>" as data is never mistaken for an open form.
+   Reusing the real reader — rather than a standalone bracket-counter — keeps
+   this in step with the grammar's every "awaiting a block/paren/comma" shape. *)
 let needs_more_input ?(source : string = "<repl>") (input : string) : bool =
   try ignore (read_string ~source input); false
   with
-  | Failure msg -> looks_incomplete msg
+  | Reader_incomplete _ -> true
+  | Failure _ -> false
   | _ -> false

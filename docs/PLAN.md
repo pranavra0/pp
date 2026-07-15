@@ -296,13 +296,6 @@ lint rule.
 - NFC Unicode normalization for cell-id canonicalization is still
   unimplemented (`runtime.ml` says so): a documented residual until a
   dependency-free path exists.
-- `reader_braces.ml`'s `looks_incomplete` still decides REPL
-  continuation by substring-matching exception text (`<eof>`,
-  `unterminated`, `unexpected end of input`). Replace it with a
-  dedicated exception raised at the actual out-of-input sites, so reader
-  error wording and REPL behaviour decouple. Left over from the
-  parser unification, which deleted the parallel parser but not this
-  stringly control-flow path.
 - Test-suite speed: `dune runtest` runs one dune rule that calls
   `scripts/run-tests.sh` sequentially. Measured total wall time is 208
   seconds, and dune adds no parallelism on top. Four tests account for

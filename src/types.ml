@@ -16,6 +16,21 @@ let () = Printexc.register_printer (function
    picks up error decoration — it unwinds to main, which exits. *)
 exception Pp_exit of int
 
+(* The reader ran out of input while a form was still open (parser: the next
+   significant token is end-of-input; lexer: a token — string, escape, island —
+   scanned off the end of the source). Distinct from `Failure`, which is a
+   genuine syntax error on a token that IS present, so the REPL can decide
+   multi-line continuation by exception TYPE, not by matching error-message text
+   (Reader_braces.needs_more_input). Carries the same located message a plain
+   reader failure would, so it reads identically if ever printed. *)
+exception Reader_incomplete of string
+(* When an incomplete form is nonetheless submitted (EOF/Ctrl-D at the REPL, or
+   a truncated file), it surfaces as a normal located reader error rather than a
+   raw exception string — same treatment as Capability_error above. *)
+let () = Printexc.register_printer (function
+  | Reader_incomplete msg -> Some msg
+  | _ -> None)
+
 (* ---- Environment ---- *)
 
 (* An environment node with a stable ID, a cached hash, and a list of bindings.

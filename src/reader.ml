@@ -40,6 +40,12 @@ let current_file = ref ""
 let lex_error line msg =
   failwith (Printf.sprintf "%s at %s:%d" msg !current_file line)
 
+(* A token that scanned off the end of the source — the lexer's out-of-input
+   signal, distinct from a genuine bad-character error. See
+   Types.Reader_incomplete. *)
+let lex_incomplete line msg =
+  raise (Reader_incomplete (Printf.sprintf "%s at %s:%d" msg !current_file line))
+
 (* Lex a string into a list of (token, start_line) pairs. *)
 let lex (input : string) : (token * int) list =
   let len = String.length input in
@@ -112,7 +118,7 @@ let lex (input : string) : (token * int) list =
     let buf = Buffer.create 16 in
     let rec loop () =
       match peek () with
-      | None -> lex_error !lex_line "unterminated string"
+      | None -> lex_incomplete !lex_line "unterminated string"
       | Some '"' -> advance (); add (TokString (Buffer.contents buf))
       | Some '\\' ->
           advance ();
@@ -122,7 +128,7 @@ let lex (input : string) : (token * int) list =
            | Some '\\' -> advance (); Buffer.add_char buf '\\'; loop ()
            | Some '"' -> advance (); Buffer.add_char buf '"'; loop ()
            | Some c -> advance (); Buffer.add_char buf c; loop ()
-           | None -> lex_error !lex_line "unterminated escape")
+           | None -> lex_incomplete !lex_line "unterminated escape")
       | Some c ->
           if c = '\n' then incr lex_line;
           advance ();
@@ -150,7 +156,7 @@ let lex (input : string) : (token * int) list =
     let buf = Buffer.create 32 in
     let rec loop () =
       match peek () with
-      | None -> lex_error !lex_line "unterminated island literal"
+      | None -> lex_incomplete !lex_line "unterminated island literal"
       | Some '>' -> advance (); add (TokIsland (Buffer.contents buf))
       | Some c -> Buffer.add_char buf c; advance (); loop ()
     in
@@ -210,10 +216,14 @@ let next ps = let t = peek ps in advance ps; t
 let is_symbol ps name =
   match peek ps with TokSymbol n when n = name -> true | _ -> false
 
+(* Incomplete (REPL: read more) iff the failure is at end-of-input; genuine
+   otherwise. The sexpr reader has no newline tokens, so the current token IS
+   the next significant one. See Types.Reader_incomplete. *)
 let parse_error ps msg =
   let file = !current_file in
   let line = peek_line ps in
-  failwith (Printf.sprintf "%s at %s:%d" msg file line)
+  let located = Printf.sprintf "%s at %s:%d" msg file line in
+  if peek ps = TokEOF then raise (Reader_incomplete located) else failwith located
 
 (* Collect items until the [closing] delimiter (consumed); [what] names the
    form in the unterminated-at-EOF error. One loop for every bracketed form. *)
