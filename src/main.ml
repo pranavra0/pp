@@ -20,6 +20,285 @@ type flag = {
   handler : string list -> string list;
 }
 
+(* CLI subcommand logic, top level rather than nested in `main`: `main` reads
+   the flag table, builds the invocation record, then dispatches to these.
+   Each reads its run configuration from the invocation record — built once,
+   never mutated afterward — not from `main`'s parse-time refs. *)
+
+let read_whole (path : string) : string =
+  let ch = open_in_bin path in
+  let s = really_input_string ch (in_channel_length ch) in
+  close_in ch; s
+
+let read_file_content (path : string) : string =
+  let ch = open_in path in
+  let s = really_input_string ch (in_channel_length ch) in
+  close_in ch; s
+
+(* Minimal pp string-literal quoting for embedding an OCaml-computed path
+   into synthetic glue source text (reader.ml supports the usual backslash
+   and double-quote escapes; anything else passes through) — NOT
+   Codec.quote_string, which is a different (store-line) escaping dialect. *)
+let pp_quote (s : string) : string =
+  let buf = Buffer.create (String.length s + 2) in
+  Buffer.add_char buf '"';
+  String.iter (fun c ->
+    if c = '\\' then Buffer.add_string buf "\\\\"
+    else if c = '"' then Buffer.add_string buf "\\\""
+    else Buffer.add_char buf c)
+    s;
+  Buffer.add_char buf '"';
+  Buffer.contents buf
+
+let uses_domains () =
+  let i = Runtime.invocation_get () in
+  i.program_reconcile_root <> None || i.program_supervise
+
+(* Domain driver wiring. `--reconcile ROOT` auto-loads stdlib/domain-fs.pp and
+   registers it with a write-cap cap-restrict'd to ROOT, wrapping the
+   program's final value as {"fs" -> v}; `--supervise` likewise with
+   stdlib/domain-proc.pp, {"proc" -> v}; both compose (the same v feeds both).
+   A program that calls register-domain itself needs none of this glue — it
+   returns {name -> desired} directly, one evaluation, N domains.
+
+   (source-tag, content) pairs to run BEFORE the user's file(s), under the
+   SAME init (Repl.execute_sources_bytecode) so the domain registrations they
+   perform survive into the user program's evaluation — two SEPARATE
+   execute_*_bytecode calls would each re-init and wipe Runtime.domain_registry
+   (Evaluator.init resets it every fresh run). *)
+let stdlib_glue_sources () : (string * string) list =
+  if not (uses_domains ()) then []
+  else match Runtime.stdlib_root () with
+    | None ->
+        failwith "pp: could not locate the stdlib/ directory next to the running \
+                  executable (needed for --reconcile/--supervise's domain-fs.pp/\
+                  domain-proc.pp)"
+    | Some root ->
+        let common = List.map (fun f ->
+          ("<stdlib:" ^ f ^ ">", Printf.sprintf "(load %s)\n"
+             (pp_quote (Filename.concat root f))))
+          ["list.pp"; "map.pp"; "string.pp"]
+        in
+        let fs_glue = match (Runtime.invocation_get ()).program_reconcile_root with
+          | None -> []
+          | Some r ->
+              let canon = Runtime.canonical_path r in
+              (* :wo, not :rw — write-only is the minimum sufficient grant
+                 here: tests/023 grants only `fs:ROOT:wo` and expects a full
+                 build+restore cycle to work — the single writer reading its
+                 OWN managed tree to converge is not a distinct authority
+                 concern (Domain_prims.tree_observe accepts read-OR-write for
+                 exactly this reason), so the domain's write-cap only needs to
+                 hold WRITE; requesting :rw here would make cap-restrict itself
+                 reject a write-only grant before the domain ever runs. *)
+              [("<domain-glue:fs>", Printf.sprintf
+                  "(load %s)\n(register-fs-domain %s (cap-restrict (current-capabilities) %s :wo))\n"
+                  (pp_quote (Filename.concat root "domain-fs.pp"))
+                  (pp_quote canon) (pp_quote canon))]
+        in
+        let proc_glue =
+          if not (Runtime.invocation_get ()).program_supervise then []
+          else
+            [("<domain-glue:proc>", Printf.sprintf
+                "(load %s)\n(register-proc-domain (current-capabilities))\n"
+                (pp_quote (Filename.concat root "domain-proc.pp")))]
+        in
+        common @ fs_glue @ proc_glue
+
+(* Merge rule for the auto-wrap: --reconcile alone -> {"fs" v}; --supervise
+   alone -> {"proc" v}; both -> {"fs" v, "proc" v} (both fed the SAME v). A
+   bare register-domain program (neither flag) returns its own {name ->
+   desired} directly — [v] unwrapped. *)
+let build_all_desired (v : Types.value) : Types.value =
+  let i = Runtime.invocation_get () in
+  let pairs =
+    (if i.program_reconcile_root <> None then [(Types.VString "fs", v)] else [])
+    @ (if i.program_supervise then [(Types.VString "proc", v)] else [])
+  in
+  if pairs <> [] then Types.VMap pairs else v
+
+(* Run every given file plus (when needed) the domain-registration glue, under
+   ONE init — this is what lets `register-fs-domain`/`register-proc-domain`'s
+   registration survive to reach the user's file. Falls back to the untouched
+   per-file loop when no domain wiring is needed at all. *)
+let run_files (files : string list) : Types.value option =
+  let bytecode = (Runtime.invocation_get ()).program_bytecode in
+  Runtime.fenced_actions := [];
+  if uses_domains () then
+    let sources = stdlib_glue_sources ()
+                  @ List.map (fun f -> (f, read_file_content f)) files in
+    match List.rev (Repl.execute_sources_bytecode bytecode sources) with
+    | v :: _ -> Some v | [] -> None
+  else
+    List.fold_left (fun _ f ->
+      Runtime.fenced_actions := [];
+      match List.rev (Repl.execute_file_bytecode bytecode f) with
+      | v :: _ -> Some v | [] -> None) None files
+
+let should_run_domains () =
+  uses_domains () || Domains.any_write_domain_registered ()
+
+(* The by-hash desired-value seam: `--desired-object HASH ROOT` substitutes
+   the DERIVATION of the desired-state root entirely — the object was already
+   pulled (and its blob: refs with it), so this process never runs a program
+   to compute what to converge, only to register domains (run_files still
+   executes for that side effect; its RETURN VALUE is discarded here in favor
+   of the synced object). Without `--desired-object`, wrap the program's own
+   return value via build_all_desired. *)
+let compute_all_desired (last : Types.value option) : Types.value =
+  match (Runtime.invocation_get ()).program_desired_object with
+  | Some (hash, _) ->
+      (match Store.load_object ~key:hash with
+       | Some v -> v
+       | None ->
+           failwith (Printf.sprintf
+             "pp: --desired-object %s: not found in the local store even \
+              after pulling — check the shared root and that it was \
+              published there via --publish-object" hash))
+  | None ->
+      (match last with
+       | Some v -> build_all_desired v
+       | None -> failwith "reconcile: the program produced no value")
+
+(* Host-qualified domain distribution: host-keying is opt-in ONLY via an
+   explicit `--member-name <n>` flag, never inferred from a value's shape.
+   Without it, [all_desired] passes through completely unchanged. With it,
+   [all_desired] MUST be a map keyed by host name (string or keyword) and this
+   indexes exactly one entry, handing the UNCHANGED Domains.run_all only that
+   host's own {domain -> desired} slice. *)
+let select_member_slice (all_desired : Types.value) : Types.value =
+  match (Runtime.invocation_get ()).program_member_name with
+  | None -> all_desired
+  | Some name ->
+      (match Primitives.force_deep all_desired with
+       | Types.VMap kvs ->
+           (match List.find_opt (fun (k, _) ->
+              match k with
+              | Types.VString s | Types.VKeyword s -> s = name
+              | _ -> false)
+              kvs
+            with
+            | Some (_, v) -> v
+            | None ->
+                failwith (Printf.sprintf
+                  "pp: --member-name %s: no such host key in the \
+                   desired-state map (host-qualified distribution expects \
+                   {host -> {domain -> desired}})" name))
+       | other ->
+           failwith (Printf.sprintf
+             "pp: --member-name %s: desired-state must be a map of \
+              host -> {domain -> desired} to index, got %s"
+             name (Types.string_of_value other)))
+
+let run_domains_pass (last : Types.value option) : unit =
+  if should_run_domains () then begin
+    Domains.run_all (select_member_slice (compute_all_desired last));
+    Fenced.drain ()
+  end
+
+let print_graph ?(verbose = false) () = Store.print_graph ~verbose ()
+
+let snapshot_cell_hashes (cell_ids : string list) : (string * string) list =
+  List.filter_map (fun id ->
+    match Store.observe_cell id with
+    | Some h -> Some (id, h) | None -> None) cell_ids
+
+(* --watch polling loop: run the program, snapshot observed cell hashes, poll
+   for changes, re-run on change. Uses the pull scheduler in a loop — the
+   persistent store's trace verification naturally skips unchanged nodes
+   (hits) and recomputes changed ones (misses), so --watch and --once collapse
+   to one store-level path. *)
+let watch_loop ~files ~interval ~stabilize =
+  Runtime.observe_all := true;
+  let last_desired = ref None in
+  let run_program () =
+    (* Clear in-memory state for a fresh evaluation. The persistent store
+       survives — this is the store-level collapse. run_files itself calls
+       Vm.init ()/Repl.init () (via execute_sources_bytecode /
+       execute_file_bytecode). *)
+    Hashtbl.clear Store.run_pins;  (* clear pinned cell observations *)
+    Hashtbl.clear Runtime.probe_values;  (* probes re-evaluate fresh each pass *)
+    Hashtbl.clear Runtime.sealed_pins;   (* sealed bytes never survive a pass *)
+    Runtime.observed_all := [];     (* clear collected observations *)
+    Runtime.current_capabilities := (Runtime.invocation_get ()).initial_capabilities;
+    (* Re-read and execute the program (plus, if --reconcile/--supervise is
+       active, the domain-registration glue — run_files/uses_domains). *)
+    let last = run_files files in
+    last_desired := last;
+    run_domains_pass last;
+    (* Collect the cells we need to poll and snapshot their current hashes. *)
+    let cell_ids = List.sort_uniq compare (List.map fst !(Runtime.observed_all)) in
+    snapshot_cell_hashes cell_ids
+  in
+  let run_program_stabilize ~prev_snapshot changed_cells =
+    let rev = Store.build_reverse_index () in
+    let dirty = Store.dirty_keys_for changed_cells rev in
+    Stabilize.reset_dirty dirty;
+    Runtime.keep_thunks := true;  (* set BEFORE run_files's internal init *)
+    Hashtbl.clear Store.run_pins;  (* fresh world observations, not last run's pins *)
+    Hashtbl.clear Runtime.probe_values;  (* probes re-evaluate fresh each pass *)
+    Hashtbl.clear Runtime.sealed_pins;   (* sealed bytes never survive a pass *)
+    Runtime.observed_all := [];
+    Runtime.current_capabilities := (Runtime.invocation_get ()).initial_capabilities;
+    let last = run_files files in
+    last_desired := last;
+    run_domains_pass last;
+    let cell_ids = List.sort_uniq compare (List.map fst !(Runtime.observed_all)) in
+    let new_obs = snapshot_cell_hashes cell_ids in
+    let new_set = List.map fst new_obs in
+    let prev_clean = List.filter (fun (id, _) -> not (List.mem id new_set)) prev_snapshot in
+    new_obs @ prev_clean
+  in
+  (* First iteration: cold run. *)
+  if stabilize then begin
+    Runtime.keep_thunks := false;
+    Stabilize.clear_side_table ()
+  end;
+  let snapshot = run_program () in
+  let rec loop snapshot =
+    begin try Unix.sleepf interval
+      with _ -> Unix.sleep 1 end;
+    (* Clear run pins so observe_cell reads the current world, not the
+       snapshot from the last run (CAS-ingest pins the first read of a cell
+       for the rest of a run). *)
+    Hashtbl.clear Store.run_pins;
+    Hashtbl.clear Runtime.probe_values;  (* probes re-evaluate fresh each pass *)
+    Hashtbl.clear Runtime.sealed_pins;   (* sealed bytes never survive a pass *)
+    (* Detect cell changes FIRST, before reconcile work, so config edits are
+       noticed promptly. Then reconcile processes only when no cell changed —
+       this still restarts killed services within one interval. *)
+    let changed_cells =
+      List.filter_map (fun (cell_id, recorded_hash) ->
+        match Store.observe_cell cell_id with
+        | Some h when h <> recorded_hash -> Some cell_id
+        | _ -> None) snapshot
+    in
+    if changed_cells <> [] then begin
+      if stabilize then begin
+        Printf.eprintf "[watch] %d cell(s) changed — stabilizing\n%!"
+          (List.length changed_cells);
+        let new_snapshot = run_program_stabilize ~prev_snapshot:snapshot changed_cells in
+        loop new_snapshot
+      end else begin
+        Printf.eprintf "[watch] cell(s) changed — re-evaluating\n%!";
+        let new_snapshot = run_program () in
+        loop new_snapshot
+      end
+    end else begin
+      (* Generalized from the old proc-only recheck: EVERY registered
+         write-domain is re-observed/re-diffed/re-applied on every tick, not
+         just proc — a killed service or an externally-drifted file is caught
+         within one poll interval either way. Cheap when nothing actually
+         changed: the plan cache (Domains.compute_plan) makes an unchanged
+         pass a cache hit, not a re-walk. *)
+      (match !last_desired with
+       | Some v -> run_domains_pass (Some v)
+       | None -> ());
+      loop snapshot
+    end
+  in
+  loop snapshot
+
 let main () =
   let args = List.tl (Array.to_list Sys.argv) in
   let bytecode = ref false in
@@ -344,12 +623,7 @@ let main () =
   (* ---- Brace-surface seams — each does its one thing and exits.
      Both read the ORIGINAL (pre-macro-expansion) forms: surface identity is
      a reader-level property, and LAW 20 keys hash the located AST these
-     produce. *)
-  let read_whole (path : string) : string =
-    let ch = open_in_bin path in
-    let s = really_input_string ch (in_channel_length ch) in
-    close_in ch; s
-  in
+     produce. (read_whole is top-level.) *)
   (match !emit_braces_file with
    | Some f ->
        if Reader_braces.file_uses_braces f then
@@ -591,282 +865,6 @@ let main () =
     Fenced.recover_unknown ~policy:!fenced_policy;
 
 
-  (* ---- Domain driver wiring ----
-
-     `--reconcile ROOT` auto-loads stdlib/domain-fs.pp and registers it with
-     a write-cap cap-restrict'd to ROOT, wrapping the program's final value
-     as {"fs" -> v}; `--supervise` likewise with stdlib/domain-proc.pp,
-     {"proc" -> v}; both compose (the same v feeds both). A program that calls
-     register-domain itself needs none of this glue — it returns
-     {name -> desired} directly, one evaluation, N domains. *)
-  let read_file_content (path : string) : string =
-    let ch = open_in path in
-    let s = really_input_string ch (in_channel_length ch) in
-    close_in ch; s
-  in
-  (* Minimal pp string-literal quoting for embedding an OCaml-computed path
-     into synthetic glue source text (reader.ml supports the usual backslash
-     and double-quote escapes; anything else passes through) — NOT
-     Codec.quote_string, which is a different (store-line) escaping
-     dialect. *)
-  let pp_quote (s : string) : string =
-    let buf = Buffer.create (String.length s + 2) in
-    Buffer.add_char buf '"';
-    String.iter (fun c ->
-      if c = '\\' then Buffer.add_string buf "\\\\"
-      else if c = '"' then Buffer.add_string buf "\\\""
-      else Buffer.add_char buf c)
-      s;
-    Buffer.add_char buf '"';
-    Buffer.contents buf
-  in
-  let uses_domains () = !reconcile_root <> None || !supervise in
-  (* (source-tag, content) pairs to run BEFORE the user's file(s), under the
-     SAME init (Repl.execute_sources_bytecode) so the domain registrations
-     they perform survive into the user program's evaluation — two
-     SEPARATE execute_*_bytecode calls would each re-init and wipe
-     Runtime.domain_registry (Evaluator.init resets it every fresh run). *)
-  let stdlib_glue_sources () : (string * string) list =
-    if not (uses_domains ()) then []
-    else match Runtime.stdlib_root () with
-      | None ->
-          failwith "pp: could not locate the stdlib/ directory next to the running \
-                    executable (needed for --reconcile/--supervise's domain-fs.pp/\
-                    domain-proc.pp)"
-      | Some root ->
-          let common = List.map (fun f ->
-            ("<stdlib:" ^ f ^ ">", Printf.sprintf "(load %s)\n"
-               (pp_quote (Filename.concat root f))))
-            ["list.pp"; "map.pp"; "string.pp"]
-          in
-          let fs_glue = match !reconcile_root with
-            | None -> []
-            | Some r ->
-                let canon = Runtime.canonical_path r in
-                (* :wo, not :rw — write-only is the minimum sufficient
-                   grant here: tests/023 grants only `fs:ROOT:wo` and
-                   expects a full build+restore cycle to work — the single
-                   writer reading its OWN managed tree to converge is not a
-                   distinct authority concern (Domain_prims.tree_observe
-                   accepts read-OR-write for exactly this reason), so the
-                   domain's write-cap only needs to hold WRITE; requesting
-                   :rw here would make cap-restrict itself reject a
-                   write-only grant before the domain ever runs. *)
-                [("<domain-glue:fs>", Printf.sprintf
-                    "(load %s)\n(register-fs-domain %s (cap-restrict (current-capabilities) %s :wo))\n"
-                    (pp_quote (Filename.concat root "domain-fs.pp"))
-                    (pp_quote canon) (pp_quote canon))]
-          in
-          let proc_glue =
-            if not !supervise then []
-            else
-              [("<domain-glue:proc>", Printf.sprintf
-                  "(load %s)\n(register-proc-domain (current-capabilities))\n"
-                  (pp_quote (Filename.concat root "domain-proc.pp")))]
-          in
-          common @ fs_glue @ proc_glue
-  in
-  (* Merge rule for the auto-wrap: --reconcile alone -> {"fs" v}; --supervise
-     alone -> {"proc" v}; both -> {"fs" v, "proc" v} (both fed the SAME v,
-     exactly as the two old reconcilers each separately received it). A bare
-     register-domain program (neither flag) returns its own {name -> desired}
-     directly — [v] unwrapped. *)
-  let build_all_desired (v : Types.value) : Types.value =
-    let pairs =
-      (if !reconcile_root <> None then [(Types.VString "fs", v)] else [])
-      @ (if !supervise then [(Types.VString "proc", v)] else [])
-    in
-    if pairs <> [] then Types.VMap pairs else v
-  in
-  (* Run every given file plus (when needed) the domain-registration glue,
-     under ONE init — this is what lets `register-fs-domain`/
-     `register-proc-domain`'s registration survive to reach the user's
-     file. Falls back to the untouched per-file loop (today's exact
-     behavior, byte-for-byte) when no domain wiring is needed at all. *)
-  let run_files (files : string list) : Types.value option =
-    Runtime.fenced_actions := [];
-    if uses_domains () then
-      let sources = stdlib_glue_sources ()
-                    @ List.map (fun f -> (f, read_file_content f)) files in
-      match List.rev (Repl.execute_sources_bytecode !bytecode sources) with
-      | v :: _ -> Some v | [] -> None
-    else
-      List.fold_left (fun _ f ->
-        Runtime.fenced_actions := [];
-        match List.rev (Repl.execute_file_bytecode !bytecode f) with
-        | v :: _ -> Some v | [] -> None) None files
-  in
-  let should_run_domains () =
-    uses_domains () || Domains.any_write_domain_registered ()
-  in
-  (* The by-hash desired-value seam: `--desired-object HASH ROOT`
-     substitutes the DERIVATION of the desired-state root entirely — the
-     object was already pulled (and its blob: refs with it) above, so this
-     process never runs a program to compute what to converge, only to
-     register domains (run_files still executes for that side effect; its
-     RETURN VALUE is discarded here in favor of the synced object). Without
-     `--desired-object`, behavior is EXACTLY today's: wrap the program's own
-     return value via build_all_desired. *)
-  let compute_all_desired (last : Types.value option) : Types.value =
-    match !desired_object_args with
-    | Some (hash, _) ->
-        (match Store.load_object ~key:hash with
-         | Some v -> v
-         | None ->
-             failwith (Printf.sprintf
-               "pp: --desired-object %s: not found in the local store even \
-                after pulling — check the shared root and that it was \
-                published there via --publish-object" hash))
-    | None ->
-        (match last with
-         | Some v -> build_all_desired v
-         | None -> failwith "reconcile: the program produced no value")
-  in
-  (* Host-qualified domain distribution: host-keying is opt-in ONLY via
-     an explicit `--member-name <n>` flag, never inferred from a value's
-     shape. Without it, [all_desired] passes through completely unchanged,
-     so a program/flags that never mention --member-name (tests/018,
-     tests/033, and every test predating this feature) behave byte-identically — this
-     is the whole back-compat proof. With it, [all_desired] MUST be a map
-     keyed by host name (string or keyword) and this indexes exactly one
-     entry, handing the UNCHANGED Domains.run_all only that host's own
-     {domain -> desired} slice. *)
-  let select_member_slice (all_desired : Types.value) : Types.value =
-    match !member_name with
-    | None -> all_desired
-    | Some name ->
-        (match Primitives.force_deep all_desired with
-         | Types.VMap kvs ->
-             (match List.find_opt (fun (k, _) ->
-                match k with
-                | Types.VString s | Types.VKeyword s -> s = name
-                | _ -> false)
-                kvs
-              with
-              | Some (_, v) -> v
-              | None ->
-                  failwith (Printf.sprintf
-                    "pp: --member-name %s: no such host key in the \
-                     desired-state map (host-qualified distribution expects \
-                     {host -> {domain -> desired}})" name))
-         | other ->
-             failwith (Printf.sprintf
-               "pp: --member-name %s: desired-state must be a map of \
-                host -> {domain -> desired} to index, got %s"
-               name (Types.string_of_value other)))
-  in
-  let run_domains_pass (last : Types.value option) : unit =
-    if should_run_domains () then begin
-      Domains.run_all (select_member_slice (compute_all_desired last));
-      Fenced.drain ()
-    end
-  in
-
-  (* ---- pp graph — delegates to Store.print_graph ---- *)
-  let print_graph ?(verbose = false) () = Store.print_graph ~verbose () in
-
-  (* ---- --watch polling loop ----
-     Run the program, snapshot observed cell hashes, poll for changes,
-     re-run on change. Uses the pull scheduler in a loop — the persistent
-     store's trace verification naturally skips unchanged nodes (hits)
-     and recomputes changed ones (misses), proving the store-level collapse
-     between --watch and --once modes. *)
-  let snapshot_cell_hashes (cell_ids : string list) : (string * string) list =
-    List.filter_map (fun id ->
-      match Store.observe_cell id with
-      | Some h -> Some (id, h) | None -> None) cell_ids
-  in
-  let watch_loop ~files ~interval ~stabilize =
-    Runtime.observe_all := true;
-    let last_desired = ref None in
-    let run_program () =
-      (* Clear in-memory state for a fresh evaluation. The persistent store
-         survives — this is the store-level collapse. run_files itself
-         calls Vm.init ()/Repl.init () (via execute_sources_bytecode /
-         execute_file_bytecode). *)
-      Hashtbl.clear Store.run_pins;  (* clear pinned cell observations *)
-      Hashtbl.clear Runtime.probe_values;  (* probes re-evaluate fresh each pass *)
-      Hashtbl.clear Runtime.sealed_pins;   (* sealed bytes never survive a pass *)
-      Runtime.observed_all := [];     (* clear collected observations *)
-      Runtime.current_capabilities := (Runtime.invocation_get ()).initial_capabilities;
-      (* Re-read and execute the program (plus, if --reconcile/--supervise
-         is active, the domain-registration glue — run_files/uses_domains). *)
-      let last = run_files files in
-      last_desired := last;
-      run_domains_pass last;
-      (* Collect the cells we need to poll and snapshot their current hashes. *)
-      let cell_ids = List.sort_uniq compare (List.map fst !(Runtime.observed_all)) in
-      snapshot_cell_hashes cell_ids
-    in
-    let run_program_stabilize ~prev_snapshot changed_cells =
-      let rev = Store.build_reverse_index () in
-      let dirty = Store.dirty_keys_for changed_cells rev in
-      Stabilize.reset_dirty dirty;
-      Runtime.keep_thunks := true;  (* set BEFORE run_files's internal init *)
-      Hashtbl.clear Store.run_pins;  (* fresh world observations, not last run's pins *)
-      Hashtbl.clear Runtime.probe_values;  (* probes re-evaluate fresh each pass *)
-      Hashtbl.clear Runtime.sealed_pins;   (* sealed bytes never survive a pass *)
-      Runtime.observed_all := [];
-      Runtime.current_capabilities := (Runtime.invocation_get ()).initial_capabilities;
-      let last = run_files files in
-      last_desired := last;
-      run_domains_pass last;
-      let cell_ids = List.sort_uniq compare (List.map fst !(Runtime.observed_all)) in
-      let new_obs = snapshot_cell_hashes cell_ids in
-      let new_set = List.map fst new_obs in
-      let prev_clean = List.filter (fun (id, _) -> not (List.mem id new_set)) prev_snapshot in
-      new_obs @ prev_clean
-    in
-    (* First iteration: cold run. *)
-    if stabilize then begin
-      Runtime.keep_thunks := false;
-      Stabilize.clear_side_table ()
-    end;
-    let snapshot = run_program () in
-    let rec loop snapshot =
-      begin try Unix.sleepf interval
-        with _ -> Unix.sleep 1 end;
-      (* Clear run pins so observe_cell reads the current world, not the
-         snapshot from the last run (CAS-ingest pins the first read of a
-         cell for the rest of a run). *)
-      Hashtbl.clear Store.run_pins;
-      Hashtbl.clear Runtime.probe_values;  (* probes re-evaluate fresh each pass *)
-      Hashtbl.clear Runtime.sealed_pins;   (* sealed bytes never survive a pass *)
-      (* Detect cell changes FIRST, before reconcile work, so config edits
-         are noticed promptly. Then reconcile processes only when no cell
-         changed — this still restarts killed services within one interval. *)
-      let changed_cells =
-        List.filter_map (fun (cell_id, recorded_hash) ->
-          match Store.observe_cell cell_id with
-          | Some h when h <> recorded_hash -> Some cell_id
-          | _ -> None) snapshot
-      in
-      if changed_cells <> [] then begin
-        if stabilize then begin
-          Printf.eprintf "[watch] %d cell(s) changed — stabilizing\n%!"
-            (List.length changed_cells);
-          let new_snapshot = run_program_stabilize ~prev_snapshot:snapshot changed_cells in
-          loop new_snapshot
-        end else begin
-          Printf.eprintf "[watch] cell(s) changed — re-evaluating\n%!";
-          let new_snapshot = run_program () in
-          loop new_snapshot
-        end
-      end else begin
-        (* Generalized from the old proc-only recheck: EVERY registered
-           write-domain is re-observed/re-diffed/re-applied on every tick,
-           not just proc — a killed service or an externally-drifted file
-           is caught within one poll interval either way. Cheap when
-           nothing actually changed: the plan cache (Domains.compute_plan)
-           makes an unchanged pass a cache hit, not a re-walk. *)
-        (match !last_desired with
-         | Some v -> run_domains_pass (Some v)
-         | None -> ());
-        loop snapshot
-      end
-    in
-    loop snapshot
-  in
   (* pp graph: just scan and print, no file needed. *)
   if !graph_mode then (print_graph (); exit 0);
   (* ---- Cluster transport/token CLI seam ----
