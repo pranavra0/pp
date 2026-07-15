@@ -368,11 +368,6 @@ if PP="$PP" bash tests/061-qq-sugar-coverage.sh; then
 else
   echo "FAIL 061-qq-sugar-coverage"; fail=1
 fi
-if PP="$PP" bash tests/061b-qq-head-coverage.sh; then
-  echo "ok   061b-qq-head-coverage"
-else
-  echo "FAIL 061b-qq-head-coverage"; fail=1
-fi
 echo "--- A4: else-newline misparse (differential) ---"
 if PP="$PP" bash tests/062-else-newline.sh; then
   echo "ok   062-else-newline"

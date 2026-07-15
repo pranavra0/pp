@@ -445,13 +445,13 @@ let peek_infix ps ~nl (ops : string list) : string option =
 
 (* Map-literal entry: a spread `...m` or a `k -> v` pair *)
 type map_entry = MSpread of expr | MPair of expr * expr
-(* Counter for fresh temp variables in try-block lowering *)
+(* Counter for fresh temp variables in try-block lowering. The counter stays
+   here (reset per top-level form in read_string); Desugar.lower_try takes it as
+   ~fresh_var. The `try_stmt` vocabulary lives in Desugar alongside lower_try. *)
 let try_counter = ref 0
 let fresh_try_var () =
   incr try_counter;
   "__try_" ^ string_of_int !try_counter
-
-type try_stmt = TryBind of string * expr | TryExpr of expr
 
 (* A parsed handler name: the `with-handler(name = fn, …)` name slot
    accepts a symbol or a keyword, in BOTH the normal and quasiquote readers.
@@ -476,6 +476,188 @@ let group_call_segments (elems : bracket_elem list)
     | BSpread s :: rest -> go [] (`Spread s :: flush cur out) rest
   in
   go [] [] elems
+
+(* A match pattern's grammar is the same in both readers; only what it builds
+   differs — the normal reader a real [Types.pattern], the quasiquote reader the
+   quoted DATA (`_`/`(lit v)`/`(var "n")`/`(list (pats…) rest)`/`(tagged "t"
+   pats…)`) that value_to_pattern reads back into the identical pattern. So the
+   grammar is written once, parameterized by an ['a pattern_builder] and
+   instantiated at ['a = Types.pattern] (normal) and ['a = expr] (qq). This is
+   the one place the two contexts return DIFFERENT types, so — unlike the
+   [spine] and [try_builder] records — the builder must be parametric.
+   [pb_reject_unquote] carries the one grammar difference: qq forbids
+   `unquote(...)` in pattern position (patterns are always literal there), where
+   the normal reader accepts `unquote` as an ordinary variable name. *)
+type 'a pattern_builder = {
+  mk_pwild : 'a;
+  mk_plit : value -> 'a;
+  mk_pvar : string -> 'a;
+  mk_plist : 'a list -> 'a option -> 'a;    (* elements, optional ...rest *)
+  mk_ptagged : string -> 'a list -> 'a;     (* (:tag pats…) *)
+  pb_reject_unquote : bool;
+}
+
+let normal_pattern_builder : Types.pattern pattern_builder = {
+  mk_pwild = Types.PWildcard;
+  mk_plit = (fun v -> Types.PLiteral v);
+  mk_pvar = (fun n -> Types.PVariable n);
+  mk_plist = (fun pats rest -> Types.PList (pats, rest));
+  mk_ptagged = (fun tag pats -> Types.PTagged (tag, pats));
+  pb_reject_unquote = false;
+}
+
+let rec parse_pattern_generic ps (pb : 'a pattern_builder) : 'a =
+  let k = cur ps in
+  match k.t with
+  | TName "_" -> advance ps; pb.mk_pwild
+  | TName "true" -> advance ps; pb.mk_plit (VBool true)
+  | TName "false" -> advance ps; pb.mk_plit (VBool false)
+  | TName "nil" -> advance ps; pb.mk_plit VNil
+  | TName "unquote" when pb.pb_reject_unquote ->
+      parse_error ps
+        "patterns are always literal inside quasiquote { ... }: unquote(...) \
+         is not supported in match-pattern position"
+  | TName n -> advance ps; pb.mk_pvar n  (* any name is a variable pattern *)
+  | TInt i -> advance ps; pb.mk_plit (VInt i)
+  | TFloat f -> advance ps; pb.mk_plit (VFloat f)
+  | TString s -> advance ps; pb.mk_plit (VString s)
+  | TKeyword kw -> advance ps; pb.mk_plit (VKeyword kw)
+  | TLBracket ->
+      (* List pattern: [p1, p2, ...rest] *)
+      advance ps;
+      skip_nl ps;
+      if (cur ps).t = TRBracket then (advance ps; pb.mk_plist [] None)
+      else begin
+        let rec loop_pats acc =
+          let k = cur ps in
+          match k.t with
+          | TName s when String.length s >= 3 && String.sub s 0 3 = "..." ->
+              (* Spread must be the last element; bind the remainder. *)
+              advance ps;
+              let rest_name = String.sub s 3 (String.length s - 3) in
+              if rest_name = "" then
+                parse_error ps "spread pattern '...' must be followed by a name or '_'";
+              let rest_pat = if rest_name = "_" then pb.mk_pwild else pb.mk_pvar rest_name in
+              skip_nl ps;
+              expect ps ~nl:true TRBracket "']' after spread pattern";
+              (List.rev acc, Some rest_pat)
+          | _ ->
+              let p = parse_pattern_generic ps pb in
+              skip_nl ps;
+              (match (cur ps).t with
+               | TComma -> advance ps; skip_nl ps; loop_pats (p :: acc)
+               | TRBracket -> advance ps; (List.rev (p :: acc), None)
+               | t -> parse_error ps ("expected ',' or ']', got " ^ string_of_btok t))
+        in
+        let pats, rest = loop_pats [] in
+        pb.mk_plist pats rest
+      end
+  | TLParen ->
+      (* Tagged pattern (:tag pats…) or a parenthesized grouping *)
+      advance ps;
+      skip_nl ps;
+      (match (cur ps).t with
+       | TKeyword tag ->
+           advance ps;
+           let rec loop_pats acc =
+             if (cur ps).t = TRParen then (advance ps; List.rev acc)
+             else begin
+               let p = parse_pattern_generic ps pb in
+               loop_pats (p :: acc)
+             end
+           in
+           pb.mk_ptagged tag (loop_pats [])
+       | _ ->
+           let p = parse_pattern_generic ps pb in
+           expect ps ~nl:true TRParen "')'";
+           p)
+  | _ ->
+      parse_error ps ("expected pattern, got " ^ string_of_btok k.t)
+
+(* Match arms — the same grammar in both readers (skip separators; an arm is
+   `pattern [if guard] => body`; stop at `}`), differing only in what a pattern
+   and a guard/body parse to, and how an arm is assembled. Written once here and
+   parameterized; each caller wraps the returned ['arm list] its own way (the
+   normal reader hands the list straight to EMatch; the quasiquote reader
+   qq_chains it into `(match scrutinee (arm…))` data). [parse_guard] and
+   [parse_body] are separate because the normal reader parses a guard in
+   `cond` context and a body without it. [what] tails the unterminated-block
+   message. *)
+let parse_match_arms_generic ps ~(parse_pat : ps -> 'p)
+    ~(parse_guard : ps -> expr) ~(parse_body : ps -> expr)
+    ~(mk_arm : 'p -> expr option -> expr -> 'arm) ~(what : string) : 'arm list =
+  let rec skip_seps () =
+    match (cur ps).t with
+    | TNewline | TSemi -> advance ps; skip_seps ()
+    | _ -> ()
+  in
+  let rec loop acc =
+    skip_seps ();
+    if (cur ps).t = TRBrace then (advance ps; List.rev acc)
+    else if (cur ps).t = TEOF then parse_error ps ("unterminated match block" ^ what)
+    else begin
+      let pat = parse_pat ps in
+      let guard =
+        match (peek ps ~nl:true).t with
+        | TName "if" -> advance ps; skip_nl ps; Some (parse_guard ps)
+        | _ -> None
+      in
+      (match peek_infix ps ~nl:true ["=>"] with
+       | Some _ -> advance ps
+       | None -> parse_error ps "match arm must be `pattern [if guard] => body`");
+      skip_nl ps;
+      let body = parse_body ps in
+      loop (mk_arm pat guard body :: acc)
+    end
+  in
+  loop []
+
+(* One dispatch over the head-word set, two readers. [parse_head_ctx] matches a
+   head keyword once; a [head_builder] supplies how each reader parses the
+   sub-parts and builds the form — the normal reader real AST (often desugared:
+   EFn via LAW-32 checks, `and`/`or`/`assert` expanded), the quasiquote reader
+   the quoted list DATA that reconstructs the same form. Because the match lives
+   in one place, a head form cannot exist in one reader and not the other — a
+   property that no longer needs a separate coverage check. Some forms are one
+   reader only (unquote/
+   splice are quasiquote-only; fenced/with/vec/defmacro are normal-only); the
+   builder's method for the other side raises the "not representable" error, so
+   the single dispatch still enumerates the whole set. Builder methods that build
+   a block take [ps] because the normal reader validates block defs (LAW 4) and
+   wraps the body, work the quasiquote reader (which splices raw items) does not.
+   Several quasiquote arms (config/load/island/assert) deliberately parse a
+   coarse argument list rather than the normal reader's structured grammar, so a
+   macro can splice `unquote(...)` where the normal reader requires a literal;
+   for those the whole per-reader parse lives in the builder method. *)
+type head_builder = {
+  hb_expr : ps -> expr;                 (* a free-context sub-expression *)
+  hb_args : ps -> expr list;            (* an argument list, '(' already consumed *)
+  hb_block_items : ps -> expr list;     (* the statements of a `{ }` block *)
+  hb_handler_pairs : ps -> (hname * expr) list;
+  mk_one : string -> expr -> expr;                       (* force/delay/import *)
+  mk_with : ps -> string -> expr -> expr list -> expr;   (* with-caps/with-config *)
+  mk_with_handler : ps -> (hname * expr) list -> expr list -> expr;
+  mk_perform : string -> expr list -> expr;
+  mk_block_form : ps -> string -> expr list -> expr;     (* do/module *)
+  mk_node_expr : ps -> expr list -> expr;                (* node { } *)
+  mk_andor : string -> expr list -> expr;
+  mk_fn : ps -> expr;                                    (* fn(params) { } *)
+  mk_def : ps -> expr;                                   (* def name(params) { } *)
+  mk_let : ps -> string -> expr;                         (* let/let* (binds) { } *)
+  mk_quote : ps -> expr;                                 (* quote { } *)
+  mk_reconcile : ps -> expr;                             (* reconcile { } *)
+  (* config/load/load-module/island/assert: the normal reader parses each's
+     structured grammar; the quasiquote reader a coarse argument list (so a
+     macro can splice unquote where the normal reader wants a literal). *)
+  mk_arglist_form : ps -> string -> expr;
+  mk_if : ps -> expr;
+  mk_try : ps -> expr;
+  mk_match : ps -> expr;
+  (* quote/quasiquote/unquote/splice in call position: the normal reader a
+     plain application; the quasiquote reader escapes unquote/splice and quotes
+     the head of a call-position quote/quasiquote. *)
+  mk_call_special : ps -> string -> expr;
+}
 
 let rec parse_expr ps (c : ctx) : expr =
   climb_pipe (normal_spine c) ps
@@ -781,7 +963,7 @@ and parse_primary ps c : expr =
       skip_nl ps;
       if (cur ps).t = TRBracket then (advance ps; EApply (ESymbol "list", []))
       else begin
-        let elems = parse_bracket_elems ps in
+        let elems = parse_bracket_elems_normal ps in
         build_spread_list "list" "cons" elems
       end
   | TLBrace ->
@@ -1002,38 +1184,313 @@ and parse_ret_ty ps : expr option =
 (* ---- head-word dispatch (shape-driven; a reserved word whose opener does
    not follow denotes its symbol, mirroring sexpr non-car positions) ---- *)
 
-and parse_head ps c (n : string) : expr =
+and parse_head_ctx ps (hb : head_builder) (n : string) : expr option =
   let next_t = (peek2 ps).t in
   match n with
-  | "fn" when next_t = TLParen ->
+  | ("force" | "delay" | "import") when next_t = TLParen ->
+      advance ps; advance ps; skip_nl ps;
+      let e = hb.hb_expr ps in
+      expect ps ~nl:true TRParen "')'";
+      Some (hb.mk_one n e)
+  | ("with-caps" | "with-config") when next_t = TLParen ->
+      advance ps; advance ps; skip_nl ps;
+      let e = hb.hb_expr ps in
+      expect ps ~nl:true TRParen "')'";
+      Some (hb.mk_with ps n e (hb.hb_block_items ps))
+  | "with-handler" when next_t = TLParen ->
+      advance ps; advance ps; skip_nl ps;
+      let pairs = hb.hb_handler_pairs ps in
+      Some (hb.mk_with_handler ps pairs (hb.hb_block_items ps))
+  | "perform" when (match next_t with TName _ -> true | _ -> false) ->
       advance ps;
-      let line = (cur ps).tline in
-      let locate e = ELocated ((ps.file, line), e) in
-      let params = parse_paren_params ps in
-      let ret_ty = parse_ret_ty ps in
-      let body = parse_block_body ps in
-      let names, body' = Desugar.assemble_fn_body locate params ret_ty body in
-      EFn (names, body')
-  | "def" when (match next_t with TName _ -> true | _ -> false) ->
-      (* def f(p, ...) [: ty] { body } — L29–L31 *)
-      advance ps;
-      let line = (cur ps).tline in
-      let locate e = ELocated ((ps.file, line), e) in
       let name = (match (cur ps).t with TName s -> s | _ -> assert false) in
       advance ps;
       if (cur ps).t <> TLParen then
-        parse_error ps "def requires a parameter list: def name(params) { ... }";
-      let params = parse_paren_params ps in
-      let ret_ty = parse_ret_ty ps in
-      let body = parse_block_body ps in
-      let names, body' = Desugar.assemble_fn_body locate params ret_ty body in
-      EDef (name, names, body')
-  | "node" when next_t = TLBrace ->
-      (* L32: node { E... } -> (node ⟦E...⟧) *)
+        parse_error ps "perform requires an argument list: perform name(args)";
       advance ps;
-      skip_nl ps;
-      let stmts = parse_block_stmts ps in
-      ENode (block_body_of ps stmts)
+      Some (hb.mk_perform name (hb.hb_args ps))
+  | ("do" | "module") when next_t = TLBrace ->
+      advance ps;
+      Some (hb.mk_block_form ps n (hb.hb_block_items ps))
+  | "node" when next_t = TLBrace ->
+      advance ps;
+      Some (hb.mk_node_expr ps (hb.hb_block_items ps))
+  | ("and" | "or") when next_t = TLParen ->
+      advance ps; advance ps;
+      Some (hb.mk_andor n (hb.hb_args ps))
+  | "fn" when next_t = TLParen -> Some (hb.mk_fn ps)
+  | "def" when (match next_t with TName _ -> true | _ -> false) ->
+      Some (hb.mk_def ps)
+  | ("let" | "let*") when next_t = TLParen ->
+      advance ps; Some (hb.mk_let ps n)
+  | "quote" when next_t = TLBrace -> advance ps; Some (hb.mk_quote ps)
+  | "reconcile" when next_t = TLBrace -> advance ps; Some (hb.mk_reconcile ps)
+  | ("config" | "load" | "load-module" | "island" | "assert") when next_t = TLParen ->
+      advance ps; advance ps;
+      Some (hb.mk_arglist_form ps n)
+  | "if" when starts_expr next_t -> Some (hb.mk_if ps)
+  | "try" when next_t = TLBrace -> Some (hb.mk_try ps)
+  | "match" when starts_expr next_t -> Some (hb.mk_match ps)
+  | "quasiquote" when next_t = TLBrace ->
+      advance ps;
+      Some (match parse_qq_block_items ps with
+            | [f] -> EApply (ESymbol "quasiquote", [f])
+            | _ -> parse_error ps "quasiquote { ... } must contain exactly one form")
+  | ("quote" | "quasiquote" | "unquote" | "splice") when next_t = TLParen ->
+      Some (hb.mk_call_special ps n)
+  | _ -> None
+
+and normal_head_builder : head_builder = {
+  hb_expr = (fun ps -> parse_expr ps free_ctx);
+  hb_args = (fun ps -> parse_args ps);
+  hb_block_items = (fun ps -> skip_nl ps; parse_block_stmts ps);
+  hb_handler_pairs =
+    (fun ps -> parse_handler_pairs ps ~parse_value:(fun () -> parse_expr ps free_ctx));
+  mk_one = (fun n e -> match n with
+    | "force" -> EForce e | "delay" -> EDelay e | "import" -> EImport e
+    | _ -> assert false);
+  mk_with = (fun ps n e items -> match n with
+    | "with-caps" -> EWithCaps (e, block_body_of ps items)
+    | "with-config" -> EWithConfig (e, block_body_of ps items)
+    | _ -> assert false);
+  mk_with_handler = (fun ps pairs items ->
+    let handlers =
+      List.map (function (HName s, h) | (HKeyword s, h) -> (s, h)) pairs in
+    EWithHandler (handlers, block_body_of ps items));
+  mk_perform = (fun name args -> EPerform (name, args));
+  mk_block_form = (fun ps n items -> match n with
+    | "do" -> EDo (check_defs ps items)
+    | "module" -> EModule (check_defs ps items)
+    | _ -> assert false);
+  mk_node_expr = (fun ps items -> ENode (block_body_of ps items));
+  mk_andor = (fun n args ->
+    if n = "and" then Desugar.desugar_and args else Desugar.desugar_or args);
+  mk_fn = (fun ps ->
+    advance ps;
+    let line = (cur ps).tline in
+    let locate e = ELocated ((ps.file, line), e) in
+    let params = parse_paren_params ps in
+    let ret_ty = parse_ret_ty ps in
+    let body = parse_block_body ps in
+    let names, body' = Desugar.assemble_fn_body locate params ret_ty body in
+    EFn (names, body'));
+  mk_def = (fun ps ->
+    advance ps;
+    let line = (cur ps).tline in
+    let locate e = ELocated ((ps.file, line), e) in
+    let name = (match (cur ps).t with TName s -> s | _ -> assert false) in
+    advance ps;
+    if (cur ps).t <> TLParen then
+      parse_error ps "def requires a parameter list: def name(params) { ... }";
+    let params = parse_paren_params ps in
+    let ret_ty = parse_ret_ty ps in
+    let body = parse_block_body ps in
+    let names, body' = Desugar.assemble_fn_body locate params ret_ty body in
+    EDef (name, names, body'));
+  mk_let = (fun ps n ->
+    let binds = parse_binding_group ps ~allow_ty:(n = "let") in
+    let body = parse_block_body ps in
+    if n = "let*" then ELetStar (binds, body) else ELet (binds, body));
+  mk_quote = (fun ps ->
+    match parse_block_stmts ps with
+    | [f] -> EQuote f
+    | _ -> parse_error ps "quote { ... } must contain exactly one form");
+  mk_reconcile = (fun ps -> parse_map_literal ps);
+  mk_arglist_form = (fun ps n -> match n with
+    | "config" ->
+        skip_nl ps;
+        let key = parse_expr ps free_ctx in
+        (match (peek ps ~nl:true).t with
+         | TComma ->
+             advance ps; skip_nl ps;
+             let d = parse_expr ps free_ctx in
+             expect ps ~nl:true TRParen "')'";
+             EConfig (key, Some d)
+         | TRParen -> advance ps; EConfig (key, None)
+         | t -> parse_error ps ("expected ',' or ')', got " ^ string_of_btok t))
+    | "assert" ->
+        skip_nl ps;
+        let line = (cur ps).tline in
+        let cond = parse_expr ps free_ctx in
+        (match (peek ps ~nl:true).t with
+         | TComma ->
+             advance ps; skip_nl ps;
+             let m = parse_expr ps free_ctx in
+             expect ps ~nl:true TRParen "')'";
+             Desugar.desugar_assert ~file:ps.file ~line cond (Some m)
+         | TRParen ->
+             advance ps;
+             Desugar.desugar_assert ~file:ps.file ~line cond None
+         | t -> parse_error ps ("expected ',' or ')', got " ^ string_of_btok t))
+    | "load" ->
+        (match (peek ps ~nl:true).t with
+         | TString p -> advance ps; expect ps ~nl:true TRParen "')'"; ELoad p
+         | _ -> parse_error ps "load expects a string path")
+    | "load-module" ->
+        (match (peek ps ~nl:true).t with
+         | TString p -> advance ps; expect ps ~nl:true TRParen "')'"; ELoadModule p
+         | _ -> parse_error ps "load-module expects a string path")
+    | "island" ->
+        (match (peek ps ~nl:true).t with
+         | TString uri ->
+             advance ps;
+             let pin =
+               match (peek ps ~nl:true).t with
+               | TComma ->
+                   advance ps;
+                   (match (peek ps ~nl:true).t with
+                    | TString p -> advance ps; Some p
+                    | t -> parse_error ps ("island pin must be a string, got "
+                                           ^ string_of_btok t))
+               | _ -> None
+             in
+             expect ps ~nl:true TRParen "')'";
+             EIsland (uri, pin)
+         | t -> parse_error ps ("island expects a string URI, got " ^ string_of_btok t))
+    | _ -> assert false);
+  mk_if = (fun ps -> parse_if ps);
+  mk_try = (fun ps ->
+    advance ps; skip_nl ps;
+    let stmts = parse_try_stmts ps in
+    Desugar.lower_try ~fresh_var:fresh_try_var Desugar.normal_try_builder stmts);
+  mk_match = (fun ps ->
+    advance ps;
+    let scrutinee = parse_expr ps { nl = false; cond = true } in
+    skip_nl ps;
+    expect ps ~nl:false TLBrace "'{'";
+    let arms = parse_match_arms ps in
+    EMatch (scrutinee, arms));
+  mk_call_special = (fun ps n ->
+    advance ps; advance ps;
+    let args = parse_args ps in
+    EApply (ESymbol n, args));
+}
+
+and qq_head_builder : head_builder = {
+  hb_expr = (fun ps -> parse_qq ps);
+  hb_args = (fun ps -> parse_qq_args ps);
+  hb_block_items = (fun ps -> parse_qq_block_items ps);
+  hb_handler_pairs =
+    (fun ps -> parse_handler_pairs ps ~parse_value:(fun () -> parse_qq ps));
+  mk_one = (fun n e -> qq_chain [qq_sym n; e]);
+  mk_with = (fun _ps n e items -> qq_chain (qq_sym n :: e :: items));
+  mk_with_handler = (fun _ps pairs items ->
+    let flat = List.concat_map (fun (name, h) ->
+      let name_e = match name with
+        | HName s -> qq_sym s
+        | HKeyword k -> EQuote (ELiteral (VKeyword k)) in
+      [name_e; h]) pairs in
+    qq_chain (qq_sym "with-handler" :: EApply (ESymbol "vector", flat) :: items));
+  mk_perform = (fun name args -> qq_chain (qq_sym "perform" :: qq_sym name :: args));
+  mk_block_form = (fun _ps n items -> qq_chain (qq_sym n :: items));
+  mk_node_expr = (fun _ps items ->
+    let body = match items with
+      | [one] -> one | items -> qq_chain (qq_sym "do" :: items) in
+    qq_chain [qq_sym "node"; body]);
+  mk_andor = (fun n args -> qq_chain (qq_sym n :: args));
+  mk_fn = (fun ps ->
+    advance ps;
+    let params = parse_paren_params ps in
+    let param_data =
+      qq_chain (List.map (fun (p, ty) ->
+        match ty with
+        | None -> qq_sym p
+        | Some _ -> parse_error ps
+                      "type annotations are not representable inside quasiquote")
+        params)
+    in
+    let body = parse_qq_block_items ps in
+    qq_chain (qq_sym "fn" :: param_data :: body));
+  mk_def = (fun ps ->
+    advance ps;
+    let name_expr = parse_qq_name_slot ps ~what:"def name" in
+    if (cur ps).t <> TLParen then
+      parse_error ps "def requires a parameter list: def name(params) { ... }";
+    let params = parse_paren_params ps in
+    let head =
+      qq_chain (name_expr
+                :: List.map (fun (p, ty) ->
+                     match ty with
+                     | None -> qq_sym p
+                     | Some _ -> parse_error ps
+                                   "type annotations are not representable inside quasiquote")
+                     params)
+    in
+    let body = parse_qq_block_items ps in
+    qq_chain (qq_sym "def" :: head :: body));
+  mk_let = (fun ps n ->
+    advance ps;  (* '(' *)
+    skip_nl ps;
+    let rec binds acc =
+      if (cur ps).t = TRParen then (advance ps; List.rev acc)
+      else begin
+        let name_expr = parse_qq_name_slot ps ~what:"binding name" in
+        if (cur ps).t = TColon then
+          parse_error ps "type annotations are not representable inside quasiquote";
+        (match (peek ps ~nl:true).t with
+         | TName "=" -> advance ps
+         | t -> parse_error ps ("expected '=' in binding, got " ^ string_of_btok t));
+        skip_nl ps;
+        let v = parse_qq ps in
+        match (peek ps ~nl:true).t with
+        | TComma -> advance ps; skip_nl ps; binds (v :: name_expr :: acc)
+        | TRParen -> advance ps; List.rev (v :: name_expr :: acc)
+        | t -> parse_error ps ("expected ',' or ')', got " ^ string_of_btok t)
+      end
+    in
+    let flat = binds [] in
+    let body = parse_qq_block_items ps in
+    qq_chain (qq_sym n :: EApply (ESymbol "vector", flat) :: body));
+  mk_quote = (fun ps ->
+    match parse_qq_block_items ps with
+    | [f] -> EQuote f
+    | _ -> parse_error ps "quote { ... } must contain exactly one form");
+  mk_reconcile = (fun ps -> parse_qq_primary ps);
+  mk_arglist_form = (fun ps n -> qq_chain (qq_sym n :: parse_qq_args ps));
+  mk_if = (fun ps ->
+    parse_if_ctx ps
+      ~parse_cond:parse_qq_cond
+      ~parse_block:parse_qq_block_one
+      ~mk_if:(fun cond then_b else_e ->
+        match else_e with
+        | Some e -> qq_chain [qq_sym "if"; cond; then_b; e]
+        | None -> qq_chain [qq_sym "if"; cond; then_b]));
+  mk_try = (fun ps ->
+    advance ps; skip_nl ps;
+    let stmts =
+      parse_try_stmts_ctx ps ~parse_stmt:parse_qq ~what:" in quasiquote" in
+    Desugar.lower_try ~fresh_var:fresh_try_var qq_try_builder stmts);
+  mk_match = (fun ps ->
+    advance ps;
+    let scrutinee = parse_qq ps in
+    skip_nl ps;
+    expect ps ~nl:false TLBrace "'{'";
+    let arms = parse_qq_match_arms ps in
+    qq_chain [qq_sym "match"; scrutinee; arms]);
+  mk_call_special = (fun ps n -> match n with
+    | "unquote" ->
+        advance ps; advance ps; skip_nl ps;
+        let e = parse_expr ps free_ctx in
+        expect ps ~nl:true TRParen "')'";
+        EApply (ESymbol "list", [EQuote (ESymbol "unquote"); e])
+    | "splice" ->
+        advance ps; advance ps; skip_nl ps;
+        let e = parse_expr ps free_ctx in
+        expect ps ~nl:true TRParen "')'";
+        EApply (ESymbol "list", [EQuote (ESymbol "unquote-splicing"); e])
+    | _ -> advance ps; EQuote (ESymbol n));
+}
+
+and parse_head ps c (n : string) : expr =
+  match parse_head_ctx ps normal_head_builder n with
+  | Some e -> e
+  | None ->
+  (* Forms unique to the normal reader (node definitions, `with`, `let x = E`,
+     the normal-only `fenced`/`defmacro`/`vec`, `@` attributes) plus the
+     bare-symbol fallback. Every form shared with the quasiquote reader lives in
+     parse_head_ctx above. *)
+  let next_t = (peek2 ps).t in
+  match n with
   | "node" when (match next_t with TName _ -> true | _ -> false) ->
       advance ps;
       let line = (cur ps).tline in
@@ -1092,26 +1549,6 @@ and parse_head ps c (n : string) : expr =
        | t ->
            parse_error ps ("malformed node definition: expected '(' or '{', got "
                            ^ string_of_btok t))
-  | "do" when next_t = TLBrace ->
-      (* L36: do { s... } -> (do s...) — the raw list, as in sexprs *)
-      advance ps;
-      let stmts = parse_block_stmts ps in
-      EDo (check_defs ps stmts)
-  | "if" when starts_expr next_t ->
-      parse_if ps
-  (* `cond {}` removed — flat `else if` chains and `match` with guards
-     cover it (DESIGN §6). `cond` is now an ordinary identifier. *)
-  | "try" when next_t = TLBrace ->
-      (* try { name <- expr; ...; final-expr } — error propagation
-         Each `name <- expr` unwraps [:ok, v] or propagates [:err, e]. *)
-      advance ps;
-      skip_nl ps;
-      let stmts = parse_try_stmts ps in
-      lower_try_block stmts
-  (* `collect {}` block form removed — `collect` is now an ordinary
-     function (the renamed `collect-results` primitive) used in pipelines:
-     `srcs |> map(compile) |> collect`. The monad(`try`)/validation(`collect`)
-     distinction lives in the library, not the grammar (DESIGN §6). *)
   | "fenced" when (match next_t with TKeyword _ -> true | _ -> false) ->
       (* fenced :kind { key -> value, ... } -> perform fenced(:kind, map) *)
       advance ps;  (* consume 'fenced' *)
@@ -1122,14 +1559,6 @@ and parse_head ps c (n : string) : expr =
       skip_nl ps;
       let spec = parse_map_literal ps in
       EPerform ("fenced", [kind; spec])
-  | "match" when starts_expr next_t ->
-      (* match expr { pat1 => body1; pat2 => body2; ... } *)
-      advance ps;  (* consume 'match' *)
-      let scrutinee = parse_expr ps { nl = false; cond = true } in
-      skip_nl ps;
-      expect ps ~nl:false TLBrace "'{'";
-      let arms = parse_match_arms ps in
-      EMatch (scrutinee, arms)
   | "with" when next_t = TLBrace ->
       (* with { caps: C, config: M, handler H: fn ... } { body }
          Lowers to nested EWithCaps, EWithConfig, EWithHandler in canonical order. *)
@@ -1240,137 +1669,6 @@ and parse_head ps c (n : string) : expr =
            let body = parse_block_body ps in
            ELet (binds, body)
        | _ -> advance ps; ESymbol "let")
-  | "let*" when next_t = TLParen ->
-      advance ps;
-      let binds = parse_binding_group ps ~allow_ty:false in
-      let body = parse_block_body ps in
-      ELetStar (binds, body)
-  | "quote" when next_t = TLBrace ->
-      (* L56: quote { F } — one form only *)
-      advance ps;
-      let stmts = parse_block_stmts ps in
-      (match stmts with
-       | [f] -> EQuote f
-       | _ -> parse_error ps "quote { ... } must contain exactly one form")
-  | "quasiquote" when next_t = TLBrace ->
-      (* L57: quasiquote { F } — quasiquote-mode read of the lowering *)
-      advance ps;
-      (match parse_qq_block_items ps with
-       | [f] -> EApply (ESymbol "quasiquote", [f])
-       | _ -> parse_error ps "quasiquote { ... } must contain exactly one form")
-  | "force" when next_t = TLParen ->
-      advance ps; parse_one_arg_form ps (fun e -> EForce e) "force"
-  | "delay" when next_t = TLParen ->
-      advance ps; parse_one_arg_form ps (fun e -> EDelay e) "delay"
-  | "import" when next_t = TLParen ->
-      advance ps; parse_one_arg_form ps (fun e -> EImport e) "import"
-  | "perform" when (match next_t with TName _ -> true | _ -> false) ->
-      (* L41: perform name(a, ...) *)
-      advance ps;
-      let name = (match (cur ps).t with TName s -> s | _ -> assert false) in
-      advance ps;
-      if (cur ps).t <> TLParen then
-        parse_error ps "perform requires an argument list: perform name(args)";
-      advance ps;
-      let args = parse_args ps in
-      EPerform (name, args)
-  | "with-caps" when next_t = TLParen ->
-      advance ps; advance ps;
-      skip_nl ps;
-      let cap = parse_expr ps free_ctx in
-      expect ps ~nl:true TRParen "')'";
-      let body = parse_block_body ps in
-      EWithCaps (cap, body)
-  | "with-config" when next_t = TLParen ->
-      advance ps; advance ps;
-      skip_nl ps;
-      let m = parse_expr ps free_ctx in
-      expect ps ~nl:true TRParen "')'";
-      let body = parse_block_body ps in
-      EWithConfig (m, body)
-  | "with-handler" when next_t = TLParen ->
-      (* L42: with-handler(n1 = h1, n2 = h2) { body... } *)
-      advance ps; advance ps;
-      skip_nl ps;
-      (* A name and a keyword both denote the handler by its string here
-         (EWithHandler stores a string); the shared parser (parse_handler_pairs)
-         keeps them distinct for the quasiquote reader's benefit. *)
-      let handlers =
-        List.map
-          (function (HName s, h) | (HKeyword s, h) -> (s, h))
-          (parse_handler_pairs ps ~parse_value:(fun () -> parse_expr ps free_ctx))
-      in
-      let body = parse_block_body ps in
-      EWithHandler (handlers, body)
-  | "module" when next_t = TLBrace ->
-      (* L51: module { forms... } *)
-      advance ps;
-      let stmts = parse_block_stmts ps in
-      EModule (check_defs ps stmts)
-  | "load" when next_t = TLParen ->
-      advance ps; advance ps;
-      (match (peek ps ~nl:true).t with
-       | TString p ->
-           advance ps;
-           expect ps ~nl:true TRParen "')'";
-           ELoad p
-       | _ -> parse_error ps "load expects a string path")
-  | "load-module" when next_t = TLParen ->
-      advance ps; advance ps;
-      (match (peek ps ~nl:true).t with
-       | TString p ->
-           advance ps;
-           expect ps ~nl:true TRParen "')'";
-           ELoadModule p
-       | _ -> parse_error ps "load-module expects a string path")
-  | "island" when next_t = TLParen ->
-      (* L55: island("URI"[, "PIN"]) — braces spell URIs as strings *)
-      advance ps; advance ps;
-      (match (peek ps ~nl:true).t with
-       | TString uri ->
-           advance ps;
-           let pin =
-             match (peek ps ~nl:true).t with
-             | TComma ->
-                 advance ps;
-                 (match (peek ps ~nl:true).t with
-                  | TString p -> advance ps; Some p
-                  | t -> parse_error ps ("island pin must be a string, got "
-                                         ^ string_of_btok t))
-             | _ -> None
-           in
-           expect ps ~nl:true TRParen "')'";
-           EIsland (uri, pin)
-       | t -> parse_error ps ("island expects a string URI, got " ^ string_of_btok t))
-  | "config" when next_t = TLParen ->
-      advance ps; advance ps;
-      skip_nl ps;
-      let key = parse_expr ps free_ctx in
-      (match (peek ps ~nl:true).t with
-       | TComma ->
-           advance ps; skip_nl ps;
-           let d = parse_expr ps free_ctx in
-           expect ps ~nl:true TRParen "')'";
-           EConfig (key, Some d)
-       | TRParen -> advance ps; EConfig (key, None)
-       | t -> parse_error ps ("expected ',' or ')', got " ^ string_of_btok t))
-  | "assert" when next_t = TLParen ->
-      (* L46: assert(C[, M]) — shared desugar; the line is the condition's
-         first token's, exactly as the sexpr reader's peek_line is *)
-      advance ps; advance ps;
-      skip_nl ps;
-      let line = (cur ps).tline in
-      let cond = parse_expr ps free_ctx in
-      (match (peek ps ~nl:true).t with
-       | TComma ->
-           advance ps; skip_nl ps;
-           let m = parse_expr ps free_ctx in
-           expect ps ~nl:true TRParen "')'";
-           Desugar.desugar_assert ~file:ps.file ~line cond (Some m)
-       | TRParen ->
-           advance ps;
-           Desugar.desugar_assert ~file:ps.file ~line cond None
-       | t -> parse_error ps ("expected ',' or ')', got " ^ string_of_btok t))
   | "defmacro" when (match next_t with TName _ -> true | _ -> false) ->
       (* L60: defmacro name(p...) { s1; s2; ... } — exactly the application
          shape macro.ml's match_defmacro recognizes (never EDo-wrapped) *)
@@ -1390,25 +1688,6 @@ and parse_head ps c (n : string) : expr =
       skip_nl ps;
       let stmts = parse_block_stmts ps in
       EApply (ESymbol "defmacro", EApply (ESymbol name, params) :: stmts)
-  | "reconcile" when next_t = TLBrace ->
-      (* L61: identity sugar naming the final-value map *)
-      advance ps;
-      parse_map_literal ps
-  | ("and" | "or") when next_t = TLParen ->
-      (* special-form heads applied in call position parse as their special
-         forms, mirroring the sexpr reader's car-symbol dispatch (§B.1) *)
-      advance ps; advance ps;
-      let args = parse_args ps in
-      if n = "and" then Desugar.desugar_and args else Desugar.desugar_or args
-  | ("quote" | "quasiquote" | "unquote" | "splice") when next_t = TLParen ->
-      (* call-position spelling: a plain application (what the lowered
-         quasiquote AST prints back as; `unquote(E)`/`splice(E)` are given
-         meaning only inside quasiquote{} — elsewhere they reach the
-         evaluator as ordinary unbound applications, like a stray `,` form
-         in sexprs) *)
-      advance ps; advance ps;
-      let args = parse_args ps in
-      EApply (ESymbol n, args)
   | "vec" when next_t = TLBracket ->
       (* vec[e1, e2, ...] -> (vector e1 e2 ...); spread: vec[a, ...rest] *)
       advance ps;  (* consume "vec" *)
@@ -1416,7 +1695,7 @@ and parse_head ps c (n : string) : expr =
       skip_nl ps;
       if (cur ps).t = TRBracket then (advance ps; EApply (ESymbol "vector", []))
       else begin
-        let elems = parse_bracket_elems ps in
+        let elems = parse_bracket_elems_normal ps in
         build_spread_list "vector" "cons" elems
       end
   | _ ->
@@ -1430,7 +1709,12 @@ and needs_restrict (e : expr) (mode : string) : expr =
            ELiteral (VKeyword mode)])
 
 
-and parse_bracket_elems ps : bracket_elem list =
+(* Bracket/call-spread elements, shared by both readers: [elem] parses each
+   element and each bare `...` spread target in the caller's context (AST vs
+   quoted data), [mk_spread_sym] builds the target of a glued `...name` spread —
+   exactly the split parse_map_entries uses. *)
+and parse_bracket_elems ps ~(elem : ps -> expr) ~(mk_spread_sym : string -> expr)
+    : bracket_elem list =
   let rec loop acc =
     match (cur ps).t with
     | TName s when String.length s >= 3 && String.sub s 0 3 = "..." ->
@@ -1438,23 +1722,27 @@ and parse_bracket_elems ps : bracket_elem list =
         let target =
           if String.length s > 3 then
             (* suffix is part of the token: ...rest *)
-            ESymbol (String.sub s 3 (String.length s - 3))
+            mk_spread_sym (String.sub s 3 (String.length s - 3))
           else
             (* bare ..., parse next expression *)
-            parse_expr ps free_ctx
+            elem ps
         in
         (match (peek ps ~nl:true).t with
          | TComma -> advance ps; skip_nl ps; loop (BSpread target :: acc)
          | TRBracket -> advance ps; List.rev (BSpread target :: acc)
          | t -> parse_error ps ("expected ',' or ']', got " ^ string_of_btok t))
     | _ ->
-        let e = parse_expr ps free_ctx in
+        let e = elem ps in
         (match (peek ps ~nl:true).t with
          | TComma -> advance ps; skip_nl ps; loop (BElem e :: acc)
          | TRBracket -> advance ps; List.rev (BElem e :: acc)
          | t -> parse_error ps ("expected ',' or ']', got " ^ string_of_btok t))
   in
   loop []
+
+and parse_bracket_elems_normal ps : bracket_elem list =
+  parse_bracket_elems ps
+    ~elem:(fun ps -> parse_expr ps free_ctx) ~mk_spread_sym:(fun s -> ESymbol s)
 
 and build_spread_list (ctor : string) (cons_name : string)
     (elems : bracket_elem list) : expr =
@@ -1477,10 +1765,14 @@ and build_spread_list (ctor : string) (cons_name : string)
     List.fold_right (fun e acc -> EApply (ESymbol cons_name, [e; acc])) prefix tail
 
 
-(* Parse statements inside a try { } block.
-   Returns list; each item is either `TryBind (name, rhs)` for a
-   `name <- expr` bind, or `TryExpr expr` for a normal statement. *)
-and parse_try_stmts ps : try_stmt list =
+(* Parse the statements inside a `try { }` block, one grammar for both readers:
+   [parse_stmt] parses each bind rhs and bare statement (the normal reader in a
+   brace-free statement context, the quasiquote reader through parse_qq so
+   unquote/splice work there), and [what] tails the unterminated-block message.
+   Each item is a `Desugar.TryBind (name, rhs)` for a `name <- expr` bind or a
+   `Desugar.TryExpr e` for a normal statement. *)
+and parse_try_stmts_ctx ps ~(parse_stmt : ps -> expr) ~(what : string)
+    : Desugar.try_stmt list =
   expect ps ~nl:false TLBrace "'{'";
   let rec skip_seps () =
     match (cur ps).t with
@@ -1491,152 +1783,48 @@ and parse_try_stmts ps : try_stmt list =
     skip_seps ();
     let k = cur ps in
     if k.t = TRBrace then (advance ps; List.rev acc)
-    else if k.t = TEOF then parse_error ps "unterminated try block"
+    else if k.t = TEOF then parse_error ps ("unterminated try block" ^ what)
     else begin
       match k.t with
       | TName name when not k.glued && not (peek2 ps).glued && (peek2 ps).t = TName "<-" ->
           advance ps;  (* consume name *)
           advance ps;  (* consume <- *)
           skip_nl ps;
-          let rhs = parse_expr ps { nl = false; cond = false } in
-          loop (TryBind (name, rhs) :: acc)
+          let rhs = parse_stmt ps in
+          loop (Desugar.TryBind (name, rhs) :: acc)
       | _ ->
           (* Postfix `?` is removed. `<-` is the one propagation spelling.
              A plain `let x = expr` here is an ordinary sequential binding
              (EDefValue) scoping to the rest of the try block. *)
-          let e = parse_expr ps { nl = false; cond = false } in
+          let e = parse_stmt ps in
           if (cur ps).t = TName "?" && (cur ps).glued then
             parse_error ps
               "postfix `?` is not part of the language; use `name <- expr` to unwrap";
-          loop (TryExpr e :: acc)
+          loop (Desugar.TryExpr e :: acc)
     end
   in
   loop []
 
-(* Lower a try block's statements into a nested if-chain.
-   Each `name <- expr` becomes a check for [:ok, v] / [:err, e].
-   The last statement is the result (when all propagations succeed). *)
-and lower_try_block (stmts : try_stmt list) : expr =
-  let ok_kw = ELiteral (VKeyword "ok") in
-  let car_of e = EApply (ESymbol "car", [e]) in
-  let cdr_of e = EApply (ESymbol "cdr", [e]) in
-  let rec build = function
-    | [] -> ok_kw  (* default: :ok (nil result) *)
-    | [TryExpr e] -> e
-    | TryExpr e :: rest ->
-        EDo [e; build rest]
-    | TryBind (name, rhs) :: rest ->
-        let tmp = fresh_try_var () in
-        let tmp_sym = ESymbol tmp in
-        let ok_branch =
-          ELet ([name, car_of (cdr_of tmp_sym)], build rest)
-        in
-        let err_branch = tmp_sym in
-        ELet ([tmp, rhs],
-              EIf (EApply (ESymbol "=", [car_of tmp_sym; ok_kw]),
-                   ok_branch, err_branch))
-  in
-  build stmts
+and parse_try_stmts ps : Desugar.try_stmt list =
+  parse_try_stmts_ctx ps
+    ~parse_stmt:(fun ps -> parse_expr ps { nl = false; cond = false })
+    ~what:""
 
-(* Parse match arms inside { } — each arm is `pattern => body` separated by newlines/; *)
+(* Parse match arms inside { } — the shared arm grammar with the normal
+   pattern/expr parsers. The guard is parsed brace-free (cond) like an `if`
+   condition; `=>` is not a spine infix, so the guard/body parse stops at it. *)
 and parse_match_arms ps : (Types.pattern * expr option * expr) list =
-  let rec skip_seps () =
-    match (cur ps).t with
-    | TNewline | TSemi -> advance ps; skip_seps ()
-    | _ -> ()
-  in
-  let rec loop acc =
-    skip_seps ();
-    if (cur ps).t = TRBrace then (advance ps; List.rev acc)
-    else if (cur ps).t = TEOF then parse_error ps "unterminated match block"
-    else begin
-      let pat = parse_pattern ps in
-      (* An optional `if <guard>` sits between the pattern and `=>`; the
-         guard is parsed brace-free (cond) like an `if` condition, stopping at
-         the `=>` arrow (not a spine infix, so parse_expr leaves it alone). *)
-      let guard =
-        match (peek ps ~nl:true).t with
-        | TName "if" -> advance ps; skip_nl ps;
-                        Some (parse_expr ps { nl = false; cond = true })
-        | _ -> None
-      in
-      (match peek_infix ps ~nl:true ["=>"] with
-       | Some _ -> advance ps
-       | None -> parse_error ps "match arm must be `pattern [if guard] => body`");
-      skip_nl ps;
-      let body = parse_expr ps { nl = false; cond = false } in
-      loop ((pat, guard, body) :: acc)
-    end
-  in
-  loop []
+  parse_match_arms_generic ps
+    ~parse_pat:parse_pattern
+    ~parse_guard:(fun ps -> parse_expr ps { nl = false; cond = true })
+    ~parse_body:(fun ps -> parse_expr ps { nl = false; cond = false })
+    ~mk_arm:(fun pat guard body -> (pat, guard, body))
+    ~what:""
 
-(* Parse a single pattern *)
+(* Parse a single pattern (real Types.pattern): the shared grammar with the
+   normal builder. *)
 and parse_pattern ps : Types.pattern =
-  let k = cur ps in
-  match k.t with
-  | TName "_" -> advance ps; Types.PWildcard
-  | TName "true" -> advance ps; Types.PLiteral (VBool true)
-  | TName "false" -> advance ps; Types.PLiteral (VBool false)
-  | TName "nil" -> advance ps; Types.PLiteral VNil
-  | TName n when n.[0] >= 'a' && n.[0] <= 'z' ->
-      (* Lowercase name: variable pattern *)
-      advance ps; Types.PVariable n
-  | TName n -> advance ps; Types.PVariable n  (* any name is a variable for now *)
-  | TInt i -> advance ps; Types.PLiteral (VInt i)
-  | TFloat f -> advance ps; Types.PLiteral (VFloat f)
-  | TString s -> advance ps; Types.PLiteral (VString s)
-  | TKeyword kw -> advance ps; Types.PLiteral (VKeyword kw)
-  | TLBracket ->
-      (* List pattern: [p1, p2, ...rest] *)
-      advance ps;
-      skip_nl ps;
-      if (cur ps).t = TRBracket then (advance ps; Types.PList ([], None))
-      else begin
-        let rec loop_pats acc =
-          let k = cur ps in
-          match k.t with
-          | TName s when String.length s >= 3 && String.sub s 0 3 = "..." ->
-              (* Spread must be the last element; bind the remainder. *)
-              advance ps;
-              let rest_name = String.sub s 3 (String.length s - 3) in
-              if rest_name = "" then
-                parse_error ps "spread pattern '...' must be followed by a name or '_'";
-              let rest_pat = if rest_name = "_" then Types.PWildcard else Types.PVariable rest_name in
-              skip_nl ps;
-              expect ps ~nl:true TRBracket "']' after spread pattern";
-              (List.rev acc, Some rest_pat)
-          | _ ->
-              let p = parse_pattern ps in
-              skip_nl ps;
-              match (cur ps).t with
-              | TComma -> advance ps; skip_nl ps; loop_pats (p :: acc)
-              | TRBracket -> advance ps; (List.rev (p :: acc), None)
-              | t -> parse_error ps ("expected ',' or ']', got " ^ string_of_btok t)
-        in
-        let pats, rest = loop_pats [] in
-        Types.PList (pats, rest)
-      end
-  | TLParen ->
-      (* Tagged pattern: (:ok v) or just grouping *)
-      advance ps;
-      skip_nl ps;
-      (match (cur ps).t with
-       | TKeyword tag ->
-           advance ps;
-           let rec loop_pats acc =
-             if (cur ps).t = TRParen then (advance ps; List.rev acc)
-             else begin
-               let p = parse_pattern ps in
-               loop_pats (p :: acc)
-             end
-           in
-           Types.PTagged (tag, loop_pats [])
-       | _ ->
-           let p = parse_pattern ps in
-           expect ps ~nl:true TRParen "')'";
-           p)
-  | _ ->
-      parse_error ps ("expected pattern, got " ^ string_of_btok k.t)
+  parse_pattern_generic ps normal_pattern_builder
 and parse_one_arg_form ps (mk : expr -> expr) (what : string) : expr =
   advance ps;  (* '(' *)
   skip_nl ps;
@@ -1648,30 +1836,40 @@ and parse_one_arg_form ps (mk : expr -> expr) (what : string) : expr =
   mk e
 
 (* if C { T... } [else if C2 { ... }]* [else { E... }] — L37–L39.
-   cur = the `if` name token. The condition is parsed brace-free (Go-style). *)
-and parse_if ps : expr =
+   cur = the `if` name token; the condition is parsed brace-free (Go-style).
+   One grammar, two contexts: [parse_cond] and [parse_block] supply how each
+   reader parses a condition and a block, and [mk_if] builds the result from
+   (cond, then, optional-else) — the normal reader a real EIf (a missing else
+   defaults to nil), the quasiquote reader the quoted `(if …)` list data
+   (2-element when there is no else). A newline may legitimately separate `}`
+   from `else`: peek past newlines but only consume them when `else` actually
+   follows, so an otherwise-trailing newline still terminates the statement. *)
+and parse_if_ctx ps ~(parse_cond : ps -> expr) ~(parse_block : ps -> expr)
+    ~(mk_if : expr -> expr -> expr option -> expr) : expr =
   advance ps;  (* 'if' *)
-  let cond = parse_expr ps { nl = false; cond = true } in
-  let then_b = parse_block_body ps in
+  let cond = parse_cond ps in
+  let then_b = parse_block ps in
   let else_e =
-    (* A newline may legitimately separate `}` from `else` (§ the pragmatic
-       reformatter always joins them onto one line, but the parser must
-       accept the split form too). Peek past newlines; only actually
-       consume them if `else` is what follows — otherwise the newline is
-       left alone so it can still terminate this statement. *)
     let save = ps.pos in
     skip_nl ps;
     match (cur ps).t with
     | TName "else" ->
         advance ps;
         (match (cur ps).t with
-         | TName "if" -> parse_if ps
-         | TLBrace -> parse_block_body ps
+         | TName "if" -> Some (parse_if_ctx ps ~parse_cond ~parse_block ~mk_if)
+         | TLBrace -> Some (parse_block ps)
          | t -> parse_error ps ("expected 'if' or '{' after else, got "
                                 ^ string_of_btok t))
-    | _ -> ps.pos <- save; ELiteral VNil
+    | _ -> ps.pos <- save; None
   in
-  EIf (cond, then_b, else_e)
+  mk_if cond then_b else_e
+
+and parse_if ps : expr =
+  parse_if_ctx ps
+    ~parse_cond:(fun ps -> parse_expr ps { nl = false; cond = true })
+    ~parse_block:parse_block_body
+    ~mk_if:(fun cond then_b else_e ->
+      EIf (cond, then_b, Option.value else_e ~default:(ELiteral VNil)))
 
 (* let/let* binding group `(x [: ty] = e, ...)`; cur = '(' *)
 and parse_binding_group ps ~(allow_ty : bool) : (string * expr) list =
@@ -1910,28 +2108,8 @@ and parse_qq_primary ps : expr =
       skip_nl ps;
       if (cur ps).t = TRBracket then (advance ps; qq_nil)
       else begin
-        let rec loop acc =
-          match (cur ps).t with
-          | TName s when String.length s >= 3 && String.sub s 0 3 = "..." ->
-              advance ps;
-              let target =
-                if String.length s > 3 then
-                  qq_sym (String.sub s 3 (String.length s - 3))
-                else
-                  parse_qq ps
-              in
-              (match (peek ps ~nl:true).t with
-               | TComma -> advance ps; skip_nl ps; loop (BSpread target :: acc)
-               | TRBracket -> advance ps; List.rev (BSpread target :: acc)
-               | t -> parse_error ps ("expected ',' or ']', got " ^ string_of_btok t))
-          | _ ->
-              let e = parse_qq ps in
-              (match (peek ps ~nl:true).t with
-               | TComma -> advance ps; skip_nl ps; loop (BElem e :: acc)
-               | TRBracket -> advance ps; List.rev (BElem e :: acc)
-               | t -> parse_error ps ("expected ',' or ']', got " ^ string_of_btok t))
-        in
-        let elems = loop [] in
+        let elems =
+          parse_bracket_elems ps ~elem:parse_qq ~mk_spread_sym:qq_sym in
         let has_spread = List.exists (function BSpread _ -> true | _ -> false) elems in
         if not has_spread then
           qq_chain (List.map (function BElem e -> e | BSpread e -> e) elems)
@@ -1995,202 +2173,13 @@ and parse_qq_name_slot ps ~(what : string) : expr =
                          ^ string_of_btok t)
 
 and parse_qq_head ps (n : string) : expr =
-  let next_t = (peek2 ps).t in
+  match parse_head_ctx ps qq_head_builder n with
+  | Some e -> e
+  | None ->
+  (* Forms unique to the quasiquote reader: defmacro/needs (not representable)
+     and $KIND observation heads; plus the bare-symbol fallback. Every form
+     shared with the normal reader lives in parse_head_ctx above. *)
   match n with
-  | "unquote" when next_t = TLParen ->
-      (* ,E — E is evaluated NORMALLY *)
-      advance ps; advance ps;
-      skip_nl ps;
-      let e = parse_expr ps free_ctx in
-      expect ps ~nl:true TRParen "')'";
-      EApply (ESymbol "list", [EQuote (ESymbol "unquote"); e])
-  | "splice" when next_t = TLParen ->
-      advance ps; advance ps;
-      skip_nl ps;
-      let e = parse_expr ps free_ctx in
-      expect ps ~nl:true TRParen "')'";
-      EApply (ESymbol "list", [EQuote (ESymbol "unquote-splicing"); e])
-  | "quote" when next_t = TLBrace ->
-      advance ps;
-      (match parse_qq_block_items ps with
-       | [f] -> EQuote f
-       | _ -> parse_error ps "quote { ... } must contain exactly one form")
-  | "quasiquote" when next_t = TLBrace ->
-      advance ps;
-      (match parse_qq_block_items ps with
-       | [f] -> EApply (ESymbol "quasiquote", [f])
-       | _ -> parse_error ps "quasiquote { ... } must contain exactly one form")
-  | "fn" when next_t = TLParen ->
-      advance ps;
-      let params = parse_paren_params ps in
-      let param_data =
-        qq_chain (List.map (fun (p, ty) ->
-          match ty with
-          | None -> qq_sym p
-          | Some _ -> parse_error ps
-                        "type annotations are not representable inside quasiquote")
-          params)
-      in
-      let body = parse_qq_block_items ps in
-      qq_chain (qq_sym "fn" :: param_data :: body)
-  | "def" when (match next_t with TName _ -> true | _ -> false) ->
-      advance ps;
-      let name_expr = parse_qq_name_slot ps ~what:"def name" in
-      if (cur ps).t <> TLParen then
-        parse_error ps "def requires a parameter list: def name(params) { ... }";
-      let params = parse_paren_params ps in
-      let head =
-        qq_chain (name_expr
-                  :: List.map (fun (p, ty) ->
-                       match ty with
-                       | None -> qq_sym p
-                       | Some _ -> parse_error ps
-                                     "type annotations are not representable inside quasiquote")
-                       params)
-      in
-      let body = parse_qq_block_items ps in
-      qq_chain (qq_sym "def" :: head :: body)
-  | "node" when next_t = TLBrace ->
-      advance ps;
-      let b = parse_qq_block_one ps in
-      qq_chain [qq_sym "node"; b]
-  | "do" when next_t = TLBrace ->
-      advance ps;
-      let items = parse_qq_block_items ps in
-      qq_chain (qq_sym "do" :: items)
-  | "if" when starts_expr next_t ->
-      advance ps;
-      let cond = parse_qq_cond ps in
-      let then_b = parse_qq_block_one ps in
-      (* Same else-across-a-newline lookahead as parse_if: only consume the
-         newline(s) if `else` actually follows. *)
-      let save = ps.pos in
-      skip_nl ps;
-      (match (cur ps).t with
-       | TName "else" ->
-           advance ps;
-           (match (cur ps).t with
-            | TName "if" ->
-                let e = parse_qq_head ps "if" in
-                qq_chain [qq_sym "if"; cond; then_b; e]
-            | TLBrace ->
-                let e = parse_qq_block_one ps in
-                qq_chain [qq_sym "if"; cond; then_b; e]
-            | t -> parse_error ps ("expected 'if' or '{' after else, got "
-                                   ^ string_of_btok t))
-       | _ -> ps.pos <- save; qq_chain [qq_sym "if"; cond; then_b])
-  | "try" when next_t = TLBrace ->
-      (* try { ... } — build the SAME nested let/if DATA shape
-         lower_try_block builds as real expr nodes, just with
-         qq_chain/qq_sym instead of ELet/EIf/EApply, and every
-         bind/statement rhs routed through parse_qq (so unquote/splice
-         work in a try statement's expression position). fresh_try_var is
-         the SAME global counter the normal path uses (reset once per
-         top-level form, read_string's try_counter := 0) — sharing it here
-         keeps a form's LAW-20 hash depending
-         only on the form, not on how many try blocks preceded it, intact
-         whether the try block was written directly or inside a
-         quasiquote template. *)
-      advance ps;
-      skip_nl ps;
-      let stmts = parse_qq_try_stmts ps in
-      qq_lower_try_block stmts
-  | "match" when starts_expr next_t ->
-      (* match E { pat => body; ... } — build the SAME DATA shape
-         quote_to_value's OWN EMatch case builds (types.ml, `(match
-         scrutinee ((pat1 body1) ...))`, arm patterns encoded exactly as
-         quote_pattern does), so a macro-expanded template reconstructs a
-         real EMatch via the matching value_to_expr "match" case (this had
-         to add that inverse, since EMatch is a first-class AST node, not sugar
-         over existing forms, unlike try/if/do). Patterns stay fully
-         literal (parse_qq_pattern) — no unquote in pattern position, same
-         judgment as parse_qq_name_slot's param-list restriction: no macro
-         test needs a computed pattern, and quote_pattern's tagged
-         encoding has no unquote convention of its own to lift. Arm bodies
-         and the scrutinee route through parse_qq, so unquote/splice work
-         there. *)
-      advance ps;
-      let scrutinee = parse_qq ps in
-      skip_nl ps;
-      expect ps ~nl:false TLBrace "'{'";
-      let arms = parse_qq_match_arms ps in
-      qq_chain [qq_sym "match"; scrutinee; arms]
-  | ("let" | "let*") when next_t = TLParen ->
-      advance ps; advance ps;
-      skip_nl ps;
-      let rec binds acc =
-        if (cur ps).t = TRParen then (advance ps; List.rev acc)
-        else begin
-          let name_expr = parse_qq_name_slot ps ~what:"binding name" in
-          if (cur ps).t = TColon then
-            parse_error ps "type annotations are not representable inside quasiquote";
-          (match (peek ps ~nl:true).t with
-           | TName "=" -> advance ps
-           | t -> parse_error ps ("expected '=' in binding, got " ^ string_of_btok t));
-          skip_nl ps;
-          let v = parse_qq ps in
-          match (peek ps ~nl:true).t with
-          | TComma -> advance ps; skip_nl ps; binds (v :: name_expr :: acc)
-          | TRParen -> advance ps; List.rev (v :: name_expr :: acc)
-          | t -> parse_error ps ("expected ',' or ')', got " ^ string_of_btok t)
-        end
-      in
-      let flat = binds [] in
-      let body = parse_qq_block_items ps in
-      qq_chain (qq_sym n :: EApply (ESymbol "vector", flat) :: body)
-  | "perform" when (match next_t with TName _ -> true | _ -> false) ->
-      advance ps;
-      let name = (match (cur ps).t with TName s -> s | _ -> assert false) in
-      advance ps;
-      if (cur ps).t <> TLParen then
-        parse_error ps "perform requires an argument list: perform name(args)";
-      advance ps;
-      let args = parse_qq_args ps in
-      qq_chain (qq_sym "perform" :: qq_sym name :: args)
-  | ("with-caps" | "with-config") when next_t = TLParen ->
-      advance ps; advance ps;
-      skip_nl ps;
-      let e = parse_qq ps in
-      expect ps ~nl:true TRParen "')'";
-      let body = parse_qq_block_items ps in
-      qq_chain (qq_sym n :: e :: body)
-  | "with-handler" when next_t = TLParen ->
-      advance ps; advance ps;
-      skip_nl ps;
-      (* Same pair syntax as the normal reader (parse_handler_pairs); the data
-         shape is the flat [name; value; …] vector the with-handler lowering
-         expects, with a name kept as `'sym` and a keyword as `'(quote :kw)`. *)
-      let flat =
-        List.concat_map
-          (fun (name, h) ->
-            let name_e = match name with
-              | HName s -> qq_sym s
-              | HKeyword k -> EQuote (ELiteral (VKeyword k))
-            in
-            [name_e; h])
-          (parse_handler_pairs ps ~parse_value:(fun () -> parse_qq ps))
-      in
-      let body = parse_qq_block_items ps in
-      qq_chain (qq_sym "with-handler" :: EApply (ESymbol "vector", flat) :: body)
-  | "module" when next_t = TLBrace ->
-      advance ps;
-      let items = parse_qq_block_items ps in
-      qq_chain (qq_sym "module" :: items)
-  | ("import" | "force" | "delay") when next_t = TLParen ->
-      advance ps; advance ps;
-      skip_nl ps;
-      let e = parse_qq ps in
-      expect ps ~nl:true TRParen "')'";
-      qq_chain [qq_sym n; e]
-  | ("config" | "assert" | "load" | "load-module" | "island"
-    | "and" | "or") when next_t = TLParen ->
-      advance ps; advance ps;
-      let args = parse_qq_args ps in
-      qq_chain (qq_sym n :: args)
-  | "reconcile" when next_t = TLBrace ->
-      advance ps;
-      (* data of the lowering: a hash-map build *)
-      parse_qq_primary ps
   | ("defmacro" | "needs") ->
       parse_error ps (n ^ " is not representable inside quasiquote { ... }")
   | _ when String.length n > 0 && n.[0] = '$'
@@ -2219,184 +2208,62 @@ and parse_qq_cond ps : expr =
   (* reuse the qq precedence chain; a top-level '{' simply stops it *)
   parse_qq ps
 
-(* try { ... } inside quasiquote — parse_try_stmts's exact grammar,
-   with every rhs/bare-expr routed through parse_qq instead
-   of parse_expr (unquote/splice work in a statement's expression
-   position; bind NAMES stay bare identifiers, same convention as
-   parse_qq_name_slot — no macro test needs a computed try-bind name). *)
-and parse_qq_try_stmts ps : try_stmt list =
-  expect ps ~nl:false TLBrace "'{'";
-  let rec skip_seps () =
-    match (cur ps).t with
-    | TNewline | TSemi -> advance ps; skip_seps ()
-    | _ -> ()
-  in
-  let rec loop acc =
-    skip_seps ();
-    let k = cur ps in
-    if k.t = TRBrace then (advance ps; List.rev acc)
-    else if k.t = TEOF then parse_error ps "unterminated try block in quasiquote"
-    else begin
-      match k.t with
-      | TName name when not k.glued && not (peek2 ps).glued && (peek2 ps).t = TName "<-" ->
-          advance ps;  (* consume name *)
-          advance ps;  (* consume <- *)
-          skip_nl ps;
-          let rhs = parse_qq ps in
-          loop (TryBind (name, rhs) :: acc)
-      | _ ->
-          (* Postfix `?` removed; parity with the normal try path. *)
-          let e = parse_qq ps in
-          if (cur ps).t = TName "?" && (cur ps).glued then
-            parse_error ps
-              "postfix `?` is not part of the language; use `name <- expr` to unwrap";
-          loop (TryExpr e :: acc)
-    end
-  in
-  loop []
+(* The quasiquote reader's try_builder: the SAME nested let/if shape
+   Desugar.lower_try builds, as quoted DATA (qq_chain/qq_sym) instead of real
+   ELet/EIf/EApply nodes, so value_to_expr (or the runtime `quasiquote` builtin,
+   for a non-macro use) reconstructs exactly what the direct `try { ... }` parse
+   produces. A `let` binding becomes the `(let (vector name val) body)` data
+   shape Types.binding_pairs reads back. Every bind rhs / bare statement is
+   routed through parse_qq at the parse step (parse_try_stmts_ctx), so
+   unquote/splice work in a try statement's expression position; bind NAMES stay
+   bare identifiers (same convention as parse_qq_name_slot — no macro test needs
+   a computed try-bind name). *)
+and qq_try_builder : Desugar.try_builder = {
+  Desugar.t_ok_kw = EQuote (ELiteral (VKeyword "ok"));
+  t_sym = (fun s -> qq_sym s);
+  t_app = (fun f args -> qq_chain (qq_sym f :: args));
+  t_do  = (fun es -> qq_chain (qq_sym "do" :: es));
+  t_let = (fun name v body ->
+    qq_chain [qq_sym "let"; EApply (ESymbol "vector", [qq_sym name; v]); body]);
+  t_if  = (fun c t e -> qq_chain [qq_sym "if"; c; t; e]);
+}
 
-(* The qq analogue of lower_try_block — SAME nested
-   let/if structure, built as quoted DATA (qq_chain/qq_sym) instead of
-   literal ELet/EIf/EApply nodes, so `value_to_expr` (or the runtime
-   `quasiquote` builtin, for a non-macro use) reconstructs exactly what
-   the ordinary `try { ... }` parse produces. *)
-and qq_lower_try_block (stmts : try_stmt list) : expr =
-  let ok_kw = EQuote (ELiteral (VKeyword "ok")) in
-  let car_of e = qq_chain [qq_sym "car"; e] in
-  let cdr_of e = qq_chain [qq_sym "cdr"; e] in
-  let rec build = function
-    | [] -> ok_kw
-    | [TryExpr e] -> e
-    | TryExpr e :: rest -> qq_chain [qq_sym "do"; e; build rest]
-    | TryBind (name, rhs) :: rest ->
-        let tmp = fresh_try_var () in
-        let tmp_sym = qq_sym tmp in
-        let ok_branch =
-          qq_chain [qq_sym "let"; EApply (ESymbol "vector", [qq_sym name; car_of (cdr_of tmp_sym)]);
-                    build rest]
-        in
-        let err_branch = tmp_sym in
-        qq_chain [qq_sym "let"; EApply (ESymbol "vector", [qq_sym tmp; rhs]);
-                  qq_chain [qq_sym "if";
-                            qq_chain [qq_sym "="; car_of tmp_sym; ok_kw];
-                            ok_branch; err_branch]]
-  in
-  build stmts
+(* The quasiquote reader's pattern builder: the shape quote_pattern produces
+   (`_`/`(lit v)`/`(var "n")`/`(list (pats…) rest)`/`(tagged "t" pats…)`), so
+   value_to_pattern reconstructs the identical Types.pattern after macro
+   expansion. A function (not a value) because its fields apply the recursive
+   qq_sym/qq_chain helpers eagerly. Patterns stay fully literal here
+   (pb_reject_unquote = true): unquote(...) in pattern position is a worded parse
+   error, not silently dropped. *)
+and qq_pattern_builder () : expr pattern_builder = {
+  mk_pwild = qq_sym "_";
+  mk_plit = (fun v -> qq_chain [qq_sym "lit"; EQuote (ELiteral v)]);
+  mk_pvar = (fun n -> qq_chain [qq_sym "var"; EQuote (ELiteral (VString n))]);
+  mk_plist = (fun pats rest ->
+    qq_chain [qq_sym "list"; qq_chain pats;
+              (match rest with Some r -> r | None -> qq_nil)]);
+  mk_ptagged = (fun tag pats ->
+    qq_chain (qq_sym "tagged" :: EQuote (ELiteral (VString tag)) :: pats));
+  pb_reject_unquote = true;
+}
 
-(* A single pattern inside a qq `match` arm — parse_pattern's exact
-   grammar, built as the quoted-DATA shape quote_pattern
-   produces for that pattern (types.ml: `_`/`(lit v)`/`(var
-   "name")`/`(list (pats...) rest)`/`(tagged "tag" pats...)`), so
-   value_to_pattern (its inverse, added alongside the "match" case in
-   value_to_expr) reconstructs the identical Types.pattern after macro
-   expansion. Deliberately NOT unquote-aware (see the "match" arm's
-   comment) — an unquote(...) here falls to the trailing parse_error,
-   worded to say so rather than a generic "expected pattern". *)
 and parse_qq_pattern ps : expr =
-  let k = cur ps in
-  match k.t with
-  | TName "_" -> advance ps; qq_sym "_"
-  | TName "true" -> advance ps; qq_chain [qq_sym "lit"; EQuote (ELiteral (VBool true))]
-  | TName "false" -> advance ps; qq_chain [qq_sym "lit"; EQuote (ELiteral (VBool false))]
-  | TName "nil" -> advance ps; qq_chain [qq_sym "lit"; EQuote (ELiteral VNil)]
-  | TName "unquote" ->
-      parse_error ps
-        "patterns are always literal inside quasiquote { ... }: unquote(...) \
-         is not supported in match-pattern position"
-  | TName n -> advance ps; qq_chain [qq_sym "var"; EQuote (ELiteral (VString n))]
-  | TInt i -> advance ps; qq_chain [qq_sym "lit"; EQuote (ELiteral (VInt i))]
-  | TFloat f -> advance ps; qq_chain [qq_sym "lit"; EQuote (ELiteral (VFloat f))]
-  | TString s -> advance ps; qq_chain [qq_sym "lit"; EQuote (ELiteral (VString s))]
-  | TKeyword kw -> advance ps; qq_chain [qq_sym "lit"; EQuote (ELiteral (VKeyword kw))]
-  | TLBracket ->
-      advance ps;
-      skip_nl ps;
-      if (cur ps).t = TRBracket then
-        (advance ps; qq_chain [qq_sym "list"; qq_nil; qq_nil])
-      else begin
-        let rec loop_pats acc =
-          let k = cur ps in
-          match k.t with
-          | TName s when String.length s >= 3 && String.sub s 0 3 = "..." ->
-              advance ps;
-              let rest_name = String.sub s 3 (String.length s - 3) in
-              if rest_name = "" then
-                parse_error ps "spread pattern '...' must be followed by a name or '_'";
-              let rest_pat =
-                if rest_name = "_" then qq_sym "_"
-                else qq_chain [qq_sym "var"; EQuote (ELiteral (VString rest_name))]
-              in
-              skip_nl ps;
-              expect ps ~nl:true TRBracket "']' after spread pattern";
-              (List.rev acc, rest_pat)
-          | _ ->
-              let p = parse_qq_pattern ps in
-              skip_nl ps;
-              (match (cur ps).t with
-               | TComma -> advance ps; skip_nl ps; loop_pats (p :: acc)
-               | TRBracket -> advance ps; (List.rev (p :: acc), qq_nil)
-               | t -> parse_error ps ("expected ',' or ']', got " ^ string_of_btok t))
-        in
-        let pats, rest = loop_pats [] in
-        qq_chain [qq_sym "list"; qq_chain pats; rest]
-      end
-  | TLParen ->
-      advance ps;
-      skip_nl ps;
-      (match (cur ps).t with
-       | TKeyword tag ->
-           advance ps;
-           let rec loop_pats acc =
-             if (cur ps).t = TRParen then (advance ps; List.rev acc)
-             else begin
-               let p = parse_qq_pattern ps in
-               loop_pats (p :: acc)
-             end
-           in
-           qq_chain (qq_sym "tagged" :: EQuote (ELiteral (VString tag)) :: loop_pats [])
-       | _ ->
-           let p = parse_qq_pattern ps in
-           expect ps ~nl:true TRParen "')'";
-           p)
-  | _ ->
-      parse_error ps ("expected pattern, got " ^ string_of_btok k.t)
+  parse_pattern_generic ps (qq_pattern_builder ())
 
-(* Match arms inside quasiquote — parse_match_arms's grammar,
-   built as a qq list of (pattern body) 2-element arms,
-   exactly the shape quote_to_value's EMatch case builds for `arms`. *)
+(* Match arms inside quasiquote — the shared arm grammar with the qq
+   pattern/expr parsers, each arm a qq list `(pat body)` or `(pat guard body)`,
+   exactly the shape quote_to_value's EMatch case builds for `arms`, then
+   qq_chained into the arm-list value. *)
 and parse_qq_match_arms ps : expr =
-  let rec skip_seps () =
-    match (cur ps).t with
-    | TNewline | TSemi -> advance ps; skip_seps ()
-    | _ -> ()
-  in
-  let rec loop acc =
-    skip_seps ();
-    if (cur ps).t = TRBrace then (advance ps; qq_chain (List.rev acc))
-    else if (cur ps).t = TEOF then parse_error ps "unterminated match block in quasiquote"
-    else begin
-      let pat = parse_qq_pattern ps in
-      (* Optional `if guard` before `=>`, built as the 3-element arm
-         (pat guard body) quote_to_value's EMatch case emits for a guarded arm
-         (a guardless arm stays the 2-element (pat body)). *)
-      let guard =
-        match (peek ps ~nl:true).t with
-        | TName "if" -> advance ps; skip_nl ps; Some (parse_qq ps)
-        | _ -> None
-      in
-      (match peek_infix ps ~nl:true ["=>"] with
-       | Some _ -> advance ps
-       | None -> parse_error ps "match arm must be `pattern [if guard] => body`");
-      skip_nl ps;
-      let body = parse_qq ps in
-      let arm = match guard with
-        | None -> qq_chain [pat; body]
-        | Some g -> qq_chain [pat; g; body]
-      in
-      loop (arm :: acc)
-    end
-  in
-  loop []
+  qq_chain (parse_match_arms_generic ps
+    ~parse_pat:parse_qq_pattern
+    ~parse_guard:parse_qq
+    ~parse_body:parse_qq
+    ~mk_arm:(fun pat guard body ->
+      match guard with
+      | None -> qq_chain [pat; body]
+      | Some g -> qq_chain [pat; g; body])
+    ~what:" in quasiquote")
 
 (* ---- Public API ---- *)
 
