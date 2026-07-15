@@ -188,7 +188,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
                       failwith "VM: tree-walker thunk encountered in VM force"
                 in
                 (match t.type_ann with
-                 | Some ty -> Evaluator.check_type result_val ty t.thunk_loc
+                 | Some ty -> Node.check_type result_val ty t.thunk_loc
                  | None -> ());
                 t.thunk_status <- Evaluated result_val;
                 push result_val;
@@ -597,7 +597,7 @@ and vm_force (v : value) : value =
               t.thunk_status <- Evaluating;
               let r = run_isolated bc' offset frames' in
               (match t.type_ann with
-               | Some ty -> Evaluator.check_type r ty t.thunk_loc
+               | Some ty -> Node.check_type r ty t.thunk_loc
                | None -> ());
               t.thunk_status <- Evaluated r;
               vm_force r

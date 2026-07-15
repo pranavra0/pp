@@ -41,27 +41,6 @@ let make_thunk_ca_typed (expr : expr) (ty : expr) (loc : (string * int) option) 
 
 (* Runtime check for gradual type annotations. Shared by both backends (the
    VM calls it too), so they fail identically by construction. *)
-let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
-  let type_name =
-    match ty with
-    | ESymbol s -> s
-    | ELiteral (VSymbol s) | ELiteral (VKeyword s) -> s
-    | _ -> "unknown"
-  in
-  let ok =
-    match type_name with
-    | "int" -> (match v with VInt _ -> true | _ -> false)
-    | "string" -> (match v with VString _ -> true | _ -> false)
-    | "bool" -> (match v with VBool _ -> true | _ -> false)
-    | "nil" -> (match v with VNil -> true | _ -> false)
-    | _ -> false (* unknown type names are hard errors *)
-  in
-  if not ok then
-    let loc_str = match loc with
-      | Some (file, line) -> Printf.sprintf " at %s:%d" file line
-      | None -> "" in
-    failwith (Printf.sprintf "type mismatch: expected %s, got %s%s"
-                type_name (string_of_value v) loc_str)
 
 (* LAW 23b: whether a set of capabilities permits reading a trace cell. Used
    to gate cache hits on the transitive read closure. The match is
@@ -134,118 +113,17 @@ let cell_authorized_for (caps : Capability.t list) (cell_id : string) : bool =
    trace reads into the active trace frames so the caller's trace transitively
    captures this node's world-reads (same mechanism as Store.hit's hit-replay).
    [key_of] is the backend's node-key function (node_key_of / vm_node_key). *)
-let replay_node_reads (t : thunk) (key_of : thunk -> string) : unit =
-  if t.thunk_persist && !Runtime.trace_stack <> [] then
-    let traces = Store.load_traces ~key:(key_of t) in
-    List.iter (fun tr ->
-      List.iter (fun (c, h) -> Runtime.record_read c h) tr.Store.tr_reads
-    ) traces
+let replay_node_reads = Node.replay_node_reads
 
 (* Run a persistent node's body and store the result (LAW 21) or the failure
    (LAW 28) with its verifying trace. Shared by the tree-walker's force, the
    trampoline, and the VM's force_node_thunk — the node caches identically
    however it is demanded. [run] executes the body; the caller owns any
    backend-specific bookkeeping (force_depth, operand-stack isolation). *)
-let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
-  (* The ambient capability set captured when this node value was created.
-     force_node uses this — never the live ambient set — for both the hit
-     gate and the miss recompute: a node's authority is fixed at creation,
-     exactly as a closure's environment is (SPEC law 23b). with_ref
-     restores current_capabilities on every exit, exception included, so
-     this composes cleanly with the try/with below. *)
-  with_ref current_capabilities t.node_caps (fun () ->
-  t.thunk_status <- Evaluating;
-  (* The trace frame captures the world-reads (slurp, read-file, …) this node
-     makes as (cell-id, observed-hash) pairs. Popped on every exit — normal or
-     exceptional — so a raised error never leaks a dangling frame. *)
-  let frame = Runtime.push_trace_frame () in
-  let result =
-    try
-      let r = run () in
-      Runtime.pop_trace_frame ();
-      r
-    with
-    | Failure msg as e ->
-        Runtime.pop_trace_frame ();
-        (* LAW 28: store a FAILING trace — the error value plus the reads made
-           up to the failure — so a re-force with unchanged inputs re-serves the
-           failure, and re-runs only when a read changes. Reset the status
-           off `Evaluating` so the next force reports the real error, not a fake
-           "infinite recursion" (which would happen if a raising thunk were
-           left marked as still being evaluated). A Capability_error is not
-           a Failure and is never memoized (LAW 15/20). *)
-        let errval = VString msg in
-        let err_hash = Types.hash_value errval in
-        (try Store.store_object ~key:err_hash ~value:errval with _ -> ());
-        (try Store.store_trace ~key ~outcome:Failed ~result_hash:err_hash
-               ~reads:(List.rev !frame) with _ -> ());
-        t.thunk_status <- Unevaluated;
-        raise e
-    | e ->
-        Runtime.pop_trace_frame ();
-        t.thunk_status <- Unevaluated;
-        raise e
-  in
-  (* Result ban (LAW 20 node-boundary, export side; also covers VSealed per
-     LAW 39): a node may not RETURN a
-     capability or a sealed value. Checked before any store write, so a
-     would-be-cached VCapability/VSealed never reaches the store; not
-     memoized as a failure either (mirrors Capability_error's own
-     not-memoized discipline — an authority-shaped outcome is not cache
-     material). Otherwise `(node (current-capabilities))` would be an
-     ambient-dependent result invisible to both the key and the trace (a
-     determinism hole), and a broad cap (or a secret) could ride a result out
-     to a narrower/unauthorized caller — the node boundary must be
-     symmetric. *)
-  if Types.contains_authority result then begin
-    t.thunk_status <- Unevaluated;
-    if Types.contains_sealed result then
-      raise (Capability_error "a node may not return a sealed value")
-    else
-      raise (Capability_error "a node may not return a capability")
-  end;
-  (match t.type_ann with
-   | Some ty -> check_type result ty t.thunk_loc
-   | None -> ());
-  t.thunk_status <- Evaluated result;
-  let result_hash = Types.hash_value result in
-  (* Objects are content-addressed by result hash; the trace maps the node
-     key to that result plus the reads that justify it. *)
-  (try Store.store_object ~key:result_hash ~value:result with _ -> ());
-  (try Store.store_trace ~key ~outcome:Ok ~result_hash
-         ~reads:(List.rev !frame) with _ -> ());
-  (* --check (LAW 38): run the body a second time under a throwaway trace
-     frame; a different result hash means the node observed something no
-     cell captured — volatile, and unsafe to cache. *)
-  if !Store.check_mode then begin
-    ignore (Runtime.push_trace_frame ());
-    let r2 =
-      try run ()
-      with e -> Runtime.pop_trace_frame (); raise e
-    in
-    Runtime.pop_trace_frame ();
-    if Types.hash_value r2 <> result_hash then begin
-      incr Store.volatile_count;
-      Printf.eprintf
-        "[check] volatile node %s: an identical run produced a different result hash\n%!"
-        (Store.short_key key)
-    end
-  end;
-  result)
 
 (* Serve a resolved Store.hit_result the same way in every miss-arm variant
    below: a verified hit (gated on LAW 23b authority), a re-served memoized
    failure (LAW 28), or [None] on Miss (caller decides what to do). *)
-let serve_hit ~(t : thunk) (h : Store.hit_result) : value option =
-  match h with
-  | Store.HitOk cached ->
-      t.thunk_status <- Evaluated cached;
-      Some cached
-  | Store.HitFailed errval ->
-      (match errval with
-       | VString msg -> failwith msg
-       | _ -> failwith "node failed (cached)")
-  | Store.Miss -> None
 
 (* Force a persistent node through the store: serve a verified hit (gated on
    the caller's authority over the trace's read closure, LAW 23b), re-serve a
@@ -273,21 +151,21 @@ let force_node ~(key : string) ~(run : unit -> value) (t : thunk) : value =
      `--grant` set whenever with-caps goes unused, exactly matching
      tests/011/013/017. *)
   let authorized = cell_authorized_for t.node_caps in
-  match serve_hit ~t (Store.hit ~key ~authorized) with
+  match Node.serve_hit ~t (Store.hit ~key ~authorized) with
   | Some v -> v
   | None ->
       (match !Scheduler.policy with
        | Scheduler.Race n when n > 1 ->
            let job = { Scheduler.j_key = key;
-                       j_run = (fun () -> run_node_body ~key ~run t);
+                       j_run = (fun () -> Node.run_node_body ~key ~run t);
                        j_width = n; j_thunk = t } in
            Scheduler.dispatch_batch [job];
-           (match serve_hit ~t (Store.hit ~key ~authorized) with
+           (match Node.serve_hit ~t (Store.hit ~key ~authorized) with
             | Some v -> v
             | None ->
                 (* Every racing worker died: degrade to the ordinary serial
                    path — never a wrong answer, never a hang. *)
-                run_node_body ~key ~run t)
+                Node.run_node_body ~key ~run t)
        (* A lone miss stays in-process under every OTHER policy too,
           including [Remote _]: spinning up a cluster-member subprocess for
           a single node buys nothing (there is no sibling to overlap with,
@@ -295,7 +173,7 @@ let force_node ~(key : string) ~(run : unit -> value) (t : thunk) : value =
           (collect_unevaluated_nodes, primitives.ml) is worth shipping. *)
        | Scheduler.Serial | Scheduler.Parallel _ | Scheduler.Race _
        | Scheduler.Remote _ ->
-           run_node_body ~key ~run t)
+           Node.run_node_body ~key ~run t)
 
 (* Module exports: the bindings of [bindings] not present in [base]
    (insertion order preserved). With [dedup], each name is exported once —
@@ -353,7 +231,7 @@ let rec force (v : value) : value =
       (match t.thunk_status with
        | Evaluated result ->
            decr force_depth;
-           replay_node_reads t node_key_of;
+           Node.replay_node_reads t node_key_of;
            force result
        | Evaluating ->
            decr force_depth;
@@ -398,7 +276,7 @@ and evaluate_and_store_no_key (t : thunk) : value =
       raise e
   in
   (match t.type_ann with
-   | Some ty -> check_type result ty t.thunk_loc
+   | Some ty -> Node.check_type result ty t.thunk_loc
    | None -> ());
   t.thunk_status <- Evaluated result;
   decr force_depth;
@@ -878,7 +756,7 @@ and trampoline_force (v : value) : value =
                         r
                   in
                   (match t.type_ann with
-                   | Some ty -> check_type result ty t.thunk_loc
+                   | Some ty -> Node.check_type result ty t.thunk_loc
                    | None -> ());
                   t.thunk_status <- Evaluated result;
                   Queue.add result queue;
@@ -1140,7 +1018,7 @@ let init () =
      node keys and run node bodies without a dependency cycle (Primitives is
      compiled before Evaluator). *)
   Backend.r.node_key_of <- node_key_of;
-  Backend.r.run_node_body <- (fun ~key ~run t -> run_node_body ~key ~run t);
+  Backend.r.run_node_body <- (fun ~key ~run t -> Node.run_node_body ~key ~run t);
   Backend.r.resolve_if_hit <- (fun t key ->
     (* Same node_caps-gated authority as force_node (LAW 23b) — this is
        the force-deep collect pass's own pre-check of the same key. *)
