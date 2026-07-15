@@ -68,18 +68,10 @@ The global-state collapse into `backend.ml` and the invocation record,
 the five literal-copy deletions, and the two-parser unification in
 `reader_braces.ml` have all landed, as has rendering each surface from
 one typed table — the CLI flag table (parse, dispatch and `--help` from
-one row set), the per-family primitive registrars, the uniform lint rule
-list, and the single test-harness loop over `tests/*.sh`. Two residues
-of that work remain.
-
-### Finish the CLI restructure around the flag table
-
-The flag table lands: parsing, dispatch and `--help` iterate one typed
-row set in `main.ml`, so a flag cannot be documented-but-not-parsed. Not
-yet done: `main`'s inline closures (`watch_loop`, `select_member_slice`,
-`build_all_desired`, and others) are still nested in `main ()`. Promote
-them to top-level functions over the invocation record, so `main ()`
-reads read-table, then build-invocation, then dispatch.
+one row set) with `main`'s subcommand logic promoted to top-level
+functions over the invocation record, the per-family primitive
+registrars, the uniform lint rule list, and the single test-harness loop
+over `tests/*.sh`. One residue of that work remains.
 
 ### Extract tests/lib.sh
 
