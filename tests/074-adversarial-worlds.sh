@@ -16,14 +16,10 @@
 #   edge:     a bullet in DESIGN.md's "Honest edges" section whose first line
 #             names `$head`, verified present
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
+. "$(dirname "$0")/lib.sh"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FIX="$ROOT/tests/fixtures/adversarial"
 DESIGN="$ROOT/docs/DESIGN.md"
-
-fail=0
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
 
 # A head with no adversarial fixture must be justified by a documented trust
 # assumption. The allowlist lives here, but a head on it is only ACCEPTED if

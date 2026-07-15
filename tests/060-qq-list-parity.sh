@@ -12,15 +12,7 @@
 # This pins value-parity between the template result and the literal, on
 # both backends (differential), plus the empty and splice cases.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 # The value a quasiquote bracket template builds must equal the value the
 # equivalent ordinary bracket code builds, and must be a list (pair?), never
 # a vector.

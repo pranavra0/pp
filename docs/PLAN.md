@@ -62,29 +62,7 @@ doesn't wait for pristine.
 
 ---
 
-## Part I — Subtraction (remaining)
-
-The global-state collapse into `backend.ml` and the invocation record,
-the five literal-copy deletions, and the two-parser unification in
-`reader_braces.ml` have all landed, as has rendering each surface from
-one typed table — the CLI flag table (parse, dispatch and `--help` from
-one row set) with `main`'s subcommand logic promoted to top-level
-functions over the invocation record, the per-family primitive
-registrars, the uniform lint rule list, and the single test-harness loop
-over `tests/*.sh`. One residue of that work remains.
-
-### Extract tests/lib.sh
-
-The harness loop lands; the per-script preamble does not. Extract
-`tests/lib.sh` for the `ok`/`bad` plus `PP` default plus `mktemp -d`
-preamble that more than 26 scripts each re-declare, and migrate every
-sharing script to source it in one pass — all-or-nothing, so no script
-is left with its own copy beside the shared one. (`assert` stays
-per-script: its shape differs by suite.)
-
----
-
-## Part II — Construction
+## Part I — Construction
 
 Ordered deliberately: types first, identity unified second, the extent
 mechanism third, and the build boundary with the `.mli` freeze last.
@@ -219,7 +197,7 @@ dynamic extent, which no test can pin exhaustively.
 
 ### Split out a pure kernel library and freeze signatures
 
-This comes last in Part II by design: `.mli`s freeze surfaces, so they
+This comes last in Part I by design: `.mli`s freeze surfaces, so they
 should be written against the shape that the type, identity and extent
 work leaves behind.
 
@@ -241,7 +219,7 @@ work leaves behind.
 
 ---
 
-## Part III — The sweep (prod-readiness)
+## Part II — The sweep (prod-readiness)
 
 Run after Parts I and II, so it sweeps the final shape rather than a
 moving target.

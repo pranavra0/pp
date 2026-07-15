@@ -27,15 +27,8 @@
 #       original is the same property tests/054's whole-tree
 #       `--roundtrip-braces` loop already gates.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
+. "$(dirname "$0")/lib.sh"
 ROOT="$PWD"
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
 
 # comment TEXT content (order-preserving), delimiter/line-number-agnostic:
 # `pp --list-comments SURFACE FILE` prints "LINE: TRIMMED-TEXT"; strip the

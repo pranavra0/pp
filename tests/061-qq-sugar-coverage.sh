@@ -15,15 +15,7 @@
 # below goes through a real defmacro + call, never a bare quasiquote-value
 # comparison for those two.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 run_both() {
   # $1: test name, $2: file, $3: expected output (both backends must match it)
   local name="$1" file="$2" expected="$3"

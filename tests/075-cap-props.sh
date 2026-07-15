@@ -28,12 +28,7 @@
 # is the runtime gate — it runs the suite across several seeds and asserts the
 # caps properties hold with full kind coverage and a non-trivial check count.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-fail=0
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 for seed in 1 2 3 7 42; do
   out=$("$PP" --check-kernel-props --seed "$seed" --count 3000 2>&1)
   rc=$?

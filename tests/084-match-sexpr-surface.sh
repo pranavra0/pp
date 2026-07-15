@@ -6,15 +6,7 @@
 # are `_`, a literal, a bare symbol (variable), `(list p… [. rest])`, and
 # `(tagged tag p…)`.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 # A match file covering every pattern kind AND a guard.
 cat > "$TMP/m.ppb" <<'EOF'
 def describe(r) {

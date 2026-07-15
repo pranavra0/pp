@@ -45,14 +45,7 @@
 # Two SIMULATED machines, differing only in $HOME (Store.store_root is a
 # process-wide singleton — see src/transport.ml's header).
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-
-TMP=$(mktemp -d)
-fail=0
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 NODEA="$TMP/nodeA"; NODEB="$TMP/nodeB"
 mkdir -p "$NODEA" "$NODEB"
 SHARED="$TMP/shared"

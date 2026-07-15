@@ -24,16 +24,10 @@
 # never mistaken for a committed object/trace (rename is atomic; a corrupt
 # object → miss → recompute; a corrupt trace line → dropped).
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
+. "$(dirname "$0")/lib.sh"
 trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP"          # isolate the store, like tests/011/013/017
 unset PP_CRASH_AT || true
-
-fail=0
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
 
 # A build that writes several store objects+traces: two persistent nodes, the
 # second depending on the first. Pure (no capability needed) — enough to drive

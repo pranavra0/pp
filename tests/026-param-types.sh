@@ -10,15 +10,7 @@
 #   (d) vector param lists ([x : int]) and multi-param lists check too;
 #   (e) return-type + param-type combine.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 assert_out() {
   local name="$1" flags="$2" file="$3" expected="$4"
   local got

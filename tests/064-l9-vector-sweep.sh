@@ -8,15 +8,7 @@
 # this statically: it warns on vector-get/vector-length whose first argument is
 # a bracket literal, and must NOT warn when the argument is a real `vector(…)`.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 # vector accessors on bracket literals (should warn) plus the correct vector(…)
 # form (should NOT warn).
 cat > "$TMP/sweep.pp" <<'EOF'

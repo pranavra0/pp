@@ -17,21 +17,13 @@
 #
 # Requires cc; skips cleanly if absent. Isolated HOME.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-
+. "$(dirname "$0")/lib.sh"
 command -v cc >/dev/null 2>&1 || { echo "=== PHASE1 EXIT TEST SKIPPED (no cc) ==="; exit 0; }
 
-TMP=$(mktemp -d)
-export HOME="$TMP"
 SRC="$TMP/src"; BUILD="$TMP/build"
 mkdir -p "$SRC"
 J="$TMP/.pp/store/journal/log"
 N=100
-fail=0
-
-ok()   { echo "ok   $1"; }
-bad()  { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
 
 execs() { grep -c "^exec " "$J" 2>/dev/null; true; }
 links() { grep -c "cc -o prog" "$J" 2>/dev/null; true; }

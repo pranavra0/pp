@@ -31,12 +31,7 @@
 #   - printer_braces printed tagged patterns as [:tag …] (reader wants
 #     (:tag …)) and spread-only list patterns as [, …r] (leading comma).
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-fail=0
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 # Several seeds, a solid sample each. Deterministic given the seed.
 for seed in 1 2 3 7 42; do
   out=$("$PP" --check-kernel-props --seed "$seed" --count 3000 2>&1)

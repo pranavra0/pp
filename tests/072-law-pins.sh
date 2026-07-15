@@ -22,13 +22,10 @@
 # remaining "holds" laws are on PENDING and get pinned test coverage over
 # time; the ratchet keeps the pinned set from regressing meanwhile.
 set -uo pipefail
-
+. "$(dirname "$0")/lib.sh"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SPEC="$ROOT/docs/SPEC.md"
 TESTS="$ROOT/tests"
-
-fail=0
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
 
 # "holds" laws deliberately deferred to a later backfill tranche — the visible
 # tail. Each must be a real "holds" law and must NOT be pinned (or it should be

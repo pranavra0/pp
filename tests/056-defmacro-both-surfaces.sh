@@ -11,13 +11,7 @@
 # quasiquote has always built (src/macro.ml, the expander, and hash_expr
 # never changed).
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 BRACE=tests/041-defmacro.pp
 SEXPR=tests/041-defmacro.ppl
 

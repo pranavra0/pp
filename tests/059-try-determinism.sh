@@ -14,15 +14,7 @@
 # process, and diffs their per-top-level-form hashes. With a global counter,
 # reading f1 bumps it, so identical f2 forms hash differently — a red build.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 # (a) Two byte-identical files, each a single `try`-using form. Reading the
 #     first must not perturb the hash of the second: identical text ⇒
 #     identical per-form hash regardless of read order in the process.

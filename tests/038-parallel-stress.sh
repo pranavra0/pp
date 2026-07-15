@@ -19,15 +19,7 @@
 #
 # Requires `sh`. Isolated HOME, like tests/010+.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()   { echo "ok   $1"; }
-bad()  { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
+. "$(dirname "$0")/lib.sh"
 now_ms() { perl -MTime::HiRes=time -e 'printf "%d", time()*1000'; }
 JOURNAL="$TMP/.pp/store/journal/log"
 

@@ -13,15 +13,7 @@
 #
 # Differential: the tree-walker and the bytecode VM must agree byte for byte.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 # A removed form must produce a parse error mentioning $needle, identically on
 # both backends (both must fail; both must contain the needle).
 run_removed() {

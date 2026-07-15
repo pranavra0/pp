@@ -25,20 +25,13 @@
 #
 # Runs under isolated HOMEs; both backends where meaningful.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-
+. "$(dirname "$0")/lib.sh"
 if ! command -v timeout >/dev/null 2>&1; then
   SHIM_DIR=$(mktemp -d)
   printf '#!/bin/sh\nexec perl -e '\''alarm shift; exec @ARGV'\'' "$@"\n' > "$SHIM_DIR/timeout"
   chmod +x "$SHIM_DIR/timeout"
   PATH="$SHIM_DIR:$PATH"
 fi
-
-TMP=$(mktemp -d)
-fail=0
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
 
 wait_for() {  # SECONDS CMD ARGS...
   local secs="$1"; shift

@@ -20,8 +20,7 @@
 #   (f) the differential fuzzer's round-trip gate passes on a few hundred
 #       full-grammar programs (2 readers x 2 backends).
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
+. "$(dirname "$0")/lib.sh"
 FUZZ=${FUZZ:-tools/fuzz.exe}
 if [ ! -x "$FUZZ" ] && [ -x "_build/default/tools/fuzz.exe" ]; then
   FUZZ="_build/default/tools/fuzz.exe"
@@ -29,12 +28,6 @@ fi
 case "$FUZZ" in /*) : ;; *) FUZZ="$PWD/$FUZZ" ;; esac
 ROOT="$PWD"
 STDLIB="$ROOT/stdlib/list.pp"
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
 
 # ---- (a) the nontrivial .ppb program, both backends ----
 # covers: comments, ';' separators, infix precedence, pipeline, infix

@@ -52,15 +52,7 @@
 #             ITS journal.
 #   VM parity — the same remote build under --bytecode.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-
-fail=0
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
-TMP=$(mktemp -d)
-
+. "$(dirname "$0")/lib.sh"
 # ===========================================================================
 # Part 1: an N-TU real-cc build, dispatcher (A) + member (B), local-dir loopback
 # ===========================================================================

@@ -37,14 +37,7 @@
 # impractical to wire for a hash comparison here, so the 6 pull
 # (--publish-object) combos below cover the hash-equality core instead.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-
-fail=0
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
-TMP=$(mktemp -d)
+. "$(dirname "$0")/lib.sh"
 trap 'rm -rf "$TMP"' EXIT
 
 DEMO_PP="$PWD/demo/volatile-deploy.pp"

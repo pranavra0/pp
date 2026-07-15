@@ -9,15 +9,7 @@
 #   (e) an error that already carries a location is not double-located;
 #   (f) uncaught errors print as one clean "pp: error: …" line, exit 1.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 # assert_err NAME FILE PATTERN — both backends fail, stderr matches PATTERN,
 # and the two backends' stderr is byte-identical.
 assert_err_both() {

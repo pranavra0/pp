@@ -17,12 +17,7 @@
 #       this grep is scoped to the grant set — the one set with no other
 #       legitimate use; the drift test (1) covers all three tables' content.)
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-fail=0
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
-
+. "$(dirname "$0")/lib.sh"
 SPEC="docs/SPEC.md"
 BEGIN='<!-- BEGIN GENERATED surface-tables -->'
 END='<!-- END GENERATED surface-tables -->'
