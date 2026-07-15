@@ -65,42 +65,9 @@ doesn't wait for pristine.
 ## Part I — Subtraction (remaining)
 
 The global-state collapse into `backend.ml` and the invocation record,
-and the five literal-copy deletions, have both landed. Two items remain:
-unifying the two parsers in `reader_braces.ml`, and rendering each
+the five literal-copy deletions, and the two-parser unification in
+`reader_braces.ml` have all landed. One item remains: rendering each
 surface from one typed table.
-
-### Unify the two parsers in reader_braces.ml
-
-What exists: `reader_braces.ml` (about 2,500 lines) contains a second,
-hand-parallel parser for quasiquote mode. The precedence-climbing spine
-and the handler pairs are already collapsed into single implementations
-parameterized by context. The block forms (`try`, `collect`, `match`,
-`if` lowering, patterns, match arms) are still written twice. The CI
-rule `tests/061b-qq-head-coverage.sh` (every `parse_head` arm is a subset
-of `parse_qq_head` plus exclusions) exists because of this duplication.
-
-How:
-1. Extend the proven pattern: each block form's parse builds one
-   template (the `tmpl`/`spine` discipline), interpreted by the two
-   existing context interpreters (AST vs quoted data) — exactly how the
-   `$` heads already work via `interp_head_normal`/`interp_head_qq`.
-2. Move the lowering functions (`lower_try_block`, `lower_collect_block`,
-   match lowering) into `desugar.ml`, which states this as its charter:
-   every reader-level sugar whose output feeds the node-key hashing
-   (SPEC law 20) lives there.
-3. Replace `looks_incomplete`'s substring-matching on exception text with
-   a dedicated exception raised at the actual out-of-input sites, and
-   render the message from it. Reader error wording and REPL behaviour
-   decouple.
-4. Retire `tests/061b-qq-head-coverage.sh`, in its own commit, after the
-   unification is green. The lowerings feed the node-key hashing, so
-   this stage is the one place the plan can silently change identity;
-   the differential suite and the golden fixture are the gate, and the
-   test comes out only after they have passed on the unified parser.
-
-Deletes: several hundred lines of parallel parser, one CI rule, one
-stringly control-flow path. `reader_braces.ml` lands near 1,400 lines:
-lexer, spine, heads, and nothing written twice.
 
 ### Render each surface from one typed table
 
@@ -349,6 +316,13 @@ lint rule.
 - NFC Unicode normalization for cell-id canonicalization is still
   unimplemented (`runtime.ml` says so): a documented residual until a
   dependency-free path exists.
+- `reader_braces.ml`'s `looks_incomplete` still decides REPL
+  continuation by substring-matching exception text (`<eof>`,
+  `unterminated`, `unexpected end of input`). Replace it with a
+  dedicated exception raised at the actual out-of-input sites, so reader
+  error wording and REPL behaviour decouple. Left over from the
+  parser unification, which deleted the parallel parser but not this
+  stringly control-flow path.
 - Test-suite speed: `dune runtest` runs one dune rule that calls
   `scripts/run-tests.sh` sequentially. Measured total wall time is 208
   seconds, and dune adds no parallelism on top. Four tests account for
