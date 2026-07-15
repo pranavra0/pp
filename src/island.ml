@@ -109,13 +109,15 @@ let log_resolution ~(uri : string) ~(pin : string) : unit =
     close_out oc
   with _ -> ()
 
-let rec rm_rf (path : string) : unit =
-  match Unix.lstat path with
-  | exception _ -> ()
-  | { Unix.st_kind = Unix.S_DIR; _ } ->
-      Array.iter (fun n -> rm_rf (Filename.concat path n)) (Sys.readdir path);
-      (try Unix.rmdir path with _ -> ())
-  | _ -> (try Sys.remove path with _ -> ())
+let rm_rf (path : string) : unit =
+  let entries = ref [] in
+  Fswalk.walk ~root:path ~cb:(fun ~rel:_ ~path visit ->
+    match visit with
+    | Fswalk.Entry st -> entries := (path, st.Unix.st_kind = Unix.S_DIR) :: !entries
+    | _ -> ());
+  List.iter (fun (p, is_dir) ->
+    try if is_dir then Unix.rmdir p else Sys.remove p with _ -> ())
+    (List.rev !entries)
 
 (* Copy a source tree into the cache. Regular files and directories only:
    anything else would make the copy's tree hash lie about the source. *)

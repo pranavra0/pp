@@ -9,8 +9,9 @@ let intern (st : comp_state) (v : value) : int =
   match Hashtbl.find_opt st.const_ht h with
   | Some idx -> idx
   | None ->
-      let idx = List.length st.consts in
-      st.consts <- st.consts @ [v];
+      let idx = st.consts_len in
+      st.consts <- v :: st.consts;
+      st.consts_len <- st.consts_len + 1;
       Hashtbl.add st.const_ht h idx;
       idx
 
@@ -20,16 +21,17 @@ let intern_name (st : comp_state) (name : string) : int =
 (* ---- Opcode emission ---- *)
 
 let emit (st : comp_state) (op : opcode) =
-  st.ops <- st.ops @ [op]
+  st.ops <- op :: st.ops;
+  st.ops_len <- st.ops_len + 1
 
-let current_offset (st : comp_state) = List.length st.ops
+let current_offset (st : comp_state) = st.ops_len
 
 (* ---- Backpatch helper ---- *)
 
 let backpatch_jump (st : comp_state) (jmp_idx : int) =
-  let target = List.length st.ops in
-  st.ops <- List.mapi (fun i op ->
-    if i = jmp_idx then
+  let target = st.ops_len in
+  st.ops <- List.mapi (fun ri op ->
+    if ri = st.ops_len - 1 - jmp_idx then
       match op with
       | JUMP _ -> JUMP (target - jmp_idx)
       | JUMP_IF_FALSE _ -> JUMP_IF_FALSE (target - jmp_idx)
@@ -85,6 +87,34 @@ let rec emit_thunk_region ?type_ann:(ta=None) ?thunk_loc:(tl=None) (st : comp_st
   backpatch_jump st jmp_idx;
   emit st (MAKE_THUNK (body_start, ta, tl));
   body_start
+
+and collect_block_defs (st : comp_state) (exprs : expr list)
+    : (int * (string, def_info) Hashtbl.t * (string, int) Hashtbl.t * (unit -> unit)) =
+  let def_infos = ref [] in
+  let val_infos = ref [] in
+  let slot_counter = ref 0 in
+  let names_to_add = ref [] in
+  List.iter (fun sub -> match sub with
+    | EDef (name, _, _) | EDefNode (name, _, _) ->
+        def_infos := {name; slot= !slot_counter} :: !def_infos;
+        names_to_add := name :: !names_to_add; incr slot_counter
+    | EDefValue (name, _) ->
+        val_infos := (name, !slot_counter) :: !val_infos;
+        names_to_add := name :: !names_to_add; incr slot_counter
+    | _ -> ()) exprs;
+  let start_slot, restore =
+    if !names_to_add = [] then (0, fun () -> ())
+    else extend_cenv st (List.rev !names_to_add) in
+  let def_map = Hashtbl.create 16 in
+  List.iter (fun di -> Hashtbl.add def_map di.name {di with slot = start_slot + di.slot}) !def_infos;
+  let val_map = Hashtbl.create 16 in
+  List.iter (fun (name, slot) -> Hashtbl.replace val_map name (start_slot + slot)) !val_infos;
+  List.iter (fun (name, slot) ->
+    ignore (emit_thunk_region st
+      (EApply (ESymbol "error",
+               [ELiteral (VString (name ^ ": referenced before its definition"))])));
+    emit st (STORE_LOCAL (start_slot + slot))) (List.rev !val_infos);
+  (start_slot, def_map, val_map, restore)
 
 (* Like emit_thunk_region, but for a persistent node: emits MAKE_NODE carrying
    the body AST (for the LAW 20 code hash) and the node's free-variable
@@ -239,39 +269,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
          VM's root frame, which is otherwise untouched at that point). *)
       (* Pass 1: collect defs — function defs AND value defs share the block's
          letrec* scope, so both get slots up front. *)
-      let def_infos = ref [] in
-      let val_infos = ref [] in
-      let slot_counter = ref 0 in
-      let names_to_add = ref [] in
-      List.iter (fun sub ->
-        match sub with
-        | EDef (name, _, _) | EDefNode (name, _, _) ->
-            def_infos := {name; slot= !slot_counter} :: !def_infos;
-            names_to_add := name :: !names_to_add;
-            incr slot_counter
-        | EDefValue (name, _) ->
-            val_infos := (name, !slot_counter) :: !val_infos;
-            names_to_add := name :: !names_to_add;
-            incr slot_counter
-        | _ -> ()
-      ) exprs;
-      let start_slot, restore =
-        if !names_to_add = [] then (0, fun () -> ())
-        else extend_cenv st (List.rev !names_to_add)
-      in
-      let def_map = Hashtbl.create 16 in
-      List.iter (fun di -> Hashtbl.add def_map di.name {di with slot = start_slot + di.slot}) !def_infos;
-      let val_map = Hashtbl.create 16 in
-      List.iter (fun (name, slot) -> Hashtbl.replace val_map name (start_slot + slot)) !val_infos;
-      (* Poison prologue: pre-store each value-def binding so a reference that
-         runs before its def raises "<name>: referenced before its definition"
-         — byte-identical to the tree-walker's poison thunks. *)
-      List.iter (fun (name, slot) ->
-        ignore (emit_thunk_region st
-          (EApply (ESymbol "error",
-                   [ELiteral (VString (name ^ ": referenced before its definition"))])));
-        emit st (STORE_LOCAL (start_slot + slot))
-      ) (List.rev !val_infos);
+      let (start_slot, def_map, val_map, restore) = collect_block_defs st exprs in
       (* Pass 2: compile each sub-expression *)
       let rec compile_subs = function
         | [] -> ()
@@ -418,38 +416,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       emit st (JUMP 0);
       let body_start = current_offset st in
       (* Pass 1: collect def/value-def names for the block's letrec* scope. *)
-      let def_infos = ref [] in
-      let val_infos = ref [] in
-      let slot_counter = ref 0 in
-      let names_to_add = ref [] in
-      List.iter (fun sub ->
-        match sub with
-        | EDef (name, _, _) | EDefNode (name, _, _) ->
-            def_infos := {name; slot= !slot_counter} :: !def_infos;
-            names_to_add := name :: !names_to_add;
-            incr slot_counter
-        | EDefValue (name, _) ->
-            val_infos := (name, !slot_counter) :: !val_infos;
-            names_to_add := name :: !names_to_add;
-            incr slot_counter
-        | _ -> ()
-      ) exprs;
-      let start_slot, restore =
-        if !names_to_add = [] then (0, fun () -> ())
-        else extend_cenv st (List.rev !names_to_add)
-      in
-      let def_map = Hashtbl.create 16 in
-      List.iter (fun di -> Hashtbl.add def_map di.name {di with slot = start_slot + di.slot}) !def_infos;
-      let val_map = Hashtbl.create 16 in
-      List.iter (fun (name, slot) -> Hashtbl.replace val_map name (start_slot + slot)) !val_infos;
-      (* Poison prologue: same discipline as EDo — a value def referenced
-         before it runs raises "<name>: referenced before its definition". *)
-      List.iter (fun (name, slot) ->
-        ignore (emit_thunk_region st
-          (EApply (ESymbol "error",
-                   [ELiteral (VString (name ^ ": referenced before its definition"))])));
-        emit st (STORE_LOCAL (start_slot + slot))
-      ) (List.rev !val_infos);
+      let (start_slot, def_map, val_map, restore) = collect_block_defs st exprs in
       (* Pass 2: compile each child, storing defs/value-defs into their slot
          (so later siblings can resolve them via LOAD_LOCAL) in addition to
          pushing (name, value) onto the stack for MAKE_MODULE — DUP keeps a
@@ -724,8 +691,8 @@ let compile_program (exprs : expr list) : bytecode =
   compile_all exprs;
   emit st HALT;
   {
-    consts = Array.of_list st.consts;
-    code = Array.of_list st.ops;
+    consts = Array.of_list (List.rev st.consts);
+    code = Array.of_list (List.rev st.ops);
     nparams_of = st.nparams_of;
     param_names_of = st.param_names_of;
     closure_names_of = st.closure_names_of;
@@ -734,8 +701,8 @@ let compile_program (exprs : expr list) : bytecode =
 let finish_comp_state (st : comp_state) : bytecode =
   emit st HALT;
   {
-    consts = Array.of_list st.consts;
-    code = Array.of_list st.ops;
+    consts = Array.of_list (List.rev st.consts);
+    code = Array.of_list (List.rev st.ops);
     nparams_of = st.nparams_of;
     param_names_of = st.param_names_of;
     closure_names_of = st.closure_names_of;

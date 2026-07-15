@@ -245,8 +245,10 @@ type def_info = {
 
 type comp_state = {
   mutable ops : opcode list;
+  mutable ops_len : int;
   mutable const_ht : (string, int) Hashtbl.t;
   mutable consts : value list;
+  mutable consts_len : int;
   mutable nparams_of : (int, int) Hashtbl.t;
   mutable param_names_of : (int, string list) Hashtbl.t;
   mutable closure_names_of : (int, string) Hashtbl.t;
@@ -256,8 +258,10 @@ type comp_state = {
 let fresh_comp_state () = {
   ops = [];
   const_ht = Hashtbl.create 128;
+  ops_len = 0;
   consts = [];
   nparams_of = Hashtbl.create 16;
+  consts_len = 0;
   param_names_of = Hashtbl.create 16;
   closure_names_of = Hashtbl.create 16;
   cenv = [];
@@ -1016,6 +1020,11 @@ let rec value_list_opt (v : value) : value list option =
       (match value_list_opt d with
        | Some rest -> Some (a :: rest)
        | None -> None)
+  | _ -> None
+
+let string_like (v : value) : string option =
+  match v with
+  | VString s | VKeyword s | VSymbol s -> Some s
   | _ -> None
 
 let rec value_to_expr (v : value) : expr =

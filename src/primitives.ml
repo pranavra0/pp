@@ -123,21 +123,15 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
    external process) an already-computed node all over again, once per
    remaining list position (an O(n^2) blowup, not a correctness issue but a
    catastrophic performance one — caught by tests/024's exec-count assert). *)
-let rec force_deep_plain (v : value) : value =
-  match force_val v with
-  | VPair (car, cdr) -> VPair (force_deep_plain car, force_deep_plain cdr)
-  | VVector vs -> VVector (Array.map force_deep_plain vs)
-  | VMap kvs -> VMap (List.map (fun (k, v) -> (force_deep_plain k, force_deep_plain v)) kvs)
-  | VSet vs -> VSet (List.map force_deep_plain vs)
-  | other -> other
 
 (* Deep force: recursively force all thunks in a data structure. Under a
    non-serial schedule policy, collects and dispatches every reachable
    unevaluated node in ONE batch BEFORE the recursive walk (see the
-   two-phase protocol above), then defers entirely to [force_deep_plain] —
-   every node it reaches from here on is now a store hit (or, for a dead
-   worker, an ordinary in-process compute). Under [Serial], collection is
-   skipped and this is exactly the original single-pass definition. *)
+   two-phase protocol above), then defers entirely to the plain recursive
+   walk in Force_deep — every node it reaches from here on is now a store
+   hit (or, for a dead worker, an ordinary in-process compute). Under
+   [Serial], collection is skipped and this is exactly the original
+   single-pass definition. *)
 let force_deep (v : value) : value =
   (match !Scheduler.policy with
    | Scheduler.Serial -> ()
@@ -145,7 +139,7 @@ let force_deep (v : value) : value =
        (match collect_unevaluated_nodes v with
         | [] -> ()
         | jobs -> Scheduler.dispatch_batch jobs));
-  force_deep_plain v
+  Force_deep.force_deep_plain v
 
 (* ---- M4 probes: shared evaluate-and-pin logic (PLAN-m4-cells.md) ----
 
@@ -963,19 +957,12 @@ let () =
      PREFIXES this domain owns (stratification, LAW 30 full form);
      `:observe-cell` is optional. Returns nil. *)
   let string_or_keyword where v =
-    match v with
-    | VString s | VKeyword s -> s
-    | other -> failwith (where ^ ": expected a string or keyword, got "
-                         ^ string_of_value other)
+    match string_like v with
+    | Some s -> s
+    | None -> failwith (where ^ ": expected a string or keyword, got "
+                         ^ string_of_value v)
   in
-  let find_kv (kvs : (value * value) list) (key : string) : value option =
-    List.find_map (fun (k, v) ->
-      match k with
-      | VKeyword k' when k' = key -> Some v
-      | VString k' when k' = key -> Some v
-      | _ -> None)
-      kvs
-  in
+  let find_kv = Force_deep.find_kv in
   register "register-domain" (fun args ->
     if !Runtime.trace_stack <> [] then
       failwith "register-domain: may not be called inside a node body (script-tier only, like fenced)";

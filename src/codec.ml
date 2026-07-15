@@ -171,6 +171,10 @@ let expect_lit (s : string) (i : int) (lit : string) : int option =
   let l = String.length lit in
   if i + l <= String.length s && String.sub s i l = lit then Some (i + l) else None
 
+let bind o f = match o with None -> None | Some x -> f x
+let (>>=) o f = bind o f
+
+
 (* Reads raw text up to (not including) the next ')', used for atoms whose
    own text can never contain '(' or ')' (ints, hex floats, nan/inf/-inf). *)
 let read_until_close (s : string) (i : int) : (string * int) option =

@@ -22,14 +22,15 @@
    so it calls Evaluator.run_node_body itself, via its OWN completely
    normal main.ml control flow, no second "evaluate on member" function
    anywhere. Whatever nodes that run forces (our assigned batch keys, plus
-   any dependency it needs regardless of the dispatcher's partition —
    duplicate computation across machines is SOUND by determinism, LAW 37)
+
    land in the member's OWN store; the dispatcher then pulls each assigned
    key back via the UNCHANGED stage-A serve-hit/recv-hit pair — the same
    re-hash-on-receive choke point every other synced artifact goes
    through. *)
 
 open Types
+open Codec
 
 (* ---- Members file: ambient config, never --grant (contract: an address
    is not an authority ceiling — LAW 34's own distinction). One member per
@@ -90,14 +91,6 @@ let quote = Codec.quote_string
 let pin_line (cell : string) (hash : string) : string =
   Printf.sprintf "(pin %s %s)\n" (quote cell) (quote hash)
 
-let ( >>= ) o f = match o with None -> None | Some x -> f x
-
-let expect_lit (s : string) (i : int) (lit : string) : int option =
-  let l = String.length lit in
-  if i + l <= String.length s && String.sub s i l = lit then Some (i + l) else None
-
-let expect_char (s : string) (i : int) (c : char) : int option =
-  if i < String.length s && s.[i] = c then Some (i + 1) else None
 
 let parse_pin_line (line : string) : (string * string) option =
   expect_lit line 0 "(pin " >>= fun i ->
@@ -271,17 +264,13 @@ let serve_assigned_keys ~(token_text : string) ~(keys_file : string)
    guessing which files a not-yet-run node body will read, and a wrong
    guess would silently observe wrong bytes (the "heuristic predictive file
    shipping" rejection in the plan's kill-list). *)
-let rec walk_files (path : string) (acc : (string * string) list ref) : unit =
-  match Unix.lstat path with
-  | exception _ -> ()
-  | { Unix.st_kind = Unix.S_REG; _ } ->
-      (try acc := (Store.file_cell_id path, Store.read_raw path) :: !acc
-       with _ -> ())
-  | { Unix.st_kind = Unix.S_DIR; _ } ->
-      (match Sys.readdir path with
-       | exception _ -> ()
-       | names -> Array.iter (fun n -> walk_files (Filename.concat path n) acc) names)
-  | _ -> ()
+let walk_files (path : string) (acc : (string * string) list ref) : unit =
+  Fswalk.walk ~root:path ~cb:(fun ~rel:_ ~path visit ->
+    match visit with
+    | Fswalk.Entry { Unix.st_kind = Unix.S_REG; _ } ->
+        (try acc := (Store.file_cell_id path, Store.read_raw path) :: !acc
+         with _ -> ())
+    | _ -> ())
 
 let pre_observe_granted_scope () : (string * string * string) list =
   let roots =

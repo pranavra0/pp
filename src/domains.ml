@@ -33,12 +33,7 @@
 
 open Types
 
-let find_kv (kvs : (value * value) list) (key : string) : value option =
-  List.find_map (fun (k, v) ->
-    match k with
-    | VKeyword k' | VString k' when k' = key -> Some (Backend.r.force v)
-    | _ -> None)
-    kvs
+let find_kv kvs key = Force_deep.find_kv kvs key
 
 let plan_map (plan : value) : (value * value) list =
   match Backend.r.force plan with
@@ -70,9 +65,7 @@ let summary_pair (entry : value) : string * string =
     | other -> failwith ("domain diff: :summary entries must be [key value] pairs, got "
                          ^ string_of_value other)
   in
-  let ks = match Backend.r.force k with
-    | VString s | VKeyword s -> s
-    | other -> failwith ("domain diff: :summary key must be a string, got " ^ string_of_value other) in
+  let ks = match string_like (Backend.r.force k) with Some s -> s | None -> failwith ("domain diff: :summary key must be a string, got " ^ string_of_value k) in
   let vs = match Backend.r.force v with
     | VString s -> s
     | other -> failwith ("domain diff: :summary value must be a string, got " ^ string_of_value other) in

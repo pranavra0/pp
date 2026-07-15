@@ -18,6 +18,7 @@
    Every receive path (LocalDir.pull_*, [recv_hit]) funnels through them. *)
 
 open Types
+open Codec
 
 exception Transport_integrity_error of string
 
@@ -386,15 +387,6 @@ type reply_decision =
   | RHit of { key : string; result_hash : string; blob_hashes : string list }
   | RMiss of string
   | RDeny of string * string
-
-let ( >>= ) o f = match o with None -> None | Some x -> f x
-
-let expect_char (s : string) (i : int) (c : char) : int option =
-  if i < String.length s && s.[i] = c then Some (i + 1) else None
-
-let expect_lit (s : string) (i : int) (lit : string) : int option =
-  let l = String.length lit in
-  if i + l <= String.length s && String.sub s i l = lit then Some (i + l) else None
 
 let parse_reply_text (text : string) : reply_decision option =
   let text = String.trim text in

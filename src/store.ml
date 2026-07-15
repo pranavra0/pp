@@ -183,17 +183,13 @@ let trace_to_line (tr : trace) : string =
 
 (* Hand-rolled parser matching [trace_to_line] exactly; [None] on anything
    that doesn't (a corrupted or old-format line → the caller drops it).
-   Written with a local Option-bind operator — a plain chain of "parse one
-   piece, thread the index forward" steps, rather than accumulating match
-   nesting one paren per step. *)
+   Thin adapters that delegate to Codec's expect_char/expect_lit/bind — the line
+   and len are baked in so callers don't pass them every time. *)
 let line_to_trace (line : string) : trace option =
   let len = String.length line in
-  let expect_char i c = if i < len && line.[i] = c then Some (i + 1) else None in
-  let expect_lit i lit =
-    let l = String.length lit in
-    if i + l <= len && String.sub line i l = lit then Some (i + l) else None
-  in
-  let ( >>= ) o f = match o with None -> None | Some x -> f x in
+  let expect_char i c = Codec.expect_char line i c in
+  let expect_lit i lit = Codec.expect_lit line i lit in
+  let (>>=) = Codec.bind in
   let parse_outcome i =
     match expect_lit i "ok " with
     | Some j -> Some (Ok, j)
@@ -354,31 +350,28 @@ let hash_file_opt (path : string) : string option =
 let tree_hash (root : string) : string =
   let entries = ref [] in
   let add rel part = entries := (rel ^ "=" ^ part) :: !entries in
-  let rec walk dir rel =
-    match Sys.readdir dir with
-    | exception _ -> add rel "unreadable-dir"
-    | names ->
-        Array.sort compare names;
-        Array.iter (fun name ->
-          let p = Filename.concat dir name in
-          let r = if rel = "" then name else rel ^ "/" ^ name in
-          match Unix.lstat p with
-          | exception _ -> add r "unstattable"
-          | st ->
-              (match st.Unix.st_kind with
-               | Unix.S_DIR -> walk p r
-               | Unix.S_REG ->
-                   add r (match hash_file_opt p with
-                          | Some h -> h | None -> "unreadable")
-               | Unix.S_LNK ->
-                   add r ("link->" ^ (try Unix.readlink p with _ -> "?"))
-               | _ -> add r "special"))
-          names
-  in
-  (match Unix.lstat root with
-   | exception _ -> add "" "missing"
-   | { Unix.st_kind = Unix.S_DIR; _ } -> walk root ""
-   | _ -> add "" (match hash_file_opt root with Some h -> h | None -> "unreadable"));
+  Fswalk.walk ~root ~cb:(fun ~rel ~path visit ->
+    match visit with
+    | Fswalk.Lstat_failed ->
+        if rel = "" then add "" "missing"
+        else add rel "unstattable"
+    | Fswalk.Readdir_failed ->
+        add rel "unreadable-dir"
+    | Fswalk.Entry st ->
+        if rel = "" then
+          (* Root entry: hash_file_opt for any non-directory root
+             (including symlinks — reads content, not target) *)
+          match st.Unix.st_kind with
+          | Unix.S_DIR -> ()
+          | _ -> add "" (match hash_file_opt root with Some h -> h | None -> "unreadable")
+        else
+          match st.Unix.st_kind with
+          | Unix.S_DIR -> ()
+          | Unix.S_REG ->
+              add rel (match hash_file_opt path with Some h -> h | None -> "unreadable")
+          | Unix.S_LNK ->
+              add rel ("link->" ^ (try Unix.readlink path with _ -> "?"))
+          | _ -> add rel "special");
   hash_concat ("tree" :: List.sort compare !entries)
 
 let blobs_dir = Filename.concat store_root "blobs"

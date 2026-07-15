@@ -104,14 +104,15 @@ let record_read (cell_id : string) (observed_hash : string) : unit =
 let sandbox_stack : string option ref list ref = ref []
 let sandbox_counter = ref 0
 
-let rec remove_tree (path : string) : unit =
-  match Unix.lstat path with
-  | { Unix.st_kind = Unix.S_DIR; _ } ->
-      Array.iter (fun name -> remove_tree (Filename.concat path name))
-        (Sys.readdir path);
-      (try Unix.rmdir path with _ -> ())
-  | _ -> (try Sys.remove path with _ -> ())
-  | exception _ -> ()
+let remove_tree (path : string) : unit =
+  let entries = ref [] in
+  Fswalk.walk ~root:path ~cb:(fun ~rel:_ ~path visit ->
+    match visit with
+    | Fswalk.Entry st -> entries := (path, st.Unix.st_kind = Unix.S_DIR) :: !entries
+    | _ -> ());
+  List.iter (fun (p, is_dir) ->
+    try if is_dir then Unix.rmdir p else Sys.remove p with _ -> ())
+    (List.rev !entries)
 
 (* Innermost node's sandbox; created on demand when [create] is set. *)
 let current_sandbox ~(create : bool) : string option =

@@ -56,6 +56,20 @@ let pop_n n =
 (* Saved evaluator force — vm_force falls back to this for tree-walker thunks.
    Declared before `run` so the mutually-recursive `vm_force` (below) can use it. *)
 let saved_eval_force : (value -> value) ref = ref (fun v -> v)
+(* Shared arity-check and frame-build for VM closures (VClosure c).
+   Extracted because CALL, TAIL_CALL, and PUSH_HANDLER all do the same:
+   validate arity, allocate a frame, fill it with args, and prepend
+   the closure's captured frames. Returns the new frame list. *)
+let build_call_frames (c : Types.closure) (args : value list) : frame list =
+  let nparams = List.length c.params in
+  let nargs = List.length args in
+  if nargs <> nparams then begin
+    let fname = match c.fn_name with Some nm -> nm | None -> "#<fn>" in
+    failwith (Printf.sprintf "arity mismatch calling %s: expected %d args, got %d" fname nparams nargs)
+  end;
+  let new_frame = make_frame nparams in
+  List.iteri (fun i arg -> frame_set new_frame i arg) args;
+  new_frame :: c.vm_frames
 
 (** Run a bytecode program starting at a given pc with given frames.
     Returns the result value (top of operand stack at HALT/RETURN). *)
@@ -256,16 +270,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
              incr pc;
              loop ()
          | VClosure c ->
-             let nparams = List.length c.params in
-             if n <> nparams then begin
-               let fname = match c.fn_name with Some nm -> nm | None -> "#<fn>" in
-               failwith (Printf.sprintf "arity mismatch calling %s: expected %d args, got %d" fname nparams n)
-             end;
-             let new_frame = make_frame nparams in
-             List.iteri (fun i arg ->
-               frame_set new_frame i arg
-             ) args;
-             let callee_frames = new_frame :: c.vm_frames in
+             let callee_frames = build_call_frames c args in
              push (run_isolated c.vm_bc c.vm_offset callee_frames);
              incr pc;
              loop ()
@@ -284,16 +289,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
          | VClosure c when c.vm_bc == Types.dummy_bytecode ->
              result := Backend.r.apply fn_val args !Primitives.current_env_ref
          | VClosure c ->
-             let nparams = List.length c.params in
-             if n <> nparams then begin
-               let fname = match c.fn_name with Some nm -> nm | None -> "#<fn>" in
-               failwith (Printf.sprintf "arity mismatch calling %s: expected %d args, got %d" fname nparams n)
-             end;
-             let new_frame = make_frame nparams in
-             List.iteri (fun i arg ->
-               frame_set new_frame i arg
-             ) args;
-             local_frames := new_frame :: c.vm_frames;
+             local_frames := build_call_frames c args;
              bc_ref := c.vm_bc;
              pc := c.vm_offset;
              loop ()
@@ -381,17 +377,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
             | VClosure c when c.vm_bc == Types.dummy_bytecode ->
                 Backend.r.apply hv args !Primitives.current_env_ref
             | VClosure c ->
-                let nparams = List.length c.params in
-                if List.length args <> nparams then begin
-                  let fname = match c.fn_name with Some nm -> nm | None -> "#<fn>" in
-                  failwith (Printf.sprintf
-                    "arity mismatch calling %s: expected %d args, got %d"
-                    fname nparams (List.length args))
-                end;
-                let new_frame = make_frame nparams in
-                List.iteri (fun i arg -> frame_set new_frame i arg) args;
-                let frames' = new_frame :: c.vm_frames in
-                run_isolated c.vm_bc c.vm_offset frames'
+                run_isolated c.vm_bc c.vm_offset (build_call_frames c args)
             | VBuiltin (_, f) -> f args
             | _ -> failwith ("VM: handler is not a function: " ^ string_of_value hv)
            ),

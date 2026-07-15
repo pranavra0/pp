@@ -19,6 +19,8 @@
    standing where `node_caps` stands locally. Zero new authority code. *)
 
 open Types
+open Codec
+
 
 (* ---- Cluster identity: ~/.pp/cluster/{secret,id} ----
 
@@ -137,14 +139,6 @@ let mint ~(secret : string) ~(cluster_id : string) ~(specs : string list)
    (a corrupted or foreign-format token) — never half-trusted. Same
    Option-bind style as store.ml's line_to_trace. *)
 
-let ( >>= ) o f = match o with None -> None | Some x -> f x
-
-let expect_char (s : string) (i : int) (c : char) : int option =
-  if i < String.length s && s.[i] = c then Some (i + 1) else None
-
-let expect_lit (s : string) (i : int) (lit : string) : int option =
-  let l = String.length lit in
-  if i + l <= String.length s && String.sub s i l = lit then Some (i + l) else None
 
 (* Reads digits (with an optional leading '-') up to the next ' ' or ')'. *)
 let read_int (s : string) (i : int) : (int * int) option =
