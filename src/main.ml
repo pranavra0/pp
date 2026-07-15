@@ -1,5 +1,25 @@
 (* pp main — entry point for the pp interpreter *)
 
+(* One row per CLI flag/subcommand. The same table drives argument parsing,
+   subcommand dispatch (via the refs each handler sets), and `--help`, so the
+   parser and the help text cannot disagree.
+
+   [handler] is the honest escape hatch: it receives the tokens AFTER the
+   flag name and returns the ones it did not consume, so a fixed-arity flag
+   takes its N args off the front while a variadic one (fmt, --schedule,
+   --check-kernel-props) consumes whatever it needs — and a terminal
+   subcommand simply exits without returning. [arity] is the nominal count of
+   consumed args for help/reference; -1 marks a variadic escape-hatch row.
+   [internal] hides test/dispatcher seams from `--help`; [doc] is the help
+   line (newline-terminated) for the rest. *)
+type flag = {
+  name : string;
+  arity : int;
+  doc : string;
+  internal : bool;
+  handler : string list -> string list;
+}
+
 let main () =
   let args = List.tl (Array.to_list Sys.argv) in
   let bytecode = ref false in
@@ -64,19 +84,20 @@ let main () =
   let program_argv = ref [] in
   let gc_keep_epochs = ref 5 in
 
-  let rec parse = function
-    | "--" :: rest ->
-        (* Everything after `--` is the program's argv (the `argv` builtin). *)
-        program_argv := rest
-    | "--bytecode" :: rest -> bytecode := true; parse rest
-    | "--diff" :: rest -> diff := true; bytecode := true; parse rest
-    | "--update" :: rest ->
-        (* Re-resolve island refs and rewrite inline pins (implies fetch). *)
-        Island.update_mode := true;
-        Runtime.island_fetch_enabled := true;
-        parse rest
-    | "--fetch-islands" :: rest -> Runtime.island_fetch_enabled := true; parse rest
-    | "--schedule" :: spec :: rest ->
+  (* Arg-shape helpers: each returns the tokens it did not consume. A flag
+     with too few args following it fails loudly rather than being silently
+     re-read as a filename. *)
+  let flag name f = { name; arity = 0; doc = ""; internal = true;
+                      handler = (fun rest -> f (); rest) } in
+  let opt1 name f = { name; arity = 1; doc = ""; internal = true;
+                      handler = (function
+                        | a :: rest -> f a; rest
+                        | [] -> failwith (name ^ " requires one argument")) } in
+  let doc_of d r = { r with doc = d; internal = false } in
+  (* The M5-remote help line must contain the literal "remote:<member>"
+     (tests/048 greps for it). *)
+  let schedule_handler = function
+    | spec :: rest ->
         (* Ambient — read only by the miss arms and Scheduler.dispatch_batch;
            NEVER by node_key_of/vm_node_key, never in a trace (LAW 26/34). *)
         (match spec with
@@ -95,169 +116,228 @@ let main () =
                   if m = "" then failwith "invalid --schedule remote spec: empty member name"
                   else Scheduler.policy := Scheduler.Remote m
               | _ -> failwith ("invalid --schedule spec: " ^ spec)));
-        parse rest
-    | "island-pins" :: f :: rest -> island_pins_file := Some f; parse rest
-    | "--grant" :: grant :: rest -> grants := grant :: !grants; parse rest
-    (* ---- Cluster transport/token CLI seam ----
-       `cluster-init` mints ~/.pp/cluster/{secret,id}; the rest are
-       internal test entries the exit tests drive directly (a real ssh
-       transport will get an ambient membership-driven CLI —
-       these flags are deliberately low-level and explicit). *)
-    | "cluster-init" :: rest -> cluster_init_mode := true; parse rest
-    | "--mint-token" :: out :: ttl :: rest ->
-        (match int_of_string_opt ttl with
-         | Some t -> mint_token_args := Some (out, t)
-         | None -> failwith ("invalid --mint-token ttl-seconds: " ^ ttl));
-        parse rest
-    | "--transport-push" :: kind :: id :: root :: rest ->
-        transport_push_args := Some (kind, id, root); parse rest
-    | "--transport-pull" :: kind :: id :: root :: rest ->
-        transport_pull_args := Some (kind, id, root); parse rest
-    | "--serve-hit" :: key :: token_file :: shared_root :: reply_file :: rest ->
-        serve_hit_args := Some (key, token_file, shared_root, reply_file); parse rest
-    | "--recv-hit" :: reply_file :: shared_root :: rest ->
-        recv_hit_args := Some (reply_file, shared_root); parse rest
-    | "--remote-node" :: token_file :: pins_file :: shared_root :: keys_file :: reply_file :: rest ->
-        remote_node_args := Some (token_file, pins_file, shared_root, keys_file, reply_file);
-        parse rest
-    | "--reconcile" :: root :: rest -> reconcile_root := Some root; parse rest
-    | "--supervise" :: rest -> supervise := true; parse rest
+        rest
+    | [] -> failwith "--schedule requires a spec"
+  in
+  (* `fmt` owns the rest of argv itself (its own small flag set). *)
+  let fmt_handler rest =
+    let to_braces = ref None in
+    let to_sexpr = ref None in
+    let in_place = ref false in
+    let rec parse_fmt = function
+      | "--to-braces" :: f :: more -> to_braces := Some f; parse_fmt more
+      | "--to-sexpr" :: f :: more -> to_sexpr := Some f; parse_fmt more
+      | ("-i" | "--in-place") :: more -> in_place := true; parse_fmt more
+      | [] -> ()
+      | a :: _ -> failwith ("pp fmt: unrecognized argument: " ^ a)
+    in
+    parse_fmt rest;
+    (match !to_braces, !to_sexpr with
+     | Some f, None -> fmt_args := Some (`ToBraces, f, !in_place)
+     | None, Some f -> fmt_args := Some (`ToSexpr, f, !in_place)
+     | Some _, Some _ | None, None ->
+         failwith "pp fmt: specify exactly one of --to-braces or --to-sexpr");
+    []
+  in
+  let check_kernel_props_handler rest =
+    (* Derived-generator kernel properties (hash injectivity, quote/printer
+       round-trip). tests/071 drives this with a fixed seed. Optional:
+       --seed N, --count K. *)
+    let seed = ref 1 and count = ref 3000 in
+    let rec grab = function
+      | "--seed" :: n :: more -> seed := int_of_string n; grab more
+      | "--count" :: k :: more -> count := int_of_string k; grab more
+      | _ -> ()
+    in
+    grab rest;
+    if Kernel_props.run ~seed:!seed ~count:!count then exit 0 else exit 1
+  in
+
+  let flags_ref : flag list ref = ref [] in
+  let print_help () =
+    Printf.printf "pp — lazy, pure-by-default, content-addressed Lisp\n";
+    Printf.printf "Usage:\n";
+    Printf.printf "  pp                       Start REPL\n";
+    Printf.printf "  pp <file.pp>             Run a pp source file\n";
+    List.iter (fun f -> if not f.internal then print_string f.doc) !flags_ref
+  in
+
+  let flags = [
+    (* Everything after `--` is the program's argv (the `argv` builtin). *)
+    { name = "--"; arity = -1; doc = ""; internal = true;
+      handler = (fun rest -> program_argv := rest; []) };
+
+    doc_of "  pp --bytecode <file.pp>  Run via bytecode VM\n"
+      (flag "--bytecode" (fun () -> bytecode := true));
+    doc_of "  pp --diff <file.pp>      Run both backends and diff\n"
+      (flag "--diff" (fun () -> diff := true; bytecode := true));
+    doc_of "  pp --update <file.pp>     Re-resolve islands and rewrite inline pins (implies --fetch-islands)\n"
+      (flag "--update" (fun () ->
+         Island.update_mode := true; Runtime.island_fetch_enabled := true));
+    doc_of "  pp --fetch-islands        Allow git fetch for uncached island pins (default: off)\n"
+      (flag "--fetch-islands" (fun () -> Runtime.island_fetch_enabled := true));
+
+    doc_of "  pp --schedule serial|parallel:N|race:N|remote:MEMBER  Node-miss dispatch policy (default: serial); remote:<member> is M5 stage B remote placement (members: ~/.pp/cluster/members or $PP_CLUSTER_MEMBERS)\n"
+      { name = "--schedule"; arity = 1; doc = ""; internal = false;
+        handler = schedule_handler };
+
+    doc_of "  pp island-pins <file.pp>  List island forms with pin and cache status\n"
+      (opt1 "island-pins" (fun f -> island_pins_file := Some f));
+    doc_of "  pp --grant <spec>        Grant capability (fs:/path:rw, net:host[:port], secret:/path, process)\n"
+      (opt1 "--grant" (fun g -> grants := g :: !grants));
+
+    (* ---- Cluster transport/token seam ----
+       `cluster-init` mints ~/.pp/cluster/{secret,id}; the transport/token
+       flags are internal test entries the exit tests drive directly. *)
+    doc_of "  pp cluster-init          Mint ~/.pp/cluster/{secret,id} (M5 cluster trust anchor)\n"
+      (flag "cluster-init" (fun () -> cluster_init_mode := true));
+    doc_of "  pp --mint-token <out> <ttl-secs> [--grant ...]  Mint a signed cluster token\n"
+      { name = "--mint-token"; arity = 2; doc = ""; internal = false;
+        handler = (function
+          | out :: ttl :: rest ->
+              (match int_of_string_opt ttl with
+               | Some t -> mint_token_args := Some (out, t)
+               | None -> failwith ("invalid --mint-token ttl-seconds: " ^ ttl));
+              rest
+          | _ -> failwith "--mint-token requires <out> <ttl-seconds>") };
+    doc_of "  pp --transport-push/--transport-pull object|blob|trace <id> <root>  Local-dir sync (internal)\n"
+      { name = "--transport-push"; arity = 3; doc = ""; internal = false;
+        handler = (function
+          | kind :: id :: root :: rest -> transport_push_args := Some (kind, id, root); rest
+          | _ -> failwith "--transport-push requires <kind> <id> <root>") };
+    { name = "--transport-pull"; arity = 3; doc = ""; internal = true;
+      handler = (function
+        | kind :: id :: root :: rest -> transport_pull_args := Some (kind, id, root); rest
+        | _ -> failwith "--transport-pull requires <kind> <id> <root>") };
+    doc_of "  pp --serve-hit <key> <token-file> <shared-root> <reply-file>  Capability-gated hit (internal)\n"
+      { name = "--serve-hit"; arity = 4; doc = ""; internal = false;
+        handler = (function
+          | key :: token_file :: shared_root :: reply_file :: rest ->
+              serve_hit_args := Some (key, token_file, shared_root, reply_file); rest
+          | _ -> failwith "--serve-hit requires <key> <token-file> <shared-root> <reply-file>") };
+    doc_of "  pp --recv-hit <reply-file> <shared-root>  Ingest a serve-hit reply (internal)\n"
+      { name = "--recv-hit"; arity = 2; doc = ""; internal = false;
+        handler = (function
+          | reply_file :: shared_root :: rest -> recv_hit_args := Some (reply_file, shared_root); rest
+          | _ -> failwith "--recv-hit requires <reply-file> <shared-root>") };
+    doc_of "  pp --remote-node <token> <pins> <root> <keys> <reply>  Cluster-member side of remote placement (internal)\n"
+      { name = "--remote-node"; arity = 5; doc = ""; internal = false;
+        handler = (function
+          | token_file :: pins_file :: shared_root :: keys_file :: reply_file :: rest ->
+              remote_node_args := Some (token_file, pins_file, shared_root, keys_file, reply_file); rest
+          | _ -> failwith "--remote-node requires <token> <pins> <root> <keys> <reply>") };
+
+    doc_of "  pp --reconcile <root>    Materialize the program's map value under <root>\n"
+      (opt1 "--reconcile" (fun root -> reconcile_root := Some root));
+    doc_of "  pp --supervise <file.pp>  Reconcile program's process-map value (use with --watch)\n"
+      (flag "--supervise" (fun () -> supervise := true));
+
     (* ---- Host-qualified domain distribution + store GC ---- *)
-    | "--member-name" :: n :: rest -> member_name := Some n; parse rest
-    | "--desired-object" :: hash :: root :: rest ->
-        desired_object_args := Some (hash, root); parse rest
-    | "--publish-object" :: root :: rest -> publish_object_root := Some root; parse rest
-    | "--gc-mark" :: out :: rest -> gc_mark_out := Some out; parse rest
-    | "--gc-keep-epochs" :: n :: rest ->
-        (match int_of_string_opt n with
-         | Some k when k > 0 -> gc_keep_epochs := k
-         | _ -> failwith ("invalid --gc-keep-epochs: " ^ n));
-        parse rest
-    | "--gc-grace-seconds" :: s :: rest ->
-        (match float_of_string_opt s with
-         | Some g when g >= 0.0 -> gc_grace_seconds := g
-         | _ -> failwith ("invalid --gc-grace-seconds: " ^ s));
-        parse rest
-    | "gc" :: rest -> gc_mode := true; parse rest
+    doc_of "  pp --member-name <n> [--reconcile/--supervise] <file>  Host-qualified domain distribution (M5 stage C): converge only desired[<n>]'s slice\n"
+      (opt1 "--member-name" (fun n -> member_name := Some n));
+    doc_of "  pp --desired-object <hash> <shared-root> [--member-name <n>] [flags]  Pull a published desired-state value by hash and converge it (never runs a program to derive it)\n"
+      { name = "--desired-object"; arity = 2; doc = ""; internal = false;
+        handler = (function
+          | hash :: root :: rest -> desired_object_args := Some (hash, root); rest
+          | _ -> failwith "--desired-object requires <hash> <shared-root>") };
+    doc_of "  pp --publish-object <shared-root> <file>  Publish the program's value (+ its blob: refs) to a shared local-dir store, by hash\n"
+      (opt1 "--publish-object" (fun root -> publish_object_root := Some root));
+    (* `--gc-mark` is internal: only `pp gc`'s own replay subprocess sets it. *)
+    opt1 "--gc-mark" (fun out -> gc_mark_out := Some out);
+    doc_of "  pp gc [--gc-keep-epochs N] [--gc-grace-seconds S]  Explicit store GC (M5 stage C): mark-by-replay the last N reconcile/supervise epochs, sweep the rest\n"
+      (flag "gc" (fun () -> gc_mode := true));
+    opt1 "--gc-keep-epochs" (fun n ->
+      match int_of_string_opt n with
+      | Some k when k > 0 -> gc_keep_epochs := k
+      | _ -> failwith ("invalid --gc-keep-epochs: " ^ n));
+    opt1 "--gc-grace-seconds" (fun s ->
+      match float_of_string_opt s with
+      | Some g when g >= 0.0 -> gc_grace_seconds := g
+      | _ -> failwith ("invalid --gc-grace-seconds: " ^ s));
+
     (* ---- The observation-pinning seam ---- *)
-    | "--pin-file" :: path :: rest -> pin_file := Some path; parse rest
-    | "--dump-pins" :: path :: rest -> dump_pins_file := Some path; parse rest
+    doc_of "  pp --pin-file <path> <file.pp>  Preseed Store.run_pins/Runtime.probe_values from a (pin ...)/(pin-probe ...) file before running (M6 stage B: the observation-pinning seam)\n"
+      (opt1 "--pin-file" (fun path -> pin_file := Some path));
+    doc_of "  pp --dump-pins <path> <file.pp>  After running, write every run_pins/probe_values entry as (pin ...)/(pin-probe ...) lines to <path>\n"
+      (opt1 "--dump-pins" (fun path -> dump_pins_file := Some path));
+
     (* ---- Brace-surface seams ---- *)
-    | "--emit-braces" :: f :: rest -> emit_braces_file := Some f; parse rest
-    | "--roundtrip-braces" :: f :: rest -> roundtrip_braces_file := Some f; parse rest
+    doc_of "  pp --emit-braces <file.ppl>  Print a sexpr (.ppl) file as brace-surface text (M7 S3: .pp/.ppb are brace surface, .ppl is the sexpr/AST surface)\n"
+      (opt1 "--emit-braces" (fun f -> emit_braces_file := Some f));
+    doc_of "  pp --roundtrip-braces <file.ppl>  Assert sexpr->braces->re-read AST + LAW-20 hash equality (the fuzz gate)\n"
+      (opt1 "--roundtrip-braces" (fun f -> roundtrip_braces_file := Some f));
+
     (* ---- `pp fmt` seams ---- *)
-    | "fmt" :: rest ->
-        (* `fmt` owns the rest of argv itself (its own small flag set); it
-           does not recurse back into the general `parse` loop. *)
-        let to_braces = ref None in
-        let to_sexpr = ref None in
-        let in_place = ref false in
-        let rec parse_fmt = function
-          | "--to-braces" :: f :: more -> to_braces := Some f; parse_fmt more
-          | "--to-sexpr" :: f :: more -> to_sexpr := Some f; parse_fmt more
-          | ("-i" | "--in-place") :: more -> in_place := true; parse_fmt more
-          | [] -> ()
-          | a :: _ -> failwith ("pp fmt: unrecognized argument: " ^ a)
-        in
-        parse_fmt rest;
-        (match !to_braces, !to_sexpr with
-         | Some f, None -> fmt_args := Some (`ToBraces, f, !in_place)
-         | None, Some f -> fmt_args := Some (`ToSexpr, f, !in_place)
-         | Some _, Some _ | None, None ->
-             failwith "pp fmt: specify exactly one of --to-braces or --to-sexpr")
-    | "--compare-hash" :: f1 :: f2 :: rest ->
-        compare_hash_args := Some (f1, f2); parse rest
-    | "--list-comments" :: "sexpr" :: f :: rest ->
-        list_comments_args := Some (`Sexpr, f); parse rest
-    | "--list-comments" :: "brace" :: f :: rest ->
-        list_comments_args := Some (`Brace, f); parse rest
-    | "--fenced-policy" :: policy :: rest ->
-        (match policy with
+    doc_of "  pp fmt --to-braces <file> [-i]  Transpile sexpr source to brace source, carrying comments (M7 S2; -i/--in-place rewrites the file, same path)\n  pp fmt --to-sexpr <file> [-i]   Transpile brace source to sexpr source, carrying comments (M7 S2)\n"
+      { name = "fmt"; arity = -1; doc = ""; internal = false; handler = fmt_handler };
+    (* `--compare-hash` and `--list-comments` are internal tests/055 seams. *)
+    { name = "--compare-hash"; arity = 2; doc = ""; internal = true;
+      handler = (function
+        | f1 :: f2 :: rest -> compare_hash_args := Some (f1, f2); rest
+        | _ -> failwith "--compare-hash requires <file1> <file2>") };
+    { name = "--list-comments"; arity = 2; doc = ""; internal = true;
+      handler = (function
+        | "sexpr" :: f :: rest -> list_comments_args := Some (`Sexpr, f); rest
+        | "brace" :: f :: rest -> list_comments_args := Some (`Brace, f); rest
+        | _ -> failwith "--list-comments requires sexpr|brace <file>") };
+
+    doc_of "  pp --fenced-policy retry|abort|ask  Unknown-status fenced-action policy (default: abort)\n"
+      (opt1 "--fenced-policy" (fun policy ->
+         match policy with
          | "retry" -> fenced_policy := Runtime.Retry
          | "abort" -> fenced_policy := Runtime.Abort
          | "ask" -> fenced_policy := Runtime.Ask
-         | _ -> failwith ("invalid --fenced-policy: " ^ policy));
-        parse rest
-    | "why" :: rest | "--why" :: rest -> Store.why_mode := true; parse rest
-    | "--no-cache" :: rest -> Store.no_cache := true; parse rest
-    | "--check" :: rest -> Store.check_mode := true; parse rest
-    | "-e" :: e :: rest -> eval_str := Some e; parse rest
-    | "--version" :: _ | "-v" :: _ ->
-        Printf.printf "pp v%s\n" Version.string; exit 0
-    | "--dump-surface-tables" :: _ ->
-        (* Emit the surface tables as the SPEC-generated block;
-           tests/067 diffs this against the block committed to docs/SPEC.md. *)
-        print_string (Surface_tables.render_spec_tables ()); exit 0
-    | "--check-kernel-props" :: rest ->
-        (* Run the derived-generator kernel properties
-           (hash injectivity, quote round-trip, printer round-trip). tests/071
-           drives this with a fixed seed. Optional: --seed N, --count K. *)
-        let seed = ref 1 and count = ref 3000 in
-        let rec grab = function
-          | "--seed" :: n :: more -> seed := int_of_string n; grab more
-          | "--count" :: k :: more -> count := int_of_string k; grab more
-          | _ -> ()
-        in
-        grab rest;
-        if Kernel_props.run ~seed:!seed ~count:!count then exit 0 else exit 1
-    | "--help" :: _ | "-h" :: _ ->
-        Printf.printf "pp — lazy, pure-by-default, content-addressed Lisp\n";
-        Printf.printf "Usage:\n";
-        Printf.printf "  pp                       Start REPL\n";
-        Printf.printf "  pp <file.pp>             Run a pp source file\n";
-        Printf.printf "  pp --bytecode <file.pp>  Run via bytecode VM\n";
-        Printf.printf "  pp --diff <file.pp>      Run both backends and diff\n";
-        Printf.printf "  pp -e '<expr>'           Evaluate an expression (brace syntax, like the REPL)\n";
-        Printf.printf "  pp --grant <spec>        Grant capability (fs:/path:rw, net:host[:port], secret:/path, process)\n";
-        Printf.printf "  pp --reconcile <root>    Materialize the program's map value under <root>\n";
-        Printf.printf "  pp --supervise <file.pp>  Reconcile program's process-map value (use with --watch)\n";
-        Printf.printf "  pp --fenced-policy retry|abort|ask  Unknown-status fenced-action policy (default: abort)\n";
-        Printf.printf "  pp why <file.pp>         Explain node cache hits/misses (capability-filtered)\n";
-        Printf.printf "  pp --no-cache <file.pp>  Skip cache reads (recompute); results still stored\n";
-        Printf.printf "  pp --check <file.pp>     Determinism audit: run each node twice, flag volatile\n";
-        Printf.printf "  pp --schedule serial|parallel:N|race:N|remote:MEMBER  Node-miss dispatch policy (default: serial)\n";
-        Printf.printf "  pp --once <file.pp>        Run once and exit (explicit; default behavior)\n";
-        Printf.printf "  pp --watch <file.pp>       Run, then watch cell changes and re-evaluate\n";
-        Printf.printf "  pp --watch --stabilize <file>  Watch with push stabilize (dirty-propagation)\n";
-        Printf.printf "  pp graph                  Print the cell->node dependency graph from traces\n";
-        Printf.printf "  pp island-pins <file.pp>  List island forms with pin and cache status\n";
-        Printf.printf "  pp --update <file.pp>     Re-resolve islands and rewrite inline pins (implies --fetch-islands)\n";
-        Printf.printf "  pp --fetch-islands        Allow git fetch for uncached island pins (default: off)\n";
-        Printf.printf "  pp --watch-interval <s>   Poll interval for --watch (default 1.0)\n";
-        Printf.printf "  pp lint <file.pp>         Check source file for naming/style convention violations\n";
-        Printf.printf "  pp run <file>            Run a pp source file\n";
-        Printf.printf "  pp --version             Print version\n";
-        Printf.printf "  pp --help                Print this help\n";
-        Printf.printf "  pp cluster-init          Mint ~/.pp/cluster/{secret,id} (M5 cluster trust anchor)\n";
-        Printf.printf "  pp --mint-token <out> <ttl-secs> [--grant ...]  Mint a signed cluster token\n";
-        Printf.printf "  pp --transport-push/--transport-pull object|blob|trace <id> <root>  Local-dir sync (internal)\n";
-        Printf.printf "  pp --serve-hit <key> <token-file> <shared-root> <reply-file>  Capability-gated hit (internal)\n";
-        Printf.printf "  pp --recv-hit <reply-file> <shared-root>  Ingest a serve-hit reply (internal)\n";
-        Printf.printf "  pp --schedule remote:<member>  Remote placement (M5 stage B); members: ~/.pp/cluster/members or $PP_CLUSTER_MEMBERS\n";
-        Printf.printf "  pp --remote-node <token> <pins> <root> <keys> <reply>  Cluster-member side of remote placement (internal)\n";
-        Printf.printf "  pp --member-name <n> [--reconcile/--supervise] <file>  Host-qualified domain distribution (M5 stage C): converge only desired[<n>]'s slice\n";
-        Printf.printf "  pp --publish-object <shared-root> <file>  Publish the program's value (+ its blob: refs) to a shared local-dir store, by hash\n";
-        Printf.printf "  pp --desired-object <hash> <shared-root> [--member-name <n>] [flags]  Pull a published desired-state value by hash and converge it (never runs a program to derive it)\n";
-        Printf.printf "  pp gc [--gc-keep-epochs N] [--gc-grace-seconds S]  Explicit store GC (M5 stage C): mark-by-replay the last N reconcile/supervise epochs, sweep the rest\n";
-        Printf.printf "  pp --pin-file <path> <file.pp>  Preseed Store.run_pins/Runtime.probe_values from a (pin ...)/(pin-probe ...) file before running (M6 stage B: the observation-pinning seam)\n";
-        Printf.printf "  pp --dump-pins <path> <file.pp>  After running, write every run_pins/probe_values entry as (pin ...)/(pin-probe ...) lines to <path>\n";
-        Printf.printf "  pp --emit-braces <file.ppl>  Print a sexpr (.ppl) file as brace-surface text (M7 S3: .pp/.ppb are brace surface, .ppl is the sexpr/AST surface)\n";
-        Printf.printf "  pp --roundtrip-braces <file.ppl>  Assert sexpr->braces->re-read AST + LAW-20 hash equality (the fuzz gate)\n";
-        Printf.printf "  pp fmt --to-braces <file> [-i]  Transpile sexpr source to brace source, carrying comments (M7 S2; -i/--in-place rewrites the file, same path)\n";
-        Printf.printf "  pp fmt --to-sexpr <file> [-i]   Transpile brace source to sexpr source, carrying comments (M7 S2)\n";
-        exit 0
-    | "--once" :: rest -> parse rest  (* no-op: explicit one-shot *)
-    | "--watch" :: rest -> watch := true; parse rest
-    | "--watch-interval" :: secs :: rest ->
-        watch_interval := float_of_string secs; parse rest
-    | "--stabilize" :: rest -> stabilize := true; parse rest
-    | "graph" :: rest -> graph_mode := true; parse rest
-    | "lint" :: f :: rest ->
-        ignore rest;
-        Lint.lint_file f
-    | "run" :: f :: rest -> files := f :: !files; parse rest
-    | f :: rest -> files := f :: !files; parse rest
+         | _ -> failwith ("invalid --fenced-policy: " ^ policy)));
+
+    doc_of "  pp why <file.pp>         Explain node cache hits/misses (capability-filtered)\n"
+      (flag "why" (fun () -> Store.why_mode := true));
+    { (flag "--why" (fun () -> Store.why_mode := true)) with internal = true };
+    doc_of "  pp --no-cache <file.pp>  Skip cache reads (recompute); results still stored\n"
+      (flag "--no-cache" (fun () -> Store.no_cache := true));
+    doc_of "  pp --check <file.pp>     Determinism audit: run each node twice, flag volatile\n"
+      (flag "--check" (fun () -> Store.check_mode := true));
+    doc_of "  pp -e '<expr>'           Evaluate an expression (brace syntax, like the REPL)\n"
+      (opt1 "-e" (fun e -> eval_str := Some e));
+
+    doc_of "  pp --version             Print version\n"
+      (flag "--version" (fun () -> Printf.printf "pp v%s\n" Version.string; exit 0));
+    { (flag "-v" (fun () -> Printf.printf "pp v%s\n" Version.string; exit 0)) with internal = true };
+    (* Emit the surface tables as the SPEC-generated block; tests/067 diffs
+       this against the block committed to docs/SPEC.md. Internal seam. *)
+    flag "--dump-surface-tables"
+      (fun () -> print_string (Surface_tables.render_spec_tables ()); exit 0);
+    { name = "--check-kernel-props"; arity = -1; doc = ""; internal = true;
+      handler = check_kernel_props_handler };
+    doc_of "  pp --help                Print this help\n"
+      (flag "--help" (fun () -> print_help (); exit 0));
+    { (flag "-h" (fun () -> print_help (); exit 0)) with internal = true };
+
+    doc_of "  pp --once <file.pp>        Run once and exit (explicit; default behavior)\n"
+      (flag "--once" (fun () -> ()));  (* no-op: explicit one-shot *)
+    doc_of "  pp --watch <file.pp>       Run, then watch cell changes and re-evaluate\n  pp --watch --stabilize <file>  Watch with push stabilize (dirty-propagation)\n"
+      (flag "--watch" (fun () -> watch := true));
+    doc_of "  pp --watch-interval <s>   Poll interval for --watch (default 1.0)\n"
+      (opt1 "--watch-interval" (fun secs -> watch_interval := float_of_string secs));
+    (* --stabilize is documented alongside --watch above. *)
+    flag "--stabilize" (fun () -> stabilize := true);
+    doc_of "  pp graph                  Print the cell->node dependency graph from traces\n"
+      (flag "graph" (fun () -> graph_mode := true));
+    doc_of "  pp lint <file.pp>         Check source file for naming/style convention violations\n"
+      (opt1 "lint" (fun f -> Lint.lint_file f));  (* Lint.lint_file exits *)
+    doc_of "  pp run <file>            Run a pp source file\n"
+      (opt1 "run" (fun f -> files := f :: !files));
+  ] in
+  flags_ref := flags;
+
+  let rec parse = function
     | [] -> ()
+    | tok :: rest ->
+        (match List.find_opt (fun f -> f.name = tok) flags with
+         | Some f -> parse (f.handler rest)
+         | None ->
+             (* Any unmatched token — a filename, or an unknown flag — is
+                taken as a program file, exactly as before. *)
+             files := tok :: !files; parse rest)
   in
   parse args;
 
