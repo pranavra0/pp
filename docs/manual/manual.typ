@@ -17,11 +17,33 @@
 #set par(justify: true)
 #set raw(theme: "/pp.tmTheme")  // muted, Zig-like syntax colours
 
-// HTML export: inline the stylesheet. read() makes style.css a tracked
-// dependency, so a CSS edit re-triggers the manual build.
+// HTML export: inline the stylesheet, dark-mode toggle, and script.
+// read() makes style.css a tracked dependency, so a CSS edit re-triggers
+// the manual build.
 #context {
   if target() == "html" {
     html.elem("style", read("style.css"))
+    html.elem("button", attrs: (id: "dm-toggle", title: "Toggle dark mode"), "")
+    html.elem("script", ```
+(function () {
+  const root = document.documentElement;
+  const btn = document.getElementById('dm-toggle');
+  const stored = localStorage.getItem('pp-theme');
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  function setTheme(dark) {
+    if (dark) {
+      root.setAttribute('data-theme', 'dark');
+    } else {
+      root.removeAttribute('data-theme');
+    }
+    localStorage.setItem('pp-theme', dark ? 'dark' : 'light');
+  }
+  setTheme(stored ? stored === 'dark' : prefersDark);
+  btn.addEventListener('click', function () {
+    setTheme(root.getAttribute('data-theme') !== 'dark');
+  });
+})();
+    ```)
     html.elem("h1", "pp reference manual")
   }
 }

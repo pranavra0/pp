@@ -47,7 +47,7 @@ def foldl2(f, acc, lst) {
   if nil?(lst) { acc } else { foldl2(f, f(acc, car(lst)), cdr(lst)) } }
 def compile(name) {
   force(node {
-    perform run-dep(string-append(name, ".d"), "cc", "-MD", "-MF", string-append(name, ".d"), "-O2", "-c", string-append("$SRC/", string-append(name, ".c")), "-o", string-append(name, ".o"))
+    perform run-dep!(string-append(name, ".d"), "cc", "-MD", "-MF", string-append(name, ".d"), "-O2", "-c", string-append("$SRC/", string-append(name, ".c")), "-o", string-append(name, ".o"))
     blob(slurp(string-append(name, ".o")))
   })
 }
@@ -59,7 +59,7 @@ fn(o) { perform write-file(string-append(car(o), ".o"), blob-get(cdr(o))) }, obj
     do {
       perform write-file("link.d", "lua: ")
       do {
-        perform run-dep("link.d", "sh", "-c", string-append("cc -o lua ", string-append(foldl2(
+        perform run-dep!("link.d", "sh", "-c", string-append("cc -o lua ", string-append(foldl2(
 
 fn(acc, o) { string-append(acc, string-append(car(o), ".o ")) }, "", objs), "-lm")))
         blob(slurp("lua"))
