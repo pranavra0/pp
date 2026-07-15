@@ -12,7 +12,7 @@
 // #example("name", sh: true)  — a shell transcript: examples/name.sh
 #let example(name, sh: false) = {
   let ext = if sh { ".sh" } else { ".pp" }
-  let lang = if sh { "bash" } else { "clojure" }
+  let lang = if sh { "bash" } else { "python" }
   let src = read("examples/" + name + ext).trim("\n", at: end)
   let out = read("captured/" + name + ".out").trim("\n", at: end)
 
