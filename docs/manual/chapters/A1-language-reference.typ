@@ -233,7 +233,7 @@ replaced, without mutating the original.
   align: (left, left),
   stroke: (x: none, y: 0.5pt + luma(220)),
   table.header([*Form*], [*Meaning*]),
-  [`{ m | k1 -> v1, k2 -> v2 }`], [Nested `map-insert`: `map-insert(map-insert(m, k1, v1), k2, v2)`],
+  [`{ ...m, :k1 -> v1, :k2 -> v2 }`], [Spread update: `map-insert(map-merge(m, new-map), k2, v2)` — rightmost wins],
 )
 
 #example("ref-map-update")
@@ -279,6 +279,8 @@ print(f"Hello, {name}! Built {n} targets.")
 `->string` renders a string as itself (no quotes) and every other value in its
 display form. f-strings desugar to `string-append`/`->string` with no dedicated
 AST node, so they round-trip through `pp fmt` with the hash preserved.
+
+#example("ref-fstrings")
 
 == Type predicates
 
@@ -328,6 +330,8 @@ The s-expression surface reads and writes the same form
 (`(match e (p body) (p if guard body) ...)`), so match files round-trip
 through `pp fmt`.
 
+#example("ref-match-guards")
+
 == Spread
 
 The `...` prefix is one concept in three places: list/vector construction, map
@@ -353,6 +357,8 @@ run!("cc", ...flags, "-c", src, "-o", obj)
 
 A spread whose target is a compound expression uses the spaced form
 (`... expr`), matching the list-literal spelling.
+
+#example("ref-call-spread")
 
 == Observation sigils
 
@@ -380,10 +386,9 @@ the corresponding trace cell, making it visible to the cache-validity system.
 
 The `try` block introduces a region where bindings unwrap `[:ok, v]` /
 `[:err, e]` pairs automatically. Each `name <- expr` extracts the value on
-success or propagates the error on failure. A trailing `?` on an expression
-does the same inline.
+success or propagates the error on failure. A plain `let name = expr` inside
+`try` is an ordinary sequential binding that does not unwrap.
 
-Inside a `try` block, `let name = expr?` is equivalent to `name <- expr`.
 The block's last expression is the overall value (reachable only when every
 binding succeeded).
 
@@ -394,7 +399,6 @@ binding succeeded).
   stroke: (x: none, y: 0.5pt + luma(220)),
   table.header([*Form*], [*Meaning*]),
   [`try { a <- f(); body }`], [Bind `a` to the unwrapped value; propagate on `:err`],
-  [`try { let x = g()?; body }`], [Same, using the `?` suffix],
   [`try { body }`], [Plain body — no unwrapping, evaluates as usual],
 )
 

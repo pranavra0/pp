@@ -1,5 +1,5 @@
 # String builtins: append, length, split, substring, index-of, trim, and
-# number conversion.
+# number conversion. f-strings (`f"..."`) provide interpolation.
 print(string-append("foo", "bar"))
 print(string-length("hello"))
 print(string-split("a,b,c", ","))
