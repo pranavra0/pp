@@ -323,7 +323,7 @@ let initial_env () : env =
 (* ---- Register all primitives ---- *)
 
 
-let () =
+let register_arith () =
   (* Arithmetic — strict: force all args, variadic + and * with identity *)
   arith_fold "+" 0 ( + ) ( +. );
 
@@ -361,7 +361,9 @@ let () =
   chained_cmp ">"  ( > )  ( > );
   chained_cmp "<=" ( <= ) ( <= );
   chained_cmp ">=" ( >= ) ( >= );
+  ()
 
+let register_lists () =
   (* List operations — car/cdr force the pair, cons/list are lazy *)
   register "cons" (fun args ->
     match args with
@@ -474,7 +476,9 @@ let () =
     match args with
     | [arg] -> VBool (match force_val arg with VNil -> true | _ -> false)
     | _ -> failwith "nil? expects one argument");
+  ()
 
+let register_collections () =
   (* Vector operations — lazy *)
   register "vector" (fun args ->
     VVector (Array.of_list args));
@@ -523,7 +527,9 @@ let () =
   predicate "fn?"      (function VClosure _ | VBuiltin _ -> true | _ -> false);
   register "thunk?" (fun args ->  (* unforced by design: tests thunk-ness *)
     match args with [arg] -> VBool (match arg with VThunk _ -> true | _ -> false) | _ -> failwith "thunk? expects one arg");
+  ()
 
+let register_scalars () =
   (* I/O — strict, deep-forces for display *)
   register "print" (fun args ->
     let args = List.map force_deep args in
@@ -553,8 +559,9 @@ let () =
     match args with
     | [VString msg] -> failwith msg
     | _ -> failwith "error");
+  ()
 
-
+let register_caps () =
   register "cap-compose" (fun args ->
     let caps = List.map (fun v -> match force_val v with VCapability c -> c | _ -> failwith "cap-compose expects capabilities") args in
     VCapability (CapCompose caps));
@@ -586,7 +593,9 @@ let () =
 
   register "capability?" (fun args ->
     match args with [arg] -> VBool (match force_val arg with VCapability _ -> true | _ -> false) | _ -> failwith "capability? expects one arg");
+  ()
 
+let register_metaeval () =
   (* ---- eval-pp and apply-pp ---- *)
 
   register "eval-pp" (fun args ->
@@ -677,7 +686,9 @@ let () =
     | [v] -> force_deep v
     | _ -> failwith "force-deep expects one argument"
   );
+  ()
 
+let register_io () =
   (* ---- slurp: read file to string ---- *)
 
   register "slurp" (fun args ->
@@ -722,7 +733,9 @@ let () =
            | None -> failwith ("blob-get: blob missing from store: " ^ h))
         else failwith ("blob-get expects a blob:<hash> reference, got " ^ r)
     | _ -> failwith "blob-get expects a blob reference string");
+  ()
 
+let register_stdlib () =
   (* ---- stdlib primitives ---- *)
 
   (* (hash-value V) — a canonical, structural content hash of ANY value
@@ -924,7 +937,9 @@ let () =
          | _ -> VVector (Array.of_list (List.map Types.quote_to_value exprs)))
     | _ -> failwith "read-string expects a source string"
   );
+  ()
 
+let register_domains () =
   (* ---- fenced: register a non-convergent action for reconciler sequencing
      (LAW 31).  May not appear inside a node body.  The action is not
      executed during evaluation; the active reconciler drains it after
@@ -1047,7 +1062,9 @@ let () =
              Runtime.record_read (Cell.(to_string (Probe name))) (Hasher.hash_value v);
              v)
     | _ -> failwith "probe expects a probe name string");
+  ()
 
+let register_collect_and_sealed () =
   (* ---- collect: applicative/validation error-accumulation partition ---- *)
 
   (* `collect(items)` — partition a list of `[:ok, v]` / `[:err, e]` results.
@@ -1097,7 +1114,9 @@ let () =
          | VSealed bytes -> VString bytes
          | other -> failwith ("unseal expects a sealed value, got " ^ string_of_value other))
     | _ -> failwith "unseal expects one argument");
+  ()
 
+let register_ppc () =
   register "ppc-emit-opcode" (fun _args ->
     failwith "ppc-emit-opcode: not yet implemented for self-hosting"
   );
@@ -1135,7 +1154,9 @@ let () =
   register "ppc-pop-cenv-frame" (fun args ->
     failwith "ppc-pop-cenv-frame: not yet implemented for self-hosting"
   );
+  ()
 
+let register_macros () =
   let rec quasiquote_walk v =
     match v with
     | VPair (VSymbol "unquote", VPair (arg, VNil)) -> arg
@@ -1187,7 +1208,9 @@ let () =
     in
     incr gensym_counter;
     VSymbol (Printf.sprintf "%s~%d" prefix !gensym_counter));
+  ()
 
+let register_match_aliases () =
   (* Unshadowable aliases for the primitives the `match` lowering
      (Compiler.EMatch) compiles its structural condition/binding code
      down to. The lowering builds ordinary EApply (ESymbol "car"/"cdr"
@@ -1212,3 +1235,21 @@ let () =
 
   ;
   ()
+
+(* Every primitive registered at module load, grouped by family. The
+   match-alias step must run last: it aliases already-registered names
+   (car/cdr/=/nil?/not/error/pair?) under NUL-prefixed, unshadowable keys. *)
+let () =
+  register_arith ();
+  register_lists ();
+  register_collections ();
+  register_scalars ();
+  register_caps ();
+  register_metaeval ();
+  register_io ();
+  register_stdlib ();
+  register_domains ();
+  register_collect_and_sealed ();
+  register_ppc ();
+  register_macros ();
+  register_match_aliases ()
