@@ -725,7 +725,7 @@ let cap_properties (st : rng) ~(count : int) : unit =
     let base = gen_value ~mode:Adv st (2 + ri st 3) in
     (* no false positive: a generated syntactic value has no cap/sealed. *)
     incr cap_checks;
-    if Hasher.contains_authority base then
+    if Types.contains_authority base then
       fail "node-ban-false-positive"
         "contains_authority flagged a capability-free value";
     (* injected cap/sealed, buried [k] deep, must be caught. *)
@@ -733,7 +733,7 @@ let cap_properties (st : rng) ~(count : int) : unit =
       if rb st then VCapability (gen_cap st (depth ())) else VSealed "s3cr3t" in
     let buried = embed_deep st (ri st 4) payload in
     incr cap_checks;
-    if not (Hasher.contains_authority buried) then
+    if not (Types.contains_authority buried) then
       fail "node-ban-evaded"
         "contains_authority missed an embedded capability/sealed value")
     (List.init count (fun _ -> ()))

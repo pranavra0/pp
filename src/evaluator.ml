@@ -14,9 +14,9 @@ open Runtime
    Two thunks with the same (expr, env, capabilities) are the SAME thunk.
    Uses env.env_hash for O(1) environment identity — no recursive traversal. *)
 let make_thunk_ca (expr : expr) (env : env) : value =
-  let caps_hash = hash_concat ("caps" :: List.map Hasher.hash_capability !current_capabilities) in
+  let caps_hash = hash_concat ("caps" :: List.map Types.hash_capability !current_capabilities) in
   let cfg_hash = hash_concat ("cfg" :: List.map hash_value !config_stack) in
-  let h = hash_concat ["thunk"; Hasher.hash_expr expr; env.env_hash; caps_hash; cfg_hash; handlers_hash ()] in
+  let h = hash_concat ["thunk"; Types.hash_expr expr; env.env_hash; caps_hash; cfg_hash; handlers_hash ()] in
   match Hashtbl.find_opt thunk_store h with
   | Some existing -> VThunk existing
   | None ->
@@ -29,9 +29,9 @@ let make_thunk_ca (expr : expr) (env : env) : value =
    type_ann, vm.ml). The annotation participates in the content hash so a
    typed thunk is never conflated with an untyped thunk over the same expr. *)
 let make_thunk_ca_typed (expr : expr) (ty : expr) (loc : (string * int) option) (env : env) : value =
-  let caps_hash = hash_concat ("caps" :: List.map Hasher.hash_capability !current_capabilities) in
+  let caps_hash = hash_concat ("caps" :: List.map Types.hash_capability !current_capabilities) in
   let cfg_hash = hash_concat ("cfg" :: List.map hash_value !config_stack) in
-  let h = hash_concat ["thunk-typed"; Hasher.hash_expr expr; Hasher.hash_expr ty; env.env_hash; caps_hash; cfg_hash; handlers_hash ()] in
+  let h = hash_concat ["thunk-typed"; Types.hash_expr expr; Types.hash_expr ty; env.env_hash; caps_hash; cfg_hash; handlers_hash ()] in
   match Hashtbl.find_opt thunk_store h with
   | Some existing -> VThunk existing
   | None ->
@@ -175,7 +175,7 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
            left marked as still being evaluated). A Capability_error is not
            a Failure and is never memoized (LAW 15/20). *)
         let errval = VString msg in
-        let err_hash = Hasher.hash_value errval in
+        let err_hash = Types.hash_value errval in
         (try Store.store_object ~key:err_hash ~value:errval with _ -> ());
         (try Store.store_trace ~key ~outcome:Failed ~result_hash:err_hash
                ~reads:(List.rev !frame) with _ -> ());
@@ -197,9 +197,9 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
      determinism hole), and a broad cap (or a secret) could ride a result out
      to a narrower/unauthorized caller — the node boundary must be
      symmetric. *)
-  if Hasher.contains_authority result then begin
+  if Types.contains_authority result then begin
     t.thunk_status <- Unevaluated;
-    if Hasher.contains_sealed result then
+    if Types.contains_sealed result then
       raise (Capability_error "a node may not return a sealed value")
     else
       raise (Capability_error "a node may not return a capability")
@@ -208,7 +208,7 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
    | Some ty -> check_type result ty t.thunk_loc
    | None -> ());
   t.thunk_status <- Evaluated result;
-  let result_hash = Hasher.hash_value result in
+  let result_hash = Types.hash_value result in
   (* Objects are content-addressed by result hash; the trace maps the node
      key to that result plus the reads that justify it. *)
   (try Store.store_object ~key:result_hash ~value:result with _ -> ());
@@ -224,7 +224,7 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
       with e -> Runtime.pop_trace_frame (); raise e
     in
     Runtime.pop_trace_frame ();
-    if Hasher.hash_value r2 <> result_hash then begin
+    if Types.hash_value r2 <> result_hash then begin
       incr Store.volatile_count;
       Printf.eprintf
         "[check] volatile node %s: an identical run produced a different result hash\n%!"
@@ -433,21 +433,21 @@ and node_key_of (t : thunk) : string =
              let hv =
                match force v with
                | fv ->
-                   if Hasher.contains_authority fv then
+                   if Types.contains_authority fv then
                      raise (Capability_error
                        (Printf.sprintf
                           "node: free variable '%s' may not be or contain a %s" name
-                          (if Hasher.contains_sealed fv then "sealed value" else "capability")));
-                   Hasher.hash_value fv
+                          (if Types.contains_sealed fv then "sealed value" else "capability")));
+                   Types.hash_value fv
                | exception e ->
                    (match e with
                     | Capability_error _ -> raise e
-                    | _ -> Hasher.hash_value v)
+                    | _ -> Types.hash_value v)
              in
              hash_concat ["fv"; name; hv]
          | None -> hash_concat ["fv-unbound"; name])
   in
-  hash_concat (["node-key"; Hasher.hash_expr e] @ fv_parts)
+  hash_concat (["node-key"; Types.hash_expr e] @ fv_parts)
 
 (* Remote placement: a
    node is data-closed iff every free var's FORCED value re-encodes under

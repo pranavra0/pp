@@ -639,11 +639,11 @@ and vm_node_key (t : thunk) : string =
       let hv =
         match vm_force v with
         | fv ->
-            if Hasher.contains_authority fv then
+            if Types.contains_authority fv then
               raise (Capability_error
                 (Printf.sprintf
                    "node: free variable '%s' may not be or contain a %s" name
-                   (if Hasher.contains_sealed fv then "sealed value" else "capability")));
+                   (if Types.contains_sealed fv then "sealed value" else "capability")));
             hash_value fv
         | exception e ->
             (match e with

@@ -261,7 +261,7 @@ let proc_spawn (spec : value) : value =
     | Some p -> p
     | None -> failwith ("proc-spawn: command not found for service " ^ name ^ ": " ^ cmd)
   in
-  let spec_hash = Hasher.hash_value (Force_deep.force_deep_plain spec) in
+  let spec_hash = Types.hash_value (Force_deep.force_deep_plain spec) in
   Journal.append (Journal.ProcStartIntent { name; spec_hash });
   Store.ensure_dir (domain_io_dir ());
   let argv = resolved :: args in

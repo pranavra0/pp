@@ -236,7 +236,7 @@ let probe_value_for (name : string) : value option =
    against the recorded one. *)
 let probe_observe_for_store (name : string) : string option =
   match probe_value_for name with
-  | Some v -> Some (Hasher.hash_value v)
+  | Some v -> Some (Types.hash_value v)
   | None -> None
 
 (* Store.observe_cell's `domain:<name>:<sub>` dispatch — calls the
@@ -260,7 +260,7 @@ let domain_observe_cell_for_store (name : string) (sub : string) : string option
        with
        | VNil -> None
        | VString h -> Some h
-       | other -> Some (Hasher.hash_value other))
+       | other -> Some (Types.hash_value other))
 
 (* A table of built-in functions: name -> value *)
 let builtins : (string, value) Hashtbl.t = Hashtbl.create 64
@@ -750,7 +750,7 @@ let register_stdlib () =
      is not fooled by that. *)
   register "hash-value" (fun args ->
     match args with
-    | [v] -> VString (Hasher.hash_value (force_deep (force_val v)))
+    | [v] -> VString (Types.hash_value (force_deep (force_val v)))
     | _ -> failwith "hash-value expects one argument");
 
   (* (hash-string S) — SHA-256 hex digest of S's raw bytes, the SAME
@@ -1059,7 +1059,7 @@ let register_domains () =
         (match probe_value_for name with
          | None -> failwith ("probe: no such probe registered: " ^ name)
          | Some v ->
-             Runtime.record_read (Cell.(to_string (Probe name))) (Hasher.hash_value v);
+             Runtime.record_read (Cell.(to_string (Probe name))) (Types.hash_value v);
              v)
     | _ -> failwith "probe expects a probe name string");
   ()

@@ -102,9 +102,9 @@ let plan_summary (plan : value) : (string * string) list =
    free, with no AST to keep in sync with a node body that doesn't exist —
    the direct route is documented here as the deliberate, simpler choice. *)
 let plan_cache_key ~(diff_closure : value) ~(observed : value) ~(desired : value) : string =
-  let diff_hash = Hasher.hash_value diff_closure in
-  let observed_hash = Hasher.hash_value (Primitives.force_deep observed) in
-  let desired_hash = Hasher.hash_value (Primitives.force_deep desired) in
+  let diff_hash = Types.hash_value diff_closure in
+  let observed_hash = Types.hash_value (Primitives.force_deep observed) in
+  let desired_hash = Types.hash_value (Primitives.force_deep desired) in
   Hasher.hash_concat ["domain-plan"; diff_hash; observed_hash; desired_hash]
 
 let compute_plan ~(domain_name : string) ~(diff_closure : value)
@@ -121,7 +121,7 @@ let compute_plan ~(domain_name : string) ~(diff_closure : value)
         Runtime.with_ref Runtime.current_capabilities []
           (fun () -> Primitives.call_with_args diff_closure [observed; desired])
       in
-      let result_hash = Hasher.hash_value plan in
+      let result_hash = Types.hash_value plan in
       (try Store.store_object ~key:result_hash ~value:plan with _ -> ());
       (try Store.store_trace ~key ~outcome:Store.Ok ~result_hash ~reads:[] with _ -> ());
       plan
@@ -206,7 +206,7 @@ let run_domain ~(name : string) ~(entry : Runtime.domain_entry) ~(desired : valu
     let plan = compute_plan ~domain_name:name ~diff_closure ~observed ~desired in
     let summary = plan_summary plan in
     let hash = Hasher.hash_concat
-        ["domain-pass"; name; Hasher.hash_value (Primitives.force_deep desired)] in
+        ["domain-pass"; name; Types.hash_value (Primitives.force_deep desired)] in
     Journal.append (Journal.DomainIntent { hash; fields = summary });
     with_domain name entry.Runtime.dm_cap
       (fun () -> ignore (call_uncached apply_closure [plan]));
@@ -240,7 +240,7 @@ let run_domain ~(name : string) ~(entry : Runtime.domain_entry) ~(desired : valu
    the epoch must never fail an otherwise-successful reconcile pass. *)
 let record_epoch (forced : value) : unit =
   try
-    let hash = Hasher.hash_value forced in
+    let hash = Types.hash_value forced in
     (try Store.store_object ~key:hash ~value:forced with _ -> ());
     Journal.append (Journal.Epoch { hash });
     Gcroots.record ~keep:(Runtime.invocation_get ()).gc_keep_epochs
