@@ -6,7 +6,7 @@
 #   (a) a well-typed call passes and returns the body's value;
 #   (b) an ill-typed call raises the same "type mismatch" error, with the
 #       definition-site location, in BOTH backends (byte-identical);
-#   (c) unknown type names pass (gradual, LAW 32);
+#   (c) unknown type names are a hard error;
 #   (d) vector param lists ([x : int]) and multi-param lists check too;
 #   (e) return-type + param-type combine.
 set -uo pipefail
@@ -60,13 +60,13 @@ assert_err "ill-typed-vm" "--bytecode" "$TMP/b.pp" "$pat"
 if diff -q "$TMP/e1" "$TMP/e2" >/dev/null; then ok "ill-typed-identical-stderr"
 else bad "ill-typed-identical-stderr" "tw: $(cat "$TMP/e1")" "vm: $(cat "$TMP/e2")"; fi
 
-# ---- (c) unknown type names pass (gradual) ----
+# ---- (c) unknown type names are a hard error ----
 cat > "$TMP/c.pp" <<'EOF'
 def h(x: widget) { x }
 print(h(7))
 EOF
-assert_out "unknown-type-passes-tw" ""           "$TMP/c.pp" "7"
-assert_out "unknown-type-passes-vm" "--bytecode" "$TMP/c.pp" "7"
+assert_err "unknown-type-err-tw" ""           "$TMP/c.pp" "type mismatch: expected widget, got 7 at .*c\.pp:1"
+assert_err "unknown-type-err-vm" "--bytecode" "$TMP/c.pp" "type mismatch: expected widget, got 7 at .*c\.pp:1"
 
 # ---- (d) vector param list checks ----
 cat > "$TMP/d.pp" <<'EOF'
