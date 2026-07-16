@@ -297,6 +297,44 @@ let watch_loop ~files ~interval ~stabilize =
   in
   loop snapshot
 
+(* ---- Cluster transport / token CLI seam ----
+   Each does its one internal job, given the args the flag table parsed; main
+   dispatches to them so its body reads as a list of what pp can do rather than
+   a wall of inline blocks. (The dispatcher, src/remote.ml, drives the token
+   and transport machinery; these are the member-side entry points.) *)
+let run_mint_token ~(out : string) ~(ttl : int) ~(specs : string list) : unit =
+  let secret = Cap_token.load_secret () in
+  let cluster_id = Cap_token.load_cluster_id () in
+  Store.atomic_write out (Cap_token.mint ~secret ~cluster_id ~specs ~ttl_seconds:ttl)
+
+let run_transport_push (kind, id, root) : unit =
+  match kind with
+  | "object" -> Transport.LocalDir.push_object root ~hash:id
+  | "blob" -> Transport.LocalDir.push_blob root ~hash:id
+  | "trace" -> Transport.LocalDir.push_trace root ~key:id
+  | _ -> failwith ("pp --transport-push: unknown artifact kind " ^ kind)
+
+let run_transport_pull (kind, id, root) : unit =
+  match kind with
+  | "object" -> Transport.LocalDir.pull_object root ~hash:id
+  | "blob" -> Transport.LocalDir.pull_blob root ~hash:id
+  | "trace" -> Transport.LocalDir.pull_trace root ~key:id
+  | _ -> failwith ("pp --transport-pull: unknown artifact kind " ^ kind)
+
+let run_serve_hit (key, token_file, shared_root, reply_file) : unit =
+  let token_text = read_file_content token_file in
+  let reply = Transport.serve_hit ~key ~token_text ~shared_root in
+  Store.atomic_write reply_file reply
+
+let run_recv_hit (reply_file, shared_root) : unit =
+  let reply_text = read_file_content reply_file in
+  match Transport.recv_hit ~reply_text ~shared_root with
+  | Transport.RHit { key; result_hash; _ } ->
+      Printf.printf "recv-hit: hit key=%s result=%s\n" key result_hash
+  | Transport.RMiss key -> Printf.printf "recv-hit: miss key=%s\n" key
+  | Transport.RDeny (key, reason) ->
+      Printf.printf "recv-hit: deny key=%s reason=%s\n" key reason
+
 let main () =
   let args = List.tl (Array.to_list Sys.argv) in
   (* Install the impure Backend hooks first, before ANY subcommand dispatch:
@@ -914,49 +952,16 @@ let main () =
     exit 0
   end;
   (match !mint_token_args with
-   | Some (out, ttl) ->
-       let secret = Cap_token.load_secret () in
-       let cluster_id = Cap_token.load_cluster_id () in
-       let token = Cap_token.mint ~secret ~cluster_id ~specs:(List.rev !grants) ~ttl_seconds:ttl in
-       Store.atomic_write out token;
-       exit 0
+   | Some (out, ttl) -> run_mint_token ~out ~ttl ~specs:(List.rev !grants); exit 0
    | None -> ());
   (match !transport_push_args with
-   | Some (kind, id, root) ->
-       (match kind with
-        | "object" -> Transport.LocalDir.push_object root ~hash:id
-        | "blob" -> Transport.LocalDir.push_blob root ~hash:id
-        | "trace" -> Transport.LocalDir.push_trace root ~key:id
-        | _ -> failwith ("pp --transport-push: unknown artifact kind " ^ kind));
-       exit 0
-   | None -> ());
+   | Some a -> run_transport_push a; exit 0 | None -> ());
   (match !transport_pull_args with
-   | Some (kind, id, root) ->
-       (match kind with
-        | "object" -> Transport.LocalDir.pull_object root ~hash:id
-        | "blob" -> Transport.LocalDir.pull_blob root ~hash:id
-        | "trace" -> Transport.LocalDir.pull_trace root ~key:id
-        | _ -> failwith ("pp --transport-pull: unknown artifact kind " ^ kind));
-       exit 0
-   | None -> ());
+   | Some a -> run_transport_pull a; exit 0 | None -> ());
   (match !serve_hit_args with
-   | Some (key, token_file, shared_root, reply_file) ->
-       let token_text = read_file_content token_file in
-       let reply = Transport.serve_hit ~key ~token_text ~shared_root in
-       Store.atomic_write reply_file reply;
-       exit 0
-   | None -> ());
+   | Some a -> run_serve_hit a; exit 0 | None -> ());
   (match !recv_hit_args with
-   | Some (reply_file, shared_root) ->
-       let reply_text = read_file_content reply_file in
-       (match Transport.recv_hit ~reply_text ~shared_root with
-        | Transport.RHit { key; result_hash; _ } ->
-            Printf.printf "recv-hit: hit key=%s result=%s\n" key result_hash
-        | Transport.RMiss key -> Printf.printf "recv-hit: miss key=%s\n" key
-        | Transport.RDeny (key, reason) ->
-            Printf.printf "recv-hit: deny key=%s reason=%s\n" key reason);
-       exit 0
-   | None -> ());
+   | Some a -> run_recv_hit a; exit 0 | None -> ());
   (* ---- `pp gc` (explicit, never automatic) ---- *)
   if !gc_mode then (Store_gc.run ~grace_seconds:!gc_grace_seconds; exit 0);
   (* ---- `--publish-object <shared-root>` — the by-hash
