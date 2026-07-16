@@ -125,6 +125,7 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
               Effect.Deep.continue k (Effect.perform (Runtime.Record_read (c, h)))
           | effect Runtime.In_node, k -> Effect.Deep.continue k true
           | effect Runtime.Get_capabilities, k -> Effect.Deep.continue k t.node_caps
+          | effect Runtime.Current_sandbox, k -> Effect.Deep.continue k (Some sandbox_slot)
           | e -> raise e
         in
         if hash_value r2 <> result_hash then begin
