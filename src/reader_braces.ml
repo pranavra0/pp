@@ -316,6 +316,10 @@ let lex ~(file : string) (input : string) : tok list =
 
 (* ---- Parser ---- *)
 
+(* A "...x" spread prefix on a name token (list/map/call spread sugar). *)
+let is_spread_prefix (s : string) : bool =
+  String.length s >= 3 && String.sub s 0 3 = "..."
+
 type ps = {
   toks : tok array;
   mutable pos : int;
@@ -547,7 +551,7 @@ let rec parse_pattern_generic ps (pb : 'a pattern_builder) : 'a =
         let rec loop_pats acc =
           let k = cur ps in
           match k.t with
-          | TName s when String.length s >= 3 && String.sub s 0 3 = "..." ->
+          | TName s when is_spread_prefix s ->
               (* Spread must be the last element; bind the remainder. *)
               advance ps;
               let rest_name = String.sub s 3 (String.length s - 3) in
@@ -891,7 +895,7 @@ and parse_call_args ps ~(elem : ps -> expr) : bracket_elem list =
     let rec loop acc =
       let item =
         match (cur ps).t with
-        | TName s when String.length s >= 3 && String.sub s 0 3 = "..." ->
+        | TName s when is_spread_prefix s ->
             advance ps;
             let target =
               if String.length s > 3 then ESymbol (String.sub s 3 (String.length s - 3))
@@ -1034,7 +1038,7 @@ and parse_map_literal ps : expr =
 and parse_map_entries ps ~parse_elem ~mk_spread_sym : map_entry list =
   let rec loop acc =
     match (cur ps).t with
-    | TName s when String.length s >= 3 && String.sub s 0 3 = "..." ->
+    | TName s when is_spread_prefix s ->
         advance ps;
         let target =
           if String.length s > 3 then mk_spread_sym (String.sub s 3 (String.length s - 3))
@@ -1733,7 +1737,7 @@ and parse_bracket_elems ps ~(elem : ps -> expr) ~(mk_spread_sym : string -> expr
     : bracket_elem list =
   let rec loop acc =
     match (cur ps).t with
-    | TName s when String.length s >= 3 && String.sub s 0 3 = "..." ->
+    | TName s when is_spread_prefix s ->
         advance ps;
         let target =
           if String.length s > 3 then
