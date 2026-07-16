@@ -31,6 +31,27 @@ let () = Printexc.register_printer (function
   | Reader_incomplete msg -> Some msg
   | _ -> None)
 
+(* A runtime or parse error carrying its source location as structured data
+   rather than baked into the message string. [Runtime.with_form_location]
+   attaches [pos] once, at the innermost enclosing form, and an outer form
+   leaves an already-located error alone by testing [pos <> None] — this
+   replaced a fragile heuristic that re-scanned the message text for a trailing
+   " at file:line". The reader raises it with [pos] already set (the token's
+   own location, more specific than any enclosing form); the evaluator's leaf
+   [failwith]s stay unlocated and are wrapped at the form boundary. [kind]
+   records the one distinction wrapping would otherwise erase: an [Eval] error
+   may be memoized as a failing node trace (LAW 28), a [Capability] error may
+   NOT (LAW 15), so node caching keys on [kind] once wrapped. The printer
+   renders "<msg> at <file>:<line>" so an uncaught one reads like the caught
+   path. *)
+type err_kind = Eval | Capability
+exception Pp_error of { kind : err_kind; msg : string; pos : (string * int) option }
+let () = Printexc.register_printer (function
+  | Pp_error { msg; pos = Some (file, line); _ } ->
+      Some (Printf.sprintf "%s at %s:%d" msg file line)
+  | Pp_error { msg; pos = None; _ } -> Some msg
+  | _ -> None)
+
 (* ---- Environment ---- *)
 
 (* An environment node with a stable ID, a cached hash, and a list of bindings.
