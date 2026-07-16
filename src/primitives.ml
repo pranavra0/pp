@@ -579,13 +579,29 @@ let register_caps () =
     let args = force_args args in
     match args with
     | [VCapability _ as cap; VString scope] ->
-        VCapability (Capability.restrict (match cap with VCapability c -> c | _ -> failwith "impossible") (Paths.canonicalize ~realpath:(fun x -> x) scope))
+        let cap = match cap with VCapability c -> c | _ -> failwith "impossible" in
+        let scope = Runtime.canonical_path scope in
+        VCapability (Capability.restrict cap scope)
     | [VCapability _ as cap; VString scope; VKeyword m] ->
+        let cap = match cap with VCapability c -> c | _ -> failwith "impossible" in
         let mode = match m with
           | "ro" -> Capability.Read | "rw" -> Capability.ReadWrite | "wo" -> Capability.Write
           | _ -> failwith ("cap-restrict: invalid mode :" ^ m ^ " (expected :ro, :rw, or :wo)")
         in
-        VCapability (Capability.restrict ~mode (match cap with VCapability c -> c | _ -> failwith "impossible") (Paths.canonicalize ~realpath:(fun x -> x) scope))
+        let scope = Runtime.canonical_path scope in
+        let read_ok = Capability.check_fs_read cap scope in
+        let write_ok = Capability.check_fs_write cap scope in
+        let ok = match mode with
+          | Capability.Read -> read_ok
+          | Capability.Write -> write_ok
+          | Capability.ReadWrite -> read_ok && write_ok
+        in
+        if not ok then
+          raise (Types.Capability_error
+            (Printf.sprintf
+               "cap-restrict: cannot widen mode to :%s for %s (not held by the underlying capability)"
+               (Capability.mode_name mode) (scope :> string)));
+        VCapability (Capability.restrict ~mode cap scope)
     | _ -> failwith "cap-restrict expects a capability, a scope string, and an optional mode keyword (:ro/:rw/:wo)");
 
   register "cap-none" (fun args ->
@@ -849,7 +865,7 @@ let register_stdlib () =
     register name (fun args ->
       match force_args args with
       | [VString path] ->
-          if not (List.exists (fun cap -> Capability.check_fs_read cap (Paths.canonicalize ~realpath:(fun x -> x) path))
+          if not (List.exists (fun cap -> Capability.check_fs_read cap (Runtime.canonical_path path))
                     !Runtime.current_capabilities) then
             raise (Types.Capability_error
                      (name ^ ": capability error: no read access for " ^ path));
