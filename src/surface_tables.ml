@@ -108,6 +108,26 @@ let check_arity (h : obs_head) (n : int) : (unit, string) result =
     Error (Printf.sprintf "$%s expects %s argument(s), got %d" h.head want n)
   else Ok ()
 
+(* Coverage ratchet: every head's [tmpl] must be defined for every arity it
+   declares, so widening [max_args] without adding a template arm fails here
+   (module load) instead of at an [assert false] deep in some later lowering.
+   Variadic heads (max_args = max_int) must be total in their arity, so a small
+   window past min_args suffices to exercise the wildcard arm. *)
+let () =
+  List.iter (fun h ->
+    let hi = if h.max_args = max_int then h.min_args + 2 else h.max_args in
+    for n = h.min_args to hi do
+      match (try Some (h.tmpl n) with _ -> None) with
+      | Some _ -> ()
+      | None ->
+          failwith (Printf.sprintf
+            "surface_tables: $%s declares arity %d..%s but its template has no \
+             arm for %d" h.head h.min_args
+            (if h.max_args = max_int then "variadic" else string_of_int h.max_args)
+            n)
+    done)
+    obs_heads
+
 (* ---- with{} clauses --------------------------------------------------- *)
 
 (* Each clause keyword maps to the wrapper constructor it lowers to. Kept as a
