@@ -45,12 +45,14 @@ let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
     | _ -> false
   in
   if not ok then
-    let loc_str = match loc with
-      | Some (file, line) -> Printf.sprintf " at %s:%d" file line
-      | None -> ""
-    in
-    failwith (Printf.sprintf "type mismatch: expected %s, got %s%s"
-                type_name (string_of_value v) loc_str)
+    (* The annotation site [loc] is a precise location, carried as Pp_error.pos
+       (not baked into the message, which would double-locate once an enclosing
+       form's with_form_location saw it). *)
+    raise (Pp_error {
+      kind = Eval;
+      msg = Printf.sprintf "type mismatch: expected %s, got %s"
+              type_name (string_of_value v);
+      pos = loc })
 
 (* Enforce a thunk's optional type annotation, resetting thunk_status to
    Unevaluated if the check fails. The reset is load-bearing: typed thunks are
@@ -108,7 +110,11 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
             Effect.Deep.continue k (Effect.perform (Runtime.Record_read (c, h)))
         | effect Runtime.In_node, k -> Effect.Deep.continue k true
         | effect Runtime.Current_sandbox, k -> Effect.Deep.continue k (Some sandbox_slot)
-        | Failure msg as e ->
+        (* Memoize a genuine failure (LAW 28). A plain Failure, or an Eval-kind
+           Pp_error a nested `load`'s form boundary already wrapped, is
+           cacheable; a Capability error (raw or Pp_error kind=Capability) is
+           NOT (LAW 15) and falls to the generic reset arm below. *)
+        | (Failure msg | Pp_error { kind = Eval; msg; _ }) as e ->
             let errval = VString msg in
             let err_hash = hash_value errval in
             (try Store.store_object ~key:err_hash ~value:errval with _ -> ());
