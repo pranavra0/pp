@@ -460,12 +460,13 @@ and hash_value (v : value) : string =
         let parts = Array.to_list (Array.map hash_val vs) in
         hash_concat ("vector" :: parts)
     | VMap kvs ->
-        let sorted = List.sort (fun (k1,_) (k2,_) ->
-          String.compare (hash_val k1) (hash_val k2)
-        ) kvs in
-        let parts = List.map (fun (k, v) ->
-          hash_concat [hash_val k; hash_val v]
-        ) sorted in
+        (* Hash each key/value once, then sort on the precomputed key hash —
+           the comparator must not re-hash per comparison (matches the VSet
+           arm below). *)
+        let hashed = List.map (fun (k, v) -> (hash_val k, hash_val v)) kvs in
+        let sorted = List.sort (fun (kh1,_) (kh2,_) ->
+          String.compare kh1 kh2) hashed in
+        let parts = List.map (fun (kh, vh) -> hash_concat [kh; vh]) sorted in
         hash_concat ("map" :: parts)
     | VSet vs ->
         let sorted = List.sort String.compare (List.map hash_val vs) in
