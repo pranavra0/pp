@@ -20,16 +20,13 @@ val parse_quoted_string : string -> int -> (string * int) option
 (* Bit-exact float encoding via %h, with nan/inf/-inf as fixed tokens. *)
 val encode_float : float -> string
 
-(* Internal encoder: returns [None] if any leaf is non-data. *)
-val encode : Types.value -> string option
-
+(* [encode]/[parse] are internal to the codec (the value grammar); only the
+   string-quoting helpers and the [encode_value]/[decode_value] entry points
+   are reused elsewhere. *)
 val expect_char : string -> int -> char -> int option
 val expect_lit : string -> int -> string -> int option
 val bind : 'a option -> ('a -> 'b option) -> 'b option
 val ( >>= ) : 'a option -> ('a -> 'b option) -> 'b option
-
-(* Recursive-descent parser matching the encoder's grammar exactly. *)
-val parse : string -> int -> (Types.value * int) option
 
 (* The public entry points. *)
 val encode_value : Types.value -> string option
