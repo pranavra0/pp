@@ -30,6 +30,16 @@ let ends_with_char (s : string) (c : char) : bool =
 let starts_with_is (s : string) : bool =
   String.length s >= 3 && String.sub s 0 3 = "is-"
 
+(* The small hardcoded vocabularies the heuristic lints below key on, hoisted
+   into one discoverable place rather than scattered through match guards.
+   These are lint heuristics, not an authoritative primitive table — there is
+   no such closed-set table to derive from, so a rename here is a manual edit,
+   just a findable one. *)
+let bool_returning_prims = ["not"; "="; "nil?"]
+let effect_prims = ["perform"; "slurp"; "run!"; "write!"]
+let vector_prims = ["vector-get"; "vector-length"]
+let list_head_prims = ["car"; "cdr"; "first"; "rest"]
+
 (* ---- Heuristic checks ---- *)
 
 (** Does [e] look like it evaluates to a boolean?
@@ -42,9 +52,8 @@ let rec looks_bool (e : expr) : bool =
   | EApply (fn, _) ->
       let f = match strip fn with ESymbol s -> Some s | _ -> None in
       (match f with
-       | Some "not" | Some "=" | Some "nil?" -> true
-       | Some s when ends_with_char s '?' -> true
-       | _ -> false)
+       | Some s -> List.mem s bool_returning_prims || ends_with_char s '?'
+       | None -> false)
   | EIf (_, t, f) -> looks_bool t && looks_bool f
   | ELet (_, body) -> looks_bool body
   | ELetStar (_, body) -> looks_bool body
@@ -57,9 +66,7 @@ let rec has_effect (e : expr) : bool =
   | EPerform _ -> true
   | EApply (fn, _) -> (
       match strip fn with
-      | ESymbol s ->
-          ends_with_char s '!' || s = "perform" || s = "slurp"
-          || s = "run!" || s = "write!"
+      | ESymbol s -> ends_with_char s '!' || List.mem s effect_prims
       | _ -> false)
   | ELet (_, body) -> has_effect body
   | ELetStar (_, body) -> has_effect body
@@ -195,7 +202,7 @@ type rule = { id : string; check : string -> int -> expr -> unit }
 let rule_vector_on_list_literal file line node =
   let peel = function ELocated (_, e') -> e' | e -> e in
   match node with
-  | EApply (ESymbol (("vector-get" | "vector-length") as op), (first :: _)) ->
+  | EApply (ESymbol op, (first :: _)) when List.mem op vector_prims ->
       (match peel first with
        | EApply (ESymbol "list", _) ->
            warn file line
@@ -211,8 +218,8 @@ let rule_vector_on_list_literal file line node =
     by position (SYNTAX §15). *)
 let rule_car_cdr_on_result file line node =
   match node with
-  | EApply (ESymbol (("car" | "cdr" | "first" | "rest") as op), [arg])
-    when tagged_tag arg <> None ->
+  | EApply (ESymbol op, [arg])
+    when List.mem op list_head_prims && tagged_tag arg <> None ->
       warn file line
         (Printf.sprintf
            "`%s` applied to a tagged result `[:%s, …]` — destructure a \
