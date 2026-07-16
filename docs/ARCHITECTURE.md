@@ -7,24 +7,21 @@ the semantics these parts must honor.
 
 ## The pipeline
 
-```
-  source text
-      │
-      ▼
-  ┌────────┐   expr (AST)        ┌──────────────────────┐
-  │ reader │ ──────────────────► │ tree-walker          │  ← the oracle
-  └────────┘        │            │ (evaluator.ml)       │
-                    │            └──────────────────────┘
-                    │                       ▲
-                    │            ┌──────────┴───────────┐
-                    │  expr      │   shared runtime     │  handler stack,
-                    └──────────► │   state (runtime.ml) │  capabilities,
-                       │         └──────────┬───────────┘  config, thunk store
-                       ▼                    ▼
-                 ┌──────────┐  bytecode  ┌──────────────┐
-                 │ compiler │ ─────────► │ bytecode VM  │
-                 │          │            │ (vm.ml)      │
-                 └──────────┘            └──────────────┘
+```mermaid
+flowchart TD
+    src([source text])
+    reader[reader]
+    walker["tree-walker (evaluator.ml)<br/>← the oracle"]
+    runtime["shared runtime state (runtime.ml)<br/>handler stack, capabilities,<br/>config, thunk store"]
+    compiler[compiler]
+    vm["bytecode VM (vm.ml)"]
+
+    src --> reader
+    reader -- "expr (AST)" --> walker
+    reader -- expr --> compiler
+    compiler -- bytecode --> vm
+    runtime <--> walker
+    runtime <--> vm
 ```
 
 pp has one front end and two back ends: the reader turns source text into
