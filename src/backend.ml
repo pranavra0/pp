@@ -48,6 +48,8 @@ type t = {
   mutable macro_reset : unit -> unit;
   mutable compiler_finish : comp_state -> bytecode;
   mutable compiler_state : comp_state option;
+  mutable get_unix_time : unit -> float;
+  mutable cap_write_secret : string -> string -> unit;
 }
 
 (* Defaults match the originals: the no-op/identity hooks keep their old
@@ -72,6 +74,9 @@ let r : t = {
   compiler_finish =
     (fun _ -> failwith "Backend: compiler_finish hook not installed");
   compiler_state = None;
-  realpath = (fun p ->
+  realpath = (fun _ ->
     failwith "Backend: realpath hook not installed");
+  get_unix_time = (fun () -> 0.);
+  cap_write_secret = (fun _ _ ->
+    failwith "Backend: cap_write_secret hook not installed");
 }

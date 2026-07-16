@@ -1,17 +1,7 @@
 (* pp runtime — shared mutable state used by both backends *)
+include Effects
 open Types
 open Effect
-
-type _ Effect.t +=
-  | Get_capabilities : Capability.t list Effect.t
-  | Get_config : Types.value list Effect.t
-  | Get_handlers : (string * string) list Effect.t
-  | Lookup_handler : string -> ((Types.value list -> Types.value) * string) option Effect.t
-  | Record_read : string * string -> unit Effect.t
-  | In_node : bool Effect.t
-  | Current_sandbox : string option ref option Effect.t
-  | Get_domain : string option Effect.t
-  | Get_observe_all : bool Effect.t
 
 type fenced_policy = Retry | Abort | Ask
 

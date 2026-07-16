@@ -772,6 +772,12 @@ let main () =
      exit 1), which the dispatcher (src/remote.ml) reads as "member
      failed" and degrades that batch to local compute. *)
   Backend.r.realpath <- Runtime.canonical_path_impl;
+  Backend.r.get_unix_time <- (fun () -> Unix.time ());
+  Backend.r.cap_write_secret <- (fun path content ->
+    let fd = Unix.openfile path [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL] 0o600 in
+    let oc = Unix.out_channel_of_descr fd in
+    output_string oc content;
+    close_out oc);
   let initial_caps =
     match !remote_node_args with
     | Some (token_file, _, _, _, _) ->
@@ -874,7 +880,26 @@ let main () =
      Errors (bad token, corrupt/tampered artifact, missing secret) propagate
      as Failure/Transport.Transport_integrity_error to the top-level handler
      below, printed uniformly as "pp: error: ...". *)
-  if !cluster_init_mode then (Cap_token.init (); exit 0);
+  if !cluster_init_mode then begin
+    Store.ensure_dir (Cap_token.cluster_dir ());
+    if Sys.file_exists (Cap_token.secret_path ()) then
+      failwith (Printf.sprintf
+        "pp cluster-init: a cluster secret already exists at %s — refusing \
+         to overwrite (this would invalidate every token already minted \
+         against it); remove it by hand first if you really mean to rotate"
+        (Cap_token.secret_path ()));
+    let secret_hex = Hasher.hex_encode (Cryptokit.Random.string Cryptokit.Random.secure_rng 32) in
+    Cap_token.write_secret_file (Cap_token.secret_path ()) (secret_hex ^ "\n");
+    let cluster_id = Hasher.hex_encode (Cryptokit.Random.string Cryptokit.Random.secure_rng 16) in
+    if not (Sys.file_exists (Cap_token.id_path ())) then
+      Store.atomic_write (Cap_token.id_path ()) (cluster_id ^ "\n");
+    Printf.printf
+      "pp cluster-init: minted %s (mode 0600) and cluster id %s\n\
+       pp cluster-init: distribute BOTH files to other cluster members out \
+       of band, at the same path (~/.pp/cluster/) — pp never transmits them\n"
+      (Cap_token.secret_path ()) cluster_id;
+    exit 0
+  end;
   (match !mint_token_args with
    | Some (out, ttl) ->
        let secret = Cap_token.load_secret () in

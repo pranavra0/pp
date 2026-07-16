@@ -69,58 +69,6 @@ mechanism third, and the build boundary with the `.mli` freeze last.
 Signatures are frozen only after the type, identity and extent work have
 reshaped what they describe.
 
-
-
-### Hold dynamic extent with OCaml 5 effect handlers
-
-What exists: pp's dynamic-extent semantics run as four parallel global
-stacks in `runtime.ml` (`handler_stack`, `current_capabilities`,
-`config_stack`, `trace_stack`, plus `sandbox_stack`), maintained by
-hand-rolled dynamic-wind at every extent boundary: `with_ref` in the
-evaluator, a shadow `handler_save_stack` in the VM whose `POP_HANDLER`
-must restore exactly (the VM handler-restore bug), `pop_trace_frame`'s
-mirrored dual-pop, and both engines' `init` resetting the refs. The
-mistake class — an extent exited without restoring, restored out of
-order, or restored on the normal path but not the raising one — stays
-expressible at every site and is guarded only by review.
-
-OCaml 5 effect handlers hold dynamic extent in the language runtime
-instead: `try_with` installs a frame, and leaving it (normal return, pp
-condition, or OCaml exception) unwinds it, by construction.
-
-How:
-- One kernel module declares the effects, one per ambient question:
-  handler lookup by name, ambient capability set, config lookup,
-  trace-read recording, sandbox resolution.
-- Extent constructs install handlers in both engines. `with-handler`,
-  `with-caps` and `with-config` become `try_with` around the body; in
-  the VM, the `WITH_HANDLER` arm re-enters `run` under `try_with`,
-  deleting `handler_save_stack` and `POP_HANDLER` outright. A node force
-  installs one frame owning its trace list and its sandbox slot; sandbox
-  teardown is that handler's finalizer, so "every exit path" becomes the
-  only path.
-- Trace recording composes instead of iterating a global: each frame's
-  handler appends to its own list and re-performs outward, so "recorded
-  into all active frames" falls out of deep-handler forwarding.
-- Fork-based worker isolation (the design chosen in DESIGN.md) is
-  preserved by the same mechanism: handler frames live on the OCaml
-  stack, `Unix.fork` copies the stack, and the child continues under
-  byte-identical extents.
-- Identity is untouched: the node-key hashing rules (SPEC law 20) never
-  read ambient state, and node capture (SPEC law 23b) is unchanged in
-  meaning. The differential suite and the golden fixture gate the
-  conversion.
-- The cost: `(ocaml (>= 4.14))` became `(>= 5.1)`; the
-  development switch is already 5.5.0. The floor change alone is
-  committed; the effect-conversion work remains.
-  This stage is severable; nothing else depends on it.
-
-Deletes: `with_ref`, `handler_save_stack` plus `POP_HANDLER`'s
-exact-restore discipline, `pop_trace_frame`'s mirrored dual-pop, the two
-engine-init resets, the four-parallel-stacks-in-sync rule, and the
-global refs themselves: the whole expressible class of unbalanced
-dynamic extent, which no test can pin exhaustively.
-
 ### Split out a pure kernel library and freeze signatures
 
 This comes last in Part I by design: `.mli`s freeze surfaces, so they

@@ -185,7 +185,7 @@ let rec hash (c : t) : string =
   | CapNone -> Hasher.hash_string "cap_none"
 
 (* ---- Display ---- *)
-let rec to_string (c : t) : string =
+let to_string (c : t) : string =
   match c with
   | CapFilesystem { path; mode } ->
       let m = match mode with Read -> ":ro" | Write -> ":wo" | ReadWrite -> ":rw" in

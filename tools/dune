@@ -1,7 +1,10 @@
-; The differential fuzzer (docs/TESTING.md). Stdlib + unix only.
+; The differential fuzzer (docs/TESTING.md). Links the pp library for
+; in-process property checks; still shells out to the pp binary for
+; end-to-end differential testing.
 ; Run:  dune exec fuzz -- --grammar full --count 1500
 (executable
  (name fuzz)
  (modules fuzz)
- (libraries unix)
+ (libraries pp unix)
+ ; -no-strict-sequence: same rationale as src/dune — pre-existing style.
  (flags -no-strict-sequence))

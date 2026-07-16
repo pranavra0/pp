@@ -720,7 +720,7 @@ let env_of_bindings (bindings : (string * value) list) : env =
 (*  Lookup and multi-extension                                          *)
 (* =================================================================== *)
 
-let rec lookup_env (env : env) (name : string) : value option =
+let lookup_env (env : env) (name : string) : value option =
   let rec walk = function
     | [] -> None
     | (n, v) :: rest -> if n = name then Some v else walk rest
@@ -894,7 +894,7 @@ let rec string_of_value (v : value) : string =
   | VString s -> "\"" ^ String.escaped s ^ "\""
   | VKeyword k -> ":" ^ k
   | VSymbol s -> s
-  | VPair (car, cdr) ->
+  | VPair _ ->
       let rec list_string v =
         match v with
         | VPair (a, VNil) -> string_of_value a
