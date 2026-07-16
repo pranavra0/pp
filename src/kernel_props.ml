@@ -429,7 +429,7 @@ and gen_expr_of_tag ~(mode : mode) (st : rng) (depth : int) (tag : expr_tag) : e
          reads a do-shaped body back as the desugared parameter-check block
          (invert_fn_body), which only round-trips in the exact reader-assembled
          shape our generator doesn't mint. Multi-statement fn bodies are the
-         text fuzzer's domain (tests/054/055). *)
+         text fuzzer's domain. *)
       let body =
         match mode with
         | Adv -> e ()

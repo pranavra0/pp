@@ -33,8 +33,8 @@ let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
     | _ -> "unknown"
   in
   (* Known scalar type names. An unrecognized name (a typo, or a type pp does
-     not check) deliberately falls through to [false] and reports a mismatch —
-     tests/026 case (c) pins that "unknown type is a hard error". *)
+     not check) deliberately falls through to [false] and reports a mismatch:
+     an unknown type is a hard error, never a silent pass. *)
   let ok =
     match type_name with
     | "int" -> (match v with VInt _ -> true | _ -> false)

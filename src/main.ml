@@ -84,8 +84,8 @@ let stdlib_glue_sources () : (string * string) list =
           | Some r ->
               let canon = Runtime.canonical_path r in
               (* :wo, not :rw — write-only is the minimum sufficient grant
-                 here: tests/023 grants only `fs:ROOT:wo` and expects a full
-                 build+restore cycle to work — the single writer reading its
+                 here: a write-only grant must still support a full
+                 build+restore cycle, because the single writer reading its
                  OWN managed tree to converge is not a distinct authority
                  concern (Domain_prims.tree_observe accepts read-OR-write for
                  exactly this reason), so the domain's write-cap only needs to
@@ -419,8 +419,8 @@ let main () =
      surfaces (SPEC Appendix B). `--to-braces`/`--to-sexpr FILE [-i]`
      dispatch by FLAG, never by extension, so a file keeps its own name
      regardless of which surface it's written in.
-     `--compare-hash`/`--list-comments` are internal test seams for
-     tests/055-fmt.sh (per-form LAW-20 hash comparison across two files;
+     `--compare-hash`/`--list-comments` are internal seams for the fmt
+     round-trip checks (per-form LAW-20 hash comparison across two files;
      dumping the comment side-channel for count/content checks) — not
      documented in --help, mirroring --emit-braces/--roundtrip-braces's own
      internal-tool tone. *)
@@ -441,8 +441,8 @@ let main () =
                         | a :: rest -> f a; rest
                         | [] -> failwith (name ^ " requires one argument")) } in
   let doc_of d r = { r with doc = d; internal = false } in
-  (* The M5-remote help line must contain the literal "remote:<member>"
-     (tests/048 greps for it). *)
+  (* The remote-placement help line names the `remote:<member>` form
+     literally, so the cluster placement surface stays greppable. *)
   let schedule_handler = function
     | spec :: rest ->
         (* Ambient — read only by the miss arms and Scheduler.dispatch_batch;
@@ -488,7 +488,7 @@ let main () =
   in
   let check_kernel_props_handler rest =
     (* Derived-generator kernel properties (hash injectivity, quote/printer
-       round-trip). tests/071 drives this with a fixed seed. Optional:
+       round-trip), driven with a fixed seed for reproducibility. Optional:
        --seed N, --count K. *)
     let seed = ref 1 and count = ref 3000 in
     let rec grab = function
@@ -524,7 +524,7 @@ let main () =
     doc_of "  pp --fetch-islands        Allow git fetch for uncached island pins (default: off)\n"
       (flag "--fetch-islands" (fun () -> Runtime.island_fetch_enabled := true));
 
-    doc_of "  pp --schedule serial|parallel:N|race:N|remote:MEMBER  Node-miss dispatch policy (default: serial); remote:<member> is M5 stage B remote placement (members: ~/.pp/cluster/members or $PP_CLUSTER_MEMBERS)\n"
+    doc_of "  pp --schedule serial|parallel:N|race:N|remote:MEMBER  Node-miss dispatch policy (default: serial); remote:<member> places misses on a cluster member (members: ~/.pp/cluster/members or $PP_CLUSTER_MEMBERS)\n"
       { name = "--schedule"; arity = 1; doc = ""; internal = false;
         handler = schedule_handler };
 
@@ -536,7 +536,7 @@ let main () =
     (* ---- Cluster transport/token seam ----
        `cluster-init` mints ~/.pp/cluster/{secret,id}; the transport/token
        flags are internal test entries the exit tests drive directly. *)
-    doc_of "  pp cluster-init          Mint ~/.pp/cluster/{secret,id} (M5 cluster trust anchor)\n"
+    doc_of "  pp cluster-init          Mint ~/.pp/cluster/{secret,id} (the cluster trust anchor)\n"
       (flag "cluster-init" (fun () -> cluster_init_mode := true));
     doc_of "  pp --mint-token <out> <ttl-secs> [--grant ...]  Mint a signed cluster token\n"
       { name = "--mint-token"; arity = 2; doc = ""; internal = false;
@@ -580,7 +580,7 @@ let main () =
       (flag "--supervise" (fun () -> supervise := true));
 
     (* ---- Host-qualified domain distribution + store GC ---- *)
-    doc_of "  pp --member-name <n> [--reconcile/--supervise] <file>  Host-qualified domain distribution (M5 stage C): converge only desired[<n>]'s slice\n"
+    doc_of "  pp --member-name <n> [--reconcile/--supervise] <file>  Host-qualified domain distribution: converge only desired[<n>]'s slice\n"
       (opt1 "--member-name" (fun n -> member_name := Some n));
     doc_of "  pp --desired-object <hash> <shared-root> [--member-name <n>] [flags]  Pull a published desired-state value by hash and converge it (never runs a program to derive it)\n"
       { name = "--desired-object"; arity = 2; doc = ""; internal = false;
@@ -591,7 +591,7 @@ let main () =
       (opt1 "--publish-object" (fun root -> publish_object_root := Some root));
     (* `--gc-mark` is internal: only `pp gc`'s own replay subprocess sets it. *)
     opt1 "--gc-mark" (fun out -> gc_mark_out := Some out);
-    doc_of "  pp gc [--gc-keep-epochs N] [--gc-grace-seconds S]  Explicit store GC (M5 stage C): mark-by-replay the last N reconcile/supervise epochs, sweep the rest\n"
+    doc_of "  pp gc [--gc-keep-epochs N] [--gc-grace-seconds S]  Explicit store GC: mark-by-replay the last N reconcile/supervise epochs, sweep the rest\n"
       (flag "gc" (fun () -> gc_mode := true));
     opt1 "--gc-keep-epochs" (fun n ->
       match int_of_string_opt n with
@@ -603,21 +603,21 @@ let main () =
       | _ -> failwith ("invalid --gc-grace-seconds: " ^ s));
 
     (* ---- The observation-pinning seam ---- *)
-    doc_of "  pp --pin-file <path> <file.pp>  Preseed Store.run_pins/Runtime.probe_values from a (pin ...)/(pin-probe ...) file before running (M6 stage B: the observation-pinning seam)\n"
+    doc_of "  pp --pin-file <path> <file.pp>  Preseed Store.run_pins/Runtime.probe_values from a (pin ...)/(pin-probe ...) file before running (the observation-pinning seam)\n"
       (opt1 "--pin-file" (fun path -> pin_file := Some path));
     doc_of "  pp --dump-pins <path> <file.pp>  After running, write every run_pins/probe_values entry as (pin ...)/(pin-probe ...) lines to <path>\n"
       (opt1 "--dump-pins" (fun path -> dump_pins_file := Some path));
 
     (* ---- Brace-surface seams ---- *)
-    doc_of "  pp --emit-braces <file.ppl>  Print a sexpr (.ppl) file as brace-surface text (M7 S3: .pp/.ppb are brace surface, .ppl is the sexpr/AST surface)\n"
+    doc_of "  pp --emit-braces <file.ppl>  Print a sexpr (.ppl) file as brace-surface text (.pp/.ppb are brace surface, .ppl is the sexpr/AST surface)\n"
       (opt1 "--emit-braces" (fun f -> emit_braces_file := Some f));
     doc_of "  pp --roundtrip-braces <file.ppl>  Assert sexpr->braces->re-read AST + LAW-20 hash equality (the fuzz gate)\n"
       (opt1 "--roundtrip-braces" (fun f -> roundtrip_braces_file := Some f));
 
     (* ---- `pp fmt` seams ---- *)
-    doc_of "  pp fmt --to-braces <file> [-i]  Transpile sexpr source to brace source, carrying comments (M7 S2; -i/--in-place rewrites the file, same path)\n  pp fmt --to-sexpr <file> [-i]   Transpile brace source to sexpr source, carrying comments (M7 S2)\n"
+    doc_of "  pp fmt --to-braces <file> [-i]  Transpile sexpr source to brace source, carrying comments (-i/--in-place rewrites the file, same path)\n  pp fmt --to-sexpr <file> [-i]   Transpile brace source to sexpr source, carrying comments\n"
       { name = "fmt"; arity = -1; doc = ""; internal = false; handler = fmt_handler };
-    (* `--compare-hash` and `--list-comments` are internal tests/055 seams. *)
+    (* `--compare-hash` and `--list-comments` are internal fmt round-trip seams. *)
     { name = "--compare-hash"; arity = 2; doc = ""; internal = true;
       handler = (function
         | f1 :: f2 :: rest -> compare_hash_args := Some (f1, f2); rest
@@ -649,8 +649,8 @@ let main () =
     doc_of "  pp --version             Print version\n"
       (flag "--version" (fun () -> Printf.printf "pp v%s\n" Version.string; exit 0));
     { (flag "-v" (fun () -> Printf.printf "pp v%s\n" Version.string; exit 0)) with internal = true };
-    (* Emit the surface tables as the SPEC-generated block; tests/067 diffs
-       this against the block committed to docs/SPEC.md. Internal seam. *)
+    (* Emit the surface tables as the SPEC-generated block; the copy committed
+       to docs/SPEC.md is generated from here and must match it. Internal seam. *)
     flag "--dump-surface-tables"
       (fun () -> print_string (Surface_tables.render_spec_tables ()); exit 0);
     { name = "--check-kernel-props"; arity = -1; doc = ""; internal = true;
@@ -777,7 +777,8 @@ let main () =
        exit 0
    | None -> ());
   (* Test seam: per-top-level-form LAW-20 hash comparison between two
-     sexpr files (tests/055-fmt.sh's round-trip-hash check). Both are read
+     sexpr files, checking that a round-trip preserves every form's hash.
+     Both are read
      with f1's path as the location label: LAW-20 hashes include the
      `ELocated` file name, and the round-trip contract this checks is
      specifically that transpiling IN PLACE (same

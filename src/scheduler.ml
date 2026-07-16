@@ -16,8 +16,7 @@
 
    No value, closure, capability, or handler ever crosses a process
    boundary this way: the store (~/.pp/store) is pp's only cross-process
-   value channel, exactly as it already is for separate `pp` invocations
-   (tests/010, tests/014). *)
+   value channel, exactly as it already is for separate `pp` invocations. *)
 
 (* [Remote member]: remote placement — the same handler, over the cluster
    transport, to a named cluster member (ambient config,

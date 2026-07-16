@@ -259,11 +259,11 @@ The `toolchain:cc` closure cell exists because system headers and
 libraries are a staleness hole: it is modelled as one closure cell whose
 hash covers the tool binary plus the system paths it resolves.
 
-This is implemented today. Plain `run` records `tool:<binary>` plus one
+Plain `run` records `tool:<binary>` plus one
 `tree:<root>` cell per filesystem-read grant. `run-dep!` parses the tool's
 Makefile-style depfile and records precise `file:` cells for granted
 dependencies, and `tool:<path>` cells for dependencies outside the grant
-— system files — with no tree cells (see `tests/022`), superseding the
+— system files — with no tree cells, superseding the
 aggregate `toolchain:cc` closure cell wherever depfiles exist. For tools
 with no depfile, the binary's `tool:` cell still covers upgrades, while
 system-path reads outside the granted trees remain a documented hole —
@@ -364,14 +364,16 @@ hit check must cover the transitive read closure — the union of cells
 across `PUB`'s trace and, recursively, every child's. A hit is granted only
 if the caller's capabilities permit every cell in that closure.
 
-This is implemented in the tree-walker: reads propagate to enclosing nodes,
+The tree-walker realises this: reads propagate to enclosing nodes,
 so the recorded reads are the transitive closure, and `Store.hit
 ~authorized` refuses to serve a trace the caller cannot fully read (see
-`SPEC.md`, law 23b, and `tests/013`). A capability denial raises a distinct
-`Capability_error` and is not memoised (law 15). What remains:
+`SPEC.md`, law 23b). A capability denial raises a distinct
+`Capability_error` and is not memoised (law 15). Three aspects are refined
+further:
 
-- cost: O(closure size), not O(1). The planned fix is to memoise a
-  `closure-read-set-hash` and `closure-cap-requirement` per stored trace.
+- cost: O(closure size), not O(1). Memoising a
+  `closure-read-set-hash` and `closure-cap-requirement` per stored trace
+  makes it O(1).
 - runtime versus traced reads: loader reads are tagged `runtime` and
   excluded from the caller's requirement; only reads under user capability
   count.
@@ -399,24 +401,23 @@ closure-cap-req}`; and `journal` records reconciliation passes (see the
 crash-safety decision above). Concurrency is handled by exclusive temp
 files plus rename; hash-named objects are immutable, so races are benign.
 
-This is now wired into the tree-walker's `force` for `node { e }` thunks.
-The live traces are a subset of the target schema —
-`{outcome, result-hash, [(cell-id, observed-hash)]}` for file cells — with
-`child-keys`, `origin`, `closure-read-set-hash` and `closure-cap-req` still
-to come. Both backends are wired: the VM compiles `node { e }` to a
-`MAKE_NODE` opcode and forces it through the same store, computing a
+The store is wired into the tree-walker's `force` for `node { e }` thunks.
+The traces are a subset of the target schema —
+`{outcome, result-hash, [(cell-id, observed-hash)]}` for file cells —
+`child-keys`, `origin`, `closure-read-set-hash` and `closure-cap-req` are
+the remaining fields. Both backends share it: the VM compiles `node { e }`
+to a `MAKE_NODE` opcode and forces it through the same store, computing a
 byte-identical key for data-valued free variables so the 2 backends
 share entries.
 
-Keying follows the vocabulary above. This is now live
-for `node { e }`: the persistent key is `H(code-structure,
+Keying follows the vocabulary above: the persistent key is `H(code-structure,
 free-var-value-hashes)` (`node_key_of` and `free_vars`), excluding the
 whole-environment hash and the capability set. This closes 2 leaks this
 decision was meant to fix — an unrelated global rebind changing every key,
-and a widened grant changing every key (see `SPEC.md`, law 20, and
-`tests/011`). What remains: configuration and the handler stack are still
+and a widened grant changing every key (see `SPEC.md`, law 20).
+Configuration and the handler stack are
 folded into the key conservatively (their treatment is the handler-caching
-policy below, and `SPEC.md` law 33), and binding order is not yet
+policy below, and `SPEC.md` law 33), and binding order is not
 canonicalised (law 3).
 
 Handler-caching policy: handlers split into 2 classes.
@@ -434,9 +435,9 @@ Handler-caching policy: handlers split into 2 classes.
   handler stack in the key, since only the effects actually intercepted
   enter the trace.
 
-An in-memory fix for handler caching already shipped — the handler stack is
-folded into the thunk key today (see `STATUS.md`). The policy above is the
-trace-layer refinement that supersedes it once the persistent store lands.
+An in-memory treatment folds the handler stack into the thunk key (see
+`STATUS.md`). The policy above is the trace-layer refinement that supersedes
+it once the persistent store lands.
 
 The `.ppc` bytecode disk cache is cut: the value and trace store
 replaces it, and bytecode stays purely in memory as the VM's execution
@@ -469,9 +470,9 @@ inherits all of it byte-identically through copy-on-write, for free,
 where a persistent pool or a fresh pp process would instead need to
 marshal that state across a channel, which is impossible for handler
 closures and buys nothing over a cheap `fork()` anyway. Because of this,
-the planned refactor of `Runtime`'s global mutable state was not needed
-to close out this milestone — though a remote transport, needing named
-or registrable handlers in place of closures, will still need it.
+a refactor of `Runtime`'s global mutable state is not needed for parallel
+dispatch — though a remote transport, needing named
+or registrable handlers in place of closures, would need it.
 
 Remote placement across a cluster works without forking or marshalling.
 A batch job ships to a remote member only when every one of its free
@@ -484,20 +485,17 @@ genuinely separate process, so the ambient-state-sharing problem above
 does not arise: it runs an ordinary second pp invocation of the
 byte-identical program, independently re-deriving its own thunk graph —
 duplicate cross-machine computation is sound, because results are
-deterministic. Results are pulled back over the unchanged
-`serve-hit`/`recv-hit` pair, re-verified by hash. See `STATUS.md` and
-`tests/048-remote-placement.sh`, and the pre-seed mechanism described
-below under effect ordering.
+deterministic. Results are pulled back over the
+`serve-hit`/`recv-hit` pair, re-verified by hash. See `STATUS.md`, and the
+pre-seed mechanism described below under effect ordering.
 
 2 further, additive pieces complete this work. First, host-qualified
 domains: the desired-state map generalises by 1 level, from `{domain ->
 desired}` to `{host -> {domain -> desired}}`, never inferred from shape,
 only opted into with an explicit `--member-name <n>` flag — without it,
 nothing changes, which is the whole backward-compatibility argument. A
-by-hash seam for desired values is proved as a local-directory,
-two-store version, without needing an SSH-backed variant this stage
-does not require (see `tests/049-host-domains.sh` and
-`tests/051-cluster-exit.sh`).
+by-hash seam for desired values is realised as a local-directory,
+two-store version, without an SSH-backed variant.
 
 Second, `pp gc`. Garbage collection is explicit, never automatic. Because
 traces do not record child keys — there is no on-disk node graph to walk
@@ -508,8 +506,7 @@ replay read-only on the world by construction. Concurrency safety comes
 from a creation-time grace period plus a re-check of the roots manifest
 immediately before each delete. Over-retention is always safe; deleting
 live data is the only real hazard, so any doubt — a failed replay, or a
-manifest that changed mid-sweep — biases toward keeping everything (see
-`tests/050-gc.sh`).
+manifest that changed mid-sweep — biases toward keeping everything.
 
 ### Backend strategy: 2 engines, one executable spec
 
@@ -529,8 +526,8 @@ boundary.
 
 Torn reads. The first observation of a cell ingests its bytes into the
 content-addressed store and pins the pair `(cell, store hash)`; nodes read
-only that pinned copy. This is implemented (`Store.read_file_cell`,
-`tests/021`), one step stronger than originally specified: the pin serves
+only that pinned copy. `Store.read_file_cell` realises this one step
+stronger than originally specified: the pin serves
 every tier, not just nodes, so one run is one world snapshot. This was
 needed because the in-memory content-addressed deduplication already
 memoised identical read expressions, which would otherwise have made a
@@ -538,7 +535,7 @@ tier-by-tier freshness split incoherent. pp's own `write-file` advances the
 snapshot for that cell, unpinning it.
 
 External writers to a reconciled domain. Verify-after-write plus
-converge-next-pass, under single ownership, handles this (see `tests/018`).
+converge-next-pass, under single ownership, handles this.
 
 Hidden writes in user handlers. Domain write capabilities cannot be granted
 to node code, which closes this off.
@@ -546,19 +543,20 @@ to node code, which closes this off.
 Laziness escape. Strict node application, plus capturing the capability set
 at node creation, closes this off.
 
-Capability capture is now a real, tested mechanism, not an assumption
-that happened to hold vacuously. With `with-caps(cap-expr) { body }` in
+Capability capture is a real, tested mechanism, not an assumption
+that holds vacuously. With `with-caps(cap-expr) { body }` in
 place, the ambient capability set can change mid-process, so "captured at
-creation" and "ambient at the moment of forcing" are now genuinely
+creation" and "ambient at the moment of forcing" are genuinely
 different, and testably so. `thunk.node_caps` is populated from
 `current_capabilities` at each `node { e }` occurrence's creation;
 `force_node` uses the forcing thunk's `node_caps`, not the live
 `current_capabilities`, for both the hit check and a miss's recompute.
-This makes a new differential test possible: a node created under a
+So a node created under a
 narrowed `with-caps` extent is still denied when forced later under the
-full grant, and vice versa (see `tests/040-caps-attenuation.sh`). Where
+full grant, and vice versa. Where
 `with-caps` is never used, capture collapses back to the pre-existing
-per-process `--grant` set, so earlier tests hold byte for byte.
+per-process `--grant` set, so a program that never uses it behaves
+identically.
 
 The node boundary is symmetric (`SPEC.md` law 20): a node's free variable
 containing a capability is banned at the key — checked structurally,
@@ -588,16 +586,14 @@ store itself so workers share one table — is later design work: today's
 pin table rides fork's copy-on-write for free, which a barrier or a
 shared table would have to stop assuming.
 
-The pin machinery above was, for some time, reachable only behind the
-internal `--remote-node` machinery used for cluster members. Later work
-exposed it directly instead of adding a parallel mechanism: `--pin-file`
+The pin machinery above is exposed directly, not only behind the
+internal `--remote-node` machinery used for cluster members: `--pin-file`
 exposes `preseed_pins_from_file` standalone, and `pin-probe("NAME",
 <codec-value>)` generalises it to a probe's own value; `--dump-pins`
 writes both tables back out. This is pure observability: no new
 authority, no write path, and no change to any key, hash or codec
 grammar — it only makes the claim that probe cells are pinned inputs
 falsifiable for a program whose desired state folds in a volatile probe.
-See `tests/053-pin-observations.sh`.
 
 ### Self-hosting: cut for now
 
@@ -712,16 +708,15 @@ code, the same narrowing check `with-caps` uses. `:observe-cell (fn (sub)
 generalising the existing process-observer and probe-observer hook
 pattern.
 
-Driver wiring is the exit criterion for this decision. `--reconcile ROOT`
+Driver wiring connects the protocol to the CLI. `--reconcile ROOT`
 auto-loads `stdlib/domain-fs.pp` and registers it with a write capability
 restricted to ROOT, wrapping the program's value as `{"fs" -> v}`.
 `--supervise` does the same with `stdlib/domain-proc.pp` and `{"proc" ->
 v}`; the 2 flags compose. A program that calls `register-domain` itself,
 with neither flag set, returns `{name -> desired}` directly, supporting N
-domains from one evaluation (see `tests/046-domains.sh`'s toy "kv"
-domain). One documented deviation from an early draft of this protocol:
+domains from one evaluation. One deviation from the obvious design:
 the filesystem domain's write capability requests write-only, not
-read-write access, because `tests/023`'s write-only grant must still let
+read-write access, because a write-only grant must still let
 the domain observe its own managed tree in order to converge it — there
 is no other reader, so this is not a distinct authority concern.
 `src/reconciler.ml` and `src/supervisor.ml` are deleted;

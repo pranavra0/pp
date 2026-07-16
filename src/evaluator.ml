@@ -100,7 +100,7 @@ let cell_authorized_for (caps : Capability.t list) (cell_id : string) : bool =
      check and LAW 23c's `pp why` redaction protect a secret exactly the way
      they already protect a narrow fs grant: a caller without the secret
      grant cannot hit a node whose closure read it, even through an
-     aggregator (tests/044's narrow-caller case). *)
+     aggregator that spans callers. *)
   | Cell.Sealed path ->
       List.exists (fun cap -> Capability.check_secret cap (Paths.canonicalize ~realpath:(fun x -> x) path)) caps
   (* A third-party domain's own sub-cell. Authorization is
@@ -152,8 +152,7 @@ let force_node ~(key : string) ~(run : unit -> value) (t : thunk) : value =
      Absent with-caps the two are always equal (node_caps is populated from
      current_capabilities at creation and current_capabilities never changes
      without with-caps), so this collapses to the plain per-process
-     `--grant` set whenever with-caps goes unused, exactly matching
-     tests/011/013/017. *)
+     `--grant` set whenever with-caps goes unused. *)
   let authorized = cell_authorized_for t.node_caps in
   match Node.serve_hit ~t (Store.hit ~key ~authorized) with
   | Some v -> v

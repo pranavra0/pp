@@ -189,8 +189,8 @@ and thunk = {
        creation, exactly as a closure's environment is. Collapses to the
        process's
        --grant set when with-caps is unused (current_capabilities never
-       changes without it), so tests/011/013/017 are byte-for-byte
-       unaffected. Meaningless (unused) on non-persist thunks. *)
+       changes without it), so a program that never uses with-caps is
+       byte-for-byte unaffected. Meaningless (unused) on non-persist thunks. *)
 }
 
 and thunk_status =
@@ -400,7 +400,7 @@ let rec hash_expr (e : expr) : string =
          join `Some p -> p | None -> ""` would conflate them, a LAW-20
          collision (island "u" "" and island "u" quote to distinct values —
          VString "" vs VNil — yet would hash identically). Caught by the
-         kernel-properties injectivity property; pinned in tests/071. *)
+         kernel-properties injectivity property. *)
       let pin_part = match pin with Some p -> hash_concat ["pin"; p] | None -> "nopin" in
       hash_concat ["island"; uri; pin_part]
   | EWithConfig (map_expr, body) ->
@@ -502,7 +502,7 @@ and hash_value (v : value) : string =
           (* The captured environment IS part of a closure's identity — two
              closures with identical code but different captures must hash
              differently, or an enclosing content-addressed thunk collides and
-             returns a stale result (tests/009). We fold in the captured env's
+             returns a stale result. We fold in the captured env's
              PRECOMPUTED env_hash: O(1), no traversal, and no recursion back into
              hash_value (env_hash is a fixed string computed at extend_env time),
              so recursive/mutual closures terminate. This over-approximates —
@@ -575,9 +575,8 @@ and hash_value (v : value) : string =
      to mutate to `extend_env`-cons `f`'s own binding onto (the letrec/mutual-
      recursion trick both backends' top-level driver relies on), so
      `f`'s captured env ends up containing `f` itself as its head binding —
-     walking it without a guard recurses forever (found by tests/024's
-     101-TU build going through this scan for every node's closure-valued
-     free vars: an immediate Stack overflow before this guard was added).
+     walking it without a guard recurses forever, so any node with
+     closure-valued free vars would overflow the stack.
      Guarded by `env_id` (unique per env node, `Types.fresh_env_id`) in a
      hashtable — no physical/structural sharing needed, an id is already an
      equality-comparable proxy for "the exact same env value". *)

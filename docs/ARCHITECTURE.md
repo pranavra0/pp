@@ -84,8 +84,7 @@ Cryptokit. This is the single idea most of the rest of the system depends on.
 The key must include everything the computation depends on, or distinct
 computations collide. Leaving out the captured environment, or the
 ambient handler stack, once let distinct computations collide in
-`thunk_store` and return stale results; both are now fixed and pinned by
-`tests/009`.
+`thunk_store` and return stale results; the key folds in both.
 
 This in-memory dedup mirrors the persistent store described below in "The
 persistent node cache".
@@ -110,7 +109,7 @@ frame-swap.
   `with-handler`, `effect`, and `with-config` push and pop that state,
   restoring it on normal return, on exception, and on tail call, in both
   back ends.
-- Capabilities (`capabilities.ml`): authority tokens for filesystem,
+- Capabilities (`capability.ml`): authority tokens for filesystem,
   network, and process access. They enter the system only at the root,
   through `--grant`, which `main.ml` parses into the initial capability set.
   User code cannot construct a capability, only narrow or combine one,
@@ -120,14 +119,14 @@ frame-swap.
 
 ## The VM path (`compiler.ml`, `vm.ml`)
 
-`compiler.ml` lowers the `expr` AST to a flat array of 29 opcodes. These
-run on a stack machine, using `LOAD_LOCAL (depth, slot)` and
+`compiler.ml` lowers the `expr` AST to a flat array of stack-machine
+opcodes. These run on a stack machine, using `LOAD_LOCAL (depth, slot)` and
 `STORE_LOCAL slot` against mutable frames.
 
 The compiler tracks a compile-time environment, `cenv`, to resolve names to
 `(depth, slot)` pairs. Reusing a slot across binding lifetimes while a
-captured frame is still live caused a bug, now fixed and pinned by
-`tests/008`.
+captured frame is still live is a soundness trap the slot allocation
+avoids.
 
 `vm.ml` executes the opcodes. It creates thunks with `MAKE_THUNK` and
 closures with `MAKE_CLOSURE` that capture live frames. Effect dispatch,
@@ -136,8 +135,7 @@ capability extraction, type checks, and node forcing all delegate to
 
 The VM compiles `ENode` to a dedicated `MAKE_NODE` opcode, carrying the body
 AST and free-variable descriptors, and forces it through the same
-persistent store as the tree-walker — superseding the since-deleted `.ppc`
-bytecode-serialization module.
+persistent store as the tree-walker.
 
 ## Shared state (`runtime.ml`)
 
@@ -227,28 +225,71 @@ is journaled as an `island fetch` entry and governed by
 
 ## File-by-file responsibilities
 
+The source splits into two dune libraries. `pp.kernel` is pure — no Unix,
+no side effects — and holds the types, hashing, and the closed vocabulary
+everything else is checked against. `pp` builds on it and may touch the
+world (files, processes, the network). `main.ml` is the thin entry point;
+`tools/fuzz.ml` is the differential fuzzer.
+
+### Kernel (`pp.kernel`, pure)
+
 | File | Role |
 |---|---|
-| `src/types.ml` | All core types: `expr`, `value`, `thunk`, `env`, `closure`, `capability`, `frame`, and opcodes, plus the content-addressed hashing — the foundation of the codebase. |
-| `src/hasher.ml` | Thin re-export of the hashing functions from `types.ml`. |
-| `src/paths.ml` | The one component-boundary path-containment check, `Paths.under`, behind capability scopes, loader authority, and domain bounds. |
+| `src/types.ml` | All core types: `expr`, `value`, `thunk`, `env`, `closure`, `capability`, `frame`, and opcodes, plus the structural content-addressed hashing (`hash_value`, `hash_expr`, `env_hash`) — the foundation of the codebase. |
+| `src/hasher.ml` | The low-level content-addressing primitives (SHA-256 via Cryptokit, `hash_concat`, `hex_encode`) that `types.ml`'s structural hashing is built on. |
+| `src/blobref.ml` | Detection of `blob:<sha256>` references embedded in an ordinary value, so large bytes stay out of a node's small result. |
+| `src/force_deep.ml` | The one deep recursive force over a value — the plain structural walk that drives every reachable thunk. |
+| `src/codec.ml` | The one canonical, versioned, byte-stable text encoding for store objects and traces. |
+| `src/constant_time.ml` | Constant-time byte comparison, used to verify signed tokens without a timing side channel. |
+| `src/paths.ml` | The one component-boundary path-containment predicate, `Paths.under`, behind capability scopes, loader authority, and domain bounds. |
 | `src/cell.ml` | The typed cell taxonomy: the `Cell.t` variant plus `of_string` and `to_string`, with the on-disk strings frozen — naming only; observation and authority live in `store.ml` and `evaluator.ml`. |
-| `src/reader.ml` | Lexer and parser: turns source text into an `expr` AST, also desugaring `and`, `or`, and quasiquote. |
+| `src/surface_tables.ml` | The closed surface sets (sigils, observation heads, lowering templates) as data, plus the renderer for SPEC's generated block. |
+| `src/capability.ml` | Authority tokens and the scope checks (filesystem, network, process, secret), matched path component by component. |
+| `src/desugar.ml` | Reader-level desugars shared by both readers (SPEC Appendix B). |
+| `src/comments.ml` | The side channel `pp fmt` uses to carry comments across a surface transpile. |
+| `src/cap_token.ml` | Signed capability grants — cluster tokens — for cross-machine authority. |
+| `src/effects.ml` | The OCaml 5 effect declarations that hold handler, config, and trace state in dynamic extent. |
+| `src/backend.ml` | The one record of init-time hook functions that breaks the kernel↔library dependency cycle. |
+| `src/version.ml` | Single source of truth for the version string. |
+
+### Runtime library (`pp`)
+
+| File | Role |
+|---|---|
+| `src/reader.ml` | S-expression lexer and parser to the `expr` AST — the `.ppl` macro surface — also desugaring `and`, `or`, and quasiquote. |
+| `src/reader_braces.ml` | The brace-surface parser (`.pp`/`.ppb`, SPEC Appendix B) to the same `expr` AST. |
+| `src/printer_braces.ml` | Renders an `expr` back to brace-surface text: the `pp fmt --to-braces` half. |
+| `src/printer_sexpr.ml` | Renders an `expr` back to s-expression text: the `--to-sexpr` half. |
 | `src/runtime.ml` | Shared mutable runtime state used by both back ends. |
-| `src/journal.ml` | The append-only intent and done audit log: a typed `entry` variant, `to_line` and `of_line`, and the scanners that find fenced-effect entries (SPEC law 31). |
 | `src/evaluator.ml` | The tree-walking evaluator, and the project's oracle, holding `force`, `eval`, effects, the `thunk_store`, and the shared node rebuilder (`force_node`, `run_node_body`) both back ends use. |
+| `src/macro.ml` | `defmacro` expansion: a function from syntax-as-values to syntax, run at the expansion boundary. |
 | `src/compiler.ml` | Turns the `expr` AST into bytecode, also running the compile-time environment and slot allocation. |
 | `src/vm.ml` | The bytecode stack machine: effect dispatch, type checks, and node forcing all delegate to `evaluator.ml`, so one implementation serves both back ends. |
-| `src/capabilities.ml` | Capability scope checks, matched path component by component. |
 | `src/primitives.ml` | Built-in functions and the initial environment. |
-| `src/island.ml` | Islands: parses file, git, and github URIs; runs the content-addressed cache and tamper verification; rewrites pins for `--update`; provides `island-pins`; and fetches over git only when asked. |
+| `src/node.ml` | The node-key skeleton and the one node rebuilder both back ends share. |
 | `src/store.ml` | The persistent content-addressed store and its verifying traces, wired into `force` for `node { e }` in both back ends. |
-| `src/domain_prims.ml` | The trusted mechanics that back in-language domains: atomic `materialize-file` and `remove-file`, `tree-observe`, `proc-spawn`, `proc-alive?`, `proc-stop`, `proc-reap`, and `domain-state-get`/`put`, a generic per-domain key-value store — moved out of the deleted `reconciler.ml` and `supervisor.ml`, owning no policy of its own. |
-| `src/domains.ml` | Generic domain orchestration: the journal bracket, `observed_all` suspension, threading capabilities into observe and apply, plan caching through direct `Store` calls with no synthetic node, verify-after-write, and stratification — domain-agnostic, replacing the driver logic once in `reconciler.ml` and `supervisor.ml`. `stdlib/domain-fs.pp` and `domain-proc.pp` hold the filesystem and process policy as pp source; `main.ml` then drains fenced actions. |
+| `src/store_gc.ml` | Explicit `pp gc`: mark-by-replay over the recent epochs, sweep the rest — never automatic. |
+| `src/gcroots.ml` | The GC roots manifest naming the epochs `pp gc` marks from. |
+| `src/journal.ml` | The append-only intent and done audit log: a typed `entry` variant, `to_line` and `of_line`, and the scanners that find fenced-effect entries (SPEC law 31). |
 | `src/fenced.ml` | The fenced-effect executor: registers scripting-tier actions, journals intent and done entries, and resolves unknown-status entries by policy (SPEC law 31). |
-| `src/repl.ml` | REPL and file-execution helpers for both back ends. |
+| `src/island.ml` | Islands: parses file, git, and github URIs; runs the content-addressed cache and tamper verification; rewrites pins for `--update`; provides `island-pins`; and fetches over git only when asked. |
+| `src/domain_prims.ml` | The trusted mechanics that back in-language domains: atomic `materialize-file` and `remove-file`, `tree-observe`, `proc-spawn`, `proc-alive?`, `proc-stop`, `proc-reap`, and `domain-state-get`/`put` — owning no policy of its own. |
+| `src/domains.ml` | Generic domain orchestration: the journal bracket, `observed_all` suspension, threading capabilities into observe and apply, plan caching through direct `Store` calls with no synthetic node, verify-after-write, and stratification. `stdlib/domain-fs.pp` and `domain-proc.pp` hold the filesystem and process policy as pp source; `main.ml` then drains fenced actions. |
+| `src/process.ml` | The `run` process effect: executes an external command under capability. |
+| `src/scheduler.ml` | The fork-at-dispatch process-pool scheduler for node misses (`serial`, `parallel:N`, `race:N`, `remote:MEMBER`). |
+| `src/remote.ml` | Remote placement: dispatches a batch of node misses to a named cluster member over the transport. |
+| `src/transport.ml` | Cross-machine sync of hash-named store artifacts, plus the capability-gated serve-hit path. |
 | `src/stabilize.ml` | The push scheduler: a side table from `node_key` to `thunk`, plus dirty reset. The reverse-edge index itself lives in `store.ml`. |
-| `src/main.ml` | The CLI entry point: flag parsing, `--grant`, and dispatch to the REPL, a file, `-e`, or `--diff`. |
+| `src/repl.ml` | REPL and file-execution helpers for both back ends. |
+| `src/kernel_props.ml` | Derived generators and the kernel properties (hash injectivity, quote/printer round-trip) the fuzzer checks. |
+| `src/lint.ml` | The convention checker for pp source files. |
+| `src/fswalk.ml` | One shared filesystem tree walk for its several callers. |
+
+### Entry point and tools
+
+| File | Role |
+|---|---|
+| `src/main.ml` | The CLI entry point: the one typed flag table, `--grant` parsing, and dispatch to the REPL, a file, `-e`, or `--diff`. |
 | `tools/fuzz.ml` | The differential fuzzer, described in [TESTING.md](TESTING.md). |
 
 ## CLI surface (`main.ml`)

@@ -2330,7 +2330,7 @@ let read_one ?(source : string = "<?>") (input : string) : expr =
 (* ---- Extension dispatch ----
 
    `.pp` and `.ppb` read with the brace reader (`.pp` is the default
-   surface; `.ppb` remains a permanent alias — tests/054's fixtures use it).
+   surface; `.ppb` remains a permanent alias).
    `.ppl` ("the AST form") reads with the sexpr reader — sexpr is demoted
    from "the syntax" to "the AST", still fully supported forever (it is the
    macro layer: `quote`/`defmacro` still traffic in sexpr data). The reader's

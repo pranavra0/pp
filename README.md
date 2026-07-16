@@ -54,6 +54,26 @@ let (m = module { export double }) {
 }
 ```
 
+## Layout
+
+- `src/` — the OCaml implementation: the pure `pp.kernel` library, the `pp`
+  runtime library built on it, and the `main` entry point
+- `bin/` — `bin/pp`, a symlink to the built interpreter, put on PATH by direnv
+- `stdlib/` — the pp standard library (`list`, `map`, `string`) and the
+  domain policies (`domain-fs`, `domain-proc`) auto-loaded by
+  `--reconcile`/`--supervise`
+- `tests/` — the differential test suite (see docs/TESTING.md)
+- `tools/` — the differential fuzzer
+- `scripts/` — build and test entry points: `run-tests.sh`, `build-self.sh`,
+  `build-lua.sh`, `build-manual.sh`
+- `examples/` — small standalone pp programs, also swept by the reader and
+  `pp fmt` round-trip tests
+- `demo/` — larger worked examples (deploy, agent) with their fixtures
+- `docs/` — the specification, design rationale, and reference manual
+- `.github/` — CI workflows
+- `fuzz-failures/` — the fuzzer's output directory for shrunk counterexamples
+  (generated, gitignored)
+
 ## Documentation
 
 Read more:

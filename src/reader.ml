@@ -732,7 +732,7 @@ and parse_config ps =
 
 (* (match scrutinee (pat [if guard] body) ...) — the sexpr surface for
    match, the exact grammar Printer_sexpr emits so match-using files round-trip
-   through --to-sexpr (they were the last exclusion in the tests/055 sweep).
+   through --to-sexpr.
    Patterns are `_`, a literal, a bare symbol (variable), `(list p... [. rest])`
    or `(tagged tag p...)` — Printer_sexpr.print_pattern's inverse. *)
 and parse_match ps =

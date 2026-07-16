@@ -233,11 +233,11 @@ let stdlib_root () : string option =
    realpath the longest EXISTING prefix and append the remaining components
    lexically normalized ("." dropped, ".." pops the previous remaining
    component); this is why a write-target's cell id is stable across the
-   file's creation (tests/036). No trailing slash (root "/" excepted).
+   file's creation. No trailing slash (root "/" excepted).
 
    NFC Unicode normalization is NOT implemented — a documented residual
-   (SPEC LAW 23, STATUS.md); it would need a new dependency (uunf, DESIGN
-   E6) and is orthogonal to the realpath fix this closes. *)
+   (SPEC LAW 23, STATUS.md); it would need a new dependency (uunf) and is
+   orthogonal to the realpath handling here. *)
 let canonical_path_impl (p : string) : string =
   let abs = if Filename.is_relative p then Filename.concat (Sys.getcwd ()) p else p in
   let strip_trailing s =

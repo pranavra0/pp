@@ -201,7 +201,8 @@ let observation_primitive (name : string) : string option =
 (* The tables above are the ONLY hand-authored copy of these closed sets. SPEC
    used to hand-list them in prose, which went stale as the tables changed;
    instead it now carries
-   a *generated* block that [tests/067] regenerates from here and diffs. A table
+   a *generated* block regenerated from here and diffed against the committed
+   copy. A table
    edit that isn't mirrored into SPEC is therefore a red build, not a stale
    paragraph — the doc-sync failure mode becomes mechanical. This function emits
    exactly the text that lives between SPEC's generated-block markers. *)

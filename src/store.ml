@@ -55,9 +55,9 @@ let traces_dir = Filename.concat store_root "traces"
 let version_path = Filename.concat store_root "VERSION"
 (* BUMP THIS whenever anything about the on-disk format changes — the codec
    grammar (codec.ml), the trace line shape, Types.canonical_float_string, or
-   which dirs are versioned. tests/037's golden fixtures are the tripwire: a
-   format change without a bump (and a regenerated store-vN fixture set)
-   fails byte-comparison there. *)
+   which dirs are versioned. The golden store fixtures are the tripwire: a
+   format change without a bump (and a regenerated fixture set)
+   fails byte-comparison. *)
 let current_version_line = "pp-store 1\n"
 
 let rec ensure_dir dir =
@@ -252,9 +252,9 @@ let load_traces ~key : trace list =
    loser's world simply re-misses and recomputes; never a wrong hit) — the
    lock only turns "sound but occasionally wasteful" into "sound and the
    waste doesn't happen in practice." [PP_TRACE_LOCK=0] disables the lock
-   (checked once, lazily) so tests/038's stress test can demonstrate the
+   (checked once, lazily) so a stress test can demonstrate the
    drop-soundness fallback still holds with it off — an internal escape
-   hatch documented in that test, not in user-facing docs. *)
+   hatch, not user-facing. *)
 let trace_lock_enabled =
   lazy (match Sys.getenv_opt "PP_TRACE_LOCK" with Some "0" -> false | _ -> true)
 

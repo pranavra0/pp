@@ -120,7 +120,7 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
    child — and re-dispatch (and thus re-run_node_body, re-executing every
    external process) an already-computed node all over again, once per
    remaining list position (an O(n^2) blowup, not a correctness issue but a
-   catastrophic performance one — caught by tests/024's exec-count assert). *)
+   catastrophic performance one). *)
 
 (* Deep force: recursively force all thunks in a data structure. Under a
    non-serial schedule policy, collects and dispatches every reachable
@@ -1015,7 +1015,7 @@ let register_domains () =
   (* `(register-probe name observe-fn read-cap)` — sugar over register-domain
      for the ⊥-write-authority case: dm_namespace = [] (nothing to
      stratify, core never converges it), dm_diff/dm_apply = None. Same
-     surface and error text as a standalone probe registry (tests/043-probes.sh). *)
+     surface and error text as a standalone probe registry. *)
   register "register-probe" (fun args ->
     if Effect.perform Runtime.In_node then
       failwith "register-probe: may not be called inside a node body (script-tier only, like fenced)";

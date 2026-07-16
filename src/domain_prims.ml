@@ -56,7 +56,7 @@ let has_process_cap () =
 let tree_observe (root : string) : value =
   let root_canon = Runtime.canonical_path root in
   let root = (root_canon :> string) in
-  (* A write-only domain grant (`fs:ROOT:wo`, tests/023) must still be able
+  (* A write-only domain grant (`fs:ROOT:wo`) must still be able
      to observe its OWN managed tree — the single writer reading its own
      domain to converge is not a new authority concern (there is no other
      reader involved); the old OCaml reconciler's internal tree scan was
