@@ -194,14 +194,17 @@ else
 fi
 
 # ---- (d) whole-tree sweep (the tree is brace-authored, so the direction
-#      is to-sexpr + to-braces), in place, same path throughout (so
-#      `assert`'s baked `at file:line` message — a STRING VALUE inside the
-#      hashed expression, not just location metadata — matches too),
-#      hash-compared against a saved-before-mutation copy, then restored so
-#      later tests in this run see pristine sources. Comment COUNT + TEXT
-#      (delimiter/whitespace-agnostic) are checked at BOTH hops too: hashes
-#      ignore comments by construction, so hash equality alone can't catch
-#      a dropped one. ----
+#      is to-sexpr + to-braces). Each file is round-tripped as a private
+#      COPY under $TMP, never in the shared tree: this suite runs
+#      concurrently with the differential .pp cases and tests/054's own
+#      whole-tree read, so mutating a source file in place — even
+#      mutate-then-restore — would expose a torn/wrong-surface file to
+#      those readers. law-20 per-form hashes are path-independent, so a
+#      copy's round-trip proves the identical hash-preservation property
+#      the real file would; the "before" copy (never round-tripped) is the
+#      hash reference. Comment COUNT + TEXT (delimiter/whitespace-agnostic)
+#      are checked at BOTH hops too: hashes ignore comments by construction,
+#      so hash equality alone can't catch a dropped one. ----
 sweep_fail=0
 sweep_count=0
 sweep_comments=0
@@ -211,49 +214,41 @@ for f in "$ROOT"/tests/[0-9]*.pp "$ROOT"/tests/gen-cproject.pp \
          "$ROOT"/docs/manual/*.pp "$ROOT"/docs/manual/examples/*.pp; do
   [ -f "$f" ] || continue
   sweep_count=$((sweep_count + 1))
-  backup="$TMP/sweep-$sweep_count.pp"
-  cp "$f" "$backup"
-  # dune's sandboxed source_tree deps are read-only (a correctness guard
-  # against rules silently depending on mutated state); this sweep's own
-  # mutate-then-restore is self-contained, so make the copy writable for
-  # its duration — permission bits aren't part of what gets restored,
-  # only content (the sandbox is rebuilt from the real tree next run
-  # regardless).
-  orig_mode=$(stat -f%Lp "$f" 2>/dev/null || stat -c%a "$f" 2>/dev/null || echo "")
-  chmod u+w "$f" 2>/dev/null || true
-  c_before=$(comment_texts brace "$f")
+  work="$TMP/sweep-work-$sweep_count.pp"
+  backup="$TMP/sweep-orig-$sweep_count.pp"
+  cp "$f" "$work"; cp "$f" "$backup"
+  # dune's sandboxed source_tree deps are read-only; cp carries that mode onto
+  # the work copy, so make it writable for the in-place round-trip below.
+  chmod u+w "$work"
+  c_before=$(comment_texts brace "$work")
   # count every comment, including delimiter-only lines whose content is
   # empty after stripping (`#` separators) — those still must survive
-  n_before=$("$PP" --list-comments brace "$f" 2>/dev/null | wc -l | tr -d ' ')
-  if ! "$PP" fmt --to-sexpr "$f" -i 2>"$TMP/sweep.err"; then
-    bad "sweep-to-sexpr ($f)" "$(cat "$TMP/sweep.err")"; sweep_fail=1
-    cp "$backup" "$f"; continue
+  n_before=$("$PP" --list-comments brace "$work" 2>/dev/null | wc -l | tr -d ' ')
+  if ! "$PP" fmt --to-sexpr "$work" -i 2>"$TMP/sweep.err"; then
+    bad "sweep-to-sexpr ($f)" "$(cat "$TMP/sweep.err")"; sweep_fail=1; continue
   fi
-  c_mid=$(comment_texts sexpr "$f")
-  if ! "$PP" fmt --to-braces "$f" -i 2>"$TMP/sweep.err"; then
-    bad "sweep-to-braces ($f)" "$(cat "$TMP/sweep.err")"; sweep_fail=1
-    cp "$backup" "$f"; continue
+  c_mid=$(comment_texts sexpr "$work")
+  if ! "$PP" fmt --to-braces "$work" -i 2>"$TMP/sweep.err"; then
+    bad "sweep-to-braces ($f)" "$(cat "$TMP/sweep.err")"; sweep_fail=1; continue
   fi
   # brace-output quality gates: no line ends in whitespace (also where a
   # trailing '; ' would appear), no stacked '# ;' delimiter
-  if grep -qE '[[:blank:]]$' "$f"; then
-    bad "sweep-noise ($f)" "$(grep -nE '[[:blank:]]$' "$f" | head -2)"; sweep_fail=1
+  if grep -qE '[[:blank:]]$' "$work"; then
+    bad "sweep-noise ($f)" "$(grep -nE '[[:blank:]]$' "$work" | head -2)"; sweep_fail=1
   fi
-  if grep -qE '^# ;|^#;;' "$f"; then
-    bad "sweep-stacked-delimiter ($f)" "$(grep -nE '^# ;|^#;;' "$f" | head -2)"; sweep_fail=1
+  if grep -qE '^# ;|^#;;' "$work"; then
+    bad "sweep-stacked-delimiter ($f)" "$(grep -nE '^# ;|^#;;' "$work" | head -2)"; sweep_fail=1
   fi
-  c_after=$(comment_texts brace "$f")
+  c_after=$(comment_texts brace "$work")
   if [ "$c_before" != "$c_mid" ] || [ "$c_before" != "$c_after" ]; then
     bad "sweep-comments ($f)" \
       "before ($n_before):" "$c_before" "braces:" "$c_mid" "after:" "$c_after"
     sweep_fail=1
   fi
   sweep_comments=$((sweep_comments + n_before))
-  if ! "$PP" --compare-hash "$f" "$backup" >"$TMP/sweep.err" 2>&1; then
+  if ! "$PP" --compare-hash "$work" "$backup" >"$TMP/sweep.err" 2>&1; then
     bad "sweep-hash ($f)" "$(cat "$TMP/sweep.err")"; sweep_fail=1
   fi
-  cp "$backup" "$f"
-  [ -n "$orig_mode" ] && chmod "$orig_mode" "$f" 2>/dev/null || true
 done
 [ "$sweep_fail" = 0 ] && ok "whole-tree-fmt-roundtrip ($sweep_count files, $sweep_comments comments)"
 

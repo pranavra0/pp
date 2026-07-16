@@ -323,7 +323,19 @@ let run_transport_pull (kind, id, root) : unit =
 
 let run_serve_hit (key, token_file, shared_root, reply_file) : unit =
   let token_text = read_file_content token_file in
-  let reply = Transport.serve_hit ~key ~token_text ~shared_root in
+  (* Store.hit re-observes the trace's read cells, which performs the
+     Lookup_handler/Record_read effects (observe_handler, file observation).
+     serve-hit runs no program, so it must supply the same top-level
+     observation context a plain run does: without it a node that read a
+     handler/config cell can never re-observe (Lookup_handler is unhandled →
+     stale → spurious miss), and a file re-observation crashes on an
+     unhandled Record_read. with_top_level answers Lookup_handler with the
+     builtin default the build itself recorded and makes Record_read a
+     no-op, so a synced node verifies exactly as it does locally. *)
+  let reply =
+    Runtime.with_top_level
+      ~f:(fun () -> Transport.serve_hit ~key ~token_text ~shared_root) ()
+  in
   Store.atomic_write reply_file reply
 
 let run_recv_hit (reply_file, shared_root) : unit =
@@ -1122,7 +1134,14 @@ let main () =
   (match !remote_node_args with
    | Some (token_file, _, shared_root, keys_file, reply_file) ->
        let token_text = Store.read_raw token_file in
-       Remote.serve_assigned_keys ~token_text ~keys_file ~shared_root ~reply_file
+       (* Store.hit replays a verified trace's reads via Runtime.record_read,
+          which performs Record_read/Get_observe_all — so this after-run serve
+          must hold the same top-level observation context the run itself held
+          (line 1050), or a clean hit crashes on an unhandled effect. *)
+       Runtime.with_top_level
+         ~f:(fun () ->
+           Remote.serve_assigned_keys ~token_text ~keys_file ~shared_root
+             ~reply_file) ()
    | None -> ());
 
   (* --check verdict: any volatile node fails the audit (LAW 38). *)

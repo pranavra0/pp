@@ -51,6 +51,19 @@ wait_for() {  # SECONDS CMD ARGS...
   "$@" 2>/dev/null
 }
 
+# Initial convergence can restart a service once before it settles (first pass
+# starts it, a later pass reconciles). Capturing a baseline pid the instant the
+# pidfile appears would race that churn, so a "did this service restart" test
+# must first wait for the pid to STOP changing — a condition, not a fixed beat.
+stable_pid() {  # FILE — succeeds once FILE's pid holds steady across a poll window
+  local f="$1" a b
+  a=$(cat "$f" 2>/dev/null) || return 1
+  [ -n "$a" ] || return 1
+  sleep 0.5
+  b=$(cat "$f" 2>/dev/null)
+  [ "$a" = "$b" ]
+}
+
 # Kill any services whose pidfiles we created.
 cleanup_services() {
   for pidfile in "$TMP"/pid-*; do
@@ -106,8 +119,7 @@ echo "v1" > "$TMP/cfg/env.txt"
 timeout 20 "$PP" --watch --supervise --grant process --grant "fs:$TMP/cfg:ro" \
   --watch-interval 0.3 "$TMP/supervise.pp" > "$TMP/watch-out" 2>&1 &
 WATCH_PID=$!
-sleep 2
-wait_for 5 test -f "$TMP/pid-a" || { echo "FAIL watch-pid-a: pidfile missing"; fail=1; }
+wait_for 8 stable_pid "$TMP/pid-a" || { echo "FAIL watch-pid-a: pidfile missing"; fail=1; }
 OLD_A=$(cat "$TMP/pid-a")
 kill -9 "$OLD_A"
 # Restart lands within one 0.3s poll interval; the fresh pidfile write is
@@ -130,15 +142,15 @@ echo "v1" > "$TMP/cfg/env.txt"
 timeout 20 "$PP" --watch --supervise --grant process --grant "fs:$TMP/cfg:ro" \
   --watch-interval 0.3 "$TMP/supervise.pp" > "$TMP/watch-out2" 2>&1 &
 WATCH_PID=$!
-sleep 2
+wait_for 8 stable_pid "$TMP/pid-a" || { echo "FAIL watch-pid-a: pidfile missing"; fail=1; }
+wait_for 8 stable_pid "$TMP/pid-b" || { echo "FAIL watch-pid-b: pidfile missing"; fail=1; }
 OLD_A=$(cat "$TMP/pid-a")
-OLD_B=$(cat "$TMP/pid-b" 2>/dev/null || echo "")
-# Find svc-b pidfile if it exists under a different env name.
-[ -f "$TMP/pid-b" ] || { echo "FAIL watch-pid-b: pidfile missing"; fail=1; }
 OLD_B=$(cat "$TMP/pid-b")
-# Edit the config file read by svc-a only.
+# Edit the config file read by svc-a only; poll for A's restart (its new pid)
+# rather than sleeping a fixed beat.
 echo "v2" > "$TMP/cfg/env.txt"
-sleep 2
+restarted_da() { p=$(cat "$TMP/pid-a" 2>/dev/null) && [ -n "$p" ] && [ "$p" != "$OLD_A" ]; }
+wait_for 5 restarted_da || { echo "FAIL config-edit-restart-a: no new pid"; fail=1; }
 NEW_A=$(cat "$TMP/pid-a")
 NEW_B=$(cat "$TMP/pid-b")
 if [ "$OLD_A" != "$NEW_A" ] && kill -0 "$NEW_A" 2>/dev/null; then

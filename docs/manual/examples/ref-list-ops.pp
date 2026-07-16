@@ -6,5 +6,6 @@ print(cons(0, list(1, 2)))
 print(car(list(1, 2, 3)))
 print(cdr(list(1, 2, 3)))
 
-# Pipelines thread values through pure functions; `|>` is the method syntax.
-list(1, 2, 3, 4) |> map(fn(x) { x * x }) |> print
+# map takes the function first — map(f, list) — and is lazy in the elements,
+# so it is the point the scheduler batches its parallel fan-out on.
+print(map(fn(x) { x * x }, list(1, 2, 3, 4)))

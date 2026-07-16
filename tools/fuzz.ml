@@ -698,6 +698,24 @@ let stmt_seq_let env d =
   [S [A "let"; V [A a; gen_int env (d - 1); A b; S [A "+"; A a; A "1"]];
       S [A "print"; A b]]]
 
+(* The VM lowers `match` to applications of car/cdr/=/nil?/not/error. If that
+   lowering resolved those names against the caller's bindings, a program that
+   shadows them would make the VM's match machinery call the redefinitions
+   while the tree-walker (which matches structurally) stayed correct — a
+   backend divergence. This shadows every one of them in a `let` and runs a
+   fixed match; both backends must still print 6, so any regression surfaces
+   as an ordinary fuzz MISMATCH. The whole fragment is emitted verbatim (a
+   single atom) because its point is to be exactly this shape, not to vary.
+   The shadows live inside an immediately-applied fn so they stay
+   function-local: a top-level `let` shadowing these names leaks into later
+   forms in the VM but not the tree-walker (a separate, tracked scoping
+   divergence), which would swamp this probe with an unrelated mismatch.
+   Supersedes the former tests/063 fixed oracle. *)
+let stmt_match_shadow _env _d =
+  [ A "(print ((fn () (let (car (fn (x) :b) cdr (fn (x) :b) = (fn (a b) false) \
+        nil? (fn (x) false) not (fn (x) :nb) error (fn (x) :eb)) \
+        (match (list 1 2 3) ((list a b c) (+ a (+ b c))) (_ 0))))))" ]
+
 let stmt_quote_special _env _d =
   (* quote_to_value fails on if/let in both backends *)
   if flip 0.5 then [S [A "print"; S [A "quote"; S [A "if"; A "1"; A "2"; A "3"]]]]
@@ -763,6 +781,7 @@ let gen_program (gram : string) (iter : int) : string =
     1, (fun () -> stmt_seq_let env d);
     1, (fun () -> stmt_quote_special env d);
     2, (fun () -> stmt_defmacro env d);
+    1, (fun () -> stmt_match_shadow env d);
   ] in
   let table = if gram = "full" then full_stmts else core_stmts in
   let n_stmts = rint 2 5 in
