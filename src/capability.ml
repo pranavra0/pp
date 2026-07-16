@@ -62,6 +62,7 @@ let rec check_network (cap : t) ~(host : string) ~(port : int option) : bool =
           | None -> true
           | Some p -> (match port with Some q -> q = p | None -> false))
   | CapCompose caps -> List.exists (fun c -> check_network c ~host ~port) caps
+  | CapRestrict { cap = inner; _ } -> check_network inner ~host ~port
   | _ -> false
 
 let rec check_secret (cap : t) (target : Paths.canonical) : bool =
@@ -76,6 +77,7 @@ let rec check_process (cap : t) : bool =
   match cap with
   | CapProcess -> true
   | CapCompose caps -> List.exists check_process caps
+  | CapRestrict { cap = inner; _ } -> check_process inner
   | _ -> false
 
 let mode_intersect (a : fs_mode) (b : fs_mode) : fs_mode option =
@@ -117,41 +119,30 @@ let rec cap_non_fs_subseteq (cap : t) (held : t) : bool =
   | CapNetwork { host; port } -> check_network held ~host ~port
   | CapSecret { path } -> check_secret held path
   | CapCompose caps -> List.for_all (fun c -> cap_non_fs_subseteq c held) caps
-  | CapRestrict _ -> true
+  | CapRestrict { cap = inner; _ } -> cap_non_fs_subseteq inner held
   | _ -> true
 
 let rec cap_subseteq (requested : t) (ambient : t list) : bool =
+  let held = CapCompose ambient in
   match requested with
   | CapNone -> true
+  | CapProcess -> check_process held
+  | CapNetwork { host; port } -> check_network held ~host ~port
+  | CapSecret { path } -> check_secret held path
   | CapFilesystem { path; mode } ->
-      let ambient_compose = CapCompose ambient in
-      check_fs_read ambient_compose path
-      && check_fs_write ambient_compose path
-      && (match mode with
-          | Read -> true
-          | Write | ReadWrite ->
-              check_fs_write ambient_compose path)
-  | CapNetwork { host; port } ->
-      List.exists (fun held ->
-        check_network held ~host ~port
-        && cap_non_fs_subseteq requested held) ambient
-  | CapSecret { path } ->
-      List.exists (fun held ->
-        check_secret held path
-        && cap_non_fs_subseteq requested held) ambient
-  | CapProcess ->
-      List.exists (fun held -> check_process held) ambient
-  | CapCompose parts ->
-      List.for_all (fun p -> cap_subseteq p ambient) parts
-  | CapRestrict { cap = inner; scope; mode } ->
-      let effective = list_fs_paths requested in
-      List.for_all (fun (p, m) ->
-        let ambient_compose = CapCompose ambient in
-        check_fs_read ambient_compose p
-        && (match m with
-            | Read -> true
-            | Write | ReadWrite -> check_fs_write ambient_compose p))
-        effective
+      (match mode with
+       | Read -> check_fs_read held path
+       | Write -> check_fs_write held path
+       | ReadWrite -> check_fs_read held path && check_fs_write held path)
+  | CapCompose caps -> List.for_all (fun c -> cap_subseteq c ambient) caps
+  | CapRestrict { cap; _ } as r ->
+      list_fs_paths r |> List.for_all (fun (path, m) ->
+        match m with
+        | Read -> check_fs_read held path
+        | Write -> check_fs_write held path
+        | ReadWrite -> check_fs_read held path && check_fs_write held path)
+      && (not (check_process r) || check_process held)
+      && cap_non_fs_subseteq cap held
 
 let subseteq = cap_subseteq
 
