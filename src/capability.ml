@@ -30,29 +30,28 @@ let path_grants ~(scope : Paths.canonical) (target : Paths.canonical) : bool =
 let mode_name = function
   | Read -> "ro" | Write -> "wo" | ReadWrite -> "rw"
 
-let rec check_fs_read (cap : t) (target : Paths.canonical) : bool =
-  match cap with
-  | CapFilesystem { path; mode = Read }
-  | CapFilesystem { path; mode = ReadWrite } ->
-      path_grants ~scope:path target
-  | CapCompose caps -> List.exists (fun c -> check_fs_read c target) caps
-  | CapRestrict { cap = inner; scope; mode } ->
-      path_grants ~scope target
-      && check_fs_read inner target
-      && (match mode with Some Read -> true | Some Write -> false | Some ReadWrite -> true | None -> true)
+(* [want] is the access being checked (Read or Write); a grant satisfies it
+   when its mode is [want] or ReadWrite. One function so the read and write
+   paths cannot drift. *)
+let mode_allows (granted : fs_mode) (want : fs_mode) : bool =
+  match granted, want with
+  | ReadWrite, _ -> true
+  | Read, Read | Write, Write -> true
   | _ -> false
 
-let rec check_fs_write (cap : t) (target : Paths.canonical) : bool =
+let rec check_fs (want : fs_mode) (cap : t) (target : Paths.canonical) : bool =
   match cap with
-  | CapFilesystem { path; mode = Write }
-  | CapFilesystem { path; mode = ReadWrite } ->
-      path_grants ~scope:path target
-  | CapCompose caps -> List.exists (fun c -> check_fs_write c target) caps
+  | CapFilesystem { path; mode } ->
+      mode_allows mode want && path_grants ~scope:path target
+  | CapCompose caps -> List.exists (fun c -> check_fs want c target) caps
   | CapRestrict { cap = inner; scope; mode } ->
       path_grants ~scope target
-      && check_fs_write inner target
-      && (match mode with Some Read -> false | Some Write -> true | Some ReadWrite -> true | None -> true)
+      && check_fs want inner target
+      && (match mode with None -> true | Some m -> mode_allows m want)
   | _ -> false
+
+let check_fs_read cap target = check_fs Read cap target
+let check_fs_write cap target = check_fs Write cap target
 
 let rec check_network (cap : t) ~(host : string) ~(port : int option) : bool =
   match cap with
@@ -92,11 +91,10 @@ let rec list_fs_paths (cap : t) : (Paths.canonical * fs_mode) list =
   | CapFilesystem { path; mode } -> [(path, mode)]
   | CapCompose caps -> List.concat_map list_fs_paths caps
   | CapRestrict { cap = inner; scope; mode } ->
-      let cscope = scope in
       List.filter_map (fun (p, m) ->
         let effective_path =
-          if Paths.under ~root:cscope p then Some p
-          else if Paths.under ~root:p cscope then Some cscope
+          if Paths.under ~root:scope p then Some p
+          else if Paths.under ~root:p scope then Some scope
           else None
         in
         match effective_path with
