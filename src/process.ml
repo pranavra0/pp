@@ -92,18 +92,24 @@ let exec (argv : string list) : int * string * string =
     let fd_out = Unix.openfile out_f [Unix.O_WRONLY; Unix.O_TRUNC] 0o600 in
     let fd_err = Unix.openfile err_f [Unix.O_WRONLY; Unix.O_TRUNC] 0o600 in
     let fd_in = Unix.openfile "/dev/null" [Unix.O_RDONLY] 0 in
-    let saved_cwd = Unix.getcwd () in
-    (match Runtime.current_sandbox ~create:true with
-     | Some d -> (try Unix.chdir d with _ -> ())
-     | None -> ());
+    (* Close the fds even if create_process raises (e.g. the binary vanished
+       between resolve_cmd and exec) — the outer cleanup only removes the temp
+       files. Same shape as Store_gc.run_replay / Remote. *)
     let pid =
       Fun.protect
-        ~finally:(fun () -> try Unix.chdir saved_cwd with _ -> ())
+        ~finally:(fun () ->
+          Unix.close fd_in; Unix.close fd_out; Unix.close fd_err)
         (fun () ->
-           Unix.create_process (List.hd argv) (Array.of_list argv)
-             fd_in fd_out fd_err)
+           let saved_cwd = Unix.getcwd () in
+           (match Runtime.current_sandbox ~create:true with
+            | Some d -> (try Unix.chdir d with _ -> ())
+            | None -> ());
+           Fun.protect
+             ~finally:(fun () -> try Unix.chdir saved_cwd with _ -> ())
+             (fun () ->
+                Unix.create_process (List.hd argv) (Array.of_list argv)
+                  fd_in fd_out fd_err))
     in
-    Unix.close fd_in; Unix.close fd_out; Unix.close fd_err;
     let (_, status) = Unix.waitpid [] pid in
     let code = match status with
       | Unix.WEXITED n -> n
