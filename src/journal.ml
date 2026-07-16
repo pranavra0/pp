@@ -70,8 +70,11 @@ let to_line = function
 
 (* Best-effort inverse. Only the fenced dialect is ever read back for
    recovery decisions; other shapes parse when unambiguous and fall to None
-   otherwise (e.g. a service name containing spaces — writers embed it
-   verbatim, and nothing downstream re-reads proc lines). *)
+   otherwise. Lines are unquoted, space-separated text by design — greppable,
+   not a rich schema — so an element containing a space (a service name, or an
+   `Exec` argv element like a path with a space) round-trips lossily here.
+   That is deliberate and safe: writers embed such elements verbatim for the
+   audit log, and nothing downstream re-reads proc or exec lines. *)
 let of_line (line : string) : entry option =
   match String.split_on_char ' ' (String.trim line) with
   | "exec" :: argv -> Some (Exec argv)
