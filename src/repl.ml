@@ -359,6 +359,11 @@ let repl_loop ~(use_vm : bool) =
              ) exprs
            with
            | Types.Pp_exit n -> exit n
+           (* Pp_error's printer renders "<msg> at file:line"; the rest are
+              unlocated. The final arm is a last resort for a genuinely
+              unexpected exception; its registered printer, if any, still keeps
+              it readable rather than a raw constructor. *)
+           | Types.Pp_error _ as e -> Printf.printf "Error: %s\n%!" (Printexc.to_string e)
            | Failure msg -> Printf.printf "Error: %s\n%!" msg
            | Sys_error msg -> Printf.printf "Error: %s\n%!" msg
            | Types.Capability_error msg -> Printf.printf "Error: %s\n%!" msg

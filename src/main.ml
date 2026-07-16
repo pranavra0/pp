@@ -1132,6 +1132,12 @@ let main () =
 let () =
   try main () with
   | Types.Pp_exit n -> exit n
+  (* Pp_error's registered printer renders "<msg> at file:line". The rest are
+     unlocated leaf errors that never crossed a form boundary (CLI validation,
+     transport, an unlocated reader failwith). *)
+  | Types.Pp_error _ as e ->
+      Printf.eprintf "pp: error: %s\n%!" (Printexc.to_string e);
+      exit 1
   | Failure msg | Types.Capability_error msg | Sys_error msg
   | Transport.Transport_integrity_error msg ->
       Printf.eprintf "pp: error: %s\n%!" msg;
