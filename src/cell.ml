@@ -71,32 +71,62 @@ let to_string = function
   | Domain { name; sub } -> "domain:" ^ name ^ ":" ^ sub
   | Unknown s -> s
 
+(* The string-payload cell kinds: prefix + how to rebuild the constructor from
+   the stripped payload. Most-specific prefix first (of_string tries them in
+   order, so "runtime:file:" must precede "file:"). of_string derives from this
+   one table; to_string stays the explicit exhaustive match above (the compiler
+   forces a printed form for a new constructor); the round-trip ratchet below
+   ties the two so a kind added to one direction but not the other fails. Argv
+   (no payload) and Domain (two fields) are structurally special, handled
+   explicitly in both directions. *)
+let string_kinds : (string * (string -> t)) list = [
+  "runtime:file:", (fun p -> RuntimeFile p);
+  "file:",         (fun p -> File p);
+  "tool:",         (fun p -> Tool p);
+  "tree:",         (fun p -> Tree p);
+  "stat:",         (fun p -> Stat p);
+  "env:",          (fun p -> Env p);
+  "config:",       (fun p -> Config p);
+  "handler:",      (fun p -> Handler p);
+  "proc:",         (fun p -> Proc p);
+  "probe:",        (fun p -> Probe p);
+  "sealed:",       (fun p -> Sealed p);
+]
+
 let of_string (s : string) : t =
-  let strip prefix =
+  let has prefix =
     let plen = String.length prefix in
-    if String.length s >= plen && String.sub s 0 plen = prefix then
-      Some (String.sub s plen (String.length s - plen))
-    else None
+    String.length s >= plen && String.sub s 0 plen = prefix
   in
-  (* "runtime:file:" before "file:" is not needed (distinct prefixes), but
-     keep the more specific kinds first for readability. *)
-  match strip "runtime:file:" with Some p -> RuntimeFile p | None ->
-  match strip "file:" with Some p -> File p | None ->
-  match strip "tool:" with Some p -> Tool p | None ->
-  match strip "tree:" with Some r -> Tree r | None ->
-  match strip "stat:" with Some p -> Stat p | None ->
-  match strip "env:" with Some n -> Env n | None ->
-  match strip "config:" with Some k -> Config k | None ->
-  match strip "handler:" with Some n -> Handler n | None ->
-  match strip "proc:" with Some n -> Proc n | None ->
-  match strip "probe:" with Some n -> Probe n | None ->
-  match strip "sealed:" with Some p -> Sealed p | None ->
-  match strip "domain:" with
-  | Some rest ->
-      (match String.index_opt rest ':' with
-       | Some i ->
-           Domain { name = String.sub rest 0 i;
-                    sub = String.sub rest (i + 1) (String.length rest - i - 1) }
-       | None -> Domain { name = rest; sub = "" })
-  | None ->
-  if s = "argv:" then Argv else Unknown s
+  let strip prefix =
+    String.sub s (String.length prefix) (String.length s - String.length prefix)
+  in
+  let rec try_kinds = function
+    | (prefix, mk) :: rest -> if has prefix then mk (strip prefix) else try_kinds rest
+    | [] ->
+        if has "domain:" then
+          let rest = strip "domain:" in
+          (match String.index_opt rest ':' with
+           | Some i ->
+               Domain { name = String.sub rest 0 i;
+                        sub = String.sub rest (i + 1) (String.length rest - i - 1) }
+           | None -> Domain { name = rest; sub = "" })
+        else if s = "argv:" then Argv
+        else Unknown s
+  in
+  try_kinds string_kinds
+
+(* Round-trip ratchet: a new constructor makes the [_cover] match non-exhaustive
+   (a build error, which the comment sends here), and the assertion fails the
+   build if to_string/of_string disagree for any representative. *)
+let () =
+  let _cover : t -> unit = function
+    | File _ | RuntimeFile _ | Tool _ | Tree _ | Stat _ | Env _ | Argv
+    | Config _ | Handler _ | Proc _ | Probe _ | Sealed _ | Domain _
+    | Unknown _ -> ()
+  in
+  List.iter (fun t -> assert (of_string (to_string t) = t))
+    [ File "/x"; RuntimeFile "/x"; Tool "/x"; Tree "/x"; Stat "/x"; Env "X";
+      Argv; Config "k"; Handler "h"; Proc "p"; Probe "p"; Sealed "/x";
+      Domain { name = "d"; sub = "s" }; Domain { name = "d"; sub = "" };
+      Unknown "zzz:unrecognized" ]

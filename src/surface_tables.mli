@@ -68,7 +68,8 @@ val observation_primitive : string -> string option
 (* ---- SPEC rendering ---------------------------------------------------- *)
 
 (* Emits exactly the text between docs/SPEC.md's generated-block markers;
-   tests/067 diffs it. The render_* helpers it uses are module-private. *)
+   the committed copy is diffed against it. The render_* helpers it uses are
+   module-private. *)
 val render_spec_tables : unit -> string
 
 (* ---- the exhaustive ratchet over Cell.t ------------------------------- *)

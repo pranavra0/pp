@@ -50,6 +50,8 @@ type t = {
   mutable compiler_state : comp_state option;
   mutable get_unix_time : unit -> float;
   mutable cap_write_secret : string -> string -> unit;
+  mutable cap_read_secret : string -> string;
+  mutable home_dir : unit -> string;
 }
 
 (* Defaults match the originals: the no-op/identity hooks keep their old
@@ -79,4 +81,8 @@ let r : t = {
   get_unix_time = (fun () -> 0.);
   cap_write_secret = (fun _ _ ->
     failwith "Backend: cap_write_secret hook not installed");
+  cap_read_secret = (fun _ ->
+    failwith "Backend: cap_read_secret hook not installed");
+  home_dir = (fun () ->
+    failwith "Backend: home_dir hook not installed");
 }

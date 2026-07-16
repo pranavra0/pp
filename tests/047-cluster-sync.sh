@@ -147,12 +147,14 @@ assert "T2-expired-reason" "expired" present "$TMP/reply-expired.txt"
 # the variable (SPEC law 23b enforced across the wire; case T3 below).
 # ---------------------------------------------------------------------
 HOME="$NODEA" "$PP" --serve-hit "$KEY" "$TMP/token-narrow.txt" "$SHARED" "$TMP/reply-narrow.txt" > "$TMP/out" 2>&1
-assert "T3-unauthorized-closure-miss" "miss" present "$TMP/reply-narrow.txt"
+assert "T3-unauthorized-closure-miss" "serve-hit-reply miss" present "$TMP/reply-narrow.txt"
 [ -d "$SHARED" ] && { echo "FAIL T3-no-push-on-miss: shared root exists after an unauthorized miss"; fail=1; } \
   || echo "ok   T3-no-push-on-miss"
 
 HOME="$NODEA" "$PP" --serve-hit "$KEY" "$TMP/token-broad.txt" "$SHARED" "$TMP/reply-broad.txt" > "$TMP/out" 2>&1
-assert "T3-authorized-closure-hit" "hit" present "$TMP/reply-broad.txt"
+# Match the verdict token, not a bare "hit": "serve-hit-reply" itself
+# contains the substring "hit", so `grep hit` passes even on a miss reply.
+assert "T3-authorized-closure-hit" "serve-hit-reply hit" present "$TMP/reply-broad.txt"
 assert "reply-names-result-hash" "$RESULT_HASH" present "$TMP/reply-broad.txt"
 
 # ---------------------------------------------------------------------

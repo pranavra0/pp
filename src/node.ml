@@ -32,21 +32,43 @@ let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
     | ELiteral (VSymbol s) | ELiteral (VKeyword s) -> s
     | _ -> "unknown"
   in
+  (* Known scalar type names. An unrecognized name (a typo, or a type pp does
+     not check) deliberately falls through to [false] and reports a mismatch:
+     an unknown type is a hard error, never a silent pass. *)
   let ok =
     match type_name with
     | "int" -> (match v with VInt _ -> true | _ -> false)
+    | "float" -> (match v with VFloat _ -> true | _ -> false)
     | "string" -> (match v with VString _ -> true | _ -> false)
     | "bool" -> (match v with VBool _ -> true | _ -> false)
     | "nil" -> (match v with VNil -> true | _ -> false)
     | _ -> false
   in
   if not ok then
-    let loc_str = match loc with
-      | Some (file, line) -> Printf.sprintf " at %s:%d" file line
-      | None -> ""
-    in
-    failwith (Printf.sprintf "type mismatch: expected %s, got %s%s"
-                type_name (string_of_value v) loc_str)
+    (* The annotation site [loc] is a precise location, carried as Pp_error.pos
+       (not baked into the message, which would double-locate once an enclosing
+       form's with_form_location saw it). *)
+    raise (Pp_error {
+      kind = Eval;
+      msg = Printf.sprintf "type mismatch: expected %s, got %s"
+              type_name (string_of_value v);
+      pos = loc })
+
+(* Enforce a thunk's optional type annotation, resetting thunk_status to
+   Unevaluated if the check fails. The reset is load-bearing: typed thunks are
+   memoised by content hash (Evaluator.make_thunk_ca_typed), so a check_type
+   that raised while the thunk was still `Evaluating` would leave it stuck, and
+   the next force of the same thunk would misreport "infinite recursion"
+   instead of the real type error (reproduced pre-fix by entering the same
+   ill-typed `let (x: ty = ...)` form twice at the REPL). Callers invoke this
+   after computing the body value and before marking the thunk Evaluated;
+   shared by both backends so the guard cannot drift between them. *)
+let enforce_type (t : thunk) (result : value) : unit =
+  match t.type_ann with
+  | None -> ()
+  | Some ty ->
+      (try check_type result ty t.thunk_loc
+       with e -> t.thunk_status <- Unevaluated; raise e)
 
 
 (* ---- Trace replay ----------------------------------------------------- *)
@@ -88,7 +110,11 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
             Effect.Deep.continue k (Effect.perform (Runtime.Record_read (c, h)))
         | effect Runtime.In_node, k -> Effect.Deep.continue k true
         | effect Runtime.Current_sandbox, k -> Effect.Deep.continue k (Some sandbox_slot)
-        | Failure msg as e ->
+        (* Memoize a genuine failure (LAW 28). A plain Failure, or an Eval-kind
+           Pp_error a nested `load`'s form boundary already wrapped, is
+           cacheable; a Capability error (raw or Pp_error kind=Capability) is
+           NOT (LAW 15) and falls to the generic reset arm below. *)
+        | (Failure msg | Pp_error { kind = Eval; msg; _ }) as e ->
             let errval = VString msg in
             let err_hash = hash_value errval in
             (try Store.store_object ~key:err_hash ~value:errval with _ -> ());
@@ -107,9 +133,7 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
         else
           raise (Capability_error "a node may not return a capability")
       end;
-      (match t.type_ann with
-       | Some ty -> check_type result ty t.thunk_loc
-       | None -> ());
+      enforce_type t result;
       t.thunk_status <- Evaluated result;
       let result_hash = hash_value result in
       (try Store.store_object ~key:result_hash ~value:result with _ -> ());

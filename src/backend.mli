@@ -26,6 +26,8 @@ type t = {
   mutable compiler_state : Types.comp_state option;
   mutable get_unix_time : unit -> float;
   mutable cap_write_secret : string -> string -> unit;
+  mutable cap_read_secret : string -> string;
+  mutable home_dir : unit -> string;
 }
 
 (* The single global record. Defaults are no-ops/identity hooks so a build

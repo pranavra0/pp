@@ -233,11 +233,11 @@ let stdlib_root () : string option =
    realpath the longest EXISTING prefix and append the remaining components
    lexically normalized ("." dropped, ".." pops the previous remaining
    component); this is why a write-target's cell id is stable across the
-   file's creation (tests/036). No trailing slash (root "/" excepted).
+   file's creation. No trailing slash (root "/" excepted).
 
    NFC Unicode normalization is NOT implemented — a documented residual
-   (SPEC LAW 23, STATUS.md); it would need a new dependency (uunf, DESIGN
-   E6) and is orthogonal to the realpath fix this closes. *)
+   (SPEC LAW 23, STATUS.md); it would need a new dependency (uunf) and is
+   orthogonal to the realpath handling here. *)
 let canonical_path_impl (p : string) : string =
   let abs = if Filename.is_relative p then Filename.concat (Sys.getcwd ()) p else p in
   let strip_trailing s =
@@ -295,10 +295,11 @@ let loader_read (path : string) : string =
 (* ---- LAW 29: source locations on runtime errors, never doubled ----
 
    A runtime error escaping a form's evaluation should report THAT form's
-   own file:line — unless its message already carries one (a trailing
-   " at <file>:<line>"), in which case it is left alone: a deeper, more
-   specific location already won and must not be overwritten by an outer,
-   less specific one.
+   own file:line — unless it already carries one (Pp_error with pos = Some,
+   from a deeper form or the reader), in which case it is left alone: a more
+   specific location already won and must not be overwritten by an outer one.
+   The already-located test is the typed [pos] field, not a scan of the
+   message text.
 
    One implementation, shared by every driver that evaluates a sequence of
    located top-level-shaped forms: the top-level driver (repl.ml,
@@ -309,30 +310,21 @@ let loader_read (path : string) : string =
    file is decorated with THAT file's line before it ever unwinds past the
    loading form, so the `(load ...)` call site's own decorator (seeing a
    message that already has a location) leaves it alone. *)
-let message_has_location (msg : string) : bool =
-  let n = String.length msg in
-  let contains_at =
-    let rec go i = i + 4 <= n && (String.sub msg i 4 = " at " || go (i + 1)) in
-    go 0 in
-  let all_digits i =
-    i < n &&
-    (let ok = ref true in
-     for k = i to n - 1 do
-       if not (msg.[k] >= '0' && msg.[k] <= '9') then ok := false
-     done; !ok) in
-  match String.rindex_opt msg ':' with
-  | Some i -> contains_at && all_digits (i + 1)
-  | None -> false
-
 let with_form_location (e : expr) (f : unit -> 'a) : 'a =
   match e with
   | ELocated ((file, line), _) ->
-      let relocate msg =
-        if message_has_location msg then msg
-        else Printf.sprintf "%s at %s:%d" msg file line in
+      let here = Some (file, line) in
       (try f () with
-       | Failure msg -> failwith (relocate msg)
-       | Capability_error msg -> raise (Capability_error (relocate msg)))
+       (* A deeper form (or the reader) already attached a location — leave it. *)
+       | Pp_error { pos = Some _; _ } as e -> raise e
+       | Pp_error r -> raise (Pp_error { r with pos = here })
+       (* Leaf raises are unlocated; wrap them here, at the innermost form.
+          [kind] preserves whether the error may be node-cached — Capability
+          errors may not (LAW 15). Capability_error keeps its distinct identity
+          everywhere BELOW this boundary (nodes see it directly); only its
+          user-facing rendering is unified through Pp_error here. *)
+       | Failure msg -> raise (Pp_error { kind = Eval; msg; pos = here })
+       | Capability_error msg -> raise (Pp_error { kind = Capability; msg; pos = here }))
   | _ -> f ()
 
 

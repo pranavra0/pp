@@ -529,7 +529,7 @@ and print_pattern st (p : pattern) : unit =
            (* Only separate the spread from PRECEDING elements; a spread-only
               pattern [...r] must not emit a leading comma ([, ...r] fails to
               re-read — "expected pattern, got ,"). Caught by the printer
-              round-trip property (tests/071). *)
+              round-trip property. *)
            if pats <> [] then emit st ", ";
            emit st "..."; print_pattern st r
        | None -> ());
@@ -541,7 +541,7 @@ and print_pattern st (p : pattern) : unit =
          re-parses as a LIST pattern whose head is the keyword literal :tag,
          which then fails on the space before the next element: a broken
          `pp fmt --to-braces` round-trip for every tagged match arm, caught by
-         the printer round-trip property (pinned in tests/071). *)
+         the printer round-trip property. *)
       emit st "(:";
       emit st tag;
       List.iter (fun p ->

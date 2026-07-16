@@ -92,23 +92,21 @@ let desugar_or (exprs : expr list) : expr =
   in
   desugar exprs
 
-(* (assert cond [msg]) — a located runtime check: a false/nil condition
-   raises `assertion failed: <form> at file:line` (or the custom message,
-   location appended). Desugars to if+error so both backends enforce the
-   shared AST identically. The message-less form renders the condition via
-   quote_to_value/string_of_value — i.e. in AST (s-expression) notation in
-   BOTH surfaces (Appendix B §B.4): the rendering is part of the hashed
-   expression, so no reader may re-render it in its own notation. *)
-let desugar_assert ~(file : string) ~(line : int)
-    (cond : expr) (msg_opt : expr option) : expr =
-  let loc_suffix = Printf.sprintf " at %s:%d" file line in
+(* (assert cond [msg]) — a located runtime check: a false/nil condition raises
+   `assertion failed: <form>` (or the custom message). The source location is
+   NOT baked into the message here — the enclosing form's [with_form_location]
+   attaches it once (as Pp_error.pos), so it is never doubled. Desugars to
+   if+error so both backends enforce the shared AST identically. The
+   message-less form renders the condition via quote_to_value/string_of_value —
+   i.e. in AST (s-expression) notation in BOTH surfaces (Appendix B §B.4): the
+   rendering is part of the hashed expression, so no reader may re-render it in
+   its own notation. *)
+let desugar_assert (cond : expr) (msg_opt : expr option) : expr =
   let msg_expr = match msg_opt with
     | None ->
         ELiteral (VString ("assertion failed: "
-                           ^ string_of_value (quote_to_value cond)
-                           ^ loc_suffix))
-    | Some m ->
-        EApply (ESymbol "string-append", [m; ELiteral (VString loc_suffix)]) in
+                           ^ string_of_value (quote_to_value cond)))
+    | Some m -> m in
   EIf (cond, ELiteral VNil, EApply (ESymbol "error", [msg_expr]))
 
 (* try { name <- expr; ...; final-expr } — brace-surface error propagation.

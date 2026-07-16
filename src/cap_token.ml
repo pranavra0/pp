@@ -30,19 +30,17 @@ open Codec
    anchors"). Losing it means re-minting AND redistributing; a member
    without a copy cannot mint OR verify tokens. *)
 
+(* Kernel purity: the HOME lookup and the secret-file read are effects, so
+   they go through Backend.r (home_dir / cap_read_secret), installed by the
+   impure entry point, exactly as the secret WRITE already does via
+   cap_write_secret. pp.kernel names no Unix directly. *)
 let cluster_dir () : string =
-  Filename.concat (Sys.getenv "HOME") ".pp/cluster"
+  Filename.concat (Backend.r.home_dir ()) ".pp/cluster"
 
 let secret_path () : string = Filename.concat (cluster_dir ()) "secret"
 let id_path () : string = Filename.concat (cluster_dir ()) "id"
 
-let read_trimmed (path : string) : string =
-  let ic = open_in_bin path in
-  let len = in_channel_length ic in
-  let s = really_input_string ic len in
-  close_in ic;
-  let n = String.length s in
-  if n > 0 && s.[n - 1] = '\n' then String.sub s 0 (n - 1) else s
+let read_trimmed (path : string) : string = Backend.r.cap_read_secret path
 
 (* Writes [content] to a FRESH file at [path] with mode 0600, refusing to
    overwrite an existing file (O_CREAT + O_EXCL, one syscall — no

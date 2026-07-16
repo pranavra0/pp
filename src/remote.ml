@@ -205,9 +205,9 @@ let preseed_pins_from_file ~(pins_file : string) : unit =
    small; blob-get's own comment: "the ref in a node's key or free vars
    already pins exactly these bytes"). Transport.decide's blob_hashes are
    derived only from `tr_reads` (Cell.File cells) — sound for "a node
-   returns the file it slurped" (tests/047's pattern), but INCOMPLETE for
+   returns the file it slurped", but INCOMPLETE for
    "a node returns a blob ref to bytes it wrote/ingested itself"
-   (tests/024's `(blob (slurp OUTPUT-FILE))` compile pattern — no `file:`
+   (the `(blob (slurp OUTPUT-FILE))` compile pattern — no `file:`
    cell records the OUTPUT file at all, since reading back a node's own
    just-written sandbox output is not a world-observation, LAW 18). Remote
    placement must ship these too, or a dispatcher-side consumer of the
@@ -359,7 +359,7 @@ let ship_and_pull ~(member_home : string) (closed : Scheduler.job list) : unit =
     let keys_file = Filename.concat scratch "keys" in
     Store.atomic_write keys_file
       (String.concat "" (List.map (fun j -> j.Scheduler.j_key ^ "\n") closed));
-    (* Test-only synchronization seam (tests/048's differing-file case): a real
+    (* Test-only synchronization seam: a real
        dispatcher-to-member gap is a NETWORK delay, which a single-machine
        test cannot otherwise force deterministically between "pins pushed"
        and "member spawned" — the exact window a real world-drift race

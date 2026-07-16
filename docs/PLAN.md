@@ -55,10 +55,6 @@ doesn't wait for pristine.
   dynamic extent with OCaml 5 effect handlers") deletes this whole
   mechanism class; fix there if that work is near, otherwise patch and
   pin now.
-- Two fuzzer gates promised as fuzzer-integrated checks exist only as
-  fixed tests: the quasiquote-parity gate and the match-shadow case
-  (`tests/061*`, `tests/063`). Either integrate them into `tools/fuzz.ml`
-  generation, or explicitly re-scope to the fixed tests.
 
 ---
 
@@ -117,33 +113,6 @@ lint rule.
 - NFC Unicode normalization for cell-id canonicalization is still
   unimplemented (`runtime.ml` says so): a documented residual until a
   dependency-free path exists.
-- Test-suite speed: `dune runtest` runs one dune rule that calls
-  `scripts/run-tests.sh` sequentially. Measured total wall time is 208
-  seconds, and dune adds no parallelism on top. Four tests account for
-  80% of that time:
-  - `tests/052-devops-complete.sh`, 95 seconds: a 6-variant schedule
-    matrix, each variant doing a real `cc` compile and process restart.
-  - `tests/032-stabilize.sh`, 32 seconds, 16 of which are flat
-    `sleep 4` guards.
-  - `tests/031-watch-once.sh`, 21 seconds, 16 of which are flat sleeps.
-  - `tests/024-phase1-exit.sh`, 19 seconds: a real 101-file C build,
-    whose cost is mostly inherent.
-
-  67 of the 75 shell tests already isolate their store with `mktemp` and
-  a `HOME` override, so running them in parallel is safe today.
-
-  Fixes, in order of impact:
-  - split the single dune rule into one rule per test, so `dune build
-    -j` can parallelize them (estimated 208 seconds down to 30 to 50
-    seconds).
-  - cut the 052 matrix to 1 or 2 representative variants, and move the
-    full matrix to a nightly tier.
-  - replace the flat sleeps with the bounded poll-until-condition idiom
-    that already exists in the same files, and shrink `--watch-interval`
-    alongside.
-
-  This dovetails with the test-harness rewrite described under "Render
-  each surface from one typed table".
 - Docs into the manual site, considered at the docs sweep: the Typst
   manual is the one doc property that cannot lie (pp runs every
   example), so folding the other docs into that site would give one

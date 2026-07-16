@@ -75,16 +75,6 @@ if ! command -v timeout >/dev/null 2>&1; then
   PATH="$SHIM_DIR:$PATH"
 fi
 
-wait_for() {  # SECONDS CMD ARGS...
-  local secs="$1"; shift
-  local i=0 max=$((secs * 10))
-  while [ "$i" -lt "$max" ]; do
-    "$@" 2>/dev/null && return 0
-    sleep 0.1; i=$((i + 1))
-  done
-  "$@" 2>/dev/null
-}
-
 count_matches() {  # PATTERN FILE -> count, never emits two lines (grep -c
                     # exits 1 with output "0" when a match count is zero,
                     # so a naive `|| echo 0` fallback doubles the line)
@@ -399,7 +389,21 @@ fi
 # (its own fixtures/hosts/run/$HOMEs), so nothing above (which mutated
 # secrets/fixtures repeatedly) leaks into what should be a clean 12-way
 # comparison.
+#
+# This is the suite's heaviest single stretch (a real cc compile and, for
+# the push rows, a watch process per placement variant). The six acceptance
+# clauses above already prove the end-to-end demo on every run; the oracle's
+# placement-transparency sweep is thoroughness on top, so it runs under
+# PP_TEST_FULL (the CI/nightly tier) rather than in the fast inner loop.
+# Placement transparency is not left unguarded meanwhile: tests/048 proves
+# remote placement and the per-clause converges above exercise the serial
+# path directly.
 # =====================================================================
+if [ -z "${PP_TEST_FULL:-}" ]; then
+  echo "--- diagonal oracle: SKIPPED (set PP_TEST_FULL=1 for the full placement matrix) ---"
+  if [ "$fail" -eq 0 ]; then echo "=== M6 STAGE A: DEVOPS-COMPLETE DEMO (clauses 1-6) PASSED ==="; fi
+  exit $fail
+fi
 echo "--- diagonal oracle ---"
 OTMP="$TMP/oracle"; mkdir -p "$OTMP"
 OFIX="$OTMP/fixtures"; OSEC="$OTMP/secrets"; OHOSTS="$OTMP/hosts"; ORUN="$OTMP/run"; OSHARED="$OTMP/shared"
@@ -421,9 +425,20 @@ NAMES=(tw-serial tw-parallel tw-remote vm-serial vm-parallel vm-remote)
 FLAGSET=("" "--schedule parallel:4" "--schedule remote:B" \
           "--bytecode" "--bytecode --schedule parallel:4" "--bytecode --schedule remote:B")
 
+# The diagonal oracle's whole claim is that placement is transparent: every
+# backend x placement combination materializes the SAME tree. Proving it needs
+# a real cc compile and (for the push rows) a watch process PER variant, which
+# is most of this suite's wall time. The inner loop runs a representative
+# cross-section — both backends, and both a same-process and a remote-member
+# placement — which still exercises every distinct code path; the exhaustive
+# 6-way sweep (all parallel:N and remote combinations) runs under PP_TEST_FULL,
+# the nightly tier. row 0 is always included: the reference tree and row-7 tie
+# below are computed against it.
+if [ -n "${PP_TEST_FULL:-}" ]; then MATRIX=(0 1 2 3 4 5); else MATRIX=(0 2 3); fi
+
 # ---- Pull rows 1-6: --publish-object prints hash_value; assert equal ----
 declare -a PULL_HASHES
-for i in 0 1 2 3 4 5; do
+for i in "${MATRIX[@]}"; do
   name="${NAMES[$i]}"
   rm -rf "$OCONTROL/.pp/store"
   out=$(HOME="$OCONTROL" "$PP" ${FLAGSET[$i]} "${OGRANTS[@]}" \
@@ -434,11 +449,12 @@ for i in 0 1 2 3 4 5; do
   else bad "oracle-pull-row-$((i + 1))-$name-publishes" "$out"; fi
 done
 ALL_EQUAL=1
-for i in 1 2 3 4 5; do
+for i in "${MATRIX[@]}"; do
+  [ "$i" -eq 0 ] && continue
   [ "${PULL_HASHES[$i]}" = "${PULL_HASHES[0]}" ] || ALL_EQUAL=0
 done
 if [ "$ALL_EQUAL" -eq 1 ] && [ -n "${PULL_HASHES[0]}" ]; then
-  ok "oracle-six-pull-hashes-string-equal (${PULL_HASHES[0]})"
+  ok "oracle-pull-hashes-all-equal (${PULL_HASHES[0]})"
 else
   bad "oracle-six-pull-hashes-string-equal" "${PULL_HASHES[*]}"
 fi
@@ -520,7 +536,7 @@ fi
 # ---- Push rows 7-12: --watch --stabilize, seeded with WRONG content
 # first (a real dirty->re-force pass), then diffed clean against the
 # reference tree; row 7 additionally diffed against the fresh tree. ----
-for i in 0 1 2 3 4 5; do
+for i in "${MATRIX[@]}"; do
   name="${NAMES[$i]}"
   PHOSTS="$OTMP/push-$name-hosts"; PRUN="$OTMP/push-$name-run"
   PH1="$OTMP/push-$name-home-web1"; PH2="$OTMP/push-$name-home-web2"

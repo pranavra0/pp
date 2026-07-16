@@ -31,6 +31,27 @@ let () = Printexc.register_printer (function
   | Reader_incomplete msg -> Some msg
   | _ -> None)
 
+(* A runtime or parse error carrying its source location as structured data
+   rather than baked into the message string. [Runtime.with_form_location]
+   attaches [pos] once, at the innermost enclosing form, and an outer form
+   leaves an already-located error alone by testing [pos <> None] — this
+   replaced a fragile heuristic that re-scanned the message text for a trailing
+   " at file:line". The reader raises it with [pos] already set (the token's
+   own location, more specific than any enclosing form); the evaluator's leaf
+   [failwith]s stay unlocated and are wrapped at the form boundary. [kind]
+   records the one distinction wrapping would otherwise erase: an [Eval] error
+   may be memoized as a failing node trace (LAW 28), a [Capability] error may
+   NOT (LAW 15), so node caching keys on [kind] once wrapped. The printer
+   renders "<msg> at <file>:<line>" so an uncaught one reads like the caught
+   path. *)
+type err_kind = Eval | Capability
+exception Pp_error of { kind : err_kind; msg : string; pos : (string * int) option }
+let () = Printexc.register_printer (function
+  | Pp_error { msg; pos = Some (file, line); _ } ->
+      Some (Printf.sprintf "%s at %s:%d" msg file line)
+  | Pp_error { msg; pos = None; _ } -> Some msg
+  | _ -> None)
+
 (* ---- Environment ---- *)
 
 (* An environment node with a stable ID, a cached hash, and a list of bindings.
@@ -168,8 +189,8 @@ and thunk = {
        creation, exactly as a closure's environment is. Collapses to the
        process's
        --grant set when with-caps is unused (current_capabilities never
-       changes without it), so tests/011/013/017 are byte-for-byte
-       unaffected. Meaningless (unused) on non-persist thunks. *)
+       changes without it), so a program that never uses with-caps is
+       byte-for-byte unaffected. Meaningless (unused) on non-persist thunks. *)
 }
 
 and thunk_status =
@@ -379,7 +400,7 @@ let rec hash_expr (e : expr) : string =
          join `Some p -> p | None -> ""` would conflate them, a LAW-20
          collision (island "u" "" and island "u" quote to distinct values —
          VString "" vs VNil — yet would hash identically). Caught by the
-         kernel-properties injectivity property; pinned in tests/071. *)
+         kernel-properties injectivity property. *)
       let pin_part = match pin with Some p -> hash_concat ["pin"; p] | None -> "nopin" in
       hash_concat ["island"; uri; pin_part]
   | EWithConfig (map_expr, body) ->
@@ -460,12 +481,13 @@ and hash_value (v : value) : string =
         let parts = Array.to_list (Array.map hash_val vs) in
         hash_concat ("vector" :: parts)
     | VMap kvs ->
-        let sorted = List.sort (fun (k1,_) (k2,_) ->
-          String.compare (hash_val k1) (hash_val k2)
-        ) kvs in
-        let parts = List.map (fun (k, v) ->
-          hash_concat [hash_val k; hash_val v]
-        ) sorted in
+        (* Hash each key/value once, then sort on the precomputed key hash —
+           the comparator must not re-hash per comparison (matches the VSet
+           arm below). *)
+        let hashed = List.map (fun (k, v) -> (hash_val k, hash_val v)) kvs in
+        let sorted = List.sort (fun (kh1,_) (kh2,_) ->
+          String.compare kh1 kh2) hashed in
+        let parts = List.map (fun (kh, vh) -> hash_concat [kh; vh]) sorted in
         hash_concat ("map" :: parts)
     | VSet vs ->
         let sorted = List.sort String.compare (List.map hash_val vs) in
@@ -480,7 +502,7 @@ and hash_value (v : value) : string =
           (* The captured environment IS part of a closure's identity — two
              closures with identical code but different captures must hash
              differently, or an enclosing content-addressed thunk collides and
-             returns a stale result (tests/009). We fold in the captured env's
+             returns a stale result. We fold in the captured env's
              PRECOMPUTED env_hash: O(1), no traversal, and no recursion back into
              hash_value (env_hash is a fixed string computed at extend_env time),
              so recursive/mutual closures terminate. This over-approximates —
@@ -511,7 +533,10 @@ and hash_value (v : value) : string =
         ) sorted in
         hash_concat ("envmap" :: parts)
     | VBytecode bc ->
-        hash_concat ["bytecode"; string_of_int (Array.length bc.code)]
+        (* Hash the actual consts+code, not just the instruction count:
+           two distinct units of equal length must not collide (LAW 20,
+           the same collision class hash_bytecode fixes for VM closures). *)
+        hash_concat ["bytecode"; hash_bytecode bc]
     | VSealed bytes ->
         (* Hash the ACTUAL bytes (rotation invalidation needs it, LAW 39) —
            this hash appears only inside trace lines under a `sealed:` cell
@@ -550,9 +575,8 @@ and hash_value (v : value) : string =
      to mutate to `extend_env`-cons `f`'s own binding onto (the letrec/mutual-
      recursion trick both backends' top-level driver relies on), so
      `f`'s captured env ends up containing `f` itself as its head binding —
-     walking it without a guard recurses forever (found by tests/024's
-     101-TU build going through this scan for every node's closure-valued
-     free vars: an immediate Stack overflow before this guard was added).
+     walking it without a guard recurses forever, so any node with
+     closure-valued free vars would overflow the stack.
      Guarded by `env_id` (unique per env node, `Types.fresh_env_id`) in a
      hashtable — no physical/structural sharing needed, an id is already an
      equality-comparable proxy for "the exact same env value". *)

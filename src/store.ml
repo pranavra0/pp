@@ -55,9 +55,9 @@ let traces_dir = Filename.concat store_root "traces"
 let version_path = Filename.concat store_root "VERSION"
 (* BUMP THIS whenever anything about the on-disk format changes — the codec
    grammar (codec.ml), the trace line shape, Types.canonical_float_string, or
-   which dirs are versioned. tests/037's golden fixtures are the tripwire: a
-   format change without a bump (and a regenerated store-vN fixture set)
-   fails byte-comparison there. *)
+   which dirs are versioned. The golden store fixtures are the tripwire: a
+   format change without a bump (and a regenerated fixture set)
+   fails byte-comparison. *)
 let current_version_line = "pp-store 1\n"
 
 let rec ensure_dir dir =
@@ -252,9 +252,9 @@ let load_traces ~key : trace list =
    loser's world simply re-misses and recomputes; never a wrong hit) — the
    lock only turns "sound but occasionally wasteful" into "sound and the
    waste doesn't happen in practice." [PP_TRACE_LOCK=0] disables the lock
-   (checked once, lazily) so tests/038's stress test can demonstrate the
+   (checked once, lazily) so a stress test can demonstrate the
    drop-soundness fallback still holds with it off — an internal escape
-   hatch documented in that test, not in user-facing docs. *)
+   hatch, not user-facing. *)
 let trace_lock_enabled =
   lazy (match Sys.getenv_opt "PP_TRACE_LOCK" with Some "0" -> false | _ -> true)
 
@@ -750,18 +750,23 @@ let print_graph ?(verbose = false) () =
   if Hashtbl.length key_to_cells = 0 then
     Printf.printf "(no traces in store — run a program first)\n"
   else begin
+    (* Sort keys and the inner cell/node lists so `pp graph` output is
+       deterministic run-to-run, like the rest of the store's ordering. *)
+    let sorted tbl = List.sort (fun (a,_) (b,_) -> String.compare a b)
+        (Hashtbl.fold (fun k v acc -> (k, v) :: acc) tbl []) in
     Printf.printf "pp graph — dependency graph from ~/.pp/store/traces\n\n";
     Printf.printf "Nodes → Cells (forward edges):\n";
-    Hashtbl.iter (fun key cells ->
+    List.iter (fun (key, cells) ->
+      let cells = List.sort String.compare cells in
       let cells_str = if cells = [] then "(none)" else String.concat ", " cells in
       Printf.printf "  node %s\n    reads: %s\n" (short_key key) cells_str
-    ) key_to_cells;
+    ) (sorted key_to_cells);
     Printf.printf "\nCells → Nodes (reverse edges):\n";
-    Hashtbl.iter (fun cell keys ->
+    List.iter (fun (cell, keys) ->
       if not (noise cell) then
         Printf.printf "  %s\n    used by: %s\n" cell
-          (String.concat ", " (List.map short_key keys))
-    ) cell_to_keys;
+          (String.concat ", " (List.sort String.compare (List.map short_key keys)))
+    ) (sorted cell_to_keys);
     Printf.printf "\n%d node(s), %d unique cell(s)\n"
       (Hashtbl.length key_to_cells) (Hashtbl.length cell_to_keys)
   end

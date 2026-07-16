@@ -18,8 +18,8 @@
    like any ordinary rebuild would — real but idempotent recomputation, not
    a hidden unsoundness; over-marking from a recompute is always safe).
 
-   Safety under concurrency (a build racing this sweep — the tests/038/050
-   shape): (1) a creation-time grace period — nothing younger than
+   Safety under concurrency (a build racing this sweep): (1) a creation-time
+   grace period — nothing younger than
    [grace_seconds] is ever a deletion candidate, so a build that just wrote
    a fresh object/trace/blob during the sweep is untouched regardless of
    whether the mark pass saw it; (2) a delete-time re-check of the roots

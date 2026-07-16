@@ -84,8 +84,8 @@ let stdlib_glue_sources () : (string * string) list =
           | Some r ->
               let canon = Runtime.canonical_path r in
               (* :wo, not :rw — write-only is the minimum sufficient grant
-                 here: tests/023 grants only `fs:ROOT:wo` and expects a full
-                 build+restore cycle to work — the single writer reading its
+                 here: a write-only grant must still support a full
+                 build+restore cycle, because the single writer reading its
                  OWN managed tree to converge is not a distinct authority
                  concern (Domain_prims.tree_observe accepts read-OR-write for
                  exactly this reason), so the domain's write-cap only needs to
@@ -297,8 +297,78 @@ let watch_loop ~files ~interval ~stabilize =
   in
   loop snapshot
 
+(* ---- Cluster transport / token CLI seam ----
+   Each does its one internal job, given the args the flag table parsed; main
+   dispatches to them so its body reads as a list of what pp can do rather than
+   a wall of inline blocks. (The dispatcher, src/remote.ml, drives the token
+   and transport machinery; these are the member-side entry points.) *)
+let run_mint_token ~(out : string) ~(ttl : int) ~(specs : string list) : unit =
+  let secret = Cap_token.load_secret () in
+  let cluster_id = Cap_token.load_cluster_id () in
+  Store.atomic_write out (Cap_token.mint ~secret ~cluster_id ~specs ~ttl_seconds:ttl)
+
+let run_transport_push (kind, id, root) : unit =
+  match kind with
+  | "object" -> Transport.LocalDir.push_object root ~hash:id
+  | "blob" -> Transport.LocalDir.push_blob root ~hash:id
+  | "trace" -> Transport.LocalDir.push_trace root ~key:id
+  | _ -> failwith ("pp --transport-push: unknown artifact kind " ^ kind)
+
+let run_transport_pull (kind, id, root) : unit =
+  match kind with
+  | "object" -> Transport.LocalDir.pull_object root ~hash:id
+  | "blob" -> Transport.LocalDir.pull_blob root ~hash:id
+  | "trace" -> Transport.LocalDir.pull_trace root ~key:id
+  | _ -> failwith ("pp --transport-pull: unknown artifact kind " ^ kind)
+
+let run_serve_hit (key, token_file, shared_root, reply_file) : unit =
+  let token_text = read_file_content token_file in
+  (* Store.hit re-observes the trace's read cells, which performs the
+     Lookup_handler/Record_read effects (observe_handler, file observation).
+     serve-hit runs no program, so it must supply the same top-level
+     observation context a plain run does: without it a node that read a
+     handler/config cell can never re-observe (Lookup_handler is unhandled →
+     stale → spurious miss), and a file re-observation crashes on an
+     unhandled Record_read. with_top_level answers Lookup_handler with the
+     builtin default the build itself recorded and makes Record_read a
+     no-op, so a synced node verifies exactly as it does locally. *)
+  let reply =
+    Runtime.with_top_level
+      ~f:(fun () -> Transport.serve_hit ~key ~token_text ~shared_root) ()
+  in
+  Store.atomic_write reply_file reply
+
+let run_recv_hit (reply_file, shared_root) : unit =
+  let reply_text = read_file_content reply_file in
+  match Transport.recv_hit ~reply_text ~shared_root with
+  | Transport.RHit { key; result_hash; _ } ->
+      Printf.printf "recv-hit: hit key=%s result=%s\n" key result_hash
+  | Transport.RMiss key -> Printf.printf "recv-hit: miss key=%s\n" key
+  | Transport.RDeny (key, reason) ->
+      Printf.printf "recv-hit: deny key=%s reason=%s\n" key reason
+
 let main () =
   let args = List.tl (Array.to_list Sys.argv) in
+  (* Install the impure Backend hooks first, before ANY subcommand dispatch:
+     several modes (--serve-hit/--recv-hit/--transport-*, cluster-init,
+     --mint-token) call into Cap_token, which reaches the world only through
+     these hooks (home_dir / cap_read_secret / cap_write_secret), and some of
+     those modes exit before the rest of main runs. *)
+  Backend.r.realpath <- Runtime.canonical_path_impl;
+  Backend.r.get_unix_time <- (fun () -> Unix.time ());
+  Backend.r.cap_write_secret <- (fun path content ->
+    let fd = Unix.openfile path [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL] 0o600 in
+    let oc = Unix.out_channel_of_descr fd in
+    output_string oc content;
+    close_out oc);
+  Backend.r.cap_read_secret <- (fun path ->
+    let ic = open_in_bin path in
+    let len = in_channel_length ic in
+    let s = really_input_string ic len in
+    close_in ic;
+    let n = String.length s in
+    if n > 0 && s.[n - 1] = '\n' then String.sub s 0 (n - 1) else s);
+  Backend.r.home_dir <- (fun () -> Sys.getenv "HOME");
   let bytecode = ref false in
   let diff = ref false in
   let eval_str = ref None in
@@ -349,8 +419,8 @@ let main () =
      surfaces (SPEC Appendix B). `--to-braces`/`--to-sexpr FILE [-i]`
      dispatch by FLAG, never by extension, so a file keeps its own name
      regardless of which surface it's written in.
-     `--compare-hash`/`--list-comments` are internal test seams for
-     tests/055-fmt.sh (per-form LAW-20 hash comparison across two files;
+     `--compare-hash`/`--list-comments` are internal seams for the fmt
+     round-trip checks (per-form LAW-20 hash comparison across two files;
      dumping the comment side-channel for count/content checks) — not
      documented in --help, mirroring --emit-braces/--roundtrip-braces's own
      internal-tool tone. *)
@@ -371,8 +441,8 @@ let main () =
                         | a :: rest -> f a; rest
                         | [] -> failwith (name ^ " requires one argument")) } in
   let doc_of d r = { r with doc = d; internal = false } in
-  (* The M5-remote help line must contain the literal "remote:<member>"
-     (tests/048 greps for it). *)
+  (* The remote-placement help line names the `remote:<member>` form
+     literally, so the cluster placement surface stays greppable. *)
   let schedule_handler = function
     | spec :: rest ->
         (* Ambient — read only by the miss arms and Scheduler.dispatch_batch;
@@ -418,7 +488,7 @@ let main () =
   in
   let check_kernel_props_handler rest =
     (* Derived-generator kernel properties (hash injectivity, quote/printer
-       round-trip). tests/071 drives this with a fixed seed. Optional:
+       round-trip), driven with a fixed seed for reproducibility. Optional:
        --seed N, --count K. *)
     let seed = ref 1 and count = ref 3000 in
     let rec grab = function
@@ -454,7 +524,7 @@ let main () =
     doc_of "  pp --fetch-islands        Allow git fetch for uncached island pins (default: off)\n"
       (flag "--fetch-islands" (fun () -> Runtime.island_fetch_enabled := true));
 
-    doc_of "  pp --schedule serial|parallel:N|race:N|remote:MEMBER  Node-miss dispatch policy (default: serial); remote:<member> is M5 stage B remote placement (members: ~/.pp/cluster/members or $PP_CLUSTER_MEMBERS)\n"
+    doc_of "  pp --schedule serial|parallel:N|race:N|remote:MEMBER  Node-miss dispatch policy (default: serial); remote:<member> places misses on a cluster member (members: ~/.pp/cluster/members or $PP_CLUSTER_MEMBERS)\n"
       { name = "--schedule"; arity = 1; doc = ""; internal = false;
         handler = schedule_handler };
 
@@ -466,7 +536,7 @@ let main () =
     (* ---- Cluster transport/token seam ----
        `cluster-init` mints ~/.pp/cluster/{secret,id}; the transport/token
        flags are internal test entries the exit tests drive directly. *)
-    doc_of "  pp cluster-init          Mint ~/.pp/cluster/{secret,id} (M5 cluster trust anchor)\n"
+    doc_of "  pp cluster-init          Mint ~/.pp/cluster/{secret,id} (the cluster trust anchor)\n"
       (flag "cluster-init" (fun () -> cluster_init_mode := true));
     doc_of "  pp --mint-token <out> <ttl-secs> [--grant ...]  Mint a signed cluster token\n"
       { name = "--mint-token"; arity = 2; doc = ""; internal = false;
@@ -510,7 +580,7 @@ let main () =
       (flag "--supervise" (fun () -> supervise := true));
 
     (* ---- Host-qualified domain distribution + store GC ---- *)
-    doc_of "  pp --member-name <n> [--reconcile/--supervise] <file>  Host-qualified domain distribution (M5 stage C): converge only desired[<n>]'s slice\n"
+    doc_of "  pp --member-name <n> [--reconcile/--supervise] <file>  Host-qualified domain distribution: converge only desired[<n>]'s slice\n"
       (opt1 "--member-name" (fun n -> member_name := Some n));
     doc_of "  pp --desired-object <hash> <shared-root> [--member-name <n>] [flags]  Pull a published desired-state value by hash and converge it (never runs a program to derive it)\n"
       { name = "--desired-object"; arity = 2; doc = ""; internal = false;
@@ -521,7 +591,7 @@ let main () =
       (opt1 "--publish-object" (fun root -> publish_object_root := Some root));
     (* `--gc-mark` is internal: only `pp gc`'s own replay subprocess sets it. *)
     opt1 "--gc-mark" (fun out -> gc_mark_out := Some out);
-    doc_of "  pp gc [--gc-keep-epochs N] [--gc-grace-seconds S]  Explicit store GC (M5 stage C): mark-by-replay the last N reconcile/supervise epochs, sweep the rest\n"
+    doc_of "  pp gc [--gc-keep-epochs N] [--gc-grace-seconds S]  Explicit store GC: mark-by-replay the last N reconcile/supervise epochs, sweep the rest\n"
       (flag "gc" (fun () -> gc_mode := true));
     opt1 "--gc-keep-epochs" (fun n ->
       match int_of_string_opt n with
@@ -533,21 +603,21 @@ let main () =
       | _ -> failwith ("invalid --gc-grace-seconds: " ^ s));
 
     (* ---- The observation-pinning seam ---- *)
-    doc_of "  pp --pin-file <path> <file.pp>  Preseed Store.run_pins/Runtime.probe_values from a (pin ...)/(pin-probe ...) file before running (M6 stage B: the observation-pinning seam)\n"
+    doc_of "  pp --pin-file <path> <file.pp>  Preseed Store.run_pins/Runtime.probe_values from a (pin ...)/(pin-probe ...) file before running (the observation-pinning seam)\n"
       (opt1 "--pin-file" (fun path -> pin_file := Some path));
     doc_of "  pp --dump-pins <path> <file.pp>  After running, write every run_pins/probe_values entry as (pin ...)/(pin-probe ...) lines to <path>\n"
       (opt1 "--dump-pins" (fun path -> dump_pins_file := Some path));
 
     (* ---- Brace-surface seams ---- *)
-    doc_of "  pp --emit-braces <file.ppl>  Print a sexpr (.ppl) file as brace-surface text (M7 S3: .pp/.ppb are brace surface, .ppl is the sexpr/AST surface)\n"
+    doc_of "  pp --emit-braces <file.ppl>  Print a sexpr (.ppl) file as brace-surface text (.pp/.ppb are brace surface, .ppl is the sexpr/AST surface)\n"
       (opt1 "--emit-braces" (fun f -> emit_braces_file := Some f));
     doc_of "  pp --roundtrip-braces <file.ppl>  Assert sexpr->braces->re-read AST + LAW-20 hash equality (the fuzz gate)\n"
       (opt1 "--roundtrip-braces" (fun f -> roundtrip_braces_file := Some f));
 
     (* ---- `pp fmt` seams ---- *)
-    doc_of "  pp fmt --to-braces <file> [-i]  Transpile sexpr source to brace source, carrying comments (M7 S2; -i/--in-place rewrites the file, same path)\n  pp fmt --to-sexpr <file> [-i]   Transpile brace source to sexpr source, carrying comments (M7 S2)\n"
+    doc_of "  pp fmt --to-braces <file> [-i]  Transpile sexpr source to brace source, carrying comments (-i/--in-place rewrites the file, same path)\n  pp fmt --to-sexpr <file> [-i]   Transpile brace source to sexpr source, carrying comments\n"
       { name = "fmt"; arity = -1; doc = ""; internal = false; handler = fmt_handler };
-    (* `--compare-hash` and `--list-comments` are internal tests/055 seams. *)
+    (* `--compare-hash` and `--list-comments` are internal fmt round-trip seams. *)
     { name = "--compare-hash"; arity = 2; doc = ""; internal = true;
       handler = (function
         | f1 :: f2 :: rest -> compare_hash_args := Some (f1, f2); rest
@@ -579,8 +649,8 @@ let main () =
     doc_of "  pp --version             Print version\n"
       (flag "--version" (fun () -> Printf.printf "pp v%s\n" Version.string; exit 0));
     { (flag "-v" (fun () -> Printf.printf "pp v%s\n" Version.string; exit 0)) with internal = true };
-    (* Emit the surface tables as the SPEC-generated block; tests/067 diffs
-       this against the block committed to docs/SPEC.md. Internal seam. *)
+    (* Emit the surface tables as the SPEC-generated block; the copy committed
+       to docs/SPEC.md is generated from here and must match it. Internal seam. *)
     flag "--dump-surface-tables"
       (fun () -> print_string (Surface_tables.render_spec_tables ()); exit 0);
     { name = "--check-kernel-props"; arity = -1; doc = ""; internal = true;
@@ -707,7 +777,8 @@ let main () =
        exit 0
    | None -> ());
   (* Test seam: per-top-level-form LAW-20 hash comparison between two
-     sexpr files (tests/055-fmt.sh's round-trip-hash check). Both are read
+     sexpr files, checking that a round-trip preserves every form's hash.
+     Both are read
      with f1's path as the location label: LAW-20 hashes include the
      `ELocated` file name, and the round-trip contract this checks is
      specifically that transpiling IN PLACE (same
@@ -771,13 +842,6 @@ let main () =
      this member process outright (Failure -> the top-level handler ->
      exit 1), which the dispatcher (src/remote.ml) reads as "member
      failed" and degrades that batch to local compute. *)
-  Backend.r.realpath <- Runtime.canonical_path_impl;
-  Backend.r.get_unix_time <- (fun () -> Unix.time ());
-  Backend.r.cap_write_secret <- (fun path content ->
-    let fd = Unix.openfile path [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL] 0o600 in
-    let oc = Unix.out_channel_of_descr fd in
-    output_string oc content;
-    close_out oc);
   let initial_caps =
     match !remote_node_args with
     | Some (token_file, _, _, _, _) ->
@@ -901,49 +965,16 @@ let main () =
     exit 0
   end;
   (match !mint_token_args with
-   | Some (out, ttl) ->
-       let secret = Cap_token.load_secret () in
-       let cluster_id = Cap_token.load_cluster_id () in
-       let token = Cap_token.mint ~secret ~cluster_id ~specs:(List.rev !grants) ~ttl_seconds:ttl in
-       Store.atomic_write out token;
-       exit 0
+   | Some (out, ttl) -> run_mint_token ~out ~ttl ~specs:(List.rev !grants); exit 0
    | None -> ());
   (match !transport_push_args with
-   | Some (kind, id, root) ->
-       (match kind with
-        | "object" -> Transport.LocalDir.push_object root ~hash:id
-        | "blob" -> Transport.LocalDir.push_blob root ~hash:id
-        | "trace" -> Transport.LocalDir.push_trace root ~key:id
-        | _ -> failwith ("pp --transport-push: unknown artifact kind " ^ kind));
-       exit 0
-   | None -> ());
+   | Some a -> run_transport_push a; exit 0 | None -> ());
   (match !transport_pull_args with
-   | Some (kind, id, root) ->
-       (match kind with
-        | "object" -> Transport.LocalDir.pull_object root ~hash:id
-        | "blob" -> Transport.LocalDir.pull_blob root ~hash:id
-        | "trace" -> Transport.LocalDir.pull_trace root ~key:id
-        | _ -> failwith ("pp --transport-pull: unknown artifact kind " ^ kind));
-       exit 0
-   | None -> ());
+   | Some a -> run_transport_pull a; exit 0 | None -> ());
   (match !serve_hit_args with
-   | Some (key, token_file, shared_root, reply_file) ->
-       let token_text = read_file_content token_file in
-       let reply = Transport.serve_hit ~key ~token_text ~shared_root in
-       Store.atomic_write reply_file reply;
-       exit 0
-   | None -> ());
+   | Some a -> run_serve_hit a; exit 0 | None -> ());
   (match !recv_hit_args with
-   | Some (reply_file, shared_root) ->
-       let reply_text = read_file_content reply_file in
-       (match Transport.recv_hit ~reply_text ~shared_root with
-        | Transport.RHit { key; result_hash; _ } ->
-            Printf.printf "recv-hit: hit key=%s result=%s\n" key result_hash
-        | Transport.RMiss key -> Printf.printf "recv-hit: miss key=%s\n" key
-        | Transport.RDeny (key, reason) ->
-            Printf.printf "recv-hit: deny key=%s reason=%s\n" key reason);
-       exit 0
-   | None -> ());
+   | Some a -> run_recv_hit a; exit 0 | None -> ());
   (* ---- `pp gc` (explicit, never automatic) ---- *)
   if !gc_mode then (Store_gc.run ~grace_seconds:!gc_grace_seconds; exit 0);
   (* ---- `--publish-object <shared-root>` — the by-hash
@@ -1104,7 +1135,14 @@ let main () =
   (match !remote_node_args with
    | Some (token_file, _, shared_root, keys_file, reply_file) ->
        let token_text = Store.read_raw token_file in
-       Remote.serve_assigned_keys ~token_text ~keys_file ~shared_root ~reply_file
+       (* Store.hit replays a verified trace's reads via Runtime.record_read,
+          which performs Record_read/Get_observe_all — so this after-run serve
+          must hold the same top-level observation context the run itself held
+          (line 1050), or a clean hit crashes on an unhandled effect. *)
+       Runtime.with_top_level
+         ~f:(fun () ->
+           Remote.serve_assigned_keys ~token_text ~keys_file ~shared_root
+             ~reply_file) ()
    | None -> ());
 
   (* --check verdict: any volatile node fails the audit (LAW 38). *)
@@ -1119,6 +1157,12 @@ let main () =
 let () =
   try main () with
   | Types.Pp_exit n -> exit n
+  (* Pp_error's registered printer renders "<msg> at file:line". The rest are
+     unlocated leaf errors that never crossed a form boundary (CLI validation,
+     transport, an unlocated reader failwith). *)
+  | Types.Pp_error _ as e ->
+      Printf.eprintf "pp: error: %s\n%!" (Printexc.to_string e);
+      exit 1
   | Failure msg | Types.Capability_error msg | Sys_error msg
   | Transport.Transport_integrity_error msg ->
       Printf.eprintf "pp: error: %s\n%!" msg;

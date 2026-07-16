@@ -320,7 +320,7 @@ block (LAW 4), and it is pinned by a differential test.
 `collect` is a function, used in pipelines:
 
 ```pp
-let results = srcs |> map(compile) |> collect
+let results = map(compile, srcs) |> collect
 # [:ok, [obj1, obj2, ...]]  if every element was [:ok, _]
 # [:err, [e1, e2, ...]]     if any element was [:err, _]
 ```
@@ -394,10 +394,13 @@ if x > 0 { "pos" } else if x < 0 { "neg" } else { "zero" }
   line — both parse. `pp fmt` normalises to `} else {`.
 - Only `nil` and `false` are falsy. Write `if found`, not
   `if not(nil?(found))`.
-- pp has no loops. Recursion with tail calls (LAW 10), and pipelines
-  (`|> map/filter/foldl`), are the iteration story, with no
-  comprehensions.
-- There is no dot-method call. `x |> f(args)` is the method syntax. An
+- pp has no loops. Recursion with tail calls (LAW 10) and the list
+  functions `map`, `filter` and `foldl` are the iteration story, with no
+  comprehensions. Those take the function first — `map(f, list)` — so they
+  are called directly, not piped into.
+- There is no dot-method call. `x |> f(args)` is the method syntax:
+  `x` becomes f's FIRST argument, so `|>` chains a value through functions
+  written receiver-first (`|> collect`, `src |> replace-ext(".o")`). An
   identifier may not contain `.` outside grant descriptors — this is
   linted.
 
@@ -488,7 +491,7 @@ node link(objs) needs process {
 
 node build() reads $glob("src/*.c") {
   try {
-    objs <- $glob("src/*.c") |> map(compile) |> collect
+    objs <- map(compile, $glob("src/*.c")) |> collect
     [:ok, link(objs)]
   }
 }

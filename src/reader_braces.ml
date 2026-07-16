@@ -85,7 +85,7 @@ let lex ~(file : string) (input : string) : tok list =
   let line = ref 1 in
   let toks = ref [] in
   let last_end = ref (-1) in   (* char index just past the previous token *)
-  let lex_error l msg = failwith (Printf.sprintf "%s at %s:%d" msg file l) in
+  let lex_error l msg = raise (Pp_error { kind = Eval; msg; pos = Some (file, l) }) in
   (* A token that scanned off the end of the source — the lexer's out-of-input
      signal, distinct from a genuine bad-character error. See
      Types.Reader_incomplete. *)
@@ -316,6 +316,10 @@ let lex ~(file : string) (input : string) : tok list =
 
 (* ---- Parser ---- *)
 
+(* A "...x" spread prefix on a name token (list/map/call spread sugar). *)
+let is_spread_prefix (s : string) : bool =
+  String.length s >= 3 && String.sub s 0 3 = "..."
+
 type ps = {
   toks : tok array;
   mutable pos : int;
@@ -335,13 +339,14 @@ let advance ps = ps.pos <- ps.pos + 1
    is a genuine error on a token that is present. next_sig scans without
    mutating (unlike [peek ~nl], which consumes newlines via skip_nl). *)
 let parse_error ps msg =
-  let located = Printf.sprintf "%s at %s:%d" msg ps.file (cur ps).tline in
+  let file = ps.file and line = (cur ps).tline in
   let rec next_sig i =
     if i >= Array.length ps.toks then eof_tok
     else match ps.toks.(i).t with TNewline -> next_sig (i + 1) | _ -> ps.toks.(i)
   in
-  if (next_sig ps.pos).t = TEOF then raise (Reader_incomplete located)
-  else failwith located
+  if (next_sig ps.pos).t = TEOF then
+    raise (Reader_incomplete (Printf.sprintf "%s at %s:%d" msg file line))
+  else raise (Pp_error { kind = Eval; msg; pos = Some (file, line) })
 
 (* Skip newline tokens (used wherever the statement-continuation rule makes
    newlines insignificant: inside brackets, after an operator/'='/'->'/','
@@ -547,7 +552,7 @@ let rec parse_pattern_generic ps (pb : 'a pattern_builder) : 'a =
         let rec loop_pats acc =
           let k = cur ps in
           match k.t with
-          | TName s when String.length s >= 3 && String.sub s 0 3 = "..." ->
+          | TName s when is_spread_prefix s ->
               (* Spread must be the last element; bind the remainder. *)
               advance ps;
               let rest_name = String.sub s 3 (String.length s - 3) in
@@ -859,9 +864,9 @@ and fstring_hole_expr ~(file : string) (src : string) ~(parse : ps -> expr) : ex
   skip_nl hps;
   (match (cur hps).t with
    | TEOF -> ()
-   | t -> failwith (Printf.sprintf
-            "unexpected %s after an f-string interpolation expression at %s"
-            (string_of_btok t) file));
+   | t -> parse_error hps (Printf.sprintf
+            "unexpected %s after an f-string interpolation expression"
+            (string_of_btok t)));
   e
 
 (* Lower f-string segments: each non-empty literal → a string literal,
@@ -891,7 +896,7 @@ and parse_call_args ps ~(elem : ps -> expr) : bracket_elem list =
     let rec loop acc =
       let item =
         match (cur ps).t with
-        | TName s when String.length s >= 3 && String.sub s 0 3 = "..." ->
+        | TName s when is_spread_prefix s ->
             advance ps;
             let target =
               if String.length s > 3 then ESymbol (String.sub s 3 (String.length s - 3))
@@ -1034,7 +1039,7 @@ and parse_map_literal ps : expr =
 and parse_map_entries ps ~parse_elem ~mk_spread_sym : map_entry list =
   let rec loop acc =
     match (cur ps).t with
-    | TName s when String.length s >= 3 && String.sub s 0 3 = "..." ->
+    | TName s when is_spread_prefix s ->
         advance ps;
         let target =
           if String.length s > 3 then mk_spread_sym (String.sub s 3 (String.length s - 3))
@@ -1326,17 +1331,16 @@ and normal_head_builder : head_builder = {
          | t -> parse_error ps ("expected ',' or ')', got " ^ string_of_btok t))
     | "assert" ->
         skip_nl ps;
-        let line = (cur ps).tline in
         let cond = parse_expr ps free_ctx in
         (match (peek ps ~nl:true).t with
          | TComma ->
              advance ps; skip_nl ps;
              let m = parse_expr ps free_ctx in
              expect ps ~nl:true TRParen "')'";
-             Desugar.desugar_assert ~file:ps.file ~line cond (Some m)
+             Desugar.desugar_assert cond (Some m)
          | TRParen ->
              advance ps;
-             Desugar.desugar_assert ~file:ps.file ~line cond None
+             Desugar.desugar_assert cond None
          | t -> parse_error ps ("expected ',' or ')', got " ^ string_of_btok t))
     | "load" ->
         (match (peek ps ~nl:true).t with
@@ -1733,7 +1737,7 @@ and parse_bracket_elems ps ~(elem : ps -> expr) ~(mk_spread_sym : string -> expr
     : bracket_elem list =
   let rec loop acc =
     match (cur ps).t with
-    | TName s when String.length s >= 3 && String.sub s 0 3 = "..." ->
+    | TName s when is_spread_prefix s ->
         advance ps;
         let target =
           if String.length s > 3 then
@@ -2320,13 +2324,13 @@ let read_string ?(source : string = "<?>") (input : string) : expr list =
 let read_one ?(source : string = "<?>") (input : string) : expr =
   match read_string ~source input with
   | [e] -> e
-  | [] -> failwith (Printf.sprintf "empty input at %s:1" source)
-  | _ -> failwith (Printf.sprintf "multiple expressions at %s:1" source)
+  | [] -> raise (Pp_error { kind = Eval; msg = "empty input"; pos = Some (source, 1) })
+  | _ -> raise (Pp_error { kind = Eval; msg = "multiple expressions"; pos = Some (source, 1) })
 
 (* ---- Extension dispatch ----
 
    `.pp` and `.ppb` read with the brace reader (`.pp` is the default
-   surface; `.ppb` remains a permanent alias — tests/054's fixtures use it).
+   surface; `.ppb` remains a permanent alias).
    `.ppl` ("the AST form") reads with the sexpr reader — sexpr is demoted
    from "the syntax" to "the AST", still fully supported forever (it is the
    macro layer: `quote`/`defmacro` still traffic in sexpr data). The reader's

@@ -12,8 +12,7 @@
 #
 # Runs under an isolated HOME; both backends.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
+. "$(dirname "$0")/lib.sh"
 
 # Portable `timeout`: macOS ships without coreutils. Must be a real executable,
 # not a shell function — `timeout N cmd &` has to put cmd's own pid in $! so
@@ -25,16 +24,9 @@ if ! command -v timeout >/dev/null 2>&1; then
   PATH="$SHIM_DIR:$PATH"
 fi
 
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
-
-assert_count() {  # NAME PATTERN EXPECTED-COUNT FILE
-  local name="$1" pat="$2" want="$3" file="$4"
-  local got=$(grep -c "$pat" "$file" 2>/dev/null || printf "0")
-  if [ "$got" = "$want" ]; then echo "ok   $name"
-  else echo "FAIL $name: expected $pat count $want, got $got"; fail=1; fi
-}
+# assert_count (poll-until-count, from lib.sh) replaces this suite's former
+# `sleep 4; grep -c` pairs: each step below writes a cell and then asserts the
+# resulting re-evaluation count, waiting for it to arrive rather than sleeping.
 
 # Write the 4-node program — use unquoted heredoc so $TMP expands to literal paths.
 cat > "$TMP/stab.pp" <<EOF
@@ -88,35 +80,30 @@ run_test() {
     $bc_flag "$TMP/stab.pp" > "$out" 2>&1 &
   local WATCH_PID=$!
 
-  # Wait for cold run to complete
-  sleep 4
-  sync
-
-  # --- Cold run assertions ---
+  # --- Cold run assertions (poll until the cold pass has logged each node) ---
   assert_count "$label-cold-A" "A" 1 "$out"
   assert_count "$label-cold-B" "B" 1 "$out"
   assert_count "$label-cold-C" "C" 1 "$out"
   assert_count "$label-cold-D" "D" 1 "$out"
 
-  # --- Step 1: change f1 — A/B/C dirty, D clean ---
+  # --- Step 1: change f1 — A/B/C dirty, D clean. Poll the nodes that recompute
+  # first (that advances real time through a full watch pass), then assert D
+  # stayed put. ---
   echo "F1-v2" > "$TMP/f1"
-  sleep 4
   assert_count "$label-step1-A" "A" 2 "$out"
   assert_count "$label-step1-B" "B" 2 "$out"
   assert_count "$label-step1-C" "C" 2 "$out"
   assert_count "$label-step1-D" "D" 1 "$out"
 
-  # --- Step 2: change f3 — only D dirty (tree-walker), B/C also in VM ---
+  # --- Step 2: change f3 — D dirty (both), B/C also in VM. Poll D first. ---
   echo "F3-v2" > "$TMP/f3"
-  sleep 4
-  assert_count "$label-step2-A" "A" 2 "$out"
+  assert_count "$label-step2-D" "D" 2 "$out"
   assert_count "$label-step2-B" "B" "$step2_B" "$out"
   assert_count "$label-step2-C" "C" "$step2_C" "$out"
-  assert_count "$label-step2-D" "D" 2 "$out"
+  assert_count "$label-step2-A" "A" 2 "$out"
 
   # --- Step 3: revert f1 — A/B/C dirty, D clean ---
   echo "F1-v3" > "$TMP/f1"
-  sleep 4
   assert_count "$label-step3-A" "A" "$step3_A" "$out"
   assert_count "$label-step3-B" "B" "$step3_B" "$out"
   assert_count "$label-step3-C" "C" "$step3_C" "$out"

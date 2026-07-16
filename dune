@@ -8,26 +8,26 @@
   (source_tree stdlib)
   (source_tree demo)
   (source_tree examples)
-  ; M7 S2: tests/055's whole-tree `pp fmt` round-trip sweep also covers the
+  ; tests/055's whole-tree `pp fmt` round-trip sweep also covers the
   ; manual's live-executed .pp examples
   (source_tree docs/manual)
-  ; A′2: tests/067 diffs SPEC's generated surface-tables block against
+  ; tests/067 diffs SPEC's generated surface-tables block against
   ; `pp --dump-surface-tables`, so the SPEC file must be a runtest dep.
   docs/SPEC.md
-  ; A″5: tests/074 checks each observation head has an adversarial fixture or
-  ; a DESIGN §4 honest-edge entry, so DESIGN.md must be a runtest dep too —
+  ; tests/074 checks each observation head has an adversarial fixture or
+  ; a DESIGN honest-edge entry, so DESIGN.md must be a runtest dep too —
   ; without it the sandbox served a stale/absent copy and env/probe/config
   ; (the §4-edge heads) failed under `dune runtest` while passing directly.
   docs/DESIGN.md
   build.pp
   scripts/run-tests.sh
   src/main.exe
-  ; M7 S1: tests/054 drives the fuzzer's reader-roundtrip gate
+  ; tests/054 drives the fuzzer's reader-roundtrip gate
   tools/fuzz.exe)
  (action
   (run bash scripts/run-tests.sh src/main.exe)))
 
-; Phase-3 fork-defeat regression, root cause: Runtime.stdlib_root()
+; Fork-defeat regression, root cause: Runtime.stdlib_root()
 ; (src/runtime.ml) resolves --reconcile/--supervise's auto-loaded
 ; domain-fs.pp/domain-proc.pp (and their list.pp/map.pp/string.pp deps) to
 ; _build/default/stdlib — the sibling directory of main.exe, i.e. THIS
@@ -40,7 +40,7 @@
 ; until something else happened to invoke `dune runtest` first. This is
 ; exactly how the list.pp `map`-shadow fix (removing the pp-level `(def
 ; (map f lst) ...)` that shadowed the batching-aware builtin, defeating
-; Phase 3's parallel fan-out — docs/PLAN-phase3-parallel.md) silently
+; the parallel fan-out) silently
 ; failed to take effect for `bin/pp`: the source was fixed, but the mirror
 ; `bin/pp` actually reads stdlib from at runtime stayed stale.
 ;

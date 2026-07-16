@@ -123,7 +123,7 @@ let ingest_trace_lines ~(key : string) (raw : string) : unit =
    BE one store, never address a second one directly. Two distinct nodes
    are therefore two distinct `pp` process invocations (differing only in
    $HOME), exactly the pattern the rest of the test suite already uses for
-   isolation (tests/010, /019, /044, ...); this module's push/pull work
+   isolation; this module's push/pull work
    between "my own store" (read via Store.load_*, written via
    Store.store_*/atomic_write — the process's own singleton) and an
    arbitrary root path passed in as [t]. *)
@@ -240,14 +240,14 @@ module LocalDir = struct
     else ingest_trace_lines ~key (Store.read_raw path)
 
   (* Control has no generic realization for local-dir without a listening
-     peer process (there is no daemon in this stage); nothing in
-     tests/047 calls this — the request/reply-FILE convention actually
+     peer process (there is no daemon); nothing calls this — the
+     request/reply-FILE convention actually
      exercised is [serve_hit]/[recv_hit] below, driven by two `pp` CLI
-     invocations (one per simulated node). See the module header and the
-     report for why: Store.store_root's process-wide singleton means a
+     invocations (one per simulated node). See the module header for why:
+     Store.store_root's process-wide singleton means a
      single process can only ever serve hits against ITS OWN store, so
      "control" here is realized at the CLI layer rather than through this
-     function this stage. *)
+     function. *)
   let control (_ : t) ~(request : string) : string =
     ignore request;
     failwith "transport: LocalDir.control is not used this stage — see \
@@ -259,7 +259,7 @@ end
    ([push_trace_filtered]) the signature doesn't mention. *)
 module LocalDir_conforms : TRANSPORT = LocalDir
 
-(* ---- ssh: STUBBED this stage ----
+(* ---- ssh: STUBBED ----
 
    scp/rsync for artifacts, `ssh <host> pp --worker-control` for control —
    drops in behind the exact
@@ -271,9 +271,8 @@ module Ssh : TRANSPORT = struct
 
   let not_yet (op : string) (host : t) : 'a =
     failwith (Printf.sprintf
-      "pp: transport ssh: %s not implemented yet (host %s) — stage A ships \
-       local-dir only; ssh drops in later behind the identical TRANSPORT \
-       shape (PLAN-m5-distribution.md \"Transport\")" op host)
+      "pp: transport ssh: %s not implemented (host %s) — local-dir is the \
+       only transport; ssh drops in behind the identical TRANSPORT shape" op host)
 
   let push_object host ~hash:_ = not_yet "push_object" host
   let push_blob host ~hash:_ = not_yet "push_blob" host

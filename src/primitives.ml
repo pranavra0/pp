@@ -120,7 +120,7 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
    child — and re-dispatch (and thus re-run_node_body, re-executing every
    external process) an already-computed node all over again, once per
    remaining list position (an O(n^2) blowup, not a correctness issue but a
-   catastrophic performance one — caught by tests/024's exec-count assert). *)
+   catastrophic performance one). *)
 
 (* Deep force: recursively force all thunks in a data structure. Under a
    non-serial schedule policy, collects and dispatches every reachable
@@ -148,51 +148,43 @@ let force_deep (v : value) : value =
    way and can never disagree (mirrors Runtime.proc_observer/observe_proc's
    existing shape, same reason). *)
 
-(* Call a zero-argument function value, dispatching on tree-walker vs VM
-   closures exactly like `map`'s apply1 / apply-pp above (this module's own
-   precedent for "invoke a value as a function without going through
-   EApply"). *)
-let call_zero_arg (fn : value) : value =
+(* Invoke a function value on already-evaluated args, without going through
+   EApply: a VM closure (non-empty bytecode) runs over a fresh frame filled
+   with the args; a tree-walker closure or a builtin goes through
+   Backend.r.apply. The one place this dispatch lives — callers that need an
+   arity check do it first, since the error wording is caller-specific. *)
+let invoke (fn : value) (args : value list) : value =
   match fn with
   | VClosure c when Array.length c.vm_bc.code > 0 ->
-      if c.params <> [] then
-        failwith (Printf.sprintf
-          "probe: observe-fn expects 0 arguments, got a closure of %d"
-          (List.length c.params));
-      let new_frame = Types.make_frame 0 in
-      Backend.r.vm_run_thunk c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
-  | VClosure c ->
-      if c.params <> [] then
-        failwith (Printf.sprintf
-          "probe: observe-fn expects 0 arguments, got a closure of %d"
-          (List.length c.params));
-      Backend.r.apply fn [] !current_env_ref
-  | VBuiltin _ -> Backend.r.apply fn [] !current_env_ref
-  | _ -> failwith "probe: observe-fn is not a function"
-
-(* Call a function value with a fixed argument list, dispatching on
-   tree-walker vs VM closures exactly like [call_zero_arg] —
-   register-domain needs 1-arg (apply) and 2-arg (diff) calls into
-   user-registered closures from OCaml orchestration (Domains.ml), so this
-   generalizes call_zero_arg's dispatch to arbitrary arity instead of adding
-   two more near-duplicate functions. *)
-let call_with_args (fn : value) (args : value list) : value =
-  match fn with
-  | VClosure c when Array.length c.vm_bc.code > 0 ->
-      if List.length c.params <> List.length args then
-        failwith (Printf.sprintf
-          "domain function expects %d argument(s), got %d"
-          (List.length c.params) (List.length args));
       let new_frame = Types.make_frame (List.length args) in
       List.iteri (fun i a -> Types.frame_set new_frame i a) args;
       Backend.r.vm_run_thunk c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
+  | _ -> Backend.r.apply fn args !current_env_ref
+
+(* Call a zero-argument function value. *)
+let call_zero_arg (fn : value) : value =
+  match fn with
+  | VClosure c ->
+      if c.params <> [] then
+        failwith (Printf.sprintf
+          "probe: observe-fn expects 0 arguments, got a closure of %d"
+          (List.length c.params));
+      invoke fn []
+  | VBuiltin _ -> invoke fn []
+  | _ -> failwith "probe: observe-fn is not a function"
+
+(* Call a function value with a fixed argument list — register-domain needs
+   1-arg (apply) and 2-arg (diff) calls into user-registered closures from
+   OCaml orchestration (Domains.ml). *)
+let call_with_args (fn : value) (args : value list) : value =
+  match fn with
   | VClosure c ->
       if List.length c.params <> List.length args then
         failwith (Printf.sprintf
           "domain function expects %d argument(s), got %d"
           (List.length c.params) (List.length args));
-      Backend.r.apply fn args !current_env_ref
-  | VBuiltin _ -> Backend.r.apply fn args !current_env_ref
+      invoke fn args
+  | VBuiltin _ -> invoke fn args
   | _ -> failwith "domain function value is not a function"
 
 (* [Some v]: the probe's value for THIS pass — pinned in Runtime.probe_values
@@ -442,18 +434,15 @@ let register_lists () =
            (== Vm.run_isolated) over a fresh one-slot frame; anything else
            (a tree-walker closure or a builtin) goes through `!apply_ref`. *)
         let apply1 (arg : value) : value =
-          match fn with
-          | VClosure c when Array.length c.vm_bc.code > 0 ->
-              if List.length c.params <> 1 then begin
-                let fname = match c.fn_name with Some n -> n | None -> "#<fn>" in
-                failwith (Printf.sprintf
-                  "arity mismatch calling %s: expected %d args, got 1"
-                  fname (List.length c.params))
-              end;
-              let new_frame = Types.make_frame 1 in
-              Types.frame_set new_frame 0 arg;
-              Backend.r.vm_run_thunk c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
-          | _ -> Backend.r.apply fn [arg] !current_env_ref
+          (match fn with
+           | VClosure c when Array.length c.vm_bc.code > 0
+                             && List.length c.params <> 1 ->
+               let fname = match c.fn_name with Some n -> n | None -> "#<fn>" in
+               failwith (Printf.sprintf
+                 "arity mismatch calling %s: expected %d args, got 1"
+                 fname (List.length c.params))
+           | _ -> ());
+          invoke fn [arg]
         in
         let rec go l =
           match force_val l with
@@ -676,13 +665,7 @@ let register_metaeval () =
           | _ -> failwith "apply-pp expects a proper list for args"
         in
         let arg_values = list_to_ocaml args_list in
-        (match fn with
-         | VClosure c when Array.length c.vm_bc.code > 0 ->
-             let new_frame = Types.make_frame (List.length c.params) in
-             List.iteri (fun i arg -> Types.frame_set new_frame i arg) arg_values;
-             Backend.r.vm_run_thunk c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
-         | _ ->
-             Backend.r.apply fn arg_values !current_env_ref)
+        invoke fn arg_values
     | _ -> failwith "apply-pp expects fn and list of args"
   );
 
@@ -1032,7 +1015,7 @@ let register_domains () =
   (* `(register-probe name observe-fn read-cap)` — sugar over register-domain
      for the ⊥-write-authority case: dm_namespace = [] (nothing to
      stratify, core never converges it), dm_diff/dm_apply = None. Same
-     surface and error text as a standalone probe registry (tests/043-probes.sh). *)
+     surface and error text as a standalone probe registry. *)
   register "register-probe" (fun args ->
     if Effect.perform Runtime.In_node then
       failwith "register-probe: may not be called inside a node body (script-tier only, like fenced)";

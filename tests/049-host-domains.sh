@@ -33,15 +33,7 @@ if ! command -v timeout >/dev/null 2>&1; then
   PATH="$SHIM_DIR:$PATH"
 fi
 
-wait_for() {  # SECONDS CMD ARGS...
-  local secs="$1"; shift
-  local i=0 max=$((secs * 10))
-  while [ "$i" -lt "$max" ]; do
-    "$@" 2>/dev/null && return 0
-    sleep 0.1; i=$((i + 1))
-  done
-  "$@" 2>/dev/null
-}
+# wait_for (poll-until-condition) comes from lib.sh.
 
 # ===========================================================================
 # Part 1: --member-name converges ONLY that host's fs slice.
@@ -130,7 +122,6 @@ EOF
 HOME="$HOSTC_HOME" timeout 20 "$PP" --watch --watch-interval 0.3 --grant process \
   --member-name C "$TMP/prog-proc.pp" > "$TMP/watch-out" 2>&1 &
 WATCH_PID=$!
-sleep 2
 wait_for 5 test -f "$TMP/pid-c" || { echo "FAIL member-svc-started: pidfile missing"; fail=1; }
 [ -e "$TMP/pid-other" ] && { echo "FAIL member-only-own-slice: svc-other (a DIFFERENT host's service) was started"; fail=1; } \
   || ok "member-only-own-slice (svc-other, host OTHER's service, never started)"
