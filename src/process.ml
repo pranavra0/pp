@@ -27,7 +27,7 @@
 open Types
 
 let has_process_cap () =
-  List.exists Capabilities.check_process !Runtime.current_capabilities
+  List.exists Capability.check_process (Effect.perform Runtime.Get_capabilities)
 
 (* Resolve a command to the binary that will execute: as-is when it contains
    a slash, else the first match on $PATH. The resolved path is what the
@@ -47,19 +47,21 @@ let resolve_cmd (cmd : string) : string option =
 
 let record_tool_cell (resolved : string) : unit =
   match Store.hash_file_opt resolved with
-  | Some h -> Runtime.record_read (Cell.(to_string (Tool (Runtime.canonical_path resolved)))) h
+  | Some h -> Runtime.record_read (Cell.(to_string (Tool ((Runtime.canonical_path resolved) :> string)))) h
   | None -> ()
 
 (* The coarse-cell soundness floor: one whole-tree hash per fs-read
    grant. Used by plain `run` and as run-dep!'s fallback when the tool
    produced no depfile. *)
 let record_tree_cells () : unit =
-  List.iter (function
-    | CapFilesystem { path; mode = (Read | ReadWrite) } ->
-        let cpath = Runtime.canonical_path path in
-        Runtime.record_read (Cell.(to_string (Tree cpath))) (Store.tree_hash cpath)
-    | _ -> ())
-    !Runtime.current_capabilities
+  List.iter (fun cap ->
+    List.iter (fun ((path : Paths.canonical), mode) ->
+      match mode with
+      | Capability.Read | Capability.ReadWrite ->
+          Runtime.record_read (Cell.(to_string (Tree (path :> string)))) (Store.tree_hash (path :> string))
+      | Capability.Write -> ())
+    (Capability.list_fs_paths cap))
+    (Effect.perform Runtime.Get_capabilities)
 
 let record_run_observations (resolved : string) : unit =
   record_tool_cell resolved;
@@ -174,12 +176,12 @@ let parse_depfile (content : string) : string list =
 let record_depfile_cells (deps : string list) : unit =
   List.iter (fun dep ->
     if Sys.file_exists dep then begin
-      if List.exists (fun cap -> Capabilities.check_fs_read cap dep)
-           !Runtime.current_capabilities
+      if List.exists (fun cap -> Capability.check_fs_read cap (Runtime.canonical_path dep))
+           (Effect.perform Runtime.Get_capabilities)
       then ignore (Store.read_file_cell dep)
       else
         match Store.hash_file_opt dep with
-        | Some h -> Runtime.record_read (Cell.(to_string (Tool (Runtime.canonical_path dep)))) h
+        | Some h -> Runtime.record_read (Cell.(to_string (Tool ((Runtime.canonical_path dep) :> string)))) h
         | None -> ()
     end)
     deps
@@ -232,13 +234,10 @@ let write_file_effect ~(has_cap : string -> bool) (path : string)
          VNil
        with Sys_error msg -> failwith ("write-file: " ^ msg))
   | None ->
-      if !Runtime.trace_stack <> [] then
+      if Effect.perform Runtime.In_node then
         failwith ("write-file: node writes are sandbox-scratch only (LAW 18): "
                   ^ path)
       else begin
-        if not (has_cap path) then
-          raise (Capability_error
-                   ("write-file: capability error: no write access for " ^ path));
         (try
            let ch = open_out path in
            output_string ch content;
@@ -280,23 +279,22 @@ let sandbox_read (path : string) : string option =
      - covered by CapSecret and NOT by CapFilesystem → VSealed, read via
        Store.read_sealed_cell (bytes pinned in Runtime.sealed_pins,
        in-memory only — store_blob/the CAS is never called for this path).
-     - covered by neither → Capability_error, worded by the caller (`slurp`
-       and `read-file` each keep their own message text via [cap_err]). *)
+     `read-file` each keep their own message text via [cap_err]). *)
 let read_dispatch ~(tag : string) ~(cap_err : string -> string) (path : string) : value =
   match sandbox_read path with
   | Some content -> VString content
   | None ->
       let fs_ok =
-        List.exists (fun cap -> Capabilities.check_fs_read cap path)
-          !Runtime.current_capabilities
+        List.exists (fun cap -> Capability.check_fs_read cap (Runtime.canonical_path path))
+          (Effect.perform Runtime.Get_capabilities)
       in
       if fs_ok then
         (try VString (Store.read_file_cell path)
          with Sys_error msg -> failwith (tag ^ ": " ^ msg))
       else
         let secret_ok =
-          List.exists (fun cap -> Capabilities.check_secret cap path)
-            !Runtime.current_capabilities
+          List.exists (fun cap -> Capability.check_secret cap (Runtime.canonical_path path))
+            (Effect.perform Runtime.Get_capabilities)
         in
         if secret_ok then
           (try VSealed (Store.read_sealed_cell path)
@@ -315,10 +313,9 @@ let read_dispatch ~(tag : string) ~(cap_err : string -> string) (path : string) 
    nondeterminism mechanism (probes are, LAW 37/38); legal in probe
    observe-fns (which run with trace_stack forced to [] —
    Primitives.probe_value_for), domain observe/apply, and the script tier. *)
-
 let has_network_cap ~(host : string) ~(port : int option) : bool =
-  List.exists (fun cap -> Capabilities.check_network cap ~host ~port)
-    !Runtime.current_capabilities
+  List.exists (fun cap -> Capability.check_network cap ~host ~port)
+    (Effect.perform Runtime.Get_capabilities)
 
 (* Parse an http(s) URL into (scheme, host, port); port defaults to the
    scheme's standard port when the URL omits one, so a `--grant
@@ -371,10 +368,9 @@ let curl_bin () : string =
    `{"status" INT "body" STRING}`, mirroring `run`'s `{"exit" "out" "err"}`
    convention (VString keys). A curl PROCESS failure (missing binary,
    couldn't connect, timeout) is a pp-level error; an HTTP-level error
-   status (404, 500, …) is not — it comes back as an ordinary result, same
-   as `run`'s nonzero exit code never being an OCaml exception. *)
+   status (404, 500, …) is not — it comes back as an ordinary result, same *)
 let http_request ~(method_ : string) ~(url : string) ~(body : string option) : value =
-  if !Runtime.trace_stack <> [] then
+  if Effect.perform Runtime.In_node then
     failwith (Printf.sprintf
       "perform http-%s: network effects may not appear inside node bodies (LAW 37/38)"
       (String.lowercase_ascii method_));

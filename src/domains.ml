@@ -102,9 +102,9 @@ let plan_summary (plan : value) : (string * string) list =
    free, with no AST to keep in sync with a node body that doesn't exist —
    the direct route is documented here as the deliberate, simpler choice. *)
 let plan_cache_key ~(diff_closure : value) ~(observed : value) ~(desired : value) : string =
-  let diff_hash = Hasher.hash_value diff_closure in
-  let observed_hash = Hasher.hash_value (Primitives.force_deep observed) in
-  let desired_hash = Hasher.hash_value (Primitives.force_deep desired) in
+  let diff_hash = Types.hash_value diff_closure in
+  let observed_hash = Types.hash_value (Primitives.force_deep observed) in
+  let desired_hash = Types.hash_value (Primitives.force_deep desired) in
   Hasher.hash_concat ["domain-plan"; diff_hash; observed_hash; desired_hash]
 
 let compute_plan ~(domain_name : string) ~(diff_closure : value)
@@ -118,10 +118,10 @@ let compute_plan ~(domain_name : string) ~(diff_closure : value)
   | Store.HitFailed _ | Store.Miss ->
       Store.why "domain %s: plan %s: miss — running diff" domain_name (Store.short_key key);
       let plan =
-        Runtime.with_ref Runtime.current_capabilities []
-          (fun () -> Primitives.call_with_args diff_closure [observed; desired])
+        try Primitives.call_with_args diff_closure [observed; desired]
+        with effect Runtime.Get_capabilities, k -> Effect.Deep.continue k []
       in
-      let result_hash = Hasher.hash_value plan in
+      let result_hash = Types.hash_value plan in
       (try Store.store_object ~key:result_hash ~value:plan with _ -> ());
       (try Store.store_trace ~key ~outcome:Store.Ok ~result_hash ~reads:[] with _ -> ());
       plan
@@ -148,9 +148,11 @@ let stratification_check (write_domains : (string * Runtime.domain_entry) list) 
    pure; apply under the SAME cap (a write grant already covers read at its
    own scope — no separate read-cap threading needed); journal a generic
    intent/done bracket; verify-after-write by re-observing and re-diffing. *)
-let with_domain (name : string) (cap : capability) (f : unit -> 'a) : 'a =
-  Runtime.with_ref Runtime.current_domain (Some name) (fun () ->
-    Runtime.with_ref Runtime.current_capabilities [cap] f)
+let with_domain (name : string) (cap : Capability.t) (f : unit -> 'a) : 'a =
+  try f ()
+  with
+  | effect Runtime.Get_domain, k -> Effect.Deep.continue k (Some name)
+  | effect Runtime.Get_capabilities, k -> Effect.Deep.continue k [cap]
 
 (* A load-bearing wall (found the hard way): observe (and, to be
    safe across --watch --stabilize's keep_thunks, apply) is a call to a
@@ -175,11 +177,10 @@ let cache_bust_counter = ref 0
 let fresh_nonce_config () : value =
   incr cache_bust_counter;
   VMap [(VString "__pp_q13_cache_bust", VInt !cache_bust_counter)]
-
 let call_uncached (fn : value) (args : value list) : value =
-  Runtime.with_ref Runtime.config_stack
-    (fresh_nonce_config () :: !Runtime.config_stack)
-    (fun () -> Primitives.call_with_args fn args)
+  try Primitives.call_with_args fn args
+  with effect Runtime.Get_config, k ->
+    Effect.Deep.continue k (fresh_nonce_config () :: Effect.perform Runtime.Get_config)
 
 let observe_domain (entry : Runtime.domain_entry) (name : string) : value =
   with_domain name entry.Runtime.dm_cap
@@ -187,7 +188,6 @@ let observe_domain (entry : Runtime.domain_entry) (name : string) : value =
 
 let verify_failed_msg (name : string) : string =
   "reconcile: verify-after-write failed for domain " ^ name
-
 let run_domain ~(name : string) ~(entry : Runtime.domain_entry) ~(desired : value) : unit =
   let diff_closure = match entry.Runtime.dm_diff with
     | Some d -> d
@@ -198,15 +198,13 @@ let run_domain ~(name : string) ~(entry : Runtime.domain_entry) ~(desired : valu
     | None -> assert false
   in
   (* Load-bearing suspension: a domain's own bookkeeping
-     during observe/diff/apply must never trip its own stratification scan —
-     exception-safe with_ref, never a hand-rolled save/restore. Does NOT
-     suspend trace_stack: node caching inside a domain's fns keeps working. *)
-  Runtime.with_ref Runtime.observe_all false (fun () ->
+     during observe/diff/apply must never trip its own stratification scan. *)
+  (try
     let observed = observe_domain entry name in
     let plan = compute_plan ~domain_name:name ~diff_closure ~observed ~desired in
     let summary = plan_summary plan in
     let hash = Hasher.hash_concat
-        ["domain-pass"; name; Hasher.hash_value (Primitives.force_deep desired)] in
+        ["domain-pass"; name; Types.hash_value (Primitives.force_deep desired)] in
     Journal.append (Journal.DomainIntent { hash; fields = summary });
     with_domain name entry.Runtime.dm_cap
       (fun () -> ignore (call_uncached apply_closure [plan]));
@@ -219,7 +217,8 @@ let run_domain ~(name : string) ~(entry : Runtime.domain_entry) ~(desired : valu
     let observed2 = observe_domain entry name in
     let plan2 = compute_plan ~domain_name:name ~diff_closure ~observed:observed2 ~desired in
     if not (plan_items_empty plan2) then
-      failwith (verify_failed_msg name))
+      failwith (verify_failed_msg name)
+  with effect Runtime.Get_observe_all, k -> Effect.Deep.continue k false)
 
 (* ---- Driver entry point ----
    [all_desired] is a map of domain-name -> desired-state value (main.ml
@@ -240,7 +239,7 @@ let run_domain ~(name : string) ~(entry : Runtime.domain_entry) ~(desired : valu
    the epoch must never fail an otherwise-successful reconcile pass. *)
 let record_epoch (forced : value) : unit =
   try
-    let hash = Hasher.hash_value forced in
+    let hash = Types.hash_value forced in
     (try Store.store_object ~key:hash ~value:forced with _ -> ());
     Journal.append (Journal.Epoch { hash });
     Gcroots.record ~keep:(Runtime.invocation_get ()).gc_keep_epochs

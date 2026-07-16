@@ -51,10 +51,7 @@ let read_trimmed (path : string) : string =
    can never silently clobber (and invalidate every token minted against)
    an existing secret. *)
 let write_secret_file (path : string) (content : string) : unit =
-  let fd = Unix.openfile path [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL] 0o600 in
-  let oc = Unix.out_channel_of_descr fd in
-  output_string oc content;
-  close_out oc
+  Backend.r.cap_write_secret path content
 
 let load_secret () : string =
   try read_trimmed (secret_path ())
@@ -80,26 +77,6 @@ let load_cluster_id () : string =
    raw bytes; the hex text itself is the HMAC key material below (HMAC
    accepts a key of any length, so there's no need to decode it back to
    the raw 32 bytes). *)
-let init () : unit =
-  Store.ensure_dir (cluster_dir ());
-  if Sys.file_exists (secret_path ()) then
-    failwith (Printf.sprintf
-      "pp cluster-init: a cluster secret already exists at %s — refusing \
-       to overwrite (this would invalidate every token already minted \
-       against it); remove it by hand first if you really mean to rotate"
-      (secret_path ()));
-  let secret_hex = hex_encode (Cryptokit.Random.string Cryptokit.Random.secure_rng 32) in
-  write_secret_file (secret_path ()) (secret_hex ^ "\n");
-  let cluster_id = hex_encode (Cryptokit.Random.string Cryptokit.Random.secure_rng 16) in
-  (* Not secret (it's a bare label embedded in every token in the clear);
-     still written once, never silently regenerated. *)
-  if not (Sys.file_exists (id_path ())) then
-    Store.atomic_write (id_path ()) (cluster_id ^ "\n");
-  Printf.printf
-    "pp cluster-init: minted %s (mode 0600) and cluster id %s\n\
-     pp cluster-init: distribute BOTH files to other cluster members out \
-     of band, at the same path (~/.pp/cluster/) — pp never transmits them\n"
-    (secret_path ()) cluster_id
 
 (* ---- Token wire format ----
 
@@ -124,7 +101,7 @@ let mac_of (secret : string) (payload : string) : string =
 
 let mint ~(secret : string) ~(cluster_id : string) ~(specs : string list)
     ~(ttl_seconds : int) : string =
-  let issued = int_of_float (Unix.time ()) in
+  let issued = int_of_float (Backend.r.get_unix_time ()) in
   let expires = issued + ttl_seconds in
   let payload = payload_text specs cluster_id issued expires in
   let mac = mac_of secret payload in
@@ -189,7 +166,7 @@ let parse_token (s : string) : parsed_token option =
    header): a forged or foreign-cluster token never reaches the capability
    parser at all. *)
 let verify ~(secret : string) ~(cluster_id : string) (token_text : string)
-    : (capability list, string) result =
+    : (Capability.t list, string) result =
   match parse_token token_text with
   | None -> Error "malformed cluster token (unparseable or foreign format)"
   | Some pt ->
@@ -200,17 +177,17 @@ let verify ~(secret : string) ~(cluster_id : string) (token_text : string)
                under a different cluster secret)"
       else if pt.pt_cluster_id <> cluster_id then
         Error "cluster token rejected: minted for a different cluster id"
-      else if int_of_float (Unix.time ()) > pt.pt_expires then
+      else if int_of_float (Backend.r.get_unix_time ()) > pt.pt_expires then
         Error (Printf.sprintf "cluster token rejected: expired at %d" pt.pt_expires)
       else
-        (try Ok (List.map Capabilities.parse_grant pt.pt_specs)
+        (try Ok (List.map (fun spec -> Capability.mint ~realpath:Backend.r.realpath spec) pt.pt_specs)
          with Failure msg -> Error ("cluster token names an invalid capability: " ^ msg))
 
 (* Convenience for the wire path: verify against the LOCAL member's own
    secret/cluster id (~/.pp/cluster), returning a capability list ready to
    feed straight into `cell_authorized_for` — the wire-verified equivalent
    of `node_caps` locally. *)
-let token_to_caps (token_text : string) : (capability list, string) result =
+let token_to_caps (token_text : string) : (Capability.t list, string) result =
   let secret = load_secret () in
   let cluster_id = load_cluster_id () in
   verify ~secret ~cluster_id token_text

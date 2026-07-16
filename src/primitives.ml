@@ -209,21 +209,12 @@ let probe_value_for (name : string) : value option =
       (match Hashtbl.find_opt Runtime.domain_registry name with
        | None -> None
        | Some entry ->
-           (* Evaluate OUTSIDE the caller's node trace stack — save/restore
-              trace_stack to [] via the exception-safe with_ref pattern — so
-              the probe's OWN world-reads are never folded into the READING
-              node's trace; that node must record ONLY the `probe:<name>`
-              cell itself (via the ordinary record_read the `probe`
-              primitive does below). Runs under EXACTLY the registered
-              cap, replacing the ambient for the call's extent (with_ref,
-              exception-safe LAW 27 style) — the authority was consumed
-              HERE, once per pass, not at every read. *)
            let result =
-             Runtime.with_ref Runtime.trace_stack []
-               (fun () ->
-                  Runtime.with_ref Runtime.current_capabilities
-                    [entry.Runtime.dm_cap]
-                    (fun () -> call_zero_arg entry.Runtime.dm_observe))
+             try call_zero_arg entry.Runtime.dm_observe
+             with
+             | effect (Runtime.Record_read _), k -> Effect.Deep.continue k ()
+             | effect Runtime.In_node, k -> Effect.Deep.continue k false
+             | effect Runtime.Get_capabilities, k -> Effect.Deep.continue k [entry.Runtime.dm_cap]
            in
            Hashtbl.replace Runtime.probe_values name result;
            Some result)
@@ -236,7 +227,7 @@ let probe_value_for (name : string) : value option =
    against the recorded one. *)
 let probe_observe_for_store (name : string) : string option =
   match probe_value_for name with
-  | Some v -> Some (Hasher.hash_value v)
+  | Some v -> Some (Types.hash_value v)
   | None -> None
 
 (* Store.observe_cell's `domain:<name>:<sub>` dispatch — calls the
@@ -253,14 +244,15 @@ let domain_observe_cell_for_store (name : string) (sub : string) : string option
   | Some { Runtime.dm_observe_cell = None; _ } -> None
   | Some { Runtime.dm_observe_cell = Some fn; dm_cap; _ } ->
       (match
-         Runtime.with_ref Runtime.trace_stack []
-           (fun () ->
-              Runtime.with_ref Runtime.current_capabilities [dm_cap]
-                (fun () -> call_with_args fn [VString sub]))
+         (try call_with_args fn [VString sub]
+          with
+          | effect (Runtime.Record_read _), k -> Effect.Deep.continue k ()
+          | effect Runtime.In_node, k -> Effect.Deep.continue k false
+          | effect Runtime.Get_capabilities, k -> Effect.Deep.continue k [dm_cap])
        with
        | VNil -> None
        | VString h -> Some h
-       | other -> Some (Hasher.hash_value other))
+       | other -> Some (Types.hash_value other))
 
 (* A table of built-in functions: name -> value *)
 let builtins : (string, value) Hashtbl.t = Hashtbl.create 64
@@ -564,7 +556,7 @@ let register_scalars () =
 let register_caps () =
   register "cap-compose" (fun args ->
     let caps = List.map (fun v -> match force_val v with VCapability c -> c | _ -> failwith "cap-compose expects capabilities") args in
-    VCapability (CapCompose caps));
+    VCapability (Capability.compose caps));
 
   (* (current-capabilities) — reifies the ambient set AS OF THE CALL as a
      VCapability. Never a mint: it observes the ceiling the code already
@@ -572,24 +564,40 @@ let register_caps () =
      gated like every other perform path — no explicit-cap argument. *)
   register "current-capabilities" (fun args ->
     match args with
-    | [] -> VCapability (CapCompose !Runtime.current_capabilities)
+    | [] -> VCapability (Capability.compose (Effect.perform Runtime.Get_capabilities))
     | _ -> failwith "current-capabilities takes no arguments");
 
   register "cap-restrict" (fun args ->
     let args = force_args args in
     match args with
     | [VCapability _ as cap; VString scope] ->
-        Capabilities.cap_restrict cap scope
+        let cap = match cap with VCapability c -> c | _ -> failwith "impossible" in
+        let scope = Runtime.canonical_path scope in
+        VCapability (Capability.restrict cap scope)
     | [VCapability _ as cap; VString scope; VKeyword m] ->
+        let cap = match cap with VCapability c -> c | _ -> failwith "impossible" in
         let mode = match m with
-          | "ro" -> Types.Read | "rw" -> Types.ReadWrite | "wo" -> Types.Write
+          | "ro" -> Capability.Read | "rw" -> Capability.ReadWrite | "wo" -> Capability.Write
           | _ -> failwith ("cap-restrict: invalid mode :" ^ m ^ " (expected :ro, :rw, or :wo)")
         in
-        Capabilities.cap_restrict ~mode cap scope
+        let scope = Runtime.canonical_path scope in
+        let read_ok = Capability.check_fs_read cap scope in
+        let write_ok = Capability.check_fs_write cap scope in
+        let ok = match mode with
+          | Capability.Read -> read_ok
+          | Capability.Write -> write_ok
+          | Capability.ReadWrite -> read_ok && write_ok
+        in
+        if not ok then
+          raise (Types.Capability_error
+            (Printf.sprintf
+               "cap-restrict: cannot widen mode to :%s for %s (not held by the underlying capability)"
+               (Capability.mode_name mode) (scope :> string)));
+        VCapability (Capability.restrict ~mode cap scope)
     | _ -> failwith "cap-restrict expects a capability, a scope string, and an optional mode keyword (:ro/:rw/:wo)");
 
   register "cap-none" (fun args ->
-    match args with [] -> VCapability CapNone | _ -> failwith "cap-none takes no arguments");
+    match args with [] -> VCapability Capability.none | _ -> failwith "cap-none takes no arguments");
 
   register "capability?" (fun args ->
     match args with [arg] -> VBool (match force_val arg with VCapability _ -> true | _ -> false) | _ -> failwith "capability? expects one arg");
@@ -750,7 +758,7 @@ let register_stdlib () =
      is not fooled by that. *)
   register "hash-value" (fun args ->
     match args with
-    | [v] -> VString (Hasher.hash_value (force_deep (force_val v)))
+    | [v] -> VString (Types.hash_value (force_deep (force_val v)))
     | _ -> failwith "hash-value expects one argument");
 
   (* (hash-string S) — SHA-256 hex digest of S's raw bytes, the SAME
@@ -849,8 +857,8 @@ let register_stdlib () =
     register name (fun args ->
       match force_args args with
       | [VString path] ->
-          if not (List.exists (fun cap -> Capabilities.check_fs_read cap path)
-                    !Runtime.current_capabilities) then
+          if not (List.exists (fun cap -> Capability.check_fs_read cap (Runtime.canonical_path path))
+                    (Effect.perform Runtime.Get_capabilities)) then
             raise (Types.Capability_error
                      (name ^ ": capability error: no read access for " ^ path));
           let kind = Store.stat_kind path in
@@ -975,7 +983,7 @@ let register_domains () =
   in
   let find_kv = Force_deep.find_kv in
   register "register-domain" (fun args ->
-    if !Runtime.trace_stack <> [] then
+    if Effect.perform Runtime.In_node then
       failwith "register-domain: may not be called inside a node body (script-tier only, like fenced)";
     let args = force_args args in
     match args with
@@ -1026,7 +1034,7 @@ let register_domains () =
      stratify, core never converges it), dm_diff/dm_apply = None. Same
      surface and error text as a standalone probe registry (tests/043-probes.sh). *)
   register "register-probe" (fun args ->
-    if !Runtime.trace_stack <> [] then
+    if Effect.perform Runtime.In_node then
       failwith "register-probe: may not be called inside a node body (script-tier only, like fenced)";
     let args = force_args args in
     match args with
@@ -1035,14 +1043,19 @@ let register_domains () =
         (match observe_fn with
          | VClosure _ | VBuiltin _ -> ()
          | _ -> failwith "register-probe: observe-fn must be a function");
-        Hashtbl.replace Runtime.domain_registry name
-          { Runtime.dm_namespace = []; dm_observe = observe_fn;
-            dm_diff = None; dm_apply = None; dm_cap = read_cap;
-            dm_observe_cell = None };
+        let entry = {
+          Runtime.dm_namespace = [];
+          dm_observe = observe_fn;
+          dm_diff = None;
+          dm_apply = None;
+          dm_cap = read_cap;
+          dm_observe_cell = None;
+        } in
+        Hashtbl.replace Runtime.domain_registry name entry;
+        let (_ : string) = name in (* suppress unused warning *)
         VNil
     | _ -> failwith "register-probe expects a name, an observe-fn, and a read capability");
-
-  (* `(probe name)` — legal inside or outside a node body. The FIRST read in
+  (* ---- `probe` primitive: one-time evaluated lazy read of a registered probe ----
      a pass evaluates observe-fn (via probe_value_for, above: OUTSIDE the
      trace stack, under exactly the registered read-cap) and pins the
      result in Runtime.probe_values for the rest of the pass; every read
@@ -1059,7 +1072,7 @@ let register_domains () =
         (match probe_value_for name with
          | None -> failwith ("probe: no such probe registered: " ^ name)
          | Some v ->
-             Runtime.record_read (Cell.(to_string (Probe name))) (Hasher.hash_value v);
+             Runtime.record_read (Cell.(to_string (Probe name))) (Types.hash_value v);
              v)
     | _ -> failwith "probe expects a probe name string");
   ()

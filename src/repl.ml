@@ -35,10 +35,12 @@ let with_toplevel_location = Runtime.with_form_location
 
 (* Tree-walker: process a single expression *)
 let process_expr (e : expr) : value =
-  with_toplevel_location e (fun () ->
-    match eval_expressions [e] global_env with
-    | VEnvMap _ as v -> v
-    | v -> v)
+  Runtime.with_top_level ~f:(fun () ->
+    with_toplevel_location e (fun () ->
+      match eval_expressions [e] global_env with
+      | VEnvMap _ as v -> v
+      | v -> v)
+  ) ()
 
 (* Tree-walker: execute a source string. The WHOLE file's forms
    are expanded together, in order, before any of them is evaluated — a

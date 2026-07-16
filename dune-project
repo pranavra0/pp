@@ -11,6 +11,6 @@
    tree-walking interpreter and a bytecode VM) that must produce identical \
    output. See AGENTS.md and docs/ for details.")
  (depends
-  (ocaml (>= 4.14))
+  (ocaml (>= 5.1))
   dune-build-info
   cryptokit))

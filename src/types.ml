@@ -110,7 +110,7 @@ and value =
   | VSet of value list
   | VClosure of closure
   | VBuiltin of string * (value list -> value)  (* name + ocaml function *)
-  | VCapability of capability
+  | VCapability of Capability.t
   | VThunk of thunk
   | VEnvMap of (string * value) list  (* module export: list of (name, thunk) pairs *)
   | VBytecode of bytecode
@@ -156,7 +156,7 @@ and thunk = {
        — code + free-var value hashes — from captured frames, since a VM thunk
        carries bytecode+frames rather than an AST+env. Empty for every other
        thunk. *)
-  mutable node_caps : capability list;
+  mutable node_caps : Capability.t list;
     (* The ambient capability set captured when this node value was
        created, populated
        unconditionally at both construction sites (ENode eval, VM MAKE_NODE) —
@@ -177,31 +177,6 @@ and thunk_status =
   | Evaluating
   | Evaluated of value
 
-(* ---- Capabilities — authority tokens ---- *)
-and capability =
-  | CapFilesystem of { path : string; mode : fs_mode }
-  | CapNetwork of { host : string; port : int option }
-    (* host: "*" wildcards any host; port: None means unrestricted, Some p pins it exactly.
-       Minted only via `--grant net:<host>[:<port>]` (main.ml) — never
-       constructible in user code (LAW 22). *)
-  | CapSecret of { path : string }
-    (* Sealed cells: `--grant secret:<path>` (canonicalized at mint, like
-       fs grants). Authorizes reading the bytes under [path] as a VSealed
-       value — never as plain fs data — via the read dispatch in
-       Process/Store's slurp/read-file paths. Deliberately has no fs_mode:
-       a secret is read-only by construction, there is no "write a secret"
-       operation in stage 1. *)
-  | CapProcess
-  | CapCompose of capability list
-  | CapRestrict of { cap : capability; scope : string; mode : fs_mode option }
-    (* mode: an optional further fs_mode restriction (in addition to scope).
-       None means "inherit whatever the underlying cap grants". Constructing one with a mode WIDER than the
-       underlying cap holds at scope is rejected (Capabilities.cap_restrict);
-       a CapRestrict value on disk/in memory therefore never itself
-       represents a widen. *)
-  | CapNone
-
-and fs_mode = Read | Write | ReadWrite
 
 (* ---- Bytecode VM types ---- *)
 and opcode =
@@ -229,16 +204,16 @@ and opcode =
                                  EVERY exit, including a raised exception
                                  (LAW 27), not just normal return/tail-call *)
   | PERFORM of int * int     (* cp idx of effect name, nargs *)
-  | PUSH_HANDLER of int      (* n (name,closure) pairs already on stack *)
-  | POP_HANDLER
+  | WITH_HANDLER of int * int(* body code offset, handler count: handler region
+                                with try/with for Lookup_handler/Get_handlers *)
+  | WITH_CONFIG of int       (* body code offset: config scope region with
+                                try/with for Get_config effect *)
   | MAKE_MODULE of int       (* nexports; pops name+thunk pairs, pushes VEnvMap *)
   | IMPORT                   (* pop VEnvMap, merge bindings into current frame *)
   | LOAD_FILE of int | LOAD_MODULE_FILE of int  (* cp idx of path *)
   | ISLAND of int * int option (* cp idx of uri, cp idx of inline pin;
                                   resolves via Island at run time, then
                                   module-evaluates the pinned entry.pp *)
-  | PUSH_CONFIG              (* pop config-map, push onto config stack *)
-  | POP_CONFIG               (* pop config stack *)
   | READ_CONFIG              (* pop key from stack; push config value or VNil *)
 
 and bytecode = {
@@ -312,37 +287,16 @@ let empty_env =
 (*  hash_value).                                                        *)
 (* =================================================================== *)
 
-let hex_encode (s : string) : string =
-  let chars = "0123456789abcdef" in
-  String.init (String.length s * 2) (fun i ->
-    let c = Char.code s.[i / 2] in
-    let nibble = if i mod 2 = 0 then c lsr 4 else c land 0xf in
-    chars.[nibble])
 
-let hash_string (s : string) : string =
-  hex_encode (Cryptokit.hash_string (Cryptokit.Hash.sha256 ()) s)
-
-(* Injective framing. Each part is emitted as its byte length in decimal,
-   a ':', then the part's bytes — so the pre-hash string can be parsed back to
-   the exact part list (read digits to ':', then read that many bytes, repeat).
-   Distinct part LISTS therefore map to distinct pre-hash strings even when a
-   part itself contains ':' (user paths, symbol names, tags) or is empty. A
-   plain `String.concat ":"` would be ambiguous the instant any part held a
-   ':' — the
-   LAW-20 collision class where two distinct ASTs share one content key and pp
-   serves a wrong cached result. Every hash builder below funnels through here
-   (and through no other join), so injectivity is a single-site property that
-   the kernel-properties generated-AST test (src/kernel_props.ml) guards
-   forever. Changing this framing is
-   hash-affecting across the whole store — see the golden fixture regeneration
-   receipt (tests/fixtures/store-v1). *)
-let hash_concat (parts : string list) : string =
-  let buf = Buffer.create 64 in
-  List.iter (fun p ->
-    Buffer.add_string buf (string_of_int (String.length p));
-    Buffer.add_char buf ':';
-    Buffer.add_string buf p) parts;
-  hash_string (Buffer.contents buf)
+(* Low-level content-addressing primitives (hex_encode, hash_string,
+   hash_concat) live in [Hasher] at the bottom of the dependency graph so
+   the early-compiled [Capability] module can hash an abstract type without
+   a cycle.  Aliased here so the recursive [hash_value]/[hash_expr] below
+   (and every `open Types` caller of the bare names) resolve to that one
+   definition.  Injectivity framing is documented at [Hasher.hash_concat]. *)
+let hex_encode = Hasher.hex_encode
+let hash_string = Hasher.hash_string
+let hash_concat = Hasher.hash_concat
 
 (* THE canonical float spelling — bit-exact via %h (so two doubles that differ
    anywhere in their bits hash and encode differently; string_of_float's ~12
@@ -549,7 +503,7 @@ and hash_value (v : value) : string =
     | VBuiltin (name, _) ->
         hash_concat ["builtin"; name]
     | VCapability cap ->
-        hash_capability cap
+        Capability.hash cap
     | VEnvMap bindings ->
         let sorted = List.sort (fun (a,_) (b,_) -> String.compare a b) bindings in
         let parts = List.map (fun (name, v) ->
@@ -566,23 +520,6 @@ and hash_value (v : value) : string =
   in
   hash_val v
 
-and hash_capability (c : capability) : string =
-  match c with
-  | CapFilesystem { path; mode } ->
-      let m = match mode with Read -> "r" | Write -> "w" | ReadWrite -> "rw" in
-      hash_concat ["cap_fs"; path; m]
-  | CapNetwork { host; port } ->
-      hash_concat ["cap_net"; host; (match port with Some p -> string_of_int p | None -> "any")]
-  | CapSecret { path } ->
-      hash_concat ["cap_secret"; path]
-  | CapProcess -> hash_string "cap_process"
-  | CapCompose caps ->
-      hash_concat ("cap_compose" :: List.map hash_capability caps)
-  | CapRestrict { cap; scope; mode } ->
-      let m = match mode with
-        | None -> "any" | Some Read -> "r" | Some Write -> "w" | Some ReadWrite -> "rw" in
-      hash_concat ["cap_restrict"; hash_capability cap; scope; m]
-  | CapNone -> hash_string "cap_none"
 
 (* ---- Node-boundary authority ban (SPEC LAW 20) ----
 
@@ -783,15 +720,12 @@ let env_of_bindings (bindings : (string * value) list) : env =
 (*  Lookup and multi-extension                                          *)
 (* =================================================================== *)
 
-let rec lookup_env (env : env) (name : string) : value option =
+let lookup_env (env : env) (name : string) : value option =
   let rec walk = function
     | [] -> None
     | (n, v) :: rest -> if n = name then Some v else walk rest
   in
   walk env.bindings
-
-let extend_env_many (env : env) (bindings : (string * value) list) : env =
-  List.fold_left (fun e (n, v) -> extend_env e n v) env bindings
 
 
 (* =================================================================== *)
@@ -957,7 +891,7 @@ let rec string_of_value (v : value) : string =
   | VString s -> "\"" ^ String.escaped s ^ "\""
   | VKeyword k -> ":" ^ k
   | VSymbol s -> s
-  | VPair (car, cdr) ->
+  | VPair _ ->
       let rec list_string v =
         match v with
         | VPair (a, VNil) -> string_of_value a
@@ -975,7 +909,7 @@ let rec string_of_value (v : value) : string =
   | VClosure { fn_name = Some n; _ } -> "#<fn " ^ n ^ ">"
   | VClosure { fn_name = None; _ } -> "#<fn>"
   | VBuiltin (name, _) -> "#<builtin " ^ name ^ ">"
-  | VCapability c -> string_of_capability c
+  | VCapability c -> Capability.to_string c
   | VThunk t ->
       (match t.thunk_status with
        | Unevaluated -> "#<thunk>"
@@ -991,21 +925,6 @@ let rec string_of_value (v : value) : string =
          this one function, so redaction is total by construction. *)
       "#<sealed>"
 
-and string_of_capability (c : capability) : string =
-  match c with
-  | CapFilesystem { path; mode } ->
-      let m = match mode with Read -> ":ro" | Write -> ":wo" | ReadWrite -> ":rw" in
-      "#<cap fs " ^ path ^ " " ^ m ^ ">"
-  | CapNetwork { host; port } ->
-      "#<cap net " ^ host ^ (match port with Some p -> ":" ^ string_of_int p | None -> "") ^ ">"
-  | CapSecret { path } -> "#<cap secret " ^ path ^ ">"
-  | CapProcess -> "#<cap process>"
-  | CapCompose caps -> "#<cap compose " ^ string_of_int (List.length caps) ^ ">"
-  | CapRestrict { scope; mode; _ } ->
-      let m = match mode with
-        | None -> "" | Some Read -> " :ro" | Some Write -> " :wo" | Some ReadWrite -> " :rw" in
-      "#<cap restrict " ^ scope ^ m ^ ">"
-  | CapNone -> "#<cap none>"
 
 (* =================================================================== *)
 (*  Unquotation: value -> expr — the inverse of quote_to_value          *)

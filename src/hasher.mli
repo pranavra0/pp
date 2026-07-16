@@ -1,17 +1,11 @@
-(* hasher — the identity kernel's public face.
+(* hasher — the low-level content-addressing primitives.
 
-   All hashing logic lives in [Types] (SHA-256 via Cryptokit); this module is
-   the thin, named re-export every other layer hashes through. The .mli fixes
-   that surface so the identity boundary is explicit: content-addressing (LAW
-   19/20) enters the rest of the system only through these functions, and the
-   authority/sealed guards ([contains_authority]/[contains_sealed]) that gate
-   the node boundary have exactly one spelling. *)
-
+   SHA-256 and the injective length-framed join, at the bottom of the
+   dependency graph so the early-compiled [Capability] module (which hashes
+   an abstract type) shares the single definition without a cycle.  The
+   higher-level [Types.hash_value]/[Types.hash_expr] are NOT re-exported
+   here: they live in [Types] where the recursive value/expr types are
+   defined. *)
+val hex_encode : string -> string
 val hash_string : string -> string
 val hash_concat : string list -> string
-val hash_expr : Types.expr -> string
-val hash_value : Types.value -> string
-val hash_capability : Types.capability -> String.t
-val hash_bindings_flat : (string * Types.value) list -> string
-val contains_authority : Types.value -> bool
-val contains_sealed : Types.value -> bool

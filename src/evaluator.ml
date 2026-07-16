@@ -14,9 +14,13 @@ open Runtime
    Two thunks with the same (expr, env, capabilities) are the SAME thunk.
    Uses env.env_hash for O(1) environment identity — no recursive traversal. *)
 let make_thunk_ca (expr : expr) (env : env) : value =
-  let caps_hash = hash_concat ("caps" :: List.map Hasher.hash_capability !current_capabilities) in
-  let cfg_hash = hash_concat ("cfg" :: List.map hash_value !config_stack) in
-  let h = hash_concat ["thunk"; Hasher.hash_expr expr; env.env_hash; caps_hash; cfg_hash; handlers_hash ()] in
+  let caps = Effect.perform Runtime.Get_capabilities in
+  let cfg = Effect.perform Runtime.Get_config in
+  let handlers = Effect.perform Runtime.Get_handlers in
+  let caps_hash = hash_concat ("caps" :: List.map Capability.hash caps) in
+  let cfg_hash = hash_concat ("cfg" :: List.map hash_value cfg) in
+  let hh = hash_concat ("handlers" :: List.concat_map (fun (n,h)->[n;h]) handlers) in
+  let h = hash_concat ["thunk"; Types.hash_expr expr; env.env_hash; caps_hash; cfg_hash; hh] in
   match Hashtbl.find_opt thunk_store h with
   | Some existing -> VThunk existing
   | None ->
@@ -24,14 +28,14 @@ let make_thunk_ca (expr : expr) (env : env) : value =
       Hashtbl.add thunk_store h t;
       VThunk t
 
-(* Like make_thunk_ca, but the thunk carries a type annotation that is
-   checked when the thunk is forced (mirrors the VM's MAKE_THUNK with
-   type_ann, vm.ml). The annotation participates in the content hash so a
-   typed thunk is never conflated with an untyped thunk over the same expr. *)
 let make_thunk_ca_typed (expr : expr) (ty : expr) (loc : (string * int) option) (env : env) : value =
-  let caps_hash = hash_concat ("caps" :: List.map Hasher.hash_capability !current_capabilities) in
-  let cfg_hash = hash_concat ("cfg" :: List.map hash_value !config_stack) in
-  let h = hash_concat ["thunk-typed"; Hasher.hash_expr expr; Hasher.hash_expr ty; env.env_hash; caps_hash; cfg_hash; handlers_hash ()] in
+  let caps = Effect.perform Runtime.Get_capabilities in
+  let cfg = Effect.perform Runtime.Get_config in
+  let handlers = Effect.perform Runtime.Get_handlers in
+  let caps_hash = hash_concat ("caps" :: List.map Capability.hash caps) in
+  let cfg_hash = hash_concat ("cfg" :: List.map hash_value cfg) in
+  let hh = hash_concat ("handlers" :: List.concat_map (fun (n,h)->[n;h]) handlers) in
+  let h = hash_concat ["thunk-typed"; Types.hash_expr expr; Types.hash_expr ty; env.env_hash; caps_hash; cfg_hash; hh] in
   match Hashtbl.find_opt thunk_store h with
   | Some existing -> VThunk existing
   | None ->
@@ -41,27 +45,6 @@ let make_thunk_ca_typed (expr : expr) (ty : expr) (loc : (string * int) option) 
 
 (* Runtime check for gradual type annotations. Shared by both backends (the
    VM calls it too), so they fail identically by construction. *)
-let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
-  let type_name =
-    match ty with
-    | ESymbol s -> s
-    | ELiteral (VSymbol s) | ELiteral (VKeyword s) -> s
-    | _ -> "unknown"
-  in
-  let ok =
-    match type_name with
-    | "int" -> (match v with VInt _ -> true | _ -> false)
-    | "string" -> (match v with VString _ -> true | _ -> false)
-    | "bool" -> (match v with VBool _ -> true | _ -> false)
-    | "nil" -> (match v with VNil -> true | _ -> false)
-    | _ -> false (* unknown type names are hard errors *)
-  in
-  if not ok then
-    let loc_str = match loc with
-      | Some (file, line) -> Printf.sprintf " at %s:%d" file line
-      | None -> "" in
-    failwith (Printf.sprintf "type mismatch: expected %s, got %s%s"
-                type_name (string_of_value v) loc_str)
 
 (* LAW 23b: whether a set of capabilities permits reading a trace cell. Used
    to gate cache hits on the transitive read closure. The match is
@@ -72,9 +55,9 @@ let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
    node_caps — its ambient AT CREATION — not necessarily whatever is live in
    current_capabilities at force time (with-caps can have narrowed the
    dynamic ambient in between). *)
-let cell_authorized_for (caps : capability list) (cell_id : string) : bool =
+let cell_authorized_for (caps : Capability.t list) (cell_id : string) : bool =
   let has_fs_read path =
-    List.exists (fun cap -> Capabilities.check_fs_read cap path) caps
+    List.exists (fun cap -> Capability.check_fs_read cap (Paths.canonicalize ~realpath:(fun x -> x) path)) caps
   in
   match Cell.of_string cell_id with
   | Cell.File path -> has_fs_read path
@@ -84,7 +67,7 @@ let cell_authorized_for (caps : capability list) (cell_id : string) : bool =
   (* A tool observation came from a `run`; serving a result that embeds
      one requires process authority, not an fs grant over the binary. *)
   | Cell.Tool _ ->
-      List.exists (fun cap -> Capabilities.check_process cap) caps
+      List.exists (fun cap -> Capability.check_process cap) caps
   (* A file-predicate observation (file-exists?/dir?) discloses presence,
      so serving it requires the same fs-read authority as recording it. *)
   | Cell.Stat path -> has_fs_read path
@@ -119,7 +102,7 @@ let cell_authorized_for (caps : capability list) (cell_id : string) : bool =
      grant cannot hit a node whose closure read it, even through an
      aggregator (tests/044's narrow-caller case). *)
   | Cell.Sealed path ->
-      List.exists (fun cap -> Capabilities.check_secret cap path) caps
+      List.exists (fun cap -> Capability.check_secret cap (Paths.canonicalize ~realpath:(fun x -> x) path)) caps
   (* A third-party domain's own sub-cell. Authorization is
      cap_subseteq of the REGISTERED write-cap against the caller's held
      set — zero new authority code, the same narrowing check with-caps
@@ -127,125 +110,24 @@ let cell_authorized_for (caps : capability list) (cell_id : string) : bool =
      the sound, conservative default, like Cell.Unknown. *)
   | Cell.Domain { name; sub = _ } ->
       (match Hashtbl.find_opt Runtime.domain_registry name with
-       | Some entry -> Capabilities.cap_subseteq entry.Runtime.dm_cap caps
+       | Some entry -> Capability.subseteq entry.Runtime.dm_cap caps
        | None -> false)
 
 (* Trace replay for an already-Evaluated persistent node: replay its stored
    trace reads into the active trace frames so the caller's trace transitively
    captures this node's world-reads (same mechanism as Store.hit's hit-replay).
    [key_of] is the backend's node-key function (node_key_of / vm_node_key). *)
-let replay_node_reads (t : thunk) (key_of : thunk -> string) : unit =
-  if t.thunk_persist && !Runtime.trace_stack <> [] then
-    let traces = Store.load_traces ~key:(key_of t) in
-    List.iter (fun tr ->
-      List.iter (fun (c, h) -> Runtime.record_read c h) tr.Store.tr_reads
-    ) traces
+let replay_node_reads = Node.replay_node_reads
 
 (* Run a persistent node's body and store the result (LAW 21) or the failure
    (LAW 28) with its verifying trace. Shared by the tree-walker's force, the
    trampoline, and the VM's force_node_thunk — the node caches identically
    however it is demanded. [run] executes the body; the caller owns any
    backend-specific bookkeeping (force_depth, operand-stack isolation). *)
-let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
-  (* The ambient capability set captured when this node value was created.
-     force_node uses this — never the live ambient set — for both the hit
-     gate and the miss recompute: a node's authority is fixed at creation,
-     exactly as a closure's environment is (SPEC law 23b). with_ref
-     restores current_capabilities on every exit, exception included, so
-     this composes cleanly with the try/with below. *)
-  with_ref current_capabilities t.node_caps (fun () ->
-  t.thunk_status <- Evaluating;
-  (* The trace frame captures the world-reads (slurp, read-file, …) this node
-     makes as (cell-id, observed-hash) pairs. Popped on every exit — normal or
-     exceptional — so a raised error never leaks a dangling frame. *)
-  let frame = Runtime.push_trace_frame () in
-  let result =
-    try
-      let r = run () in
-      Runtime.pop_trace_frame ();
-      r
-    with
-    | Failure msg as e ->
-        Runtime.pop_trace_frame ();
-        (* LAW 28: store a FAILING trace — the error value plus the reads made
-           up to the failure — so a re-force with unchanged inputs re-serves the
-           failure, and re-runs only when a read changes. Reset the status
-           off `Evaluating` so the next force reports the real error, not a fake
-           "infinite recursion" (which would happen if a raising thunk were
-           left marked as still being evaluated). A Capability_error is not
-           a Failure and is never memoized (LAW 15/20). *)
-        let errval = VString msg in
-        let err_hash = Hasher.hash_value errval in
-        (try Store.store_object ~key:err_hash ~value:errval with _ -> ());
-        (try Store.store_trace ~key ~outcome:Failed ~result_hash:err_hash
-               ~reads:(List.rev !frame) with _ -> ());
-        t.thunk_status <- Unevaluated;
-        raise e
-    | e ->
-        Runtime.pop_trace_frame ();
-        t.thunk_status <- Unevaluated;
-        raise e
-  in
-  (* Result ban (LAW 20 node-boundary, export side; also covers VSealed per
-     LAW 39): a node may not RETURN a
-     capability or a sealed value. Checked before any store write, so a
-     would-be-cached VCapability/VSealed never reaches the store; not
-     memoized as a failure either (mirrors Capability_error's own
-     not-memoized discipline — an authority-shaped outcome is not cache
-     material). Otherwise `(node (current-capabilities))` would be an
-     ambient-dependent result invisible to both the key and the trace (a
-     determinism hole), and a broad cap (or a secret) could ride a result out
-     to a narrower/unauthorized caller — the node boundary must be
-     symmetric. *)
-  if Hasher.contains_authority result then begin
-    t.thunk_status <- Unevaluated;
-    if Hasher.contains_sealed result then
-      raise (Capability_error "a node may not return a sealed value")
-    else
-      raise (Capability_error "a node may not return a capability")
-  end;
-  (match t.type_ann with
-   | Some ty -> check_type result ty t.thunk_loc
-   | None -> ());
-  t.thunk_status <- Evaluated result;
-  let result_hash = Hasher.hash_value result in
-  (* Objects are content-addressed by result hash; the trace maps the node
-     key to that result plus the reads that justify it. *)
-  (try Store.store_object ~key:result_hash ~value:result with _ -> ());
-  (try Store.store_trace ~key ~outcome:Ok ~result_hash
-         ~reads:(List.rev !frame) with _ -> ());
-  (* --check (LAW 38): run the body a second time under a throwaway trace
-     frame; a different result hash means the node observed something no
-     cell captured — volatile, and unsafe to cache. *)
-  if !Store.check_mode then begin
-    ignore (Runtime.push_trace_frame ());
-    let r2 =
-      try run ()
-      with e -> Runtime.pop_trace_frame (); raise e
-    in
-    Runtime.pop_trace_frame ();
-    if Hasher.hash_value r2 <> result_hash then begin
-      incr Store.volatile_count;
-      Printf.eprintf
-        "[check] volatile node %s: an identical run produced a different result hash\n%!"
-        (Store.short_key key)
-    end
-  end;
-  result)
 
 (* Serve a resolved Store.hit_result the same way in every miss-arm variant
    below: a verified hit (gated on LAW 23b authority), a re-served memoized
    failure (LAW 28), or [None] on Miss (caller decides what to do). *)
-let serve_hit ~(t : thunk) (h : Store.hit_result) : value option =
-  match h with
-  | Store.HitOk cached ->
-      t.thunk_status <- Evaluated cached;
-      Some cached
-  | Store.HitFailed errval ->
-      (match errval with
-       | VString msg -> failwith msg
-       | _ -> failwith "node failed (cached)")
-  | Store.Miss -> None
 
 (* Force a persistent node through the store: serve a verified hit (gated on
    the caller's authority over the trace's read closure, LAW 23b), re-serve a
@@ -273,21 +155,21 @@ let force_node ~(key : string) ~(run : unit -> value) (t : thunk) : value =
      `--grant` set whenever with-caps goes unused, exactly matching
      tests/011/013/017. *)
   let authorized = cell_authorized_for t.node_caps in
-  match serve_hit ~t (Store.hit ~key ~authorized) with
+  match Node.serve_hit ~t (Store.hit ~key ~authorized) with
   | Some v -> v
   | None ->
       (match !Scheduler.policy with
        | Scheduler.Race n when n > 1 ->
            let job = { Scheduler.j_key = key;
-                       j_run = (fun () -> run_node_body ~key ~run t);
+                       j_run = (fun () -> Node.run_node_body ~key ~run t);
                        j_width = n; j_thunk = t } in
            Scheduler.dispatch_batch [job];
-           (match serve_hit ~t (Store.hit ~key ~authorized) with
+           (match Node.serve_hit ~t (Store.hit ~key ~authorized) with
             | Some v -> v
             | None ->
                 (* Every racing worker died: degrade to the ordinary serial
                    path — never a wrong answer, never a hang. *)
-                run_node_body ~key ~run t)
+                Node.run_node_body ~key ~run t)
        (* A lone miss stays in-process under every OTHER policy too,
           including [Remote _]: spinning up a cluster-member subprocess for
           a single node buys nothing (there is no sibling to overlap with,
@@ -295,7 +177,7 @@ let force_node ~(key : string) ~(run : unit -> value) (t : thunk) : value =
           (collect_unevaluated_nodes, primitives.ml) is worth shipping. *)
        | Scheduler.Serial | Scheduler.Parallel _ | Scheduler.Race _
        | Scheduler.Remote _ ->
-           run_node_body ~key ~run t)
+           Node.run_node_body ~key ~run t)
 
 (* Module exports: the bindings of [bindings] not present in [base]
    (insertion order preserved). With [dedup], each name is exported once —
@@ -353,7 +235,7 @@ let rec force (v : value) : value =
       (match t.thunk_status with
        | Evaluated result ->
            decr force_depth;
-           replay_node_reads t node_key_of;
+           Node.replay_node_reads t node_key_of;
            force result
        | Evaluating ->
            decr force_depth;
@@ -398,7 +280,7 @@ and evaluate_and_store_no_key (t : thunk) : value =
       raise e
   in
   (match t.type_ann with
-   | Some ty -> check_type result ty t.thunk_loc
+   | Some ty -> Node.check_type result ty t.thunk_loc
    | None -> ());
   t.thunk_status <- Evaluated result;
   decr force_depth;
@@ -414,40 +296,14 @@ and evaluate_and_store_no_key (t : thunk) : value =
    and governs validity, not identity (LAW 33/26). *)
 and node_key_of (t : thunk) : string =
   let e = t.thunk_expr in
-  let fv_parts =
+  let fv_hashes =
     Types.SS.elements (Types.free_vars e)
     |> List.map (fun name ->
-         match lookup_env t.thunk_env name with
-         | Some v ->
-             (* Free-var ban (LAW 20 node-boundary, import side; also covers
-                VSealed per LAW 39): if the forced value contains a
-                VCapability or VSealed (Hasher.contains_authority — never
-                forces an already-Unevaluated thunk, LAW 14), the key can
-                never be computed — raise Capability_error naming the
-                variable, rather than silently keying on (and thereby
-                smuggling identity information about) a capability or secret.
-                If forcing itself raises Capability_error, propagate it
-                as-is; any OTHER exception falls back to hashing the
-                unforced value (pre-existing behavior, unrelated to this
-                ban). *)
-             let hv =
-               match force v with
-               | fv ->
-                   if Hasher.contains_authority fv then
-                     raise (Capability_error
-                       (Printf.sprintf
-                          "node: free variable '%s' may not be or contain a %s" name
-                          (if Hasher.contains_sealed fv then "sealed value" else "capability")));
-                   Hasher.hash_value fv
-               | exception e ->
-                   (match e with
-                    | Capability_error _ -> raise e
-                    | _ -> Hasher.hash_value v)
-             in
-             hash_concat ["fv"; name; hv]
-         | None -> hash_concat ["fv-unbound"; name])
+      match lookup_env t.thunk_env name with
+      | Some v -> Node.fv_hash ~name v force
+      | None -> Node.unbound_fv_hash ~name)
   in
-  hash_concat (["node-key"; Hasher.hash_expr e] @ fv_parts)
+  Node.node_key_skeleton ~expr_hash:(Types.hash_expr e) fv_hashes
 
 (* Remote placement: a
    node is data-closed iff every free var's FORCED value re-encodes under
@@ -553,30 +409,24 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
   | EQuote e ->
       k (Types.quote_to_value e)
 
-  | EForce e ->
-      (* EForce in tail position: eval the inner expression in tail position,
-         then force the result and pass to k *)
-      eval_tail e env (fun v -> k (force v))
-
   | EDelay e ->
       k (make_thunk_ca e env)
 
+  | EForce e ->
+      (* EForce in tail position: eval the inner expression in tail position,
+         then force the result and pass to k *)
+      k (force (eval e env))
   | ENode e ->
       let thunk_val = make_thunk_ca e env in
       (match thunk_val with
        | VThunk t ->
            t.thunk_persist <- true;
-           (* Node capture: populate node_caps from the ambient at THIS
-              creation, unconditionally — never left at the [] default (see
-              Types.thunk.node_caps); force_node later reads this back as
-              the node's fixed authority. Safe
-              to re-assign even when make_thunk_ca returned an ALREADY-cached
-              physical thunk (its content hash folds in caps_hash, so a hit
-              here only happens when the ambient at that prior creation
-              hashed the same). *)
-           t.node_caps <- !current_capabilities
+           t.node_caps <- Effect.perform Runtime.Get_capabilities
        | _ -> ());
       k thunk_val
+
+  | EDef (name, params, body) ->
+      k (make_closure ~name:(Some name) params body (ref env))
 
   | EDefNode (name, params, body) ->
       k (make_closure ~name:(Some name) params body (ref env))
@@ -652,25 +502,24 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
              | _ -> go rest)
       in
       go exprs
-
   | EWithCaps (cap_expr, body) ->
       (* REPLACES the dynamic ambient with exactly the requested cap for the
          body's extent (never a union — that was the removed `effect` form's
          widening backdoor), gated by cap_subseteq against the CURRENT
          ambient (not the root grant), so narrowing composes even when code
-         lexically retains a broader value. with_ref
-         restores current_capabilities on every exit, exception included
-         (LAW 27). *)
+         lexically retains a broader value. *)
       let cap_val = force (eval cap_expr env) in
       let requested =
         match cap_val with
         | VCapability c -> c
         | _ -> failwith "with-caps expects a capability value"
       in
-      if not (Capabilities.cap_subseteq requested !current_capabilities) then
-        raise (Capability_error Capabilities.err_with_caps_widen);
-      with_ref current_capabilities [requested]
-        (fun () -> eval_tail body env k)
+      if not (Capability.subseteq requested (Effect.perform Runtime.Get_capabilities)) then
+        raise (Capability_error Capability.err_with_caps_widen);
+      begin
+        try eval_tail body env k
+        with effect Runtime.Get_capabilities, kont -> Effect.Deep.continue kont [requested]
+      end
 
   | EPerform (name, arg_exprs) ->
       let args = List.map (fun e -> make_thunk_ca e env) arg_exprs in
@@ -684,12 +533,17 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
          (fun args -> apply handler_val args env),
          hash_value handler_val)   (* handler identity in the key *)
       ) handlers in
-      with_ref handler_stack (new_handlers @ !handler_stack)
-        (fun () -> eval_tail body env k)
-
-  | EDef (name, params, body) ->
-      k (make_closure ~name:(Some name) params body (ref env))
-
+      let snew = List.map (fun (n,_,h)->(n,h)) new_handlers in
+      begin
+        try eval_tail body env k
+        with
+        | effect (Runtime.Lookup_handler name), kont ->
+            (match List.find_opt (fun (n,_,_) -> n = name) new_handlers with
+             | Some (_, fn, h) -> Effect.Deep.continue kont (Some (fn, h))
+             | None -> Effect.Deep.continue kont (Effect.perform (Runtime.Lookup_handler name)))
+        | effect Runtime.Get_handlers, kont ->
+            Effect.Deep.continue kont (snew @ Effect.perform Runtime.Get_handlers)
+      end
   | EDefValue (_, rhs) ->
       (* Bare expression position: evaluate the RHS and return it; binding is
          the job of the enclosing block / top level (mirrors EDef, which
@@ -782,8 +636,9 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       let cfg = force (eval map_expr env) in
       (match cfg with
        | VMap _ ->
-           with_ref config_stack (cfg :: !config_stack)
-             (fun () -> eval_tail body env k)
+           try eval_tail body env k
+           with effect Runtime.Get_config, kont ->
+             Effect.Deep.continue kont (cfg :: Effect.perform Runtime.Get_config)
        | _ -> failwith "with-config expects a map")
   | EConfig (key_expr, default_opt) ->
       let key_val = force (eval key_expr env) in
@@ -904,7 +759,7 @@ and trampoline_force (v : value) : value =
                         r
                   in
                   (match t.type_ann with
-                   | Some ty -> check_type result ty t.thunk_loc
+                   | Some ty -> Node.check_type result ty t.thunk_loc
                    | None -> ());
                   t.thunk_status <- Evaluated result;
                   Queue.add result queue;
@@ -923,16 +778,10 @@ and perform_effect (name : string) (args : value list) : value =
      as a `handler:<effect>` trace cell so a hit under a different handler
      (mock vs real) re-computes instead of cross-contaminating. *)
   Runtime.record_handler_observation name;
-  (* Check for handler *)
-  let rec find_handler = function
-    | [] ->
-        (* No handler — try builtin effect *)
-        perform_builtin_effect name args
-    | (n, handler, _) :: rest ->
-        if n = name then handler args
-        else find_handler rest
-  in
-  find_handler !handler_stack
+  (* Check for handler via effect perform *)
+  match Effect.perform (Runtime.Lookup_handler name) with
+  | Some (handler, _) -> handler args
+  | None -> perform_builtin_effect name args
 
 and perform_builtin_effect (name : string) (args : value list) : value =
   match name with
@@ -947,7 +796,6 @@ and perform_builtin_effect (name : string) (args : value list) : value =
            Process.read_dispatch ~tag:"read-file"
              ~cap_err:(fun p -> "read-file: capability error: no read access for " ^ p) path
        | _ -> failwith "read-file expects a string path")
-
   | "write-file" ->
       (match args with
        | [VString path; VString content] ->
@@ -1046,10 +894,10 @@ and perform_builtin_effect (name : string) (args : value list) : value =
 (* ---- Helpers ---- *)
 
 and has_fs_read (path : string) : bool =
-  List.exists (fun cap -> Capabilities.check_fs_read cap path) !current_capabilities
+  List.exists (fun cap -> Capability.check_fs_read cap (Runtime.canonical_path path)) (Effect.perform Runtime.Get_capabilities)
 
 and has_fs_write (path : string) : bool =
-  List.exists (fun cap -> Capabilities.check_fs_write cap path) !current_capabilities
+  List.exists (fun cap -> Capability.check_fs_write cap (Runtime.canonical_path path)) (Effect.perform Runtime.Get_capabilities)
 
 
 (* (load-module "file.pp"): evaluate the file against a fresh initial env and
@@ -1124,22 +972,23 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
     | e :: rest -> ignore (step e); go rest
   in
   go exprs
-
 (* ---- Public API ---- *)
 
 (* Evaluate an expression in the initial environment *)
 let eval_program (e : expr) : value =
-  let env = Primitives.initial_env () in
-  eval e env
+  Runtime.with_top_level ~f:(fun () ->
+    let env = Primitives.initial_env () in
+    eval e env
+  ) ()
 
 (* Evaluate and force (for top-level expressions) *)
 let eval_and_force (e : expr) : value =
-  force (eval_program e)
+  Runtime.with_top_level ~f:(fun () ->
+    force (eval_program e)
+  ) ()
 
 (* Initialize the evaluator state *)
 let init () =
-  handler_stack := [];
-  current_capabilities := (Runtime.invocation_get ()).initial_capabilities;
   if not !Runtime.keep_thunks then Hashtbl.clear thunk_store;
   (* Probes: the registry is script-tier registration state, re-established
      by the program's own top-level `(register-probe ...)` forms on every
@@ -1154,7 +1003,7 @@ let init () =
      of every fresh run — the counter matters for LAW 20 stability (a
      gensym'd name can be baked into an expanded node's code, so re-running
      the SAME source must reproduce the SAME counter sequence, or the same
-     program could hash differently run to run). Unconditional (not gated
+     program could hash differently run to run. Unconditional (not gated
      on Runtime.keep_thunks like thunk_store): both are derived fresh from
      source text each run, never persistent cache state. *)
   Backend.r.macro_reset ();
@@ -1166,7 +1015,7 @@ let init () =
      node keys and run node bodies without a dependency cycle (Primitives is
      compiled before Evaluator). *)
   Backend.r.node_key_of <- node_key_of;
-  Backend.r.run_node_body <- (fun ~key ~run t -> run_node_body ~key ~run t);
+  Backend.r.run_node_body <- (fun ~key ~run t -> Node.run_node_body ~key ~run t);
   Backend.r.resolve_if_hit <- (fun t key ->
     (* Same node_caps-gated authority as force_node (LAW 23b) — this is
        the force-deep collect pass's own pre-check of the same key. *)

@@ -652,7 +652,7 @@ let stmt_handler_leak env d =
       S [A f; gen_int_lit ()]];
    S [A "print"; S [A "perform"; A "log"; gen_str_lit ()]]]
 
-let stmt_deep_rec env _d =
+let stmt_deep_rec _env _d =
   (* deep recursion — stack-safety; tail and non-tail variants *)
   let f = fresh "f" in
   let n = fresh "p" in

@@ -275,10 +275,10 @@ let walk_files (path : string) (acc : (string * string) list ref) : unit =
 
 let pre_observe_granted_scope () : (string * string * string) list =
   let roots =
-    Capabilities.list_fs_paths (CapCompose (Runtime.invocation_get ()).initial_capabilities)
-    |> List.filter_map (fun (p, m) -> match m with
-         | Read | ReadWrite -> Some p
-         | Write -> None)
+    Capability.list_fs_paths (Capability.compose (Runtime.invocation_get ()).initial_capabilities)
+    |> List.filter_map (fun ((p : Paths.canonical), m) -> match m with
+         | Capability.Read | Capability.ReadWrite -> Some (p :> string)
+         | Capability.Write -> None)
     |> List.sort_uniq compare
   in
   let acc = ref [] in
@@ -349,9 +349,9 @@ let ship_and_pull ~(member_home : string) (closed : Scheduler.job list) : unit =
     let pins_file = Filename.concat scratch "pins" in
     Store.atomic_write pins_file
       (String.concat "" (List.map (fun (c, h, _) -> pin_line c h) pins));
-    let secret = Token.load_secret () and cluster_id = Token.load_cluster_id () in
+    let secret = Cap_token.load_secret () and cluster_id = Cap_token.load_cluster_id () in
     let token_text =
-      Token.mint ~secret ~cluster_id ~specs:(Runtime.invocation_get ()).initial_grant_specs
+      Cap_token.mint ~secret ~cluster_id ~specs:(Runtime.invocation_get ()).initial_grant_specs
         ~ttl_seconds:remote_ttl_seconds
     in
     let token_file = Filename.concat scratch "token" in

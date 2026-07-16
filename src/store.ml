@@ -298,14 +298,14 @@ let store_trace ~key ~outcome ~result_hash ~reads =
    which spelling (symlink, /var vs /private/var, trailing slash) the
    program used. *)
 let file_cell_id (path : string) : string =
-  Cell.(to_string (File (Runtime.canonical_path path)))
+  Cell.(to_string (File ((Runtime.canonical_path path) :> string)))
 
 (* A stat cell — "stat:<canonical-path>" — records what a file *predicate*
    observed: presence and kind, never contents. Precise for file-exists?/
    dir?: creating or deleting the path invalidates, content edits do not; a
    trace that observed absence re-verifies while the path stays absent. *)
 let stat_cell_id (path : string) : string =
-  Cell.(to_string (Stat (Runtime.canonical_path path)))
+  Cell.(to_string (Stat ((Runtime.canonical_path path) :> string)))
 
 let stat_kind (path : string) : string =
   match Unix.lstat path with
@@ -521,7 +521,7 @@ let read_file_cell (path : string) : string =
    rotation-invalidation and the trace mechanism need). Returns the raw
    bytes; the caller wraps them as VSealed. *)
 let sealed_cell_id (path : string) : string =
-  Cell.(to_string (Sealed (Runtime.canonical_path path)))
+  Cell.(to_string (Sealed ((Runtime.canonical_path path) :> string)))
 
 let read_sealed_cell (path : string) : string =
   let cell = sealed_cell_id path in

@@ -19,20 +19,18 @@
 open Types
 
 let require_no_node_body (who : string) : unit =
-  if !Runtime.trace_stack <> [] then
+  if Effect.perform Runtime.In_node then
     failwith (who ^ ": may not be called inside a node body (writes are domain-apply-only)")
 
 let has_fs_read path =
-  List.exists (fun cap -> Capabilities.check_fs_read cap path)
-    !Runtime.current_capabilities
+  List.exists (fun cap -> Capability.check_fs_read cap (Runtime.canonical_path path))
+    (Effect.perform Runtime.Get_capabilities)
 
 let has_fs_write path =
-  List.exists (fun cap -> Capabilities.check_fs_write cap path)
-    !Runtime.current_capabilities
-
+  List.exists (fun cap -> Capability.check_fs_write cap (Runtime.canonical_path path))
+    (Effect.perform Runtime.Get_capabilities)
 (* Capabilities.check_process recurses through CapCompose (and so, via
    check_process's own CapCompose arm, through however many levels a
-   `(current-capabilities)` round-trip nested) — required here because a
    domain's registered cap is typically exactly that round-trip (main.ml's
    glue registers the proc domain's write-cap as `(current-capabilities)`
    itself, a single CapCompose value, not narrowed the way fs's is via
@@ -42,7 +40,7 @@ let has_fs_write path =
    has_process_cap did before it needed to recurse through CapCompose)
    would miss it. *)
 let has_process_cap () =
-  List.exists Capabilities.check_process !Runtime.current_capabilities
+  List.exists Capability.check_process (Effect.perform Runtime.Get_capabilities)
 
 (* Fully force a value (map values / vector-set elements are lazy by
    construction, primitives.ml) so Codec.encode_value and Hasher.hash_value
@@ -56,7 +54,8 @@ let has_process_cap () =
    assoc list (the diff runs in pp, over pp values) and canonicalizes root
    the same way every other fs boundary does (LAW 23 / DESIGN §2.1). *)
 let tree_observe (root : string) : value =
-  let root = Runtime.canonical_path root in
+  let root_canon = Runtime.canonical_path root in
+  let root = (root_canon :> string) in
   (* A write-only domain grant (`fs:ROOT:wo`, tests/023) must still be able
      to observe its OWN managed tree — the single writer reading its own
      domain to converge is not a new authority concern (there is no other
@@ -84,13 +83,10 @@ let rec mkdir_p dir =
     | Unix.Unix_error (Unix.EEXIST, _, _) -> ()
   end
 
-(* ---- materialize-file: temp-in-target + rename(2), mkdir -p, optional
-   :executable — moved from Reconciler.write_atomic. Whole-domain
-   verify-after-write (Domains.ml) supersedes the old per-file inline
-   check, so this primitive itself does not re-read after writing. *)
 let materialize_file (path : string) (content : string) (executable : bool) : unit =
   require_no_node_body "materialize-file";
-  let path = Runtime.canonical_path path in
+  let path_canon = Runtime.canonical_path path in
+  let path = (path_canon :> string) in
   if not (has_fs_write path) then
     raise (Capability_error ("materialize-file: capability error: no write access for " ^ path));
   mkdir_p (Filename.dirname path);
@@ -103,13 +99,7 @@ let materialize_file (path : string) (content : string) (executable : bool) : un
   if executable then (try Unix.chmod path 0o755 with _ -> ());
   Store.unpin_file path
 
-(* ---- remove-file: unlink + prune now-empty ancestor directories ----
-   Pruning climbs upward exactly as far as the ambient write authority
-   still covers the directory — the same check_fs_write test that gated the
-   remove itself — so it stops at a domain's own root without needing a
-   separate root argument threaded through (the old Reconciler took an
-   explicit ~root; this generalizes to any domain's write-cap boundary,
-   fs-rooted or not). *)
+
 let rec prune_empty_dirs (dir : string) : unit =
   if has_fs_write dir then
     match Sys.readdir dir with
@@ -119,12 +109,14 @@ let rec prune_empty_dirs (dir : string) : unit =
 
 let remove_file (path : string) : unit =
   require_no_node_body "remove-file";
-  let path = Runtime.canonical_path path in
+  let path_canon = Runtime.canonical_path path in
+  let path = (path_canon :> string) in
   if not (has_fs_write path) then
     raise (Capability_error ("remove-file: capability error: no write access for " ^ path));
   (try Sys.remove path with _ -> ());
   Store.unpin_file path;
   prune_empty_dirs (Filename.dirname path)
+
 
 (* ---- domain-state-get/put: per-domain persistent KV, replacing procs/'s
    role ----
@@ -138,13 +130,13 @@ let remove_file (path : string) : unit =
    is a Capability_error automatically — closing that side-channel with the
    SAME mechanism diff's purity already uses, not a new checker. *)
 let require_domain_context (who : string) : Runtime.domain_entry * string =
-  match !Runtime.current_domain with
+  match Effect.perform Runtime.Get_domain with
   | None -> failwith (who ^ ": not running inside a domain's observe/diff/apply")
   | Some name ->
       (match Hashtbl.find_opt Runtime.domain_registry name with
        | None -> failwith (who ^ ": unknown current domain " ^ name)
        | Some entry ->
-           if Capabilities.cap_subseteq entry.Runtime.dm_cap !Runtime.current_capabilities
+           if Capability.subseteq entry.Runtime.dm_cap (Effect.perform Runtime.Get_capabilities)
            then (entry, name)
            else raise (Capability_error
                     (who ^ ": capability error: no authority for domain " ^ name)))
@@ -238,7 +230,7 @@ let env_array spec_env =
   Array.of_list (overrides @ base)
 
 let domain_io_dir () : string =
-  let name = match !Runtime.current_domain with Some n -> n | None -> "unknown" in
+  let name = match Effect.perform Runtime.Get_domain with Some n -> n | None -> "unknown" in
   Filename.concat Store.store_root (Filename.concat "domain-state" (name ^ "-io"))
 
 let out_file name = Filename.concat (domain_io_dir ()) ("svc-" ^ Hasher.hash_string name ^ ".out")
@@ -261,7 +253,7 @@ let proc_spawn (spec : value) : value =
     | Some p -> p
     | None -> failwith ("proc-spawn: command not found for service " ^ name ^ ": " ^ cmd)
   in
-  let spec_hash = Hasher.hash_value (Force_deep.force_deep_plain spec) in
+  let spec_hash = Types.hash_value (Force_deep.force_deep_plain spec) in
   Journal.append (Journal.ProcStartIntent { name; spec_hash });
   Store.ensure_dir (domain_io_dir ());
   let argv = resolved :: args in

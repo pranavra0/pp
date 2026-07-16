@@ -28,7 +28,7 @@ let action_key ~(epoch : string) ~(kind : string) ~(spec_hash : string) : string
   Hasher.hash_concat ["fenced"; epoch; kind; spec_hash]
 
 let hash_spec (spec : value) : string =
-  Hasher.hash_value (Backend.r.force spec)
+  Types.hash_value (Backend.r.force spec)
 
 (* Deep-force and validate that the spec is a map. *)
 let force_spec_map (spec : value) : (value * value) list =
@@ -111,10 +111,10 @@ let run_command (spec : value) : value =
             (VString "out", VString out);
             (VString "err", VString err)]
 
-let result_hash (v : value) : string = Hasher.hash_value v
+let result_hash (v : value) : string = Types.hash_value v
 
 let register (kind : string) (spec : value) : unit =
-  if !Runtime.trace_stack <> [] then
+  if Effect.perform Runtime.In_node then
     failwith "fenced: fenced effects may not appear inside node bodies (LAW 31)";
   let forced = Force_deep.force_deep_plain spec in
   (match Codec.encode_value forced with

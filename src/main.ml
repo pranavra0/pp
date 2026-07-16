@@ -94,7 +94,7 @@ let stdlib_glue_sources () : (string * string) list =
               [("<domain-glue:fs>", Printf.sprintf
                   "(load %s)\n(register-fs-domain %s (cap-restrict (current-capabilities) %s :wo))\n"
                   (pp_quote (Filename.concat root "domain-fs.pp"))
-                  (pp_quote canon) (pp_quote canon))]
+                  (pp_quote (canon :> string)) (pp_quote (canon :> string)))]
         in
         let proc_glue =
           if not (Runtime.invocation_get ()).program_supervise then []
@@ -220,7 +220,6 @@ let watch_loop ~files ~interval ~stabilize =
     Hashtbl.clear Runtime.probe_values;  (* probes re-evaluate fresh each pass *)
     Hashtbl.clear Runtime.sealed_pins;   (* sealed bytes never survive a pass *)
     Runtime.observed_all := [];     (* clear collected observations *)
-    Runtime.current_capabilities := (Runtime.invocation_get ()).initial_capabilities;
     (* Re-read and execute the program (plus, if --reconcile/--supervise is
        active, the domain-registration glue — run_files/uses_domains). *)
     let last = run_files files in
@@ -239,7 +238,6 @@ let watch_loop ~files ~interval ~stabilize =
     Hashtbl.clear Runtime.probe_values;  (* probes re-evaluate fresh each pass *)
     Hashtbl.clear Runtime.sealed_pins;   (* sealed bytes never survive a pass *)
     Runtime.observed_all := [];
-    Runtime.current_capabilities := (Runtime.invocation_get ()).initial_capabilities;
     let last = run_files files in
     last_desired := last;
     run_domains_pass last;
@@ -756,9 +754,12 @@ let main () =
 
 
   let source_roots =
-    Runtime.canonical_path (Sys.getcwd ())
-    :: List.map (fun f -> Filename.dirname (Runtime.canonical_path f)) !files
-    @ (match Runtime.stdlib_root () with Some d -> [d] | None -> [])
+    let raw_roots =
+      Sys.getcwd ()
+      :: List.map (fun f -> Filename.dirname f) !files
+      @ (match Runtime.stdlib_root () with Some d -> [d] | None -> [])
+    in
+    List.map Runtime.canonical_path raw_roots
   in
 
 
@@ -770,14 +771,21 @@ let main () =
      this member process outright (Failure -> the top-level handler ->
      exit 1), which the dispatcher (src/remote.ml) reads as "member
      failed" and degrades that batch to local compute. *)
+  Backend.r.realpath <- Runtime.canonical_path_impl;
+  Backend.r.get_unix_time <- (fun () -> Unix.time ());
+  Backend.r.cap_write_secret <- (fun path content ->
+    let fd = Unix.openfile path [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL] 0o600 in
+    let oc = Unix.out_channel_of_descr fd in
+    output_string oc content;
+    close_out oc);
   let initial_caps =
     match !remote_node_args with
     | Some (token_file, _, _, _, _) ->
         let token_text = Store.read_raw token_file in
-        (match Token.token_to_caps token_text with
+        (match Cap_token.token_to_caps token_text with
          | Ok caps -> caps
          | Error reason -> failwith ("pp: --remote-node: token rejected: " ^ reason))
-    | None -> List.map Capabilities.parse_grant (List.rev !grants)
+    | None -> List.map (fun spec -> Capability.mint ~realpath:Backend.r.realpath spec) (List.rev !grants)
   in
 
   Runtime.invocation := Some {
@@ -872,12 +880,31 @@ let main () =
      Errors (bad token, corrupt/tampered artifact, missing secret) propagate
      as Failure/Transport.Transport_integrity_error to the top-level handler
      below, printed uniformly as "pp: error: ...". *)
-  if !cluster_init_mode then (Token.init (); exit 0);
+  if !cluster_init_mode then begin
+    Store.ensure_dir (Cap_token.cluster_dir ());
+    if Sys.file_exists (Cap_token.secret_path ()) then
+      failwith (Printf.sprintf
+        "pp cluster-init: a cluster secret already exists at %s — refusing \
+         to overwrite (this would invalidate every token already minted \
+         against it); remove it by hand first if you really mean to rotate"
+        (Cap_token.secret_path ()));
+    let secret_hex = Hasher.hex_encode (Cryptokit.Random.string Cryptokit.Random.secure_rng 32) in
+    Cap_token.write_secret_file (Cap_token.secret_path ()) (secret_hex ^ "\n");
+    let cluster_id = Hasher.hex_encode (Cryptokit.Random.string Cryptokit.Random.secure_rng 16) in
+    if not (Sys.file_exists (Cap_token.id_path ())) then
+      Store.atomic_write (Cap_token.id_path ()) (cluster_id ^ "\n");
+    Printf.printf
+      "pp cluster-init: minted %s (mode 0600) and cluster id %s\n\
+       pp cluster-init: distribute BOTH files to other cluster members out \
+       of band, at the same path (~/.pp/cluster/) — pp never transmits them\n"
+      (Cap_token.secret_path ()) cluster_id;
+    exit 0
+  end;
   (match !mint_token_args with
    | Some (out, ttl) ->
-       let secret = Token.load_secret () in
-       let cluster_id = Token.load_cluster_id () in
-       let token = Token.mint ~secret ~cluster_id ~specs:(List.rev !grants) ~ttl_seconds:ttl in
+       let secret = Cap_token.load_secret () in
+       let cluster_id = Cap_token.load_cluster_id () in
+       let token = Cap_token.mint ~secret ~cluster_id ~specs:(List.rev !grants) ~ttl_seconds:ttl in
        Store.atomic_write out token;
        exit 0
    | None -> ());
@@ -989,113 +1016,86 @@ let main () =
         Printf.eprintf "[update] %s: %d pin(s) updated, %d skipped\n%!"
           f updated skipped)
       (List.rev !files);
-  (match !eval_str, !files with
-  | Some e, [] ->
-      if !diff then begin
-        Printf.eprintf "--diff not supported with -e\n"; exit 1
-      end;
-      let results = Repl.execute_string_bytecode !bytecode e in
-      List.iter (fun v ->
-        Printf.printf "%s\n" (Types.string_of_value v)
-      ) results
-  | None, [] ->
-      if !bytecode then Repl.repl_bytecode ()
-      else Repl.repl ()
-  | _, files ->
-      let files = List.rev files in
-      if !watch then
-        watch_loop ~files ~interval:!watch_interval ~stabilize:!stabilize
-      else if !diff then begin
-        List.iter (fun f ->
-          let tw_results = Repl.execute_file f in
-          let bc_results = Repl.execute_file_bytecode true f in
-          let tw_strings = List.map Types.string_of_value tw_results in
-          let bc_strings = List.map Types.string_of_value bc_results in
-          if tw_strings <> bc_strings then begin
-            Printf.eprintf "--diff mismatch in %s\n" f;
-            Printf.eprintf "tree-walker (%d values):\n" (List.length tw_strings);
-            List.iter (Printf.eprintf "  %s\n") tw_strings;
-            Printf.eprintf "bytecode (%d values):\n" (List.length bc_strings);
-            List.iter (Printf.eprintf "  %s\n") bc_strings;
-            exit 1
-          end
-        ) files
-      end else begin
-        let last = run_files files in
-        run_domains_pass last;
-        (* `--dump-pins <path>` — after the canonical run
-           completes (this plain non-watch, non-remote-node branch only;
-           the other branches have their own, different, run shapes),
-           write every Store.run_pins entry as a `(pin ...)` line and every
-           Runtime.probe_values entry as a `(pin-probe ...)` line. A probe value
-           Codec.encode_value can't encode (code/a handle/a sealed secret)
-           is skipped — mirrors how a node's RESULT value already treats
-           non-data (--publish-object's own "cannot be published as data"
-           check) — logged, not a hard failure, since the run itself
-           already succeeded. Placed BEFORE the --check re-run below,
-           which clears/repopulates Store.run_pins for its own serial
-           comparison — dumping first captures exactly this run's own
-           observations, not the re-run's. *)
-        (match !dump_pins_file with
-         | Some path ->
-             let buf = Buffer.create 256 in
-             Hashtbl.iter (fun cell hash -> Buffer.add_string buf (Remote.pin_line cell hash))
-               Store.run_pins;
-             Hashtbl.iter (fun name v ->
-               match Codec.encode_value v with
-               | Some text -> Buffer.add_string buf (Remote.pin_probe_line name text)
-               | None ->
-                   Printf.eprintf
-                     "[dump-pins] skipping non-data probe value for %s (code/handle/sealed)\n%!"
-                     name)
-               Runtime.probe_values;
-             Store.atomic_write path (Buffer.contents buf)
-         | None -> ());
-        (* Schedule-transparency audit (LAW 26/34's
-           promised --check): a result-transparent handler must never change
-           WHAT a program computes, only where/when it runs. Under --check
-           with a non-serial policy, re-run the SAME program forced Serial
-           against the SAME on-disk store and compare the desired-state
-           value's hash; any mismatch is exactly as unsound as the existing
-           per-node volatility failure and is reported/gated the same way
-           (Store.volatile_count). This is a WHOLE-PROGRAM check distinct
-           from run_node_body's per-node double-run — the re-run's own
-           reconcile/supervise/fenced side effects are deliberately skipped
-           (only the value is compared) so a --check run never applies
-           convergent state or fenced actions twice. *)
-        if !Store.check_mode && !Scheduler.policy <> Scheduler.Serial then
-          (match last with
-           | None -> ()
-           | Some v ->
-               let h_scheduled = Types.hash_value v in
-               let saved_policy = !Scheduler.policy in
-               let policy_name = function
-                 | Scheduler.Serial -> "serial"
-                 | Scheduler.Parallel n -> Printf.sprintf "parallel:%d" n
-                 | Scheduler.Race n -> Printf.sprintf "race:%d" n
-                 | Scheduler.Remote m -> Printf.sprintf "remote:%s" m
-               in
-               Scheduler.policy := Scheduler.Serial;
-               Hashtbl.clear Store.run_pins;
-               Runtime.current_capabilities := (Runtime.invocation_get ()).initial_capabilities;
-               (* Deliberately reuses run_files (so a --reconcile/--supervise
-                  program's domain registration is available identically to
-                  the scheduled run) but never calls run_domains_pass — this
-                  comparison is value-only; convergent/fenced side effects
-                  must not apply twice. *)
-               let last_serial = run_files files in
-               Scheduler.policy := saved_policy;
-               (match last_serial with
-                | None -> ()
-                | Some v2 ->
-                    if Types.hash_value v2 <> h_scheduled then begin
-                      incr Store.volatile_count;
-                      Printf.eprintf
-                        "[check] schedule non-transparent: %s and serial re-runs produced different desired-state hashes\n%!"
-                        (policy_name saved_policy)
-                    end))
-      end);
-
+  begin
+    let _ = Runtime.with_top_level ~f:(fun () ->
+      (match !eval_str, !files with
+      | Some e, [] ->
+          if !diff then begin
+            Printf.eprintf "--diff not supported with -e\n"; exit 1
+          end;
+          let results = Repl.execute_string_bytecode !bytecode e in
+          List.iter (fun v ->
+            Printf.printf "%s\n" (Types.string_of_value v)
+          ) results
+      | None, [] ->
+          if !bytecode then Repl.repl_bytecode ()
+          else Repl.repl ()
+      | _, files ->
+          let files = List.rev files in
+          if !watch then
+            watch_loop ~files ~interval:!watch_interval ~stabilize:!stabilize
+          else if !diff then begin
+            List.iter (fun f ->
+              let tw_results = Repl.execute_file f in
+              let bc_results = Repl.execute_file_bytecode true f in
+              let tw_strings = List.map Types.string_of_value tw_results in
+              let bc_strings = List.map Types.string_of_value bc_results in
+              if tw_strings <> bc_strings then begin
+                Printf.eprintf "--diff mismatch in %s\n" f;
+                Printf.eprintf "tree-walker (%d values):\n" (List.length tw_strings);
+                List.iter (Printf.eprintf "  %s\n") tw_strings;
+                Printf.eprintf "bytecode (%d values):\n" (List.length bc_strings);
+                List.iter (Printf.eprintf "  %s\n") bc_strings;
+                exit 1
+              end
+            ) files
+          end else begin
+            let last = run_files files in
+            run_domains_pass last;
+            (match !dump_pins_file with
+             | Some path ->
+                 let buf = Buffer.create 256 in
+                 Hashtbl.iter (fun cell hash -> Buffer.add_string buf (Remote.pin_line cell hash))
+                   Store.run_pins;
+                 Hashtbl.iter (fun name v ->
+                   match Codec.encode_value v with
+                   | Some text -> Buffer.add_string buf (Remote.pin_probe_line name text)
+                   | None ->
+                       Printf.eprintf
+                         "[dump-pins] skipping non-data probe value for %s (code/handle/sealed)\n%!"
+                         name)
+                   Runtime.probe_values;
+                 Store.atomic_write path (Buffer.contents buf)
+             | None -> ());
+            if !Store.check_mode && !Scheduler.policy <> Scheduler.Serial then
+              (match last with
+               | None -> ()
+               | Some v ->
+                   let h_scheduled = Types.hash_value v in
+                   let saved_policy = !Scheduler.policy in
+                   let policy_name = function
+                     | Scheduler.Serial -> "serial"
+                     | Scheduler.Parallel n -> Printf.sprintf "parallel:%d" n
+                     | Scheduler.Race n -> Printf.sprintf "race:%d" n
+                     | Scheduler.Remote m -> Printf.sprintf "remote:%s" m
+                   in
+                   Scheduler.policy := Scheduler.Serial;
+                   Hashtbl.clear Store.run_pins;
+                   let last_serial = run_files files in
+                   Scheduler.policy := saved_policy;
+                   (match last_serial with
+                    | None -> ()
+                    | Some v2 ->
+                        if Types.hash_value v2 <> h_scheduled then begin
+                          incr Store.volatile_count;
+                          Printf.eprintf
+                            "[check] schedule non-transparent: %s and serial re-runs produced different desired-state hashes\n%!"
+                            (policy_name saved_policy)
+                        end))
+          end)
+    ) ()
+    in ()
+  end;
   (* After running the program (whatever nodes that forced,
      including — but not limited to — the dispatcher's assigned batch keys;
      duplicate/extra computation here is sound), serve each assigned key back to the
