@@ -69,80 +69,7 @@ mechanism third, and the build boundary with the `.mli` freeze last.
 Signatures are frozen only after the type, identity and extent work have
 reshaped what they describe.
 
-### Make capabilities and canonical paths unforgeable types
 
-Both are subtraction wearing type clothing: each makes a catastrophic,
-silent mistake inexpressible, and thereby retires the prose, review
-vigilance, and negative tests that currently guard it. No other new
-types belong in this stage (no phantom-tagged hashes, no second AST, no
-functors: each was weighed and fails the criterion in section 0).
-
-- `Capability.t` becomes abstract. The `capability` variant references
-  nothing else in `types.ml`'s recursive group, so it extracts cleanly
-  into an early-compiled module whose `.mli` exposes `mint` (called from
-  exactly one CLI site), `restrict`, `compose`, `subseteq`, the
-  per-channel `check_*` functions, and `hash` — and no constructors. The
-  unforgeable, root-minted capability rule (SPEC law 22: user code
-  narrows and unions, never constructs) stops being a discipline and
-  becomes a fact about which functions return `t`, for OCaml-side code
-  too, which today can fabricate `CapFilesystem {path="/"; mode=ReadWrite}`
-  anywhere. Rename `token.ml` to `cap_token.ml` while it's on the bench,
-  since it collides with the lexing concept.
-- `Path.canonical = private string`. DESIGN section 2.1's law says a
-  path is canonicalized once, so the bug class where two spellings of
-  one path bypass authority checks cannot reappear. Today that only
-  holds by discipline: any new call site can hand a raw symlinked path
-  to an authority check. Give `canonicalize` the only constructor;
-  `Paths.under`, `Cell.File`, capability checks, and sandbox and loader
-  containment all take `canonical`. `private` (not abstract) keeps
-  reads, printing, and hashing zero-cost. The kernel/syscall tension,
-  decided now: canonicalization is `realpath`, a syscall, but `path.ml`
-  must live in the syscall-free kernel (see "Split out a pure kernel
-  library and freeze signatures"). So the kernel signature is
-  `val canonicalize : realpath:(string -> string) -> string ->
-  canonical`. The resolver is injected, the kernel stays pure, and the
-  sole partial application (`~realpath:Unix.realpath`) lives in the
-  backend record introduced by the global-state collapse: one blessed
-  construction site.
-
-### One node-key construction shared by both engines
-
-The two execution engines are a sanctioned copy under the section 0
-corollary: their divergence is loud, and the differential suite is the
-verification. What that sanction does not cover is identity: the node-key
-construction (the node-key hashing rules, SPEC law 20 — the
-`["node-key"; hash_expr e]` / `["fv"; name; hv]` skeleton, plus the
-capability/sealed free-var ban) is written twice (`evaluator.ml`'s
-`node_key_of`, `vm.ml`'s `vm_node_key`), with a comment demanding the
-formats stay byte-identical. An identity divergence would not fail a
-differential assertion; it would silently split the store.
-
-How:
-- Extract the key skeleton into the kernel: one function beside the
-  hasher, given the expr hash and the free variables (name to forced
-  value), builds the key and enforces the authority ban. `node_key_of`
-  and `vm_node_key` become about 10-line adapters supplying only what
-  genuinely differs: free-var enumeration and each engine's force.
-  "Must stay byte-identical" stops being a comment and becomes the
-  absence of a second implementation.
-- Make the rebuilder one findable file. Its implementation is currently
-  smeared across `evaluator.ml` (`force_node`, `run_node_body`,
-  `cell_authorized_for`), `store.ml` (`hit`), and `runtime.ml` (trace
-  frames). Move, don't rewrite, it into `node.ml`, with the key skeleton
-  and both adapters in one place. `tests/010` to `tests/024` pin the
-  move.
-- Declare which engine is normative: one sentence in DESIGN.md stating
-  that the tree-walker is the executable specification and the VM
-  conforms. When they disagree, the differential suite has found a VM
-  bug, unless the spec is shown wrong.
-- Deliberately not done: deleting either engine (the redundancy is the
-  oracle), and generating one engine from the other (a generator is a
-  third implementation of the semantics, which fails the section 0
-  criterion).
-
-Deletes: the second key implementation, the byte-identical-by-discipline
-rule and the review vigilance behind it, and the standing ambiguity over
-which engine to trust when they disagree.
 
 ### Hold dynamic extent with OCaml 5 effect handlers
 
@@ -183,11 +110,10 @@ How:
   read ambient state, and node capture (SPEC law 23b) is unchanged in
   meaning. The differential suite and the golden fixture gate the
   conversion.
-- The cost: `(ocaml (>= 4.14))` becomes `(>= 5.1)`, the
-  one dependency-floor change in this plan (the development switch is
-  already 5.4). This stage is severable; nothing else depends on it.
-  But the default is to move: the floor buys deleting an entire
-  expressible-mistake class.
+- The cost: `(ocaml (>= 4.14))` became `(>= 5.1)`; the
+  development switch is already 5.5.0. The floor change alone is
+  committed; the effect-conversion work remains.
+  This stage is severable; nothing else depends on it.
 
 Deletes: `with_ref`, `handler_save_stack` plus `POP_HANDLER`'s
 exact-restore discipline, `pop_trace_frame`'s mirrored dual-pop, the two
