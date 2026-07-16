@@ -1,12 +1,17 @@
+; pp.kernel is pure — no Unix, no side-effects — so it needs no
+; -no-strict-sequence override. The kernel's sequences are all unit-typed
+; let-bindings; dune's default -strict-sequence is the correct default here.
 (library
  (name pp_kernel)
  (public_name pp.kernel)
  (wrapped false)
  (modules types effects backend hasher blobref force_deep codec constant_time
    paths cell surface_tables capability desugar comments version cap_token)
- (libraries cryptokit dune-build-info)
- (flags -no-strict-sequence))
+ (libraries cryptokit dune-build-info))
 
+; -no-strict-sequence: same rationale as main below — pp uses ; for
+; side-effecting expressions where the return value is naturally non-unit
+; (e.g., Hashtbl.replace, output_string, Unix.write_substring).
 (library
  (name pp)
  (public_name pp)

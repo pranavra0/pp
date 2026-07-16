@@ -727,9 +727,6 @@ let lookup_env (env : env) (name : string) : value option =
   in
   walk env.bindings
 
-let extend_env_many (env : env) (bindings : (string * value) list) : env =
-  List.fold_left (fun e (n, v) -> extend_env e n v) env bindings
-
 
 (* =================================================================== *)
 (*  Constructor helpers                                                 *)

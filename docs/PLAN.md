@@ -62,37 +62,6 @@ doesn't wait for pristine.
 
 ---
 
-## Part I — Construction
-
-Ordered deliberately: types first, identity unified second, the extent
-mechanism third, and the build boundary with the `.mli` freeze last.
-Signatures are frozen only after the type, identity and extent work have
-reshaped what they describe.
-
-### Split out a pure kernel library and freeze signatures
-
-This comes last in Part I by design: `.mli`s freeze surfaces, so they
-should be written against the shape that the type, identity and extent
-work leaves behind.
-
-- One library: `src/dune`'s flat 47-module executable becomes library
-  `pp` plus a thin `main` executable. One split, not several: the
-  kernel is pure. The identity, authority, naming and codec modules
-  (`types`'s successors, `hasher`, `cell`, `capability`, `path`, `codec`,
-  `surface_tables`, `cap_token`, and the effect declarations from the
-  dynamic-extent work) live in a `pp.kernel` sub-library that lists no
-  `unix`. That single boundary makes "keep the oracle auditable" a build
-  fact, and lets tests and the fuzzer link the reader, printer and
-  evaluator in-process (today's fuzzer can only shell out to the
-  binary).
-- `.mli` for the remaining wide-open modules: `evaluator`, `compiler`,
-  `vm`, `reader`, `reader_braces`, `macro`, and `types`'s successors.
-  Each is the inferred signature trimmed to what its callers use.
-- Explain or drop `-no-strict-sequence` (`src/dune`, `tools/dune`): the
-  only unexplained flag in the build.
-
----
-
 ## Part II — The sweep (prod-readiness)
 
 Run after Parts I and II, so it sweeps the final shape rather than a
