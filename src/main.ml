@@ -299,6 +299,26 @@ let watch_loop ~files ~interval ~stabilize =
 
 let main () =
   let args = List.tl (Array.to_list Sys.argv) in
+  (* Install the impure Backend hooks first, before ANY subcommand dispatch:
+     several modes (--serve-hit/--recv-hit/--transport-*, cluster-init,
+     --mint-token) call into Cap_token, which reaches the world only through
+     these hooks (home_dir / cap_read_secret / cap_write_secret), and some of
+     those modes exit before the rest of main runs. *)
+  Backend.r.realpath <- Runtime.canonical_path_impl;
+  Backend.r.get_unix_time <- (fun () -> Unix.time ());
+  Backend.r.cap_write_secret <- (fun path content ->
+    let fd = Unix.openfile path [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL] 0o600 in
+    let oc = Unix.out_channel_of_descr fd in
+    output_string oc content;
+    close_out oc);
+  Backend.r.cap_read_secret <- (fun path ->
+    let ic = open_in_bin path in
+    let len = in_channel_length ic in
+    let s = really_input_string ic len in
+    close_in ic;
+    let n = String.length s in
+    if n > 0 && s.[n - 1] = '\n' then String.sub s 0 (n - 1) else s);
+  Backend.r.home_dir <- (fun () -> Sys.getenv "HOME");
   let bytecode = ref false in
   let diff = ref false in
   let eval_str = ref None in
@@ -771,13 +791,6 @@ let main () =
      this member process outright (Failure -> the top-level handler ->
      exit 1), which the dispatcher (src/remote.ml) reads as "member
      failed" and degrades that batch to local compute. *)
-  Backend.r.realpath <- Runtime.canonical_path_impl;
-  Backend.r.get_unix_time <- (fun () -> Unix.time ());
-  Backend.r.cap_write_secret <- (fun path content ->
-    let fd = Unix.openfile path [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL] 0o600 in
-    let oc = Unix.out_channel_of_descr fd in
-    output_string oc content;
-    close_out oc);
   let initial_caps =
     match !remote_node_args with
     | Some (token_file, _, _, _, _) ->
