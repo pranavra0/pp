@@ -21,8 +21,7 @@ val assemble_fn_body :
 val desugar_and : Types.expr list -> Types.expr
 val desugar_or : Types.expr list -> Types.expr
 
-val desugar_assert :
-  file:string -> line:int -> Types.expr -> Types.expr option -> Types.expr
+val desugar_assert : Types.expr -> Types.expr option -> Types.expr
 
 (* try-block lowering (brace surface only). [try_stmt] is the parsed statement
    vocabulary; [try_builder] is how a reader builds each lowered node (real AST

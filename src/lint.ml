@@ -407,9 +407,15 @@ let lint_file (path : string) : unit =
   (* Parse *)
   let forms =
     try Reader_braces.read_string ~source:path src
-    with Failure msg ->
-      Printf.eprintf "pp lint: parse error in %s: %s\n%!" path msg;
-      exit 1
+    with
+    | Failure msg ->
+        Printf.eprintf "pp lint: parse error in %s: %s\n%!" path msg;
+        exit 1
+    | Types.Pp_error { msg; pos } ->
+        let loc = match pos with
+          | Some (f, l) -> Printf.sprintf " at %s:%d" f l | None -> "" in
+        Printf.eprintf "pp lint: parse error in %s: %s%s\n%!" path msg loc;
+        exit 1
   in
   (* Walk every top-level form *)
   List.iter (check_expr path) forms;
