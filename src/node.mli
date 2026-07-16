@@ -21,6 +21,7 @@ val fv_hash : name:string -> Types.value -> (Types.value -> Types.value) -> stri
 val unbound_fv_hash : name:string -> string
 
 val check_type : Types.value -> Types.expr -> (string * int) option -> unit
+val enforce_type : Types.thunk -> Types.value -> unit
 val replay_node_reads : Types.thunk -> (Types.thunk -> string) -> unit
 val serve_hit : t:Types.thunk -> Store.hit_result -> Types.value option
 val run_node_body : key:string -> run:(unit -> Types.value) -> Types.thunk -> Types.value

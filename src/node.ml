@@ -48,6 +48,22 @@ let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
     failwith (Printf.sprintf "type mismatch: expected %s, got %s%s"
                 type_name (string_of_value v) loc_str)
 
+(* Enforce a thunk's optional type annotation, resetting thunk_status to
+   Unevaluated if the check fails. The reset is load-bearing: typed thunks are
+   memoised by content hash (Evaluator.make_thunk_ca_typed), so a check_type
+   that raised while the thunk was still `Evaluating` would leave it stuck, and
+   the next force of the same thunk would misreport "infinite recursion"
+   instead of the real type error (reproduced pre-fix by entering the same
+   ill-typed `let (x: ty = ...)` form twice at the REPL). Callers invoke this
+   after computing the body value and before marking the thunk Evaluated;
+   shared by both backends so the guard cannot drift between them. *)
+let enforce_type (t : thunk) (result : value) : unit =
+  match t.type_ann with
+  | None -> ()
+  | Some ty ->
+      (try check_type result ty t.thunk_loc
+       with e -> t.thunk_status <- Unevaluated; raise e)
+
 
 (* ---- Trace replay ----------------------------------------------------- *)
 
@@ -107,9 +123,7 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
         else
           raise (Capability_error "a node may not return a capability")
       end;
-      (match t.type_ann with
-       | Some ty -> check_type result ty t.thunk_loc
-       | None -> ());
+      enforce_type t result;
       t.thunk_status <- Evaluated result;
       let result_hash = hash_value result in
       (try Store.store_object ~key:result_hash ~value:result with _ -> ());

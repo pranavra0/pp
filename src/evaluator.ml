@@ -279,9 +279,10 @@ and evaluate_and_store_no_key (t : thunk) : value =
       decr force_depth;
       raise e
   in
-  (match t.type_ann with
-   | Some ty -> Node.check_type result ty t.thunk_loc
-   | None -> ());
+  (* enforce_type resets thunk_status on failure; also unwind force_depth,
+     which is evaluator-local, so a failed check does not leak trampoline
+     depth (the body-eval guard above already decrements on its own raise). *)
+  (try Node.enforce_type t result with e -> decr force_depth; raise e);
   t.thunk_status <- Evaluated result;
   decr force_depth;
   force result

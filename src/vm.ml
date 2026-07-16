@@ -176,16 +176,18 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
                 loop ()
             | Unevaluated ->
                 t.thunk_status <- Evaluating;
+                (* Reset thunk_status on any raise from the body, so a failing
+                   thunk is never left `Evaluating` (see Node.enforce_type). *)
                 let result_val =
-                  match t.vm_code with
-                  | Some (bc', offset, captured_frames) ->
-                      run_isolated bc' offset captured_frames
-                  | None ->
-                      failwith "VM: tree-walker thunk encountered in VM force"
+                  try
+                    match t.vm_code with
+                    | Some (bc', offset, captured_frames) ->
+                        run_isolated bc' offset captured_frames
+                    | None ->
+                        failwith "VM: tree-walker thunk encountered in VM force"
+                  with e -> t.thunk_status <- Unevaluated; raise e
                 in
-                (match t.type_ann with
-                 | Some ty -> Node.check_type result_val ty t.thunk_loc
-                 | None -> ());
+                Node.enforce_type t result_val;
                 t.thunk_status <- Evaluated result_val;
                 push result_val;
                 incr pc;
@@ -575,10 +577,11 @@ and vm_force (v : value) : value =
           begin match t.vm_code with
           | Some (bc', offset, frames') ->
               t.thunk_status <- Evaluating;
-              let r = run_isolated bc' offset frames' in
-              (match t.type_ann with
-               | Some ty -> Node.check_type r ty t.thunk_loc
-               | None -> ());
+              let r =
+                try run_isolated bc' offset frames'
+                with e -> t.thunk_status <- Unevaluated; raise e
+              in
+              Node.enforce_type t r;
               t.thunk_status <- Evaluated r;
               vm_force r
           | None ->
