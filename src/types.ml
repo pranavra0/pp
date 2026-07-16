@@ -511,7 +511,10 @@ and hash_value (v : value) : string =
         ) sorted in
         hash_concat ("envmap" :: parts)
     | VBytecode bc ->
-        hash_concat ["bytecode"; string_of_int (Array.length bc.code)]
+        (* Hash the actual consts+code, not just the instruction count:
+           two distinct units of equal length must not collide (LAW 20,
+           the same collision class hash_bytecode fixes for VM closures). *)
+        hash_concat ["bytecode"; hash_bytecode bc]
     | VSealed bytes ->
         (* Hash the ACTUAL bytes (rotation invalidation needs it, LAW 39) —
            this hash appears only inside trace lines under a `sealed:` cell
