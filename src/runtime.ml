@@ -1,5 +1,17 @@
 (* pp runtime — shared mutable state used by both backends *)
 open Types
+open Effect
+
+type _ Effect.t +=
+  | Get_capabilities : Capability.t list Effect.t
+  | Get_config : Types.value list Effect.t
+  | Get_handlers : (string * string) list Effect.t
+  | Lookup_handler : string -> ((Types.value list -> Types.value) * string) option Effect.t
+  | Record_read : string * string -> unit Effect.t
+  | In_node : bool Effect.t
+  | Current_sandbox : string option ref option Effect.t
+  | Get_domain : string option Effect.t
+  | Get_observe_all : bool Effect.t
 
 type fenced_policy = Retry | Abort | Ask
 
@@ -22,38 +34,8 @@ let invocation : invocation option ref = ref None
 let invocation_get () : invocation =
   match !invocation with Some i -> i | None -> failwith "invocation not set"
 
-
-
-(* Handler stack for algebraic effects.
-   Each entry is (effect-name, handler-fn, handler-value-hash). The third
-   component lets a thunk's content-addressed key depend on the ambient
-   handlers, since the handler-fn itself is an opaque OCaml closure. *)
-let handler_stack : (string * (value list -> value) * string) list ref = ref []
-
-(* Content hash of the current handler stack (for thunk keys). *)
-let handlers_hash () =
-  hash_concat
-    ("handlers"
-     :: List.concat_map (fun (n, _, h) -> [n; h]) !handler_stack)
-
-(* Current capability set (for effectful blocks) *)
-let current_capabilities : Capability.t list ref = ref []
-
-(* ReaderT-style ambient config stack *)
-let config_stack : value list ref = ref []
-
 (* Content-addressed thunk store *)
 let thunk_store : (string, thunk) Hashtbl.t = Hashtbl.create 1024
-
-(* Dynamic scoping: set [r] to [v] for the extent of [f], restoring the saved
-   value on normal return AND on exception. The shape behind effect blocks,
-   handler installation, and config scoping. *)
-let with_ref (r : 'a ref) (v : 'a) (f : unit -> 'b) : 'b =
-  let saved = !r in
-  r := v;
-  match f () with
-  | result -> r := saved; result
-  | exception e -> r := saved; raise e
 
 (* ---- Trace recording: the verifying-trace cache-validity mechanism ----
 
@@ -70,7 +52,6 @@ let with_ref (r : 'a ref) (v : 'a) (f : unit -> 'b) : 'b =
    Each node force pushes a fresh frame; every world-read during its evaluation
    is recorded into *all* active frames, so a parent's trace transitively
    subsumes the reads of nested (non-node) computation it forced. *)
-let trace_stack : (string * string) list ref list ref = ref []
 
 (* Program-level observation collection for the reconciler's stratification
    check (LAW 30): when enabled (pp --reconcile), every recorded cell
@@ -87,11 +68,9 @@ let observed_all : (string * string) list ref = ref []
    containing both can never verify — forcing a recompute, which is the only
    sound answer for a run that saw an inconsistent world. *)
 let record_read (cell_id : string) (observed_hash : string) : unit =
-  List.iter (fun frame ->
-    if not (List.mem (cell_id, observed_hash) !frame) then
-      frame := (cell_id, observed_hash) :: !frame)
-    !trace_stack;
-  if !observe_all then observed_all := (cell_id, observed_hash) :: !observed_all
+  ignore (Effect.perform (Record_read (cell_id, observed_hash)));
+  if Effect.perform Get_observe_all then
+    observed_all := (cell_id, observed_hash) :: !observed_all
 
 (* ---- Per-node sandbox (LAW 18) ----
 
@@ -100,7 +79,6 @@ let record_read (cell_id : string) (observed_hash : string) : unit =
    removed when the node's frame pops (every exit path). Scratch is node-local
    working memory: reads/writes inside it are neither capability-checked nor
    recorded in the trace — only values that the node returns escape. *)
-let sandbox_stack : string option ref list ref = ref []
 let sandbox_counter = ref 0
 
 let remove_tree (path : string) : unit =
@@ -115,9 +93,9 @@ let remove_tree (path : string) : unit =
 
 (* Innermost node's sandbox; created on demand when [create] is set. *)
 let current_sandbox ~(create : bool) : string option =
-  match !sandbox_stack with
-  | [] -> None
-  | slot :: _ ->
+  match Effect.perform Current_sandbox with
+  | None -> None
+  | Some slot ->
       (match !slot with
        | Some d -> Some d
        | None ->
@@ -135,27 +113,14 @@ let current_sandbox ~(create : bool) : string option =
    it if [create]); absolute paths and scripting-tier paths resolve to None
    and take the ordinary capability-checked route. *)
 let sandbox_resolve ?(create = false) (path : string) : string option =
-  if Filename.is_relative path && !sandbox_stack <> [] then
-    match current_sandbox ~create with
-    | Some d -> Some (Filename.concat d path)
-    | None -> None
+  if Filename.is_relative path then
+    match Effect.perform Current_sandbox with
+    | Some slot when (match !slot with Some _ -> true | None -> create) ->
+        (match current_sandbox ~create with
+         | Some d -> Some (Filename.concat d path)
+         | None -> None)
+    | _ -> None
   else None
-
-let push_trace_frame () : (string * string) list ref =
-  let frame = ref [] in
-  trace_stack := frame :: !trace_stack;
-  sandbox_stack := ref None :: !sandbox_stack;
-  frame
-
-let pop_trace_frame () : unit =
-  (match !sandbox_stack with
-   | slot :: rest ->
-       (match !slot with Some d -> remove_tree d | None -> ());
-       sandbox_stack := rest
-   | [] -> ());
-  match !trace_stack with
-  | _ :: rest -> trace_stack := rest
-  | [] -> ()
 
 (* ---- LAW 33 / LAW 26: config and handlers are observations, not identity ----
 
@@ -167,7 +132,6 @@ let pop_trace_frame () : unit =
    against the current file contents. These helpers are the single code path
    for both the record (during a node run) and the re-observation (during a
    hit check), so the two can never disagree. *)
-
 
 (* Process-domain cell observation hook — currently dormant. Nothing wires
    it, and nothing ever calls record_read with a Cell.Proc id either, so
@@ -217,7 +181,7 @@ let config_lookup (key : string) : value option =
               | None -> find rest))
     | _ :: rest -> find rest
   in
-  find !config_stack
+  find (Effect.perform Get_config)
 
 let observe_config (key : string) : string =
   match config_lookup key with
@@ -225,20 +189,16 @@ let observe_config (key : string) : string =
   | None -> config_absent_hash
 
 let observe_handler (name : string) : string =
-  let rec find = function
-    | [] -> builtin_handler_hash
-    | (n, _, h) :: rest -> if n = name then h else find rest
-  in
-  find !handler_stack
+  match Effect.perform (Lookup_handler name) with
+  | Some (_, h) -> h
+  | None -> builtin_handler_hash
 
 (* Record-side entry points; no-ops outside a node (no active trace frame). *)
 let record_config_read (key : string) : unit =
-  if !trace_stack <> [] then
-    record_read (config_cell_id key) (observe_config key)
+  record_read (config_cell_id key) (observe_config key)
 
 let record_handler_observation (name : string) : unit =
-  if !trace_stack <> [] then
-    record_read (handler_cell_id name) (observe_handler name)
+  record_read (handler_cell_id name) (observe_handler name)
 
 (* ---- Loader authority — the runtime/traced split ----
 
@@ -250,9 +210,6 @@ let record_handler_observation (name : string) : unit =
    it participates in cache VALIDITY (editing a loaded file invalidates the
    nodes that loaded it) but is excluded from the caller's hit-time authority
    requirement (cell_authorized passes runtime: cells unconditionally). *)
-
-
-
 
 (* stdlib/domain-fs.pp and stdlib/domain-proc.pp
    must load from ANY cwd (--reconcile/--supervise are meant to work from
@@ -443,16 +400,6 @@ type domain_entry = {
 
 let domain_registry : (string, domain_entry) Hashtbl.t = Hashtbl.create 16
 
-(* Which domain's observe/diff/apply is currently executing — set by
-   Domains.run_pass via with_ref for the extent of each call, so
-   domain-state-get/put (core-trusted, per-domain-scoped bookkeeping) know
-   where to read/write without an explicit domain-name argument at every
-   call site ("core knows which domain is running"). None at every other
-   time (script tier, node bodies, diff's empty-cap extent doesn't clear
-   this — the cap gate on domain-state-get/put is what blocks diff, not
-   this being None). *)
-let current_domain : string option ref = ref None
-
 (* Store-facing hook for a `domain:<name>:<sub>` cell's re-observation, wired
    in main.ml (mirrors proc_observer/probe_observer just below) — Store
    cannot depend on Primitives directly (module-cycle reasons identical to
@@ -483,3 +430,15 @@ let probe_values : (string, value) Hashtbl.t = Hashtbl.create 16
    at exactly the three points Store.run_pins is cleared (main.ml's watch
    loop) — same points, different justification per cell kind. *)
 let sealed_pins : (string, string) Hashtbl.t = Hashtbl.create 16
+
+let with_top_level ~f x =
+  try f x with
+  | effect Get_capabilities, k -> Effect.Deep.continue k (invocation_get ()).initial_capabilities
+  | effect Get_config, k -> Effect.Deep.continue k []
+  | effect Get_handlers, k -> Effect.Deep.continue k []
+  | effect (Lookup_handler _), k -> Effect.Deep.continue k None
+  | effect (Record_read _), k -> Effect.Deep.continue k ()
+  | effect In_node, k -> Effect.Deep.continue k false
+  | effect Current_sandbox, k -> Effect.Deep.continue k None
+  | effect Get_domain, k -> Effect.Deep.continue k None
+  | effect Get_observe_all, k -> Effect.Deep.continue k true

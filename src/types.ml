@@ -204,16 +204,16 @@ and opcode =
                                  EVERY exit, including a raised exception
                                  (LAW 27), not just normal return/tail-call *)
   | PERFORM of int * int     (* cp idx of effect name, nargs *)
-  | PUSH_HANDLER of int      (* n (name,closure) pairs already on stack *)
-  | POP_HANDLER
+  | WITH_HANDLER of int * int(* body code offset, handler count: handler region
+                                with try/with for Lookup_handler/Get_handlers *)
+  | WITH_CONFIG of int       (* body code offset: config scope region with
+                                try/with for Get_config effect *)
   | MAKE_MODULE of int       (* nexports; pops name+thunk pairs, pushes VEnvMap *)
   | IMPORT                   (* pop VEnvMap, merge bindings into current frame *)
   | LOAD_FILE of int | LOAD_MODULE_FILE of int  (* cp idx of path *)
   | ISLAND of int * int option (* cp idx of uri, cp idx of inline pin;
                                   resolves via Island at run time, then
                                   module-evaluates the pinned entry.pp *)
-  | PUSH_CONFIG              (* pop config-map, push onto config stack *)
-  | POP_CONFIG               (* pop config stack *)
   | READ_CONFIG              (* pop key from stack; push config value or VNil *)
 
 and bytecode = {

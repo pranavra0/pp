@@ -14,9 +14,13 @@ open Runtime
    Two thunks with the same (expr, env, capabilities) are the SAME thunk.
    Uses env.env_hash for O(1) environment identity — no recursive traversal. *)
 let make_thunk_ca (expr : expr) (env : env) : value =
-  let caps_hash = hash_concat ("caps" :: List.map Capability.hash !current_capabilities) in
-  let cfg_hash = hash_concat ("cfg" :: List.map hash_value !config_stack) in
-  let h = hash_concat ["thunk"; Types.hash_expr expr; env.env_hash; caps_hash; cfg_hash; handlers_hash ()] in
+  let caps = Effect.perform Runtime.Get_capabilities in
+  let cfg = Effect.perform Runtime.Get_config in
+  let handlers = Effect.perform Runtime.Get_handlers in
+  let caps_hash = hash_concat ("caps" :: List.map Capability.hash caps) in
+  let cfg_hash = hash_concat ("cfg" :: List.map hash_value cfg) in
+  let hh = hash_concat ("handlers" :: List.concat_map (fun (n,h)->[n;h]) handlers) in
+  let h = hash_concat ["thunk"; Types.hash_expr expr; env.env_hash; caps_hash; cfg_hash; hh] in
   match Hashtbl.find_opt thunk_store h with
   | Some existing -> VThunk existing
   | None ->
@@ -24,14 +28,14 @@ let make_thunk_ca (expr : expr) (env : env) : value =
       Hashtbl.add thunk_store h t;
       VThunk t
 
-(* Like make_thunk_ca, but the thunk carries a type annotation that is
-   checked when the thunk is forced (mirrors the VM's MAKE_THUNK with
-   type_ann, vm.ml). The annotation participates in the content hash so a
-   typed thunk is never conflated with an untyped thunk over the same expr. *)
 let make_thunk_ca_typed (expr : expr) (ty : expr) (loc : (string * int) option) (env : env) : value =
-  let caps_hash = hash_concat ("caps" :: List.map Capability.hash !current_capabilities) in
-  let cfg_hash = hash_concat ("cfg" :: List.map hash_value !config_stack) in
-  let h = hash_concat ["thunk-typed"; Types.hash_expr expr; Types.hash_expr ty; env.env_hash; caps_hash; cfg_hash; handlers_hash ()] in
+  let caps = Effect.perform Runtime.Get_capabilities in
+  let cfg = Effect.perform Runtime.Get_config in
+  let handlers = Effect.perform Runtime.Get_handlers in
+  let caps_hash = hash_concat ("caps" :: List.map Capability.hash caps) in
+  let cfg_hash = hash_concat ("cfg" :: List.map hash_value cfg) in
+  let hh = hash_concat ("handlers" :: List.concat_map (fun (n,h)->[n;h]) handlers) in
+  let h = hash_concat ["thunk-typed"; Types.hash_expr expr; Types.hash_expr ty; env.env_hash; caps_hash; cfg_hash; hh] in
   match Hashtbl.find_opt thunk_store h with
   | Some existing -> VThunk existing
   | None ->
@@ -405,30 +409,24 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
   | EQuote e ->
       k (Types.quote_to_value e)
 
-  | EForce e ->
-      (* EForce in tail position: eval the inner expression in tail position,
-         then force the result and pass to k *)
-      eval_tail e env (fun v -> k (force v))
-
   | EDelay e ->
       k (make_thunk_ca e env)
 
+  | EForce e ->
+      (* EForce in tail position: eval the inner expression in tail position,
+         then force the result and pass to k *)
+      k (force (eval e env))
   | ENode e ->
       let thunk_val = make_thunk_ca e env in
       (match thunk_val with
        | VThunk t ->
            t.thunk_persist <- true;
-           (* Node capture: populate node_caps from the ambient at THIS
-              creation, unconditionally — never left at the [] default (see
-              Types.thunk.node_caps); force_node later reads this back as
-              the node's fixed authority. Safe
-              to re-assign even when make_thunk_ca returned an ALREADY-cached
-              physical thunk (its content hash folds in caps_hash, so a hit
-              here only happens when the ambient at that prior creation
-              hashed the same). *)
-           t.node_caps <- !current_capabilities
+           t.node_caps <- Effect.perform Runtime.Get_capabilities
        | _ -> ());
       k thunk_val
+
+  | EDef (name, params, body) ->
+      k (make_closure ~name:(Some name) params body (ref env))
 
   | EDefNode (name, params, body) ->
       k (make_closure ~name:(Some name) params body (ref env))
@@ -504,25 +502,24 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
              | _ -> go rest)
       in
       go exprs
-
   | EWithCaps (cap_expr, body) ->
       (* REPLACES the dynamic ambient with exactly the requested cap for the
          body's extent (never a union — that was the removed `effect` form's
          widening backdoor), gated by cap_subseteq against the CURRENT
          ambient (not the root grant), so narrowing composes even when code
-         lexically retains a broader value. with_ref
-         restores current_capabilities on every exit, exception included
-         (LAW 27). *)
+         lexically retains a broader value. *)
       let cap_val = force (eval cap_expr env) in
       let requested =
         match cap_val with
         | VCapability c -> c
         | _ -> failwith "with-caps expects a capability value"
       in
-      if not (Capability.subseteq requested !current_capabilities) then
+      if not (Capability.subseteq requested (Effect.perform Runtime.Get_capabilities)) then
         raise (Capability_error Capability.err_with_caps_widen);
-      with_ref current_capabilities [requested]
-        (fun () -> eval_tail body env k)
+      begin
+        try eval_tail body env k
+        with effect Runtime.Get_capabilities, kont -> Effect.Deep.continue kont [requested]
+      end
 
   | EPerform (name, arg_exprs) ->
       let args = List.map (fun e -> make_thunk_ca e env) arg_exprs in
@@ -536,12 +533,17 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
          (fun args -> apply handler_val args env),
          hash_value handler_val)   (* handler identity in the key *)
       ) handlers in
-      with_ref handler_stack (new_handlers @ !handler_stack)
-        (fun () -> eval_tail body env k)
-
-  | EDef (name, params, body) ->
-      k (make_closure ~name:(Some name) params body (ref env))
-
+      let snew = List.map (fun (n,_,h)->(n,h)) new_handlers in
+      begin
+        try eval_tail body env k
+        with
+        | effect (Runtime.Lookup_handler name), kont ->
+            (match List.find_opt (fun (n,_,_) -> n = name) new_handlers with
+             | Some (_, fn, h) -> Effect.Deep.continue kont (Some (fn, h))
+             | None -> Effect.Deep.continue kont (Effect.perform (Runtime.Lookup_handler name)))
+        | effect Runtime.Get_handlers, kont ->
+            Effect.Deep.continue kont (snew @ Effect.perform Runtime.Get_handlers)
+      end
   | EDefValue (_, rhs) ->
       (* Bare expression position: evaluate the RHS and return it; binding is
          the job of the enclosing block / top level (mirrors EDef, which
@@ -634,8 +636,9 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       let cfg = force (eval map_expr env) in
       (match cfg with
        | VMap _ ->
-           with_ref config_stack (cfg :: !config_stack)
-             (fun () -> eval_tail body env k)
+           try eval_tail body env k
+           with effect Runtime.Get_config, kont ->
+             Effect.Deep.continue kont (cfg :: Effect.perform Runtime.Get_config)
        | _ -> failwith "with-config expects a map")
   | EConfig (key_expr, default_opt) ->
       let key_val = force (eval key_expr env) in
@@ -775,16 +778,10 @@ and perform_effect (name : string) (args : value list) : value =
      as a `handler:<effect>` trace cell so a hit under a different handler
      (mock vs real) re-computes instead of cross-contaminating. *)
   Runtime.record_handler_observation name;
-  (* Check for handler *)
-  let rec find_handler = function
-    | [] ->
-        (* No handler — try builtin effect *)
-        perform_builtin_effect name args
-    | (n, handler, _) :: rest ->
-        if n = name then handler args
-        else find_handler rest
-  in
-  find_handler !handler_stack
+  (* Check for handler via effect perform *)
+  match Effect.perform (Runtime.Lookup_handler name) with
+  | Some (handler, _) -> handler args
+  | None -> perform_builtin_effect name args
 
 and perform_builtin_effect (name : string) (args : value list) : value =
   match name with
@@ -799,7 +796,6 @@ and perform_builtin_effect (name : string) (args : value list) : value =
            Process.read_dispatch ~tag:"read-file"
              ~cap_err:(fun p -> "read-file: capability error: no read access for " ^ p) path
        | _ -> failwith "read-file expects a string path")
-
   | "write-file" ->
       (match args with
        | [VString path; VString content] ->
@@ -898,10 +894,10 @@ and perform_builtin_effect (name : string) (args : value list) : value =
 (* ---- Helpers ---- *)
 
 and has_fs_read (path : string) : bool =
-  List.exists (fun cap -> Capability.check_fs_read cap (Runtime.canonical_path path)) !current_capabilities
+  List.exists (fun cap -> Capability.check_fs_read cap (Runtime.canonical_path path)) (Effect.perform Runtime.Get_capabilities)
 
 and has_fs_write (path : string) : bool =
-  List.exists (fun cap -> Capability.check_fs_write cap (Runtime.canonical_path path)) !current_capabilities
+  List.exists (fun cap -> Capability.check_fs_write cap (Runtime.canonical_path path)) (Effect.perform Runtime.Get_capabilities)
 
 
 (* (load-module "file.pp"): evaluate the file against a fresh initial env and
@@ -976,22 +972,23 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
     | e :: rest -> ignore (step e); go rest
   in
   go exprs
-
 (* ---- Public API ---- *)
 
 (* Evaluate an expression in the initial environment *)
 let eval_program (e : expr) : value =
-  let env = Primitives.initial_env () in
-  eval e env
+  Runtime.with_top_level ~f:(fun () ->
+    let env = Primitives.initial_env () in
+    eval e env
+  ) ()
 
 (* Evaluate and force (for top-level expressions) *)
 let eval_and_force (e : expr) : value =
-  force (eval_program e)
+  Runtime.with_top_level ~f:(fun () ->
+    force (eval_program e)
+  ) ()
 
 (* Initialize the evaluator state *)
 let init () =
-  handler_stack := [];
-  current_capabilities := (Runtime.invocation_get ()).initial_capabilities;
   if not !Runtime.keep_thunks then Hashtbl.clear thunk_store;
   (* Probes: the registry is script-tier registration state, re-established
      by the program's own top-level `(register-probe ...)` forms on every
@@ -1006,7 +1003,7 @@ let init () =
      of every fresh run — the counter matters for LAW 20 stability (a
      gensym'd name can be baked into an expanded node's code, so re-running
      the SAME source must reproduce the SAME counter sequence, or the same
-     program could hash differently run to run). Unconditional (not gated
+     program could hash differently run to run. Unconditional (not gated
      on Runtime.keep_thunks like thunk_store): both are derived fresh from
      source text each run, never persistent cache state. *)
   Backend.r.macro_reset ();

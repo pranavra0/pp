@@ -379,11 +379,16 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
         compile_expr st handler_expr false;
         emit st FORCE
       ) handlers;
-      emit st (PUSH_HANDLER (List.length handlers));
-      (* Body NON-tail (was [tail]) so control returns to run POP_HANDLER;
-         a tail call would frame-swap past POP and leak the handler. *)
-      compile_expr st body false;
-      emit st POP_HANDLER
+      (* Build a body region using the WITH_CAPS pattern: JUMP over it,
+         compile body tail within its own region, RETURN, backpatch the jump,
+         then emit WITH_HANDLER with the body start offset and handler count. *)
+      let jmp_idx = current_offset st in
+      emit st (JUMP 0);
+      let body_start = current_offset st in
+      compile_expr st body true;
+      emit st RETURN;
+      backpatch_jump st jmp_idx;
+      emit st (WITH_HANDLER (body_start, List.length handlers))
 
   | EImport mod_expr ->
       compile_expr st mod_expr false;
@@ -483,13 +488,16 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
   | EWithConfig (map_expr, body) ->
       compile_expr st map_expr false;
       emit st FORCE;
-      emit st PUSH_CONFIG;
-      (* Body NON-tail (was [tail]) so control returns to run POP_CONFIG;
-         a tail call would frame-swap past POP and leak the config scope.
-         Matches the tree-walker's dynamic extent (evaluator.ml
-         EWithConfig restores [config_stack] after the body). *)
-      compile_expr st body false;
-      emit st POP_CONFIG
+      (* Region pattern (mirrors EWithCaps): JUMP over body region,
+         compile body tail within its own region, RETURN, backpatch jump,
+         then emit WITH_CONFIG body_start. *)
+      let jmp_idx = current_offset st in
+      emit st (JUMP 0);
+      let body_start = current_offset st in
+      compile_expr st body true;
+      emit st RETURN;
+      backpatch_jump st jmp_idx;
+      emit st (WITH_CONFIG body_start)
   | EConfig (key_expr, default_opt) ->
       compile_expr st key_expr false;
       emit st FORCE;

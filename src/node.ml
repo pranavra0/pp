@@ -52,7 +52,7 @@ let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
 (* ---- Trace replay ----------------------------------------------------- *)
 
 let replay_node_reads (t : thunk) (key_of : thunk -> string) : unit =
-  if t.thunk_persist && !Runtime.trace_stack <> [] then
+  if t.thunk_persist && Effect.perform Runtime.In_node then
     let traces = Store.load_traces ~key:(key_of t) in
     List.iter (fun tr ->
       List.iter (fun (c, h) -> Runtime.record_read c h) tr.Store.tr_reads
@@ -73,56 +73,65 @@ let serve_hit ~(t : thunk) (h : Store.hit_result) : value option =
   | Store.Miss -> None
 
 let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
-  Runtime.with_ref Runtime.current_capabilities t.node_caps (fun () ->
   t.thunk_status <- Evaluating;
-  let frame = Runtime.push_trace_frame () in
-  let result =
-    try
-      let r = run () in
-      Runtime.pop_trace_frame ();
-      r
-    with
-    | Failure msg as e ->
-        Runtime.pop_trace_frame ();
-        let errval = VString msg in
-        let err_hash = hash_value errval in
-        (try Store.store_object ~key:err_hash ~value:errval with _ -> ());
-        (try Store.store_trace ~key ~outcome:Store.Failed ~result_hash:err_hash
-               ~reads:(List.rev !frame) with _ -> ());
+  let frame = ref [] in
+  let sandbox_slot = ref None in
+  Fun.protect
+    ~finally:(fun () -> match !sandbox_slot with Some d -> Runtime.remove_tree d | None -> ())
+    (fun () ->
+      let result =
+        try run ()
+        with
+        | effect Runtime.Get_capabilities, k -> Effect.Deep.continue k t.node_caps
+        | effect (Runtime.Record_read (c, h)), k ->
+            if not (List.mem (c, h) !frame) then frame := (c, h) :: !frame;
+            Effect.Deep.continue k (Effect.perform (Runtime.Record_read (c, h)))
+        | effect Runtime.In_node, k -> Effect.Deep.continue k true
+        | effect Runtime.Current_sandbox, k -> Effect.Deep.continue k (Some sandbox_slot)
+        | Failure msg as e ->
+            let errval = VString msg in
+            let err_hash = hash_value errval in
+            (try Store.store_object ~key:err_hash ~value:errval with _ -> ());
+            (try Store.store_trace ~key ~outcome:Store.Failed ~result_hash:err_hash
+                   ~reads:(List.rev !frame) with _ -> ());
+            t.thunk_status <- Unevaluated;
+            raise e
+        | e ->
+            t.thunk_status <- Unevaluated;
+            raise e
+      in
+      if contains_authority result then begin
         t.thunk_status <- Unevaluated;
-        raise e
-    | e ->
-        Runtime.pop_trace_frame ();
-        t.thunk_status <- Unevaluated;
-        raise e
-  in
-  if contains_authority result then begin
-    t.thunk_status <- Unevaluated;
-    if contains_sealed result then
-      raise (Capability_error "a node may not return a sealed value")
-    else
-      raise (Capability_error "a node may not return a capability")
-  end;
-  (match t.type_ann with
-   | Some ty -> check_type result ty t.thunk_loc
-   | None -> ());
-  t.thunk_status <- Evaluated result;
-  let result_hash = hash_value result in
-  (try Store.store_object ~key:result_hash ~value:result with _ -> ());
-  (try Store.store_trace ~key ~outcome:Store.Ok ~result_hash
-         ~reads:(List.rev !frame) with _ -> ());
-  if !Store.check_mode then begin
-    ignore (Runtime.push_trace_frame ());
-    let r2 =
-      try run ()
-      with e -> Runtime.pop_trace_frame (); raise e
-    in
-    Runtime.pop_trace_frame ();
-    if hash_value r2 <> result_hash then begin
-      incr Store.volatile_count;
-      Printf.eprintf
-        "[check] volatile node %s: an identical run produced a different result hash\n%!"
-        (Store.short_key key)
-    end
-  end;
-  result)
+        if contains_sealed result then
+          raise (Capability_error "a node may not return a sealed value")
+        else
+          raise (Capability_error "a node may not return a capability")
+      end;
+      (match t.type_ann with
+       | Some ty -> check_type result ty t.thunk_loc
+       | None -> ());
+      t.thunk_status <- Evaluated result;
+      let result_hash = hash_value result in
+      (try Store.store_object ~key:result_hash ~value:result with _ -> ());
+      (try Store.store_trace ~key ~outcome:Store.Ok ~result_hash
+             ~reads:(List.rev !frame) with _ -> ());
+      if !Store.check_mode then begin
+        let frame2 = ref [] in
+        let r2 =
+          try run ()
+          with
+          | effect (Runtime.Record_read (c, h)), k ->
+              if not (List.mem (c, h) !frame2) then frame2 := (c, h) :: !frame2;
+              Effect.Deep.continue k (Effect.perform (Runtime.Record_read (c, h)))
+          | effect Runtime.In_node, k -> Effect.Deep.continue k true
+          | effect Runtime.Get_capabilities, k -> Effect.Deep.continue k t.node_caps
+          | e -> raise e
+        in
+        if hash_value r2 <> result_hash then begin
+          incr Store.volatile_count;
+          Printf.eprintf
+            "[check] volatile node %s: an identical run produced a different result hash\n%!"
+            (Store.short_key key)
+        end
+      end;
+      result)

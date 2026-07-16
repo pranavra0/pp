@@ -118,8 +118,8 @@ let compute_plan ~(domain_name : string) ~(diff_closure : value)
   | Store.HitFailed _ | Store.Miss ->
       Store.why "domain %s: plan %s: miss — running diff" domain_name (Store.short_key key);
       let plan =
-        Runtime.with_ref Runtime.current_capabilities []
-          (fun () -> Primitives.call_with_args diff_closure [observed; desired])
+        try Primitives.call_with_args diff_closure [observed; desired]
+        with effect Runtime.Get_capabilities, k -> Effect.Deep.continue k []
       in
       let result_hash = Types.hash_value plan in
       (try Store.store_object ~key:result_hash ~value:plan with _ -> ());
@@ -149,8 +149,10 @@ let stratification_check (write_domains : (string * Runtime.domain_entry) list) 
    own scope — no separate read-cap threading needed); journal a generic
    intent/done bracket; verify-after-write by re-observing and re-diffing. *)
 let with_domain (name : string) (cap : Capability.t) (f : unit -> 'a) : 'a =
-  Runtime.with_ref Runtime.current_domain (Some name) (fun () ->
-    Runtime.with_ref Runtime.current_capabilities [cap] f)
+  try f ()
+  with
+  | effect Runtime.Get_domain, k -> Effect.Deep.continue k (Some name)
+  | effect Runtime.Get_capabilities, k -> Effect.Deep.continue k [cap]
 
 (* A load-bearing wall (found the hard way): observe (and, to be
    safe across --watch --stabilize's keep_thunks, apply) is a call to a
@@ -175,11 +177,10 @@ let cache_bust_counter = ref 0
 let fresh_nonce_config () : value =
   incr cache_bust_counter;
   VMap [(VString "__pp_q13_cache_bust", VInt !cache_bust_counter)]
-
 let call_uncached (fn : value) (args : value list) : value =
-  Runtime.with_ref Runtime.config_stack
-    (fresh_nonce_config () :: !Runtime.config_stack)
-    (fun () -> Primitives.call_with_args fn args)
+  try Primitives.call_with_args fn args
+  with effect Runtime.Get_config, k ->
+    Effect.Deep.continue k (fresh_nonce_config () :: Effect.perform Runtime.Get_config)
 
 let observe_domain (entry : Runtime.domain_entry) (name : string) : value =
   with_domain name entry.Runtime.dm_cap
@@ -187,7 +188,6 @@ let observe_domain (entry : Runtime.domain_entry) (name : string) : value =
 
 let verify_failed_msg (name : string) : string =
   "reconcile: verify-after-write failed for domain " ^ name
-
 let run_domain ~(name : string) ~(entry : Runtime.domain_entry) ~(desired : value) : unit =
   let diff_closure = match entry.Runtime.dm_diff with
     | Some d -> d
@@ -198,10 +198,8 @@ let run_domain ~(name : string) ~(entry : Runtime.domain_entry) ~(desired : valu
     | None -> assert false
   in
   (* Load-bearing suspension: a domain's own bookkeeping
-     during observe/diff/apply must never trip its own stratification scan —
-     exception-safe with_ref, never a hand-rolled save/restore. Does NOT
-     suspend trace_stack: node caching inside a domain's fns keeps working. *)
-  Runtime.with_ref Runtime.observe_all false (fun () ->
+     during observe/diff/apply must never trip its own stratification scan. *)
+  (try
     let observed = observe_domain entry name in
     let plan = compute_plan ~domain_name:name ~diff_closure ~observed ~desired in
     let summary = plan_summary plan in
@@ -219,7 +217,8 @@ let run_domain ~(name : string) ~(entry : Runtime.domain_entry) ~(desired : valu
     let observed2 = observe_domain entry name in
     let plan2 = compute_plan ~domain_name:name ~diff_closure ~observed:observed2 ~desired in
     if not (plan_items_empty plan2) then
-      failwith (verify_failed_msg name))
+      failwith (verify_failed_msg name)
+  with effect Runtime.Get_observe_all, k -> Effect.Deep.continue k false)
 
 (* ---- Driver entry point ----
    [all_desired] is a map of domain-name -> desired-state value (main.ml

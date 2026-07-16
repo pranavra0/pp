@@ -220,7 +220,6 @@ let watch_loop ~files ~interval ~stabilize =
     Hashtbl.clear Runtime.probe_values;  (* probes re-evaluate fresh each pass *)
     Hashtbl.clear Runtime.sealed_pins;   (* sealed bytes never survive a pass *)
     Runtime.observed_all := [];     (* clear collected observations *)
-    Runtime.current_capabilities := (Runtime.invocation_get ()).initial_capabilities;
     (* Re-read and execute the program (plus, if --reconcile/--supervise is
        active, the domain-registration glue — run_files/uses_domains). *)
     let last = run_files files in
@@ -239,7 +238,6 @@ let watch_loop ~files ~interval ~stabilize =
     Hashtbl.clear Runtime.probe_values;  (* probes re-evaluate fresh each pass *)
     Hashtbl.clear Runtime.sealed_pins;   (* sealed bytes never survive a pass *)
     Runtime.observed_all := [];
-    Runtime.current_capabilities := (Runtime.invocation_get ()).initial_capabilities;
     let last = run_files files in
     last_desired := last;
     run_domains_pass last;
@@ -993,113 +991,86 @@ let main () =
         Printf.eprintf "[update] %s: %d pin(s) updated, %d skipped\n%!"
           f updated skipped)
       (List.rev !files);
-  (match !eval_str, !files with
-  | Some e, [] ->
-      if !diff then begin
-        Printf.eprintf "--diff not supported with -e\n"; exit 1
-      end;
-      let results = Repl.execute_string_bytecode !bytecode e in
-      List.iter (fun v ->
-        Printf.printf "%s\n" (Types.string_of_value v)
-      ) results
-  | None, [] ->
-      if !bytecode then Repl.repl_bytecode ()
-      else Repl.repl ()
-  | _, files ->
-      let files = List.rev files in
-      if !watch then
-        watch_loop ~files ~interval:!watch_interval ~stabilize:!stabilize
-      else if !diff then begin
-        List.iter (fun f ->
-          let tw_results = Repl.execute_file f in
-          let bc_results = Repl.execute_file_bytecode true f in
-          let tw_strings = List.map Types.string_of_value tw_results in
-          let bc_strings = List.map Types.string_of_value bc_results in
-          if tw_strings <> bc_strings then begin
-            Printf.eprintf "--diff mismatch in %s\n" f;
-            Printf.eprintf "tree-walker (%d values):\n" (List.length tw_strings);
-            List.iter (Printf.eprintf "  %s\n") tw_strings;
-            Printf.eprintf "bytecode (%d values):\n" (List.length bc_strings);
-            List.iter (Printf.eprintf "  %s\n") bc_strings;
-            exit 1
-          end
-        ) files
-      end else begin
-        let last = run_files files in
-        run_domains_pass last;
-        (* `--dump-pins <path>` — after the canonical run
-           completes (this plain non-watch, non-remote-node branch only;
-           the other branches have their own, different, run shapes),
-           write every Store.run_pins entry as a `(pin ...)` line and every
-           Runtime.probe_values entry as a `(pin-probe ...)` line. A probe value
-           Codec.encode_value can't encode (code/a handle/a sealed secret)
-           is skipped — mirrors how a node's RESULT value already treats
-           non-data (--publish-object's own "cannot be published as data"
-           check) — logged, not a hard failure, since the run itself
-           already succeeded. Placed BEFORE the --check re-run below,
-           which clears/repopulates Store.run_pins for its own serial
-           comparison — dumping first captures exactly this run's own
-           observations, not the re-run's. *)
-        (match !dump_pins_file with
-         | Some path ->
-             let buf = Buffer.create 256 in
-             Hashtbl.iter (fun cell hash -> Buffer.add_string buf (Remote.pin_line cell hash))
-               Store.run_pins;
-             Hashtbl.iter (fun name v ->
-               match Codec.encode_value v with
-               | Some text -> Buffer.add_string buf (Remote.pin_probe_line name text)
-               | None ->
-                   Printf.eprintf
-                     "[dump-pins] skipping non-data probe value for %s (code/handle/sealed)\n%!"
-                     name)
-               Runtime.probe_values;
-             Store.atomic_write path (Buffer.contents buf)
-         | None -> ());
-        (* Schedule-transparency audit (LAW 26/34's
-           promised --check): a result-transparent handler must never change
-           WHAT a program computes, only where/when it runs. Under --check
-           with a non-serial policy, re-run the SAME program forced Serial
-           against the SAME on-disk store and compare the desired-state
-           value's hash; any mismatch is exactly as unsound as the existing
-           per-node volatility failure and is reported/gated the same way
-           (Store.volatile_count). This is a WHOLE-PROGRAM check distinct
-           from run_node_body's per-node double-run — the re-run's own
-           reconcile/supervise/fenced side effects are deliberately skipped
-           (only the value is compared) so a --check run never applies
-           convergent state or fenced actions twice. *)
-        if !Store.check_mode && !Scheduler.policy <> Scheduler.Serial then
-          (match last with
-           | None -> ()
-           | Some v ->
-               let h_scheduled = Types.hash_value v in
-               let saved_policy = !Scheduler.policy in
-               let policy_name = function
-                 | Scheduler.Serial -> "serial"
-                 | Scheduler.Parallel n -> Printf.sprintf "parallel:%d" n
-                 | Scheduler.Race n -> Printf.sprintf "race:%d" n
-                 | Scheduler.Remote m -> Printf.sprintf "remote:%s" m
-               in
-               Scheduler.policy := Scheduler.Serial;
-               Hashtbl.clear Store.run_pins;
-               Runtime.current_capabilities := (Runtime.invocation_get ()).initial_capabilities;
-               (* Deliberately reuses run_files (so a --reconcile/--supervise
-                  program's domain registration is available identically to
-                  the scheduled run) but never calls run_domains_pass — this
-                  comparison is value-only; convergent/fenced side effects
-                  must not apply twice. *)
-               let last_serial = run_files files in
-               Scheduler.policy := saved_policy;
-               (match last_serial with
-                | None -> ()
-                | Some v2 ->
-                    if Types.hash_value v2 <> h_scheduled then begin
-                      incr Store.volatile_count;
-                      Printf.eprintf
-                        "[check] schedule non-transparent: %s and serial re-runs produced different desired-state hashes\n%!"
-                        (policy_name saved_policy)
-                    end))
-      end);
-
+  begin
+    let _ = Runtime.with_top_level ~f:(fun () ->
+      (match !eval_str, !files with
+      | Some e, [] ->
+          if !diff then begin
+            Printf.eprintf "--diff not supported with -e\n"; exit 1
+          end;
+          let results = Repl.execute_string_bytecode !bytecode e in
+          List.iter (fun v ->
+            Printf.printf "%s\n" (Types.string_of_value v)
+          ) results
+      | None, [] ->
+          if !bytecode then Repl.repl_bytecode ()
+          else Repl.repl ()
+      | _, files ->
+          let files = List.rev files in
+          if !watch then
+            watch_loop ~files ~interval:!watch_interval ~stabilize:!stabilize
+          else if !diff then begin
+            List.iter (fun f ->
+              let tw_results = Repl.execute_file f in
+              let bc_results = Repl.execute_file_bytecode true f in
+              let tw_strings = List.map Types.string_of_value tw_results in
+              let bc_strings = List.map Types.string_of_value bc_results in
+              if tw_strings <> bc_strings then begin
+                Printf.eprintf "--diff mismatch in %s\n" f;
+                Printf.eprintf "tree-walker (%d values):\n" (List.length tw_strings);
+                List.iter (Printf.eprintf "  %s\n") tw_strings;
+                Printf.eprintf "bytecode (%d values):\n" (List.length bc_strings);
+                List.iter (Printf.eprintf "  %s\n") bc_strings;
+                exit 1
+              end
+            ) files
+          end else begin
+            let last = run_files files in
+            run_domains_pass last;
+            (match !dump_pins_file with
+             | Some path ->
+                 let buf = Buffer.create 256 in
+                 Hashtbl.iter (fun cell hash -> Buffer.add_string buf (Remote.pin_line cell hash))
+                   Store.run_pins;
+                 Hashtbl.iter (fun name v ->
+                   match Codec.encode_value v with
+                   | Some text -> Buffer.add_string buf (Remote.pin_probe_line name text)
+                   | None ->
+                       Printf.eprintf
+                         "[dump-pins] skipping non-data probe value for %s (code/handle/sealed)\n%!"
+                         name)
+                   Runtime.probe_values;
+                 Store.atomic_write path (Buffer.contents buf)
+             | None -> ());
+            if !Store.check_mode && !Scheduler.policy <> Scheduler.Serial then
+              (match last with
+               | None -> ()
+               | Some v ->
+                   let h_scheduled = Types.hash_value v in
+                   let saved_policy = !Scheduler.policy in
+                   let policy_name = function
+                     | Scheduler.Serial -> "serial"
+                     | Scheduler.Parallel n -> Printf.sprintf "parallel:%d" n
+                     | Scheduler.Race n -> Printf.sprintf "race:%d" n
+                     | Scheduler.Remote m -> Printf.sprintf "remote:%s" m
+                   in
+                   Scheduler.policy := Scheduler.Serial;
+                   Hashtbl.clear Store.run_pins;
+                   let last_serial = run_files files in
+                   Scheduler.policy := saved_policy;
+                   (match last_serial with
+                    | None -> ()
+                    | Some v2 ->
+                        if Types.hash_value v2 <> h_scheduled then begin
+                          incr Store.volatile_count;
+                          Printf.eprintf
+                            "[check] schedule non-transparent: %s and serial re-runs produced different desired-state hashes\n%!"
+                            (policy_name saved_policy)
+                        end))
+          end)
+    ) ()
+    in ()
+  end;
   (* After running the program (whatever nodes that forced,
      including — but not limited to — the dispatcher's assigned batch keys;
      duplicate/extra computation here is sound), serve each assigned key back to the

@@ -9,15 +9,11 @@ let operand_stack : value array ref = ref (Array.make 1024 VNil)
 let sp = ref 0
 
 (* handler_stack, current_capabilities, config_stack, thunk_store are in Runtime. *)
-(* Save-stack so PUSH_HANDLER can restore the EXACT prior scope on
-   POP_HANDLER regardless of how many handlers were pushed (a naive
-   PUSH_HANDLER-pushes-n/POP_HANDLER-pops-1 scheme would leak handlers past
-   the construct that installed them). Mirrors the tree-walker's
-   saved/restore pattern. (with-caps' WITH_CAPS opcode below needs no
-   analogous save-stack: it restores current_capabilities via an ordinary
-   OCaml local + try/with around its nested run_isolated call, which is also
-   what makes it exception-safe — see WITH_CAPS.) *)
-let handler_save_stack : (string * (value list -> value) * string) list list ref = ref []
+(* WITH_HANDLER / WITH_CONFIG / WITH_CAPS opcodes use OCaml try/with
+   around run_isolated to restore ambient state on EVERY exit, including
+   an exception — LAW 27. The region pattern makes this possible: each
+   opcode wraps its body call in a nested run_isolated that an enclosing
+   try/with can catch exceptions from. *)
 let globals : (string, value) Hashtbl.t = Hashtbl.create 128
 
 (* ---- Stack helpers ---- *)
@@ -58,9 +54,9 @@ let pop_n n =
    Declared before `run` so the mutually-recursive `vm_force` (below) can use it. *)
 let saved_eval_force : (value -> value) ref = ref (fun v -> v)
 (* Shared arity-check and frame-build for VM closures (VClosure c).
-   Extracted because CALL, TAIL_CALL, and PUSH_HANDLER all do the same:
-   validate arity, allocate a frame, fill it with args, and prepend
-   the closure's captured frames. Returns the new frame list. *)
+   Extracted because CALL, TAIL_CALL, and the handler build (WITH_HANDLER)
+   all do the same: validate arity, allocate a frame, fill it with args, and
+   prepend the closure's captured frames. Returns the new frame list. *)
 let build_call_frames (c : Types.closure) (args : value list) : frame list =
   let nparams = List.length c.params in
   let nargs = List.length args in
@@ -204,7 +200,8 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
 
     | MAKE_THUNK (offset, type_ann, thunk_loc) ->
         let captured = !local_frames in
-        let cfg_hash = hash_concat ("cfg" :: List.map hash_value !config_stack) in
+        let cfg = Effect.perform Runtime.Get_config in
+        let cfg_hash = hash_concat ("cfg" :: List.map hash_value cfg) in
         let t = make_thunk ~vm_code:(Some (!bc_ref, offset, captured))
                    ~type_ann ~thunk_loc ~config_hash:cfg_hash
                    (ELiteral VNil)
@@ -221,7 +218,8 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
         (* Persistent node thunk: carries the captured frames (for execution) plus
            the body AST and free-var descriptors (for the LAW 20 node key). *)
         let captured = !local_frames in
-        let cfg_hash = hash_concat ("cfg" :: List.map hash_value !config_stack) in
+        let cfg = Effect.perform Runtime.Get_config in
+        let cfg_hash = hash_concat ("cfg" :: List.map hash_value cfg) in
         let t = make_thunk ~vm_code:(Some (!bc_ref, offset, captured))
                    ~type_ann ~thunk_loc ~config_hash:cfg_hash
                    body_ast
@@ -235,7 +233,8 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
                 creation, unconditionally — never left at the [] default
                 (see Types.thunk.node_caps); force_node later reads this
                 back as the node's fixed authority. *)
-             th.node_caps <- !current_capabilities
+             let caps = Effect.perform Runtime.Get_capabilities in
+             th.node_caps <- caps
          | _ -> ());
         push t;
         incr pc;
@@ -305,9 +304,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
 
     | RETURN ->
         (* Pop result from current frame's execution and return to caller *)
-        result := pop ();
-        (* The caller (nested run) will pick up the result *)
-        (* We just exit the loop *)
+        result := pop ()
 
     | HALT ->
         result := (if !sp > 0 then pop () else VNil)
@@ -319,21 +316,12 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
           | VCapability c -> c
           | _ -> failwith "with-caps expects a capability value"
         in
-        if not (Capability.subseteq requested !current_capabilities) then
+        if not (Capability.subseteq requested (Effect.perform Runtime.Get_capabilities)) then
           raise (Capability_error Capability.err_with_caps_widen);
-        let saved = !current_capabilities in
-        current_capabilities := [requested];
-        (* Nested run_isolated call (not a flat opcode pair): the try/with
-           here restores current_capabilities on EVERY exit — normal return
-           AND a raised exception — which the flat ENTER/EXIT-opcode shape
-           used by PUSH_HANDLER/PUSH_CONFIG cannot do (an OCaml exception
-           thrown mid-body there unwinds straight past the EXIT opcode,
-           since nothing in this VM's dispatch loop catches it). LAW 27. *)
         let result =
           try run_isolated !bc_ref body_start !local_frames
-          with e -> current_capabilities := saved; raise e
+          with effect Runtime.Get_capabilities, k -> Effect.Deep.continue k [requested]
         in
-        current_capabilities := saved;
         push result;
         incr pc;
         loop ()
@@ -352,9 +340,9 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
         incr pc;
         loop ()
 
-    | PUSH_HANDLER n ->
-        (* n (name, closure) pairs already on stack; 
-           pop them and push onto handler stack *)
+    | WITH_HANDLER (body_start, n) ->
+        (* Pop n (name, closure) pairs already on stack;
+           build new_handlers and run body region with try/with. *)
         let pairs = ref [] in
         for _ = 1 to n do
           let handler_val = pop () in
@@ -362,20 +350,13 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
           let name =
             match name_val with
             | VString s -> s
-            | _ -> failwith "VM: PUSH_HANDLER name is not a string"
+            | _ -> failwith "VM: WITH_HANDLER name is not a string"
           in
           pairs := (name, handler_val) :: !pairs
         done;
         let new_handlers = List.map (fun (n, hv) ->
           (n,
            (fun args ->
-            (* Invoke the handler FUNCTION with the (already-forced) effect
-               args and return its result, mirroring the tree-walker's
-               [fun args -> apply handler_val args env] (evaluator.ml
-               EWithHandler). [hv] is now the real handler function (the
-               compiler no longer wraps it in a 0-param region). Save/restore
-               the operand stack exactly like CALL: [run] shares the
-               module-global operand_stack/sp. *)
             match hv with
             | VClosure c when c.vm_bc == Types.dummy_bytecode ->
                 Backend.r.apply hv args !Primitives.current_env_ref
@@ -386,18 +367,18 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
            ),
            hash_value hv)   (* handler identity in the key *)
         ) !pairs in
-        handler_save_stack := !handler_stack :: !handler_save_stack;
-        handler_stack := new_handlers @ !handler_stack;
-        incr pc;
-        loop ()
-
-    | POP_HANDLER ->
-        (* Restore the pre-PUSH handler stack exactly, not pop-one. *)
-        (match !handler_save_stack with
-         | [] -> ()
-         | saved :: rest ->
-             handler_stack := saved;
-             handler_save_stack := rest);
+        let r =
+          try run_isolated !bc_ref body_start !local_frames
+          with
+          | effect (Runtime.Lookup_handler name), k ->
+              (match List.find_opt (fun (n,_,_) -> n = name) new_handlers with
+               | Some (_, fn, h) -> Effect.Deep.continue k (Some (fn, h))
+               | None -> Effect.Deep.continue k (Effect.perform (Runtime.Lookup_handler name)))
+          | effect Runtime.Get_handlers, k ->
+              let mine = List.map (fun (n,_,h)->(n,h)) new_handlers in
+              Effect.Deep.continue k (mine @ Effect.perform Runtime.Get_handlers)
+        in
+        push r;
         incr pc;
         loop ()
 
@@ -501,18 +482,17 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
         incr pc;
         loop ()
 
-    | PUSH_CONFIG ->
+    | WITH_CONFIG body_start ->
         let cfg = pop () in
         (match cfg with
-         | VMap _ -> config_stack := cfg :: !config_stack
-         | _ -> failwith "VM: PUSH_CONFIG expects a map");
-        incr pc;
-        loop ()
-
-    | POP_CONFIG ->
-        (match !config_stack with
-         | [] -> failwith "VM: POP_CONFIG with empty config stack"
-         | _ :: rest -> config_stack := rest);
+         | VMap _ -> ()
+         | _ -> failwith "VM: WITH_CONFIG expects a map");
+        let r =
+          try run_isolated !bc_ref body_start !local_frames
+          with effect Runtime.Get_config, k ->
+            Effect.Deep.continue k (cfg :: Effect.perform Runtime.Get_config)
+        in
+        push r;
         incr pc;
         loop ()
 
@@ -656,16 +636,15 @@ and force_node_thunk (t : thunk) : value =
 
 (* ---- Public: run a single expression bytecode without re-initialising VM state ---- *)
 let run_program_expr (prog : bytecode) : value =
-  let root_frame = make_frame 0 in
-  let r = run_isolated prog 0 [root_frame] in
-  (* Match the tree-walker's eval_expressions: a top-level statement whose
-     value is a module (VEnvMap) has its bindings merged into the top-level
-     environment (covers bare `(module ...)` and `(load-module ...)`). *)
-  (match r with
-   | VEnvMap bindings ->
-       List.iter (fun (name, v) -> Hashtbl.replace globals name v) bindings
-   | _ -> ());
-  r
+  Runtime.with_top_level ~f:(fun () ->
+    let root_frame = make_frame 0 in
+    let r = run_isolated prog 0 [root_frame] in
+    (match r with
+     | VEnvMap bindings ->
+         List.iter (fun (name, v) -> Hashtbl.replace globals name v) bindings
+     | _ -> ());
+    r
+  ) ()
 
 (* ---- VM init and registration ---- *)
 
@@ -681,9 +660,6 @@ let rec init () =
      can see the same top-level bindings as the VM. *)
   let global_bindings = Hashtbl.fold (fun name v acc -> (name, v) :: acc) globals [] in
   Primitives.current_env_ref := Types.env_of_bindings global_bindings;
-  handler_stack := [];
-  config_stack := [];
-  handler_save_stack := [];
   if not !Runtime.keep_thunks then Hashtbl.clear thunk_store;
   Backend.r.force <- vm_force;
   (* Config-cell observations (LAW 33) hash the forced value; under the VM the

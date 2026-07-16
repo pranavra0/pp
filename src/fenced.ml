@@ -114,7 +114,7 @@ let run_command (spec : value) : value =
 let result_hash (v : value) : string = Types.hash_value v
 
 let register (kind : string) (spec : value) : unit =
-  if !Runtime.trace_stack <> [] then
+  if Effect.perform Runtime.In_node then
     failwith "fenced: fenced effects may not appear inside node bodies (LAW 31)";
   let forced = Force_deep.force_deep_plain spec in
   (match Codec.encode_value forced with
