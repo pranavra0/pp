@@ -38,7 +38,7 @@ let lex_line = ref 1
 let current_file = ref ""
 
 let lex_error line msg =
-  failwith (Printf.sprintf "%s at %s:%d" msg !current_file line)
+  raise (Pp_error { kind = Eval; msg; pos = Some (!current_file, line) })
 
 (* A token that scanned off the end of the source — the lexer's out-of-input
    signal, distinct from a genuine bad-character error. See
@@ -222,8 +222,9 @@ let is_symbol ps name =
 let parse_error ps msg =
   let file = !current_file in
   let line = peek_line ps in
-  let located = Printf.sprintf "%s at %s:%d" msg file line in
-  if peek ps = TokEOF then raise (Reader_incomplete located) else failwith located
+  if peek ps = TokEOF then
+    raise (Reader_incomplete (Printf.sprintf "%s at %s:%d" msg file line))
+  else raise (Pp_error { kind = Eval; msg; pos = Some (file, line) })
 
 (* Collect items until the [closing] delimiter (consumed); [what] names the
    form in the unterminated-at-EOF error. One loop for every bracketed form. *)
@@ -597,17 +598,16 @@ and parse_defnode ps =
   | _ -> parse_error ps "malformed defnode"
 
 (* (assert cond [msg]) — a located runtime check: a false/nil condition
-   raises `assertion failed: <form> at file:line` (or the custom message,
-   location appended). Desugars to if+error via the shared Desugar module,
-   so both backends enforce the identical AST. *)
+   raises `assertion failed: <form>` (or the custom message); the location is
+   attached by with_form_location, not baked in. Desugars to if+error via the
+   shared Desugar module, so both backends enforce the identical AST. *)
 and parse_assert ps =
-  let line = peek_line ps in
   let cond = parse_expr ps in
   let msg_opt = match peek ps with
     | TokRParen -> None
     | _ -> Some (parse_expr ps) in
   ignore (parse_rest ps);
-  Desugar.desugar_assert ~file:!current_file ~line cond msg_opt
+  Desugar.desugar_assert cond msg_opt
 
 (* (do exprs...) *)
 and parse_do ps =
@@ -899,5 +899,5 @@ let read_string ?(source : string = "<?>") (input : string) : expr list =
 let read_one ?(source : string = "<?>") (input : string) : expr =
   match read_string ~source input with
   | [e] -> e
-  | [] -> failwith (Printf.sprintf "empty input at %s:1" source)
-  | _ -> failwith (Printf.sprintf "multiple expressions at %s:1" source)
+  | [] -> raise (Pp_error { kind = Eval; msg = "empty input"; pos = Some (source, 1) })
+  | _ -> raise (Pp_error { kind = Eval; msg = "multiple expressions"; pos = Some (source, 1) })

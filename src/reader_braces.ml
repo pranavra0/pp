@@ -85,7 +85,7 @@ let lex ~(file : string) (input : string) : tok list =
   let line = ref 1 in
   let toks = ref [] in
   let last_end = ref (-1) in   (* char index just past the previous token *)
-  let lex_error l msg = failwith (Printf.sprintf "%s at %s:%d" msg file l) in
+  let lex_error l msg = raise (Pp_error { kind = Eval; msg; pos = Some (file, l) }) in
   (* A token that scanned off the end of the source — the lexer's out-of-input
      signal, distinct from a genuine bad-character error. See
      Types.Reader_incomplete. *)
@@ -339,13 +339,14 @@ let advance ps = ps.pos <- ps.pos + 1
    is a genuine error on a token that is present. next_sig scans without
    mutating (unlike [peek ~nl], which consumes newlines via skip_nl). *)
 let parse_error ps msg =
-  let located = Printf.sprintf "%s at %s:%d" msg ps.file (cur ps).tline in
+  let file = ps.file and line = (cur ps).tline in
   let rec next_sig i =
     if i >= Array.length ps.toks then eof_tok
     else match ps.toks.(i).t with TNewline -> next_sig (i + 1) | _ -> ps.toks.(i)
   in
-  if (next_sig ps.pos).t = TEOF then raise (Reader_incomplete located)
-  else failwith located
+  if (next_sig ps.pos).t = TEOF then
+    raise (Reader_incomplete (Printf.sprintf "%s at %s:%d" msg file line))
+  else raise (Pp_error { kind = Eval; msg; pos = Some (file, line) })
 
 (* Skip newline tokens (used wherever the statement-continuation rule makes
    newlines insignificant: inside brackets, after an operator/'='/'->'/','
@@ -863,9 +864,9 @@ and fstring_hole_expr ~(file : string) (src : string) ~(parse : ps -> expr) : ex
   skip_nl hps;
   (match (cur hps).t with
    | TEOF -> ()
-   | t -> failwith (Printf.sprintf
-            "unexpected %s after an f-string interpolation expression at %s"
-            (string_of_btok t) file));
+   | t -> parse_error hps (Printf.sprintf
+            "unexpected %s after an f-string interpolation expression"
+            (string_of_btok t)));
   e
 
 (* Lower f-string segments: each non-empty literal → a string literal,
@@ -1330,17 +1331,16 @@ and normal_head_builder : head_builder = {
          | t -> parse_error ps ("expected ',' or ')', got " ^ string_of_btok t))
     | "assert" ->
         skip_nl ps;
-        let line = (cur ps).tline in
         let cond = parse_expr ps free_ctx in
         (match (peek ps ~nl:true).t with
          | TComma ->
              advance ps; skip_nl ps;
              let m = parse_expr ps free_ctx in
              expect ps ~nl:true TRParen "')'";
-             Desugar.desugar_assert ~file:ps.file ~line cond (Some m)
+             Desugar.desugar_assert cond (Some m)
          | TRParen ->
              advance ps;
-             Desugar.desugar_assert ~file:ps.file ~line cond None
+             Desugar.desugar_assert cond None
          | t -> parse_error ps ("expected ',' or ')', got " ^ string_of_btok t))
     | "load" ->
         (match (peek ps ~nl:true).t with
@@ -2324,8 +2324,8 @@ let read_string ?(source : string = "<?>") (input : string) : expr list =
 let read_one ?(source : string = "<?>") (input : string) : expr =
   match read_string ~source input with
   | [e] -> e
-  | [] -> failwith (Printf.sprintf "empty input at %s:1" source)
-  | _ -> failwith (Printf.sprintf "multiple expressions at %s:1" source)
+  | [] -> raise (Pp_error { kind = Eval; msg = "empty input"; pos = Some (source, 1) })
+  | _ -> raise (Pp_error { kind = Eval; msg = "multiple expressions"; pos = Some (source, 1) })
 
 (* ---- Extension dispatch ----
 
