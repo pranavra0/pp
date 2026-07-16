@@ -176,7 +176,7 @@ let parse_depfile (content : string) : string list =
 let record_depfile_cells (deps : string list) : unit =
   List.iter (fun dep ->
     if Sys.file_exists dep then begin
-      if List.exists (fun cap -> Capability.check_fs_read cap (Paths.canonicalize ~realpath:(fun x -> x) dep))
+      if List.exists (fun cap -> Capability.check_fs_read cap (Runtime.canonical_path dep))
            !Runtime.current_capabilities
       then ignore (Store.read_file_cell dep)
       else
@@ -289,7 +289,7 @@ let read_dispatch ~(tag : string) ~(cap_err : string -> string) (path : string) 
   | Some content -> VString content
   | None ->
       let fs_ok =
-        List.exists (fun cap -> Capability.check_fs_read cap (Paths.canonicalize ~realpath:(fun x -> x) path))
+        List.exists (fun cap -> Capability.check_fs_read cap (Runtime.canonical_path path))
           !Runtime.current_capabilities
       in
       if fs_ok then
@@ -297,7 +297,7 @@ let read_dispatch ~(tag : string) ~(cap_err : string -> string) (path : string) 
          with Sys_error msg -> failwith (tag ^ ": " ^ msg))
       else
         let secret_ok =
-          List.exists (fun cap -> Capability.check_secret cap (Paths.canonicalize ~realpath:(fun x -> x) path))
+          List.exists (fun cap -> Capability.check_secret cap (Runtime.canonical_path path))
             !Runtime.current_capabilities
         in
         if secret_ok then

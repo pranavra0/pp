@@ -23,11 +23,11 @@ let require_no_node_body (who : string) : unit =
     failwith (who ^ ": may not be called inside a node body (writes are domain-apply-only)")
 
 let has_fs_read path =
-  List.exists (fun cap -> Capability.check_fs_read cap (Paths.canonicalize ~realpath:(fun x -> x) path))
+  List.exists (fun cap -> Capability.check_fs_read cap (Runtime.canonical_path path))
     !Runtime.current_capabilities
 
 let has_fs_write path =
-  List.exists (fun cap -> Capability.check_fs_write cap (Paths.canonicalize ~realpath:(fun x -> x) path))
+  List.exists (fun cap -> Capability.check_fs_write cap (Runtime.canonical_path path))
     !Runtime.current_capabilities
 
 (* Capabilities.check_process recurses through CapCompose (and so, via
@@ -97,6 +97,7 @@ let materialize_file (path : string) (content : string) (executable : bool) : un
   (try output_string oc content
    with exn -> close_out oc; (try Sys.remove tmp with _ -> ()); raise exn);
   close_out oc;
+  Unix.rename tmp path;
   if executable then (try Unix.chmod path 0o755 with _ -> ());
   Store.unpin_file path
 

@@ -59,6 +59,7 @@ val invocation_get : unit -> invocation
 
 val stdlib_root : unit -> string option
 val canonical_path : string -> Paths.canonical
+val canonical_path_impl : string -> string
 val loader_read : string -> string
 val with_form_location : Types.expr -> (unit -> 'a) -> 'a
 val keep_thunks : bool ref

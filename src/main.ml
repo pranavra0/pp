@@ -773,6 +773,7 @@ let main () =
      this member process outright (Failure -> the top-level handler ->
      exit 1), which the dispatcher (src/remote.ml) reads as "member
      failed" and degrades that batch to local compute. *)
+  Backend.r.realpath <- Runtime.canonical_path_impl;
   let initial_caps =
     match !remote_node_args with
     | Some (token_file, _, _, _, _) ->

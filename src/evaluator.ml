@@ -898,10 +898,10 @@ and perform_builtin_effect (name : string) (args : value list) : value =
 (* ---- Helpers ---- *)
 
 and has_fs_read (path : string) : bool =
-  List.exists (fun cap -> Capability.check_fs_read cap (Paths.canonicalize ~realpath:(fun x -> x) path)) !current_capabilities
+  List.exists (fun cap -> Capability.check_fs_read cap (Runtime.canonical_path path)) !current_capabilities
 
 and has_fs_write (path : string) : bool =
-  List.exists (fun cap -> Capability.check_fs_write cap (Paths.canonicalize ~realpath:(fun x -> x) path)) !current_capabilities
+  List.exists (fun cap -> Capability.check_fs_write cap (Runtime.canonical_path path)) !current_capabilities
 
 
 (* (load-module "file.pp"): evaluate the file against a fresh initial env and
