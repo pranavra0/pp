@@ -234,10 +234,9 @@ now met by making the reader's quote path total — `quote_to_value` handles
 every form, plus quasiquote — together with `defmacro`. This gives a
 cleaner homoiconicity story than operatives over thunks. `defmacro` is not
 a reader special form: it parses as an ordinary application and is
-recognised only at the one expansion point both backends pass through
-before compiling or evaluating a top-level form. The code hash is
-computed on the already-expanded AST, with no change to how expressions
-are hashed.
+recognised only at the one expansion point before compiling or evaluating
+a top-level form. The code hash is computed on the already-expanded AST,
+with no change to how expressions are hashed.
 
 ### Tracking what a node reads: sound but coarse, refined per tool
 
@@ -405,10 +404,8 @@ The store is wired into the tree-walker's `force` for `node { e }` thunks.
 The traces are a subset of the target schema —
 `{outcome, result-hash, [(cell-id, observed-hash)]}` for file cells —
 `child-keys`, `origin`, `closure-read-set-hash` and `closure-cap-req` are
-the remaining fields. Both backends share it: the VM compiles `node { e }`
-to a `MAKE_NODE` opcode and forces it through the same store, computing a
-byte-identical key for data-valued free variables so the 2 backends
-share entries.
+the remaining fields. The engine shares the store: `node { e }` forces
+through the same store, computing a data-valued key for free variables.
 
 Keying follows the vocabulary above: the persistent key is `H(code-structure,
 free-var-value-hashes)` (`node_key_of` and `free_vars`), excluding the
@@ -440,8 +437,7 @@ An in-memory treatment folds the handler stack into the thunk key (see
 it once the persistent store lands.
 
 The `.ppc` bytecode disk cache is cut: the value and trace store
-replaces it, and bytecode stays purely in memory as the VM's execution
-form, never itself cached.
+replaces it, and there is no separate bytecode serialisation.
 
 Introspection is via `pp why <key>`, capability-filtered. `pp graph` is
 deferred to later work, since it needs the reverse index.
@@ -508,16 +504,29 @@ immediately before each delete. Over-retention is always safe; deleting
 live data is the only real hazard, so any doubt — a failed replay, or a
 manifest that changed mid-sweep — biases toward keeping everything.
 
-### Backend strategy: 2 engines, one executable spec
+### Engine strategy: 1 engine, one executable spec (resolved)
 
-The tree-walker is the executable specification for pp's semantics; the VM
-must conform to it, not the other way round.
+The bytecode VM was deleted in July 2026. pp now has a single tree-walking
+evaluator. This was not a failure of the two-engine approach — it was the
+correct decision given what the project learned.
 
-`--diff` runs both backends against the same program and is the cheapest
-correctness check available. The parity rule softens from "no feature may
-exist in only one backend" to "no shipped feature may exist in only one
-backend": divergence while a feature is mid-migration is allowed, but a
-release with it is not.
+The differential signal was low: two evaluators by the same author, in the
+same language, with the same shared store and key construction, correlated
+heavily. The VM found real bugs in the tree-walker early on (slot reuse,
+global-scope holes, effect scoping), but those were one-time finds in the
+project's early phase. After the shared runtime consolidation (`runtime.ml`),
+the risky machinery — store, keys, traces, capabilities — was already
+single-copy, so the second engine audited the less risky layer.
+
+Every semantic change cost two migrations: the tree-walker and the compiler.
+The slot-allocation discipline, frame management, and per-opcode parity checks
+were a recurring tax on every feature. The metamorphic fuzzer plus kernel
+properties replace the differential oracle: semantics-preserving twins
+(do-wrap, let-identity, eta-identity) catch regressions the VM used to catch,
+and the reader round-trip gate catches serialization divergence. The remaining
+risk — that the tree-walker alone has a blind spot — is mitigated by the
+expected-output test suite and the kernel property sweeps (hash injectivity,
+quote/printer round-trips).
 
 ### Effect ordering: one snapshot, capabilities captured early
 

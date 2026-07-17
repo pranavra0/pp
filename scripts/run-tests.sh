@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Differential test suite. Runs every tests/NNN-*.pp under BOTH backends
-# (tree-walker and bytecode VM) and diffs their output — any divergence is a
-# failure — then runs every tests/*.sh oracle. Invoked by `dune runtest`; can
+# Single-engine test suite. For tests/NNN-*.pp cases, runs the tree-walker once
+# under an isolated HOME, diffs against a committed .expected file (stdout+stderr
+# and final exit-code line), and fails on any difference. For tests/*.sh oracles,
+# runs the script and checks its exit status. Invoked by `dune runtest`; can
 # also be run by hand from the repo root:
 #
 #     dune build && scripts/run-tests.sh ./pp
@@ -17,9 +18,9 @@
 # replayed in enumeration order, so a parallel run reads identically to a
 # serial one.
 #
-# Adding a shell oracle is just: create tests/NNN-name.sh (it is picked up by
-# the glob below; its second line is shown as the description). Adding a
-# differential case is: create tests/NNN-name.pp. Neither touches this file.
+# Adding a .pp expected-output oracle: create tests/NNN-name.pp, bless its
+# .expected with `scripts/run-tests.sh` (a missing .expected fails with a
+# message). Add a shell oracle: create tests/NNN-name.sh.
 set -uo pipefail
 
 # ---- Worker: run ONE job, printing its verdict on the first line (PASS or
@@ -32,14 +33,22 @@ if [ "${1:-}" = "--worker" ]; then
   trap 'rm -rf "$scratch"' EXIT
   case "$kind" in
     pp)
-      "$PP" --bytecode "$file" >"$scratch/bc" 2>&1
-      "$PP"             "$file" >"$scratch/tw" 2>&1
-      if diff -u "$scratch/tw" "$scratch/bc" >"$scratch/diff"; then
+      scratch_home=$(mktemp -d)
+      export HOME="$scratch_home"
+      "$PP" "$file" >"$scratch/actual" 2>&1
+      ec=$?
+      printf '# exit: %d\n' $ec >> "$scratch/actual"
+      expected="${file}.expected"
+      if [ ! -f "$expected" ]; then
+        printf 'FAIL\nFAIL %s  (no .expected file — bless with:\n' "$file"
+        printf '  TMP=$$(mktemp -d) HOME=$$TMP bin/pp %s >$$TMP/out 2>&1; ec=$$?; { cat $$TMP/out; printf "\\n# exit: %%d\\n" $$ec; } >%s)\n' "$file" "$expected"
+      elif diff -u "$expected" "$scratch/actual" >"$scratch/diff"; then
         printf 'PASS\nok   %s\n' "$file"
       else
-        printf 'FAIL\nFAIL %s  (backends disagree)\n' "$file"
+        printf 'FAIL\nFAIL %s  (output differs from expected)\n' "$file"
         cat "$scratch/diff"
-      fi ;;
+      fi
+      rm -rf "$scratch_home" ;;
     sh)
       name=$(basename "$file" .sh)
       desc=$(sed -n '2s/^#[[:space:]]*//p' "$file")
@@ -58,7 +67,7 @@ export PP
 export FUZZ="${FUZZ:-tools/fuzz.exe}"
 SELF="$0"
 
-# ---- Enumerate jobs: differential .pp cases first, then shell oracles, so the
+# ---- Enumerate jobs: .pp expected-output cases first, then shell oracles, so the
 # replay order below matches the historical serial run.
 jobs=()
 for f in tests/[0-9]*.pp; do jobs+=("pp|$f"); done

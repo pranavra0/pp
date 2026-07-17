@@ -65,9 +65,8 @@ brace-to-s-expression mapping.
   (`tests/016`). Cutoff for
   inline-nested nodes, and push-mode dirty-propagation over the
   reverse-edge graph, are still planned.
-- store: the persistent content-addressed store at `~/.pp/store`
-  (`objects/`, `traces/`), `store.ml`, shared by both back ends for
-  `node { e }` thunks.
+  (`objects/`, `traces/`), `store.ml`, used by the engine for `node { e }`
+  thunks.
 
 ### The outside world
 
@@ -210,20 +209,17 @@ brace-to-s-expression mapping.
   [ARCHITECTURE.md](ARCHITECTURE.md) for resolution and `--update`.
 - fexpr (cut): an operative that receives unevaluated arguments. pp
   removed this; metaprogramming instead runs through total `quote`,
-  `quasiquote`, and `defmacro` (`macro.ml`). A macro's body runs through
-  the tree-walker at one shared expansion point, before either back end's
-  own machinery — `hash_expr` or the compiler — sees the form, so both
-  back ends stay byte-identical (SPEC law 36).
-
+  the tree-walker at one shared expansion point, before the evaluator's own
+  machinery — `hash_expr` or the evaluator — sees the form, so byte-identity
+  is preserved (SPEC law 36).
 ### Process and testing
 
-- the two back ends: the tree-walker (`evaluator.ml`), the reference
-  interpreter, and the bytecode VM (`compiler.ml`, `vm.ml`), the faster
-  model. They must produce identical output.
-- oracle: the tree-walker, taken as ground truth in differential tests. It
-  can still be wrong — see the thunk key entry above, and
-  [STATUS.md](STATUS.md), for its now-fixed key bugs.
-- differential testing: running both back ends and comparing behavior —
-  pp's core correctness check, enforced by `dune runtest` and the fuzzer
-  (see [TESTING.md](TESTING.md)).
+- engine: the tree-walking evaluator (`evaluator.ml`), pp's single execution
+  engine.
+- oracle: the tree-walker, taken as ground truth in tests. It can still be
+  wrong — see the thunk key entry above, and [STATUS.md](STATUS.md), for its
+  now-fixed key bugs.
+- metamorphic testing: generating semantics-preserving program twins and
+  asserting identical output — pp's core correctness check, enforced by
+  `dune runtest` and the fuzzer (see [TESTING.md](TESTING.md)).
 </content>

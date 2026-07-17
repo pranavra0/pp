@@ -353,10 +353,9 @@ multi-way conditional with no destructuring, use a flat `if`/`else if`
 chain, or `match` on the scrutinised value with guards. Map patterns may
 be added later as a new pattern kind; they will not add a new form.
 
-Both backends must agree on every pattern kind, and this is
-differential-tested. The compiler's lowering must use unshadowable
-internal primitives, so user code shadowing `car` or `=` cannot change
-match semantics.
+The engine must agree on every pattern kind, and this is exercised by the
+fuzzer. The lowering uses unshadowable internal primitives, so user code
+shadowing `car` or `=` cannot change match semantics.
 
 ---
 

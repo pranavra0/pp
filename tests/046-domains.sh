@@ -18,7 +18,7 @@
 # under-converging apply); the generic journal intent/done bracket; and
 # fenced-after-domains ordering.
 #
-# Runs under an isolated HOME; both backends.
+# Runs under an isolated HOME.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -235,25 +235,6 @@ else
   echo "FAIL fenced-after-domains-ordering: no journal"; fail=1
 fi
 
-# =====================================================================
-# (6) VM parity
-# =====================================================================
-KV6="$TMP/kv6"
-{ kv_domain_source "$KV6"
-  cat <<EOF
-do {
-  register-kv-domain()
-  {"kv" -> {"a" -> "1", "b" -> "2"}}
-}
-EOF
-} > "$TMP/kv-vm.pp"
-rm -rf "$TMP/.pp"
-run --bytecode --grant "fs:$KV6:wo" "$TMP/kv-vm.pp"
-assert "vm-cold-created" "created=2" present
-[ -f "$KV6/a" ] && [ -f "$KV6/b" ] && echo "ok   vm-cold-files" \
-  || { echo "FAIL vm-cold-files"; fail=1; }
-run --bytecode --grant "fs:$KV6:wo" "$TMP/kv-vm.pp"
-assert "vm-null-created" "created=0" present
 
 rm -rf "$TMP"
 if [ "$fail" -eq 0 ]; then echo "=== DOMAINS (Q13) TEST PASSED ==="; fi

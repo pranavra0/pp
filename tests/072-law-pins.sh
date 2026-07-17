@@ -2,7 +2,7 @@
 # tests/072 — every SPEC law claimed to hold must have a real test backing it.
 #
 # SPEC.md gives every law an explicit **Status** marker; a law marked "holds"
-# is a claim that both backends satisfy it. This script is the mechanism that
+# is a claim that the engine satisfies it. This script is the mechanism that
 # stops such a claim from being unbacked: it cross-references every LAW id in
 # SPEC against the `# pins: LAW-<n>` markers declared in the test suite and
 # fails the build when a "holds" law has neither a pinned test nor an explicit

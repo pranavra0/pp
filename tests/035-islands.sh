@@ -10,7 +10,7 @@
 #   The network half (git:/github: fetch) is exercised only under
 #   PP_ISLAND_NET_TEST=1, against a LOCAL bare repo (no real network).
 #
-# Runs under an isolated HOME; both backends.
+# Runs under an isolated HOME.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -28,13 +28,8 @@ assert() {  # NAME PATTERN present|absent [FILE]
        echo "--- output ---"; cat "$file"; fail=1; fi
 }
 
-both() {  # NAME ARGS... — run under both backends, diff, leave output in $TMP/out
-  local name="$1"; shift
+run_one() {  # ARGS... — run single engine, leave output in $TMP/out
   "$PP" "$@" > "$TMP/out" 2>&1
-  "$PP" --bytecode "$@" > "$TMP/out-bc" 2>&1
-  if diff -q "$TMP/out" "$TMP/out-bc" > /dev/null; then echo "ok   $name-parity"
-  else echo "FAIL $name-parity: backends disagree"
-       diff -u "$TMP/out" "$TMP/out-bc" | head -20; fail=1; fi
 }
 
 # --- fixture island ---
@@ -48,11 +43,11 @@ EOF
 
 # --- (1) parse & scheme dispatch ---
 echo 'island("nope:foo", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")' > bad-scheme.pp
-both "scheme" bad-scheme.pp
+run_one bad-scheme.pp
 assert "scheme-error" "island: unknown scheme in URI: nope:foo" present
 
 echo 'island("file:./lib", "v1.0")' > bad-pin.pp
-both "bad-pin" bad-pin.pp
+run_one bad-pin.pp
 assert "bad-pin-error" "pin for file:./lib must be a 64-hex content hash" present
 
 # --- (2) unpinned is a hard error naming the fix ---
@@ -60,7 +55,7 @@ cat > prog.pp <<'EOF'
 import(island("file:./lib"))
 print(isl-double(isl-x))
 EOF
-both "unpinned" prog.pp
+run_one prog.pp
 assert "unpinned-error" "island: no pin for file:./lib; run pp --update" present
 
 # --- (3) --update rewrites the inline pin; import binds exports ---
@@ -68,7 +63,7 @@ assert "unpinned-error" "island: no pin for file:./lib; run pp --update" present
 assert "update-ran" "1 pin\(s\) updated" present
 PIN=$(grep -oE '[0-9a-f]{64}' prog.pp | head -1)
 [ -n "$PIN" ] && echo "ok   pin-inlined" || { echo "FAIL pin-inlined: no pin in prog.pp"; fail=1; }
-both "pinned-run" prog.pp
+run_one prog.pp
 assert "pinned-value" "^84$" present
 
 # --- (4) pin is content-addressed & stable ---
@@ -82,7 +77,7 @@ PIN2=$(grep -oE '[0-9a-f]{64}' prog2.pp | head -1)
 if [ "$PIN" = "$PIN2" ]; then echo "ok   pin-stable"
 else echo "FAIL pin-stable: identical trees pinned differently ($PIN vs $PIN2)"; fail=1; fi
 
-# --- (5) island import is a node boundary (cold run, hit, VM shares) ---
+# --- (5) island import is a node boundary (cold run, hit, cache reuse) ---
 cat > nprog.pp <<EOF
 import(island("file:./lib", "$PIN"))
 perform log(force(node { perform log("RUN"); number->string(isl-x * 2) }))
@@ -93,13 +88,13 @@ assert "node-cold" "RUN" present
 "$PP" nprog.pp > "$TMP/out" 2>&1
 assert "node-hit" "RUN" absent
 assert "node-hit-value" "84" present
-"$PP" --bytecode nprog.pp > "$TMP/out" 2>&1
-assert "node-vm-shared-hit" "RUN" absent
-assert "node-vm-value" "84" present
+"$PP" nprog.pp > "$TMP/out" 2>&1
+assert "node-shared-hit" "RUN" absent
+assert "node-value" "84" present
 
 # --- (6) editing the source dir does nothing (pinned); --update re-pins ---
 printf 'let isl-x = 99\ndef isl-double(n) { n * 2 }\n' > lib/entry.pp
-both "pinned-frozen" prog.pp
+run_one prog.pp
 assert "pinned-frozen-value" "^84$" present
 "$PP" why prog.pp > "$TMP/out" 2>&1
 assert "why-drift" "source dir now hashes .* run pp --update" present
@@ -107,24 +102,24 @@ assert "why-drift" "source dir now hashes .* run pp --update" present
 NEWPIN=$(grep -oE '[0-9a-f]{64}' prog.pp | head -1)
 if [ "$NEWPIN" != "$PIN" ]; then echo "ok   repin-changed"
 else echo "FAIL repin-changed: pin did not move on content change"; fail=1; fi
-both "repinned-run" prog.pp
+run_one prog.pp
 assert "repinned-value" "^198$" present
 
 # --- (7) tamper check ---
 printf 'x' >> "$TMP/.pp/islands/src/$NEWPIN/entry.pp"
-both "tamper" prog.pp
+run_one prog.pp
 assert "tamper-error" "island: cache tamper detected" present
 rm -rf "$TMP/.pp/islands/src/$NEWPIN"
 
 # --- (8) offline reproducibility: source dir gone, cache + inline pin win ---
 "$PP" prog.pp > /dev/null 2>&1   # re-fill cache from source (hash matches pin)
 rm -rf lib
-both "offline" prog.pp
+run_one prog.pp
 assert "offline-value" "^198$" present
 
 # --- (9) pinned-but-uncached git island errors cleanly with fetch off ---
 echo 'island("github:foo/bar#main", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")' > g.pp
-both "git-uncached" g.pp
+run_one g.pp
 assert "git-uncached-error" "not in the cache; run pp --fetch-islands" present
 
 # --- (10) island-pins introspection ---

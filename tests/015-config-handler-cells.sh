@@ -183,19 +183,6 @@ run --grant "fs:$TMP:ro" "$TMP/f-real.pp"; assert "mock-real-run3-hit"  "COMPUTE
 run --grant "fs:$TMP:ro" "$TMP/f-mock.pp"; assert "mock-mock-run4-hit"  "COMPUTE" absent
                                            assert "mock-mock-run4-MOCK" "MOCKED"  present
 
-# --- (g) VM parity: the VM shares the trace-cell treatment and the store ---
-rm -rf "$TMP/.pp"
-run             "$TMP/b1.pp"; assert "vm-cfg-tw-populates"  "COMPUTE" present
-run --bytecode  "$TMP/b1.pp"; assert "vm-cfg-hits-tw"       "COMPUTE" absent
-                              assert "vm-cfg-hits-tw-V1"    "V1"      present
-run --bytecode  "$TMP/b2.pp"; assert "vm-cfg-change-miss"   "COMPUTE" present
-                              assert "vm-cfg-change-V2"     "V2"      present
-run --bytecode  "$TMP/a1.pp"; assert "vm-amb-run1-miss"     "COMPUTE" present
-run --bytecode  "$TMP/a2.pp"; assert "vm-amb-still-hit"     "COMPUTE" absent
-run --bytecode  "$TMP/e1.pp"; assert "vm-hnd-run1-miss"     "COMPUTE" present
-run --bytecode  "$TMP/e2.pp"; assert "vm-hnd-run2-miss"     "COMPUTE" present
-run --bytecode  "$TMP/e1.pp"; assert "vm-hnd-revert-hit"    "COMPUTE" absent
-
 rm -rf "$TMP"
 if [ "$fail" -eq 0 ]; then echo "=== CONFIG/HANDLER TRACE-CELL TEST PASSED ==="; fi
 exit $fail

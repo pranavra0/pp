@@ -33,16 +33,15 @@ EOF
 
 expected=$'"big ok"\n"small ok"\n"boom"\n"long list"\n"singleton"\n"empty"\n"the answer"\n"other"'
 
-# (a) the brace file itself runs correctly on both backends (baseline).
-got_tw=$("$PP" "$TMP/m.ppb" 2>&1)
-got_bc=$("$PP" --bytecode "$TMP/m.ppb" 2>&1)
-if [ "$got_tw" = "$expected" ] && [ "$got_bc" = "$expected" ]; then
+# (a) the brace file itself runs correctly (baseline).
+got=$("$PP" "$TMP/m.ppb" 2>&1)
+if [ "$got" = "$expected" ]; then
   ok "brace-baseline"
 else
-  bad "brace-baseline" "tw: $(printf '%q' "$got_tw")" "bc: $(printf '%q' "$got_bc")"
+  bad "brace-baseline" "got: $(printf '%q' "$got")"
 fi
 
-# (b) transpile to sexpr, and the SEXPR file runs identically on both backends
+# (b) transpile to sexpr, and the SEXPR file runs identically
 #     (the sexpr reader now understands match — the C4 change).
 "$PP" fmt --to-sexpr "$TMP/m.ppb" > "$TMP/m.ppl" 2>"$TMP/e1"
 if [ ! -s "$TMP/m.ppl" ]; then
@@ -50,12 +49,11 @@ if [ ! -s "$TMP/m.ppl" ]; then
 else
   ok "to-sexpr"
 fi
-got_tw=$("$PP" "$TMP/m.ppl" 2>&1)
-got_bc=$("$PP" --bytecode "$TMP/m.ppl" 2>&1)
-if [ "$got_tw" = "$expected" ] && [ "$got_bc" = "$expected" ]; then
+got=$("$PP" "$TMP/m.ppl" 2>&1)
+if [ "$got" = "$expected" ]; then
   ok "sexpr-runs-identically"
 else
-  bad "sexpr-runs-identically" "tw: $(printf '%q' "$got_tw")" "bc: $(printf '%q' "$got_bc")"
+  bad "sexpr-runs-identically" "got: $(printf '%q' "$got")"
 fi
 
 # (c) full round-trip braces → sexpr → braces preserves the LAW-20 hash (this
@@ -81,13 +79,12 @@ cat > "$TMP/hand.ppl" <<'EOF'
 (print (f (list -1 2)))
 (print (f 3))
 EOF
-got_tw=$("$PP" "$TMP/hand.ppl" 2>&1)
-got_bc=$("$PP" --bytecode "$TMP/hand.ppl" 2>&1)
+got=$("$PP" "$TMP/hand.ppl" 2>&1)
 handexp=$'"pos-head"\n"nonpos-head"\n"not-a-list"'
-if [ "$got_tw" = "$handexp" ] && [ "$got_bc" = "$handexp" ]; then
+if [ "$got" = "$handexp" ]; then
   ok "hand-written-sexpr-match"
 else
-  bad "hand-written-sexpr-match" "tw: $(printf '%q' "$got_tw")" "bc: $(printf '%q' "$got_bc")"
+  bad "hand-written-sexpr-match" "got: $(printf '%q' "$got")"
 fi
 
 exit $fail

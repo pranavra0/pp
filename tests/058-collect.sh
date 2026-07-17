@@ -9,13 +9,10 @@ set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 run_both() {
   local name="$1" file="$2" expected="$3"
-  local got_tw got_bc
-  got_tw=$("$PP" "$file" 2>&1)
-  got_bc=$("$PP" --bytecode "$file" 2>&1)
-  if [ "$got_tw" != "$expected" ]; then
-    bad "$name-tw" "expected: $(printf '%q' "$expected")" "got:      $(printf '%q' "$got_tw")"
-  elif [ "$got_bc" != "$expected" ]; then
-    bad "$name-bc" "expected: $(printf '%q' "$expected")" "got:      $(printf '%q' "$got_bc")"
+  local got
+  got=$("$PP" "$file" 2>&1)
+  if [ "$got" != "$expected" ]; then
+    bad "$name" "expected: $(printf '%q' "$expected")" "got:      $(printf '%q' "$got")"
   else
     ok "$name"
   fi

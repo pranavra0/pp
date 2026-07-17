@@ -1165,8 +1165,8 @@ let is_expr_position form target =
     | C xs -> List.iter go xs
     | S (A head :: args) ->
         let skip = head = "quote" || head = "quasiquote"
-                   || head = "load" || head = "import" || head = "defmacro"
-                   || head = "def" || head = "fn" in
+                   || head = "load" || head = "load-module" || head = "import"
+                   || head = "defmacro" || head = "def" || head = "fn" in
         if skip then
           List.iter count (A head :: args)
         else if head = "let" || head = "let*" then

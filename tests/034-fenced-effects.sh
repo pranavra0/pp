@@ -8,7 +8,7 @@
 #   entry that is resolved by --fenced-policy (retry | abort | ask), never
 #   by silent retry.
 #
-# Runs under an isolated HOME; both backends.
+# Runs under an isolated HOME; single engine.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -28,16 +28,16 @@ assert() {  # NAME PATTERN present|absent [FILE]
 
 mkdir -p "$OUT"
 
-# --- (a) fenced inside a node body is an error (both backends) ---
+# --- (a) fenced inside a node body is an error ---
 cat > "$TMP/in-node.pp" <<'EOF'
 let bad = node {
   fenced("x", {}); 1 }
 force(bad)
 EOF
 "$PP" "$TMP/in-node.pp" > "$TMP/outlog" 2>&1 || true
-assert "tw-node-body-error" "fenced effects may not appear inside node bodies" present
-"$PP" --bytecode "$TMP/in-node.pp" > "$TMP/outlog" 2>&1 || true
-assert "bc-node-body-error" "fenced effects may not appear inside node bodies" present
+assert "node-body-error" "fenced effects may not appear inside node bodies" present
+"$PP" "$TMP/in-node.pp" > "$TMP/outlog" 2>&1 || true
+assert "node-body-error" "fenced effects may not appear inside node bodies" present
 
 # --- (b) fenced in scripting tier without reconciler is a no-op ---
 cat > "$TMP/noop.pp" <<'EOF'
@@ -69,19 +69,6 @@ if [ -f "$JOURNAL" ] && \
   echo "ok   simple-journal"
 else
   echo "FAIL simple-journal: missing intent/done fenced entries"; fail=1
-fi
-
-# --- (d) VM parity: bytecode backend journals and runs fenced actions ---
-rm -rf "$TMP/.pp" "$OUT"
-rm -f "$TMP/touched"
-"$PP" --bytecode --fenced-policy retry --reconcile "$OUT" --grant "fs:$OUT:rw" "$TMP/simple.pp" > "$TMP/outlog" 2>&1
-assert "vm-summary" "create=1" present
-[ -f "$TMP/touched" ] && echo "ok   vm-ran" \
-  || { echo "FAIL vm-ran: action did not run"; fail=1; }
-if [ -f "$JOURNAL" ] && grep -q "done fenced" "$JOURNAL"; then
-  echo "ok   vm-journal"
-else
-  echo "FAIL vm-journal"; fail=1
 fi
 
 # --- (e) simulated crash recovery: retry re-runs the unknown action once ---

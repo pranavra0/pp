@@ -6,20 +6,17 @@
 #   { ...defaults, ...over } merge, rightmost wins
 # A spread-free literal keeps its `(hash-map …)` lowering (hash-preserving).
 # Map spread is a quasiquote exclusion (SPEC B.7) — it must error cleanly.
-#
-# Differential: the tree-walker and the bytecode VM must agree byte for byte.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 run_ok() {
   local name="$1" file="$2" expected="$3"
-  local got_tw got_bc
-  got_tw=$("$PP"            "$file" 2>&1)
-  got_bc=$("$PP" --bytecode "$file" 2>&1)
-  if [ "$got_tw" = "$expected" ] && [ "$got_bc" = "$expected" ]; then
+  local got
+  got=$("$PP" "$file" 2>&1)
+  if [ "$got" = "$expected" ]; then
     ok "$name"
   else
     bad "$name" "expected: $(printf '%q' "$expected")" \
-        "tw: $(printf '%q' "$got_tw")" "bc: $(printf '%q' "$got_bc")"
+        "got: $(printf '%q' "$got")"
   fi
 }
 
@@ -62,17 +59,16 @@ print({ :a -> 1, :b -> 2 })
 EOF
 run_ok "plain-map-unchanged" "$TMP/plain.pp" '{:a 1, :b 2}'
 
-# (f) the removed `{ base | k -> v }` update form errors on both backends.
+# (f) the removed `{ base | k -> v }` update form errors.
 cat > "$TMP/old.pp" <<'EOF'
 let base = { :a -> 1 }
 print({ base | :a -> 2 })
 EOF
-got_tw=$("$PP" "$TMP/old.pp" 2>&1 || true)
-got_bc=$("$PP" --bytecode "$TMP/old.pp" 2>&1 || true)
-if [[ "$got_tw" == *error* ]] && [[ "$got_bc" == *error* ]]; then
+got=$("$PP" "$TMP/old.pp" 2>&1 || true)
+if [[ "$got" == *error* ]]; then
   ok "old-pipe-update-removed"
 else
-  bad "old-pipe-update-removed" "tw: $got_tw" "bc: $got_bc"
+  bad "old-pipe-update-removed" "got: $got"
 fi
 
 # (g) map spread inside quasiquote{} is a documented B.7 exclusion: clean error.
@@ -80,13 +76,11 @@ cat > "$TMP/qq.pp" <<'EOF'
 let m = { :a -> 1 }
 print(quasiquote { { ...m } })
 EOF
-got_tw=$("$PP" "$TMP/qq.pp" 2>&1 || true)
-got_bc=$("$PP" --bytecode "$TMP/qq.pp" 2>&1 || true)
-if [[ "$got_tw" == *"not supported inside quasiquote"* ]] \
-   && [[ "$got_bc" == *"not supported inside quasiquote"* ]]; then
+got=$("$PP" "$TMP/qq.pp" 2>&1 || true)
+if [[ "$got" == *"not supported inside quasiquote"* ]]; then
   ok "map-spread-qq-excluded"
 else
-  bad "map-spread-qq-excluded" "tw: $got_tw" "bc: $got_bc"
+  bad "map-spread-qq-excluded" "got: $got"
 fi
 
 # (h) but a plain map literal inside quasiquote{} still works.

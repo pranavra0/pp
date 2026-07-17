@@ -7,20 +7,17 @@
 # EConfig node as the bare `config(key)` form, and templates inside
 # quasiquote{} the same way every other $-form does (via the Surface_tables
 # `Config` tmpl node).
-#
-# Differential: the tree-walker and the bytecode VM must agree byte for byte.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
-run_both() {
+run_one() {
   local name="$1" file="$2" expected="$3"
-  local got_tw got_bc
-  got_tw=$("$PP"            "$file" 2>&1)
-  got_bc=$("$PP" --bytecode "$file" 2>&1)
-  if [ "$got_tw" = "$expected" ] && [ "$got_bc" = "$expected" ]; then
+  local got
+  got=$("$PP" "$file" 2>&1)
+  if [ "$got" = "$expected" ]; then
     ok "$name"
   else
     bad "$name" "expected: $(printf '%q' "$expected")" \
-        "tw:       $(printf '%q' "$got_tw")" "bc:       $(printf '%q' "$got_bc")"
+        "got: $(printf '%q' "$got")"
   fi
 }
 
@@ -31,7 +28,7 @@ with { config: { :cc -> "clang", :opt -> 2 } } {
   print($config("opt"))
 }
 EOF
-run_both "config-read" "$TMP/read.pp" $'"clang"\n2'
+run_one "config-read" "$TMP/read.pp" $'"clang"\n2'
 
 # (b) default is used when the key is unset.
 cat > "$TMP/default.pp" <<'EOF'
@@ -39,7 +36,7 @@ with { config: { :cc -> "clang" } } {
   print($config("missing", "fallback"))
 }
 EOF
-run_both "config-default" "$TMP/default.pp" '"fallback"'
+run_one "config-default" "$TMP/default.pp" '"fallback"'
 
 # (c) computed key expression: heads take expressions, not just literals.
 cat > "$TMP/computed.pp" <<'EOF'
@@ -47,7 +44,7 @@ with { config: { :cflags -> "-O2" } } {
   print($config(string-append("cf", "lags")))
 }
 EOF
-run_both "config-computed-key" "$TMP/computed.pp" '"-O2"'
+run_one "config-computed-key" "$TMP/computed.pp" '"-O2"'
 
 # (d) $config lowers to the same value as the bare config(...) form.
 cat > "$TMP/same.pp" <<'EOF'
@@ -56,7 +53,7 @@ with { config: { :k -> "v" } } {
   print($config("nope", "d") = config("nope", "d"))
 }
 EOF
-run_both "config-equals-bare-form" "$TMP/same.pp" $'true\ntrue'
+run_one "config-equals-bare-form" "$TMP/same.pp" $'true\ntrue'
 
 # (e) quasiquote parity: a $config template with an unquoted hole expands to
 # code that evaluates to the same value as the bare form.
@@ -68,7 +65,7 @@ with { config: { :cc -> "clang" } } {
   print(mkd("x", "def") = $config("x", "def"))
 }
 EOF
-run_both "config-qq-parity" "$TMP/qq.pp" $'true\ntrue'
+run_one "config-qq-parity" "$TMP/qq.pp" $'true\ntrue'
 
 # (f) arity is enforced from the table (1 or 2 args).
 cat > "$TMP/arity.pp" <<'EOF'

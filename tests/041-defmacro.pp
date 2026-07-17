@@ -18,9 +18,8 @@
 # spelled out as hand-nested cons/list calls. tests/041-defmacro.ppl is
 # this SAME test, authored in the sexpr surface (the AST-native notation
 # `defmacro` has always used); tests/056-defmacro-both-surfaces.sh proves
-# the two files produce byte-identical output on both backends — a macro
-# author may write braces or sexprs and the language does not know the
-# difference.
+# the two files produce byte-identical output — a macro author may write
+# braces or sexprs and the language does not know the difference.
 
 print("=== control-flow macro (unless), via quasiquote ===")
 defmacro unless(cond, then-branch) {

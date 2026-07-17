@@ -15,7 +15,7 @@
 #   requirement — a hit on a node that loaded a module needs no fs grant
 #   over the module (the read was the loader's, not the user's).
 #
-# Runs under an isolated HOME; both backends.
+# Runs under an isolated HOME; single engine.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -82,23 +82,6 @@ printf 'let libval = "V2"\n' > "$APP/lib.pp"
 run "$APP/node.pp"
 assert "node-run3-stale"  "COMPUTE" present  # editing the module invalidates
 assert "node-run3-V2"     "V2"      present
-
-# --- (d) VM parity ---
-printf 'let libval = "LIBVAL"\n' > "$APP/lib.pp"
-run --bytecode "$APP/main.pp"
-assert "vm-beside-loads"  "LIBVAL" present
-run --bytecode "$APP/esc.pp"
-assert "vm-outside-refused" "source root" present
-rm -rf "$TMP/.pp"
-printf 'let libval = "V1"\n' > "$APP/lib.pp"
-run --bytecode "$APP/node.pp"
-assert "vm-node-run1-miss" "COMPUTE" present
-run --bytecode "$APP/node.pp"
-assert "vm-node-run2-hit"  "COMPUTE" absent
-printf 'let libval = "V3"\n' > "$APP/lib.pp"
-run --bytecode "$APP/node.pp"
-assert "vm-node-run3-stale" "COMPUTE" present
-assert "vm-node-run3-V3"    "V3"      present
 
 # --- (e) stdlib loads relative to cwd still work (cwd is a source root) ---
 mkdir -p "$RUNDIR/stdlib"

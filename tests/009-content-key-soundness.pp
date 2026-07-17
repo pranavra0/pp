@@ -1,11 +1,10 @@
 # Soundness of the content-addressed thunk key: two things the key omitted.
 # pins: LAW-19
 #
-# Regression test: passes on both backends since the fix below. Before the
-# fix, the tree-walker returned d6b=1 and d17b=1 — stale cache hits instead of
-# the correct new values.
+# Regression test: before the fix, the evaluator returned d6b=1 and
+# d17b=1 — stale cache hits instead of the correct new values.
 #
-# The tree-walker memoizes thunks in a global content-addressed table
+# The evaluator memoizes thunks in a global content-addressed table
 # (evaluator.ml make_thunk_ca / thunk_store). The key is
 # hash(expr, env.env_hash, caps, cfg)
 # Two independent things the computation actually depends on are missing
@@ -21,9 +20,8 @@
 # Bug 2 — the key omits handler_stack entirely. The same `perform ...`
 # thunk forced under two different handlers collides.
 #
-# In both cases the VM (which does not share thunk_store) is correct, so
-# this is also a live backend divergence the fuzzer never reached — its
-# grammar does not generate def + captured-closure/handler + let nesting.
+# The bug is a live divergence the fuzzer never reached — its grammar does
+# not generate def + captured-closure/handler + let nesting.
 
 print("=== D6: closure capture must be part of the key ===")
 # make returns a closure capturing x; run wraps its call in a let-thunk.
@@ -43,4 +41,4 @@ with-handler(ask = fn(n) { 1 }) { print("d17a =>", ask-run()) }  # expect 1
 with-handler(ask = fn(n) { 2 }) { print("d17b =>", ask-run()) }  # expect 2  (tree-walker currently prints 1)
 
 print("")
-print("=== EXPECTED: d6a=1 d6b=2 d17a=1 d17b=2 on BOTH backends ===")
+print("=== EXPECTED: d6a=1 d6b=2 d17a=1 d17b=2 ===")

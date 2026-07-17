@@ -11,31 +11,23 @@ the semantics these parts must honor.
 flowchart TD
     src([source text])
     reader[reader]
-    walker["tree-walker (evaluator.ml)<br/>← the oracle"]
+    walker["tree-walker evaluator (evaluator.ml)"]
     runtime["shared runtime state (runtime.ml)<br/>handler stack, capabilities,<br/>config, thunk store"]
-    compiler[compiler]
-    vm["bytecode VM (vm.ml)"]
 
     src --> reader
     reader -- "expr (AST)" --> walker
-    reader -- expr --> compiler
-    compiler -- bytecode --> vm
     runtime <--> walker
-    runtime <--> vm
 ```
 
-pp has one front end and two back ends: the reader turns source text into
-an `expr` AST, the tree-walker interprets it directly, and the compiler
-instead turns it into bytecode for the VM.
+pp has one front end and one engine: the reader turns source text into an
+`expr` AST, and the tree-walker evaluates it directly.
 
-Both back ends share one pool of runtime state and one set of data types
-and hashing definitions, letting pp run them against each other — using
-`--diff` and the fuzzer — and check that they agree.
+The tree-walker is the reference implementation — the oracle. Correctness is
+checked by a metamorphic fuzzer (see [TESTING.md](TESTING.md)): it generates
+semantics-preserving program twins and asserts they produce identical output,
+plus a reader round-trip gate. This is the project's most valuable correctness
+check.
 
-The tree-walker is the simple, obviously correct reference — the oracle.
-The VM is the faster execution model. Any disagreement between the two is
-a bug. Differential testing catches it (see [TESTING.md](TESTING.md)):
-the project's most valuable correctness check.
 
 ## The data model (`types.ml`)
 
@@ -45,9 +37,8 @@ Everything hangs off a few mutually recursive types:
   application, `quote`/`force`/`delay`, `effect`/`perform`/`with-handler`,
   `node`/`defnode`, `module`/`import`/`load`, `island`, `with-config`/`config`,
   and type annotations and source locations.
-- `value`: the runtime representation. Covers nil, bool, int, float, string,
   keyword, symbol, pair, vector, map, set, closure, builtin, capability,
-  thunk, module-env-map, and bytecode.
+  thunk, and module-env-map.
 - `thunk`: a suspended computation. It holds a mutable status
   (`Unevaluated`, `Evaluating`, or `Evaluated`), a precomputed content hash,
   its expression and captured environment, and a persist flag (true for
@@ -56,11 +47,9 @@ Everything hangs off a few mutually recursive types:
   a precomputed, incrementally built `env_hash`, and a stable id, giving
   environment identity constant-time lookup instead of a recursive
   traversal.
-- `closure`: captured parameters, body, and environment in the tree-walker;
-  a bytecode offset and captured frames in the VM.
+- `closure`: captured parameters, body, and environment.
 - `capability`: an authority token for filesystem, network, process,
   compose, restrict, or none.
-- `frame`: the VM's mutable, growable array of local variables.
 
 `types.ml` also holds the content-addressing logic: `hash_value`,
 `hash_expr`, `hash_capability`, and the incremental `env_hash`
@@ -94,18 +83,14 @@ self-reference as an infinite-recursion error, and switches from the native
 OCaml stack to a heap-allocated trampoline past a depth threshold, so deep
 chains do not overflow.
 
-Application is strict — call-by-value: a function's arguments are forced
-before its body runs. Tail calls run in constant stack space in both back
-ends. The tree-walker uses CPS continuations; the VM uses a `TAIL_CALL`
-frame-swap.
+before its body runs. Tail calls run in constant stack space, using CPS
+continuations.
 
 ## Effects and capabilities
 
 - Effects: `perform` looks up a dynamic handler stack, falling back to
   builtins such as `read-file`, `write-file`, and `log` when unhandled.
-  `with-handler`, `effect`, and `with-config` push and pop that state,
-  restoring it on normal return, on exception, and on tail call, in both
-  back ends.
+  restoring it on normal return, on exception, and on tail call.
 - Capabilities (`capability.ml`): authority tokens for filesystem,
   network, and process access. They enter the system only at the root,
   through `--grant`, which `main.ml` parses into the initial capability set.
@@ -114,38 +99,15 @@ frame-swap.
   `slurp` calls are checked at perform time, against the full path, matched
   component by component.
 
-## The VM path (`compiler.ml`, `vm.ml`)
-
-`compiler.ml` lowers the `expr` AST to a flat array of stack-machine
-opcodes. These run on a stack machine, using `LOAD_LOCAL (depth, slot)` and
-`STORE_LOCAL slot` against mutable frames.
-
-The compiler tracks a compile-time environment, `cenv`, to resolve names to
-`(depth, slot)` pairs. Reusing a slot across binding lifetimes while a
-captured frame is still live is a soundness trap the slot allocation
-avoids.
-
-`vm.ml` executes the opcodes. It creates thunks with `MAKE_THUNK` and
-closures with `MAKE_CLOSURE` that capture live frames. Effect dispatch,
-capability extraction, type checks, and node forcing all delegate to
-`evaluator.ml`.
-
-The VM compiles `ENode` to a dedicated `MAKE_NODE` opcode, carrying the body
-AST and free-variable descriptors, and forces it through the same
-persistent store as the tree-walker.
-
 ## Shared state (`runtime.ml`)
 
-Both back ends read and write one set of module-global references: the
+The engine reads and writes one set of module-global references: the
 handler stack, the current capability set, the config stack, the thunk
 store, and the trace-frame stack nodes push while forcing so world-reads
 land in the right trace. This also covers the initial `--grant`
 capabilities, the registry of scripting-tier fenced actions
 (`Runtime.fenced_actions`), and the unknown-status policy
 (`Runtime.fenced_policy`).
-
-Consolidating this state into one `Runtime` module removed a class of
-parity bugs from separate per-backend copies drifting apart.
 
 ## The persistent node cache (`store.ml`)
 
@@ -179,12 +141,6 @@ the trace depends on, checked by `Store.hit ~authorized` and
 `cell_authorized` (SPEC law 23b). A capability denial, `Capability_error`,
 is never memoized.
 
-The VM shares this store. `MAKE_NODE` records the free-variable
-descriptors the compiler resolved. `vm_node_key` rebuilds the same node key
-from the captured frames and globals; for data free variables this is
-byte-identical to the tree-walker's key, so the two back ends share
-entries. `force_node_thunk` runs the same hit, verify, trace, failure, and
-capability logic as the tree-walker.
 
 With `pp --watch --stabilize`, the reverse-edge index built by
 `Store.build_reverse_index` maps changed cells to dirty node keys.
@@ -208,9 +164,8 @@ Resolution serves only the immutable cached tree at
 `~/.pp/islands/src/<pin>/`, re-verified against the pin on every resolve;
 tampering is a hard error.
 
-Both back ends evaluate the pinned `entry.pp` as a module, with `VEnvMap`
-exports: the tree-walker through `EIsland`, the VM through a dedicated
-`ISLAND` opcode. An unpinned form is a hard error that names the fix.
+The tree-walker evaluates the pinned `entry.pp` as a module, with `VEnvMap`
+exports through `EIsland`. An unpinned form is a hard error that names the fix.
 `pp --update` re-resolves the source, re-hashing a file island or fetching
 a git island, and rewrites the pins, refusing to run rather than
 half-write the source on any ambiguity.
@@ -226,8 +181,7 @@ The source splits into two dune libraries. `pp.kernel` is pure — no Unix,
 no side effects — and holds the types, hashing, and the closed vocabulary
 everything else is checked against. `pp` builds on it and may touch the
 world (files, processes, the network). `main.ml` is the thin entry point;
-`tools/fuzz.ml` is the differential fuzzer.
-
+`tools/fuzz.ml` is the metamorphic fuzzer.
 ### Kernel (`pp.kernel`, pure)
 
 | File | Role |
@@ -241,7 +195,7 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/paths.ml` | The one component-boundary path-containment predicate, `Paths.under`, behind capability scopes, loader authority, and domain bounds. |
 | `src/cell.ml` | The typed cell taxonomy: the `Cell.t` variant plus `of_string` and `to_string`, with the on-disk strings frozen — naming only; observation and authority live in `store.ml` and `evaluator.ml`. |
 | `src/surface_tables.ml` | The closed surface sets (sigils, observation heads, lowering templates) as data, plus the renderer for SPEC's generated block. |
-| `src/capability.ml` | Authority tokens and the scope checks (filesystem, network, process, secret), matched path component by component. |
+| `src/types.ml` | All core types: `expr`, `value`, `thunk`, `env`, `closure`, `capability`, plus the structural content-addressed hashing (`hash_value`, `hash_expr`, `env_hash`) — the foundation of the codebase. |
 | `src/desugar.ml` | Reader-level desugars shared by both readers (SPEC Appendix B). |
 | `src/comments.ml` | The side channel `pp fmt` uses to carry comments across a surface transpile. |
 | `src/cap_token.ml` | Signed capability grants — cluster tokens — for cross-machine authority. |
@@ -257,14 +211,12 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/reader_braces.ml` | The brace-surface parser (`.pp`/`.ppb`, SPEC Appendix B) to the same `expr` AST. |
 | `src/printer_braces.ml` | Renders an `expr` back to brace-surface text: the `pp fmt --to-braces` half. |
 | `src/printer_sexpr.ml` | Renders an `expr` back to s-expression text: the `--to-sexpr` half. |
-| `src/runtime.ml` | Shared mutable runtime state used by both back ends. |
-| `src/evaluator.ml` | The tree-walking evaluator, and the project's oracle, holding `force`, `eval`, effects, the `thunk_store`, and the shared node rebuilder (`force_node`, `run_node_body`) both back ends use. |
+| `src/runtime.ml` | The mutable runtime state used by the engine. |
+| `src/evaluator.ml` | The tree-walking evaluator, the project's sole engine, holding `force`, `eval`, effects, the `thunk_store`, and the node rebuilder (`force_node`, `run_node_body`). |
 | `src/macro.ml` | `defmacro` expansion: a function from syntax-as-values to syntax, run at the expansion boundary. |
-| `src/compiler.ml` | Turns the `expr` AST into bytecode, also running the compile-time environment and slot allocation. |
-| `src/vm.ml` | The bytecode stack machine: effect dispatch, type checks, and node forcing all delegate to `evaluator.ml`, so one implementation serves both back ends. |
 | `src/primitives.ml` | Built-in functions and the initial environment. |
-| `src/node.ml` | The node-key skeleton and the one node rebuilder both back ends share. |
-| `src/store.ml` | The persistent content-addressed store and its verifying traces, wired into `force` for `node { e }` in both back ends. |
+| `src/node.ml` | The node-key skeleton and the node rebuilder. |
+| `src/store.ml` | The persistent content-addressed store and its verifying traces, wired into `force` for `node { e }`. |
 | `src/store_gc.ml` | Explicit `pp gc`: mark-by-replay over the recent epochs, sweep the rest — never automatic. |
 | `src/gcroots.ml` | The GC roots manifest naming the epochs `pp gc` marks from. |
 | `src/journal.ml` | The append-only intent and done audit log: a typed `entry` variant, `to_line` and `of_line`, and the scanners that find fenced-effect entries (SPEC law 31). |
@@ -277,7 +229,7 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/remote.ml` | Remote placement: dispatches a batch of node misses to a named cluster member over the transport. |
 | `src/transport.ml` | Cross-machine sync of hash-named store artifacts, plus the capability-gated serve-hit path. |
 | `src/stabilize.ml` | The push scheduler: a side table from `node_key` to `thunk`, plus dirty reset. The reverse-edge index itself lives in `store.ml`. |
-| `src/repl.ml` | REPL and file-execution helpers for both back ends. |
+| `src/repl.ml` | REPL and file-execution helpers. |
 | `src/kernel_props.ml` | Derived generators and the kernel properties (hash injectivity, quote/printer round-trip) the fuzzer checks. |
 | `src/lint.ml` | The convention checker for pp source files. |
 | `src/fswalk.ml` | One shared filesystem tree walk for its several callers. |
@@ -286,8 +238,8 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 
 | File | Role |
 |---|---|
-| `src/main.ml` | The CLI entry point: the one typed flag table, `--grant` parsing, and dispatch to the REPL, a file, `-e`, or `--diff`. |
-| `tools/fuzz.ml` | The differential fuzzer, described in [TESTING.md](TESTING.md). |
+| `src/main.ml` | The CLI entry point: the one typed flag table, `--grant` parsing, and dispatch to the REPL, a file, or `-e`. |
+| `tools/fuzz.ml` | The metamorphic fuzzer, described in [TESTING.md](TESTING.md). |
 
 ## CLI surface (`main.ml`)
 

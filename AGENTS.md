@@ -1,8 +1,7 @@
 # AGENTS.md
 
 pp is a content-addressed, capability-scoped language, written in OCaml. It
-has two back ends, a tree-walker (the oracle) and a bytecode VM, that must
-produce identical output.
+has a single tree-walking evaluator engine.
 
 ## Commands
 
@@ -10,13 +9,12 @@ produce identical output.
 dune build            # builds bin/pp and the fuzzer
 dune runtest          # differential suite (slow — see docs/TESTING.md)
 pp file.pp            # bin/pp is on PATH via direnv; else `opam exec -- dune exec pp --`
-pp --diff file.pp     # run both back ends, fail on divergence
 ```
 
 ## Invariants
 
-- The two back ends must agree. After touching `evaluator.ml`, `compiler.ml`,
-  `vm.ml`, or `types.ml`, run `--diff` and the fuzzer.
+- After touching `evaluator.ml`, `types.ml`, or `store.ml`, run the fuzzer
+  (`dune exec ./tools/fuzz.exe -- --grammar full --count 2000`) and the suite.
 - A content key must include everything the computation depends on. If you
   touch hashing or thunk keys, keep `tests/009` passing. If you touch the
   store, traces, or node keying, keep `tests/010` to `tests/024` passing.

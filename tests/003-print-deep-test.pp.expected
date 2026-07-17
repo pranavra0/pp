@@ -1,0 +1,25 @@
+"=== 1. Print lazy list (map result) ==="
+(2 3 4 5 6)
+""
+"=== 2. Print filtered list ==="
+(2 4 6)
+""
+"=== 3. Print range (take) ==="
+(10 11 12 13 14)
+""
+"=== 4. Print vector ==="
+[1 2 7 30]
+""
+"=== 5. Print map ==="
+{:a 3, :b 200}
+""
+"=== 6. Print nested structures ==="
+((1 2) (3 4))
+""
+"=== 7. force-deep on simple values ==="
+"force-deep 42:"42
+"force-deep nil:"nil
+"force-deep \"hello\":""hello"
+""
+"=== ALL TESTS PASSED ==="
+# exit: 0

@@ -4,7 +4,7 @@
 # --grant (filesystem/network/process are not user-code constructors any
 # more), and in-language attenuation (cap-restrict/cap-compose/with-caps) can
 # only narrow what's already held, never widen or invent authority.
-# Runs both backends and compares their verdicts.
+# Runs the tree-walker on every case.
 set -euo pipefail
 PP=${PP:-bin/pp}
 TMP=$(mktemp -d)
@@ -13,24 +13,20 @@ trap 'rm -rf "$TMP"' EXIT
 # tests/011/013/017 do. Harmless for the pre-existing scripting-tier cases
 # above, which never touch ~/.pp/store.
 export HOME="$TMP"
+fail=0
+ok()  { echo "ok   $1"; }
+bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
 
 run_case() {
   local name="$1"; shift
   local expected="$1"; shift
-  local tw_out="$TMP/tw-$name.out"
-  local bc_out="$TMP/bc-$name.out"
-  "$PP" "$@" > "$tw_out" 2>&1 || true
-  "$PP" --bytecode "$@" > "$bc_out" 2>&1 || true
-  local tw_ok=false
-  local bc_ok=false
-  grep -qE "$expected" "$tw_out" && tw_ok=true
-  grep -qE "$expected" "$bc_out" && bc_ok=true
-  if $tw_ok && $bc_ok; then
+  local out="$TMP/out-$name.out"
+  "$PP" "$@" > "$out" 2>&1 || true
+  if grep -qE "$expected" "$out"; then
     echo "ok $name"
   else
-    echo "FAIL $name: expected '$expected' in both backends"
-    echo "--- tree-walker ---"; cat "$tw_out"
-    echo "--- bytecode ---"; cat "$bc_out"
+    echo "FAIL $name: expected '$expected'"
+    cat "$out"
     return 1
   fi
 }
@@ -80,17 +76,14 @@ run_case cap-ops "restricted:" "$TMP/cap-ops.pp"
 #     which is still exactly "cannot be read back into a capability by any
 #     means". Sentinels on both sides confirm the line in between is
 #     swallowed without incident (no value, no binding, no error). ---
-out_tw=$("$PP" -e 'print("before")
-#<cap compose 1>
-print("after")' 2>&1)
-out_bc=$("$PP" --bytecode -e 'print("before")
+out=$("$PP" -e 'print("before")
 #<cap compose 1>
 print("after")' 2>&1)
 want=$'"before"\n"after"\nnil\nnil'
-if [ "$out_tw" = "$want" ] && [ "$out_bc" = "$want" ]; then
-  echo "ok forge-from-print-inert"
+if [ "$out" = "$want" ]; then
+  ok "forge-from-print-is-comment"
 else
-  echo "FAIL forge-from-print-inert: tw='$out_tw' bc='$out_bc'"
+  bad "forge-from-print-is-comment" "got: $(printf '%q' "$out")" "want: $(printf '%q' "$want")"
 fi
 
 # --- compose-does-not-resurrect: two narrowed views of the SAME broad root,
@@ -132,19 +125,13 @@ printf 'SECRETDATA\n' > "$TMP/wcex/secret/s.txt"
 
 run_repl_case() {  # NAME  INPUT  EXPECTED_REGEX  [extra pp args...]
   local name="$1" input="$2" expected="$3"; shift 3
-  local tw_out="$TMP/tw-$name.out"
-  local bc_out="$TMP/bc-$name.out"
-  printf '%s\n' "$input" | "$PP" "$@" > "$tw_out" 2>&1 || true
-  printf '%s\n' "$input" | "$PP" --bytecode "$@" > "$bc_out" 2>&1 || true
-  local tw_ok=false bc_ok=false
-  grep -qE "$expected" "$tw_out" && tw_ok=true
-  grep -qE "$expected" "$bc_out" && bc_ok=true
-  if $tw_ok && $bc_ok; then
+  local out="$TMP/out-$name.out"
+  printf '%s\n' "$input" | "$PP" "$@" > "$out" 2>&1 || true
+  if grep -qE "$expected" "$out"; then
     echo "ok $name"
   else
-    echo "FAIL $name: expected '$expected' in both backends"
-    echo "--- tree-walker ---"; cat "$tw_out"
-    echo "--- bytecode ---"; cat "$bc_out"
+    echo "FAIL $name: expected '$expected'"
+    cat "$out"
     return 1
   fi
 }

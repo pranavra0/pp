@@ -31,7 +31,7 @@ same at the top level, and also defines functions.
 
 A function definition and a function value are the same idea written two ways.
 `def` names one; `fn` produces one anonymously. There is no loop keyword:
-recursion is the loop. Both back ends eliminate tail calls, so recursion does
+recursion is the loop. The tree-walker eliminates tail calls, so recursion does
 not grow the stack.
 
 #example("lang-functions")

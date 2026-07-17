@@ -118,15 +118,6 @@ if [ "$iter_fail" -eq 0 ]; then
   ok "stress64-$ITERS-cold-iterations (every object/trace round-trips, sum=$EXPECTED_SUM each time)"
 fi
 
-# VM parity: `map` applies a VM-compiled closure via its bytecode, not the
-# tree-walker's `apply` over the closure's dummy `ELiteral VNil` body (a VM
-# closure's real code lives in vm_bc/vm_offset — routing it through the
-# tree-walker's apply would silently return VNil for every mapped element).
-rm -rf "$TMP/.pp"
-bc_out=$("$PP" --bytecode --grant process --schedule parallel:16 "$TMP/stress64.pp" 2>"$TMP/stress-bc.err")
-if [ "$bc_out" = "$EXPECTED_SUM" ]; then ok "stress64-bytecode-parallel-correct-sum"
-else bad "stress64-bytecode-parallel-correct-sum" "got '$bc_out', expected $EXPECTED_SUM" "$(cat "$TMP/stress-bc.err")"; fi
-
 # One cold run's journal: exactly 64 parseable exec lines (N concurrent
 # journal appends -> N lines, none torn/merged by Journal.append's hardened
 # single write_substring on an O_APPEND fd).

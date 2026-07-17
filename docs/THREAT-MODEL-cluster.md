@@ -208,7 +208,7 @@ rather than a true single-process, dual-store setup.
   placement is a later part of this feature, so this document proves the
   claim only for what this document's own tests cover: syncing, not
   scheduling where code runs. This is the placement half of the wider
-  invariance argument that already holds across backends and schedulers: a
+  invariance argument that already holds across schedulers: a
   node built independently on a third, never-synced member computes the
   same key as everywhere else, because identity is a hash of the code and
   the free variables' value hashes, independent of where it is computed

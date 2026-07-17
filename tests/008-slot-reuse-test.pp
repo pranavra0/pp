@@ -1,21 +1,17 @@
-# Regression: VM local-slot reuse across a lazily-forced thunk.
+# Regression: local-slot reuse across a lazily-forced thunk.
 #
-# The VM frame is a single mutable array shared with every thunk/closure that
-# captures it. The compiler used to truncate the compile-time frame when a
+# The evaluator frame is a single mutable array shared with every thunk/closure
+# that captures it. The compiler used to truncate the compile-time frame when a
 # scope exited, letting a later binding REUSE a slot index. A nested `let`
 # inside a `let*` binding RHS is compiled into a thunk; when that thunk was
 # forced later, its STORE_LOCAL wrote into the slot the sibling binding had
-# reused, clobbering it — so the VM returned the inner let's value instead of
-# the sibling's. The tree-walker (immutable env chains) was always correct.
-#
-# `dune runtest` runs every file under BOTH backends and diffs the output, so any
-# reintroduction of the divergence fails this test. Fixed by reserving slots
-# for a frame's whole lifetime (compiler.ml extend_cenv: mark-dead, not
-# truncate).
+# reused, clobbering it — returning the inner let's value instead of
+# the sibling's. Fixed by reserving slots for a frame's whole lifetime
+# (compiler.ml extend_cenv: mark-dead, not truncate).
 
 print("=== nested let in let* binding, captured by a closure ===")
 # x2's RHS contains a nested let; x2 is then captured by fn(x3) { x2 }.
-# Correct answer: -1  (VM used to print 0 = the inner let's x5).
+# Correct answer: -1  (the bug returned 0 = the inner let's x5).
 print("a =>", let* (x1 = 31, x2 = let (x5 = 0) { x5 } - 1) {
   (
 fn(x3) { x2 })(x2)

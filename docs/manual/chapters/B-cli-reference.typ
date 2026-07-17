@@ -8,7 +8,7 @@ It comes from the argument parser in `src/main.ml`. Where the built-in
 internal are dispatch machinery that `pp` invokes on itself. They are here for
 completeness; you should not need to type them by hand.
 
-Flags compose the way you would expect: `--bytecode`, `--grant`, `--schedule`,
+Flags compose the way you would expect: `--grant`, `--schedule`,
 and `--watch` all layer onto whichever run mode you pick. Anything after a bare
 `--` becomes the program's own argument vector, which you read with `argv()`.
 
@@ -23,7 +23,7 @@ and `--watch` all layer onto whichever run mode you pick. Anything after a bare
   [`pp`], [Start the REPL (tree-walker).],
   [`pp <file.pp>`], [Read and run a source file; the program's value is its last top-level form.],
   [`pp run <file>`], [Same as `pp <file>` — `run` is an explicit subcommand spelling.],
-  [`pp -e '<expr>'`], [Evaluate one expression string and print each top-level value. Not compatible with `--diff`.],
+  [`pp -e '<expr>'`], [Evaluate one expression string and print each top-level value.],
   [`pp --once <file.pp>`], [Run once and exit. A no-op: this is already the default; the flag is for symmetry with `--watch`.],
   [`pp -- <args…>`], [Everything after `--` becomes the program's argv, read via the `argv()` builtin.],
   [`pp --version`, `pp -v`], [Print the version and exit.],
@@ -32,18 +32,18 @@ and `--watch` all layer onto whichever run mode you pick. Anything after a bare
 
 == Back ends
 
-pp has two interpreters over one shared store. The tree-walker is the default;
-`--bytecode` selects the VM. Both eliminate tail calls and share the same node
-cache, so a program's value is identical either way.
+pp has a single tree-walking interpreter over the content-addressed store.
+Tail calls run in constant stack, and node results persist across runs.
 
 #table(
-  columns: (auto, 1fr),
-  inset: (x: 6pt, y: 4pt),
+  columns: 2,
+  stroke: none,
+  inset: 8pt,
   align: (left, left),
-  stroke: (x: none, y: 0.5pt + luma(220)),
   table.header([*Flag*], [*Meaning*]),
-  [`--bytecode <file.pp>`], [Run via the bytecode VM instead of the tree-walker.],
-  [`--diff <file.pp>`], [Run the file on both back ends and compare every top-level value. Implies `--bytecode`; exits 1 on any mismatch, printing both sides. Not supported with `-e`.],
+  [`--once <file.pp>`], [Run once and exit (the default).],
+  [`--watch <file.pp>`], [Run, then re-run when observed cells change.],
+  [`--reconcile <root> <file.pp>`], [Treat the program's final value as a desired file tree and converge `<root>` to it.],
 )
 
 == Capabilities and grants

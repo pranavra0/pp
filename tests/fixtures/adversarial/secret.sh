@@ -6,8 +6,7 @@
 #   - the sealed bytes leaking to stdout as plaintext.
 # Escapes must be DENIED (canonicalization before the CapSecret containment
 # check, exactly like $file); a legitimate read must print the REDACTED form
-# ("#<sealed>"), never the plaintext. Both backends must agree.
-set -uo pipefail
+# ("#<sealed>"), never the plaintext.
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
 SB=$(mktemp -d); OUT=$(mktemp -d)
@@ -22,34 +21,29 @@ OUT_BASE=$(basename "$OUT")
 fail=0
 
 deny() {  # NAME  EXPR
-  local name="$1" expr="$2" bad=0
-  for bk in "" "--bytecode"; do
-    local out
-    out=$("$PP" $bk --grant "secret:$SB" -e "$expr" 2>&1 || true)
-    if printf '%s' "$out" | grep -q "$PLAINTEXT"; then
-      echo "FAIL $name${bk:+ ($bk)}: LEAKED plaintext of an out-of-scope secret"; echo "     $out"; bad=1
-    elif printf '%s' "$out" \
-         | grep -qiE "permission denied|no read access|no read or write|symbolic links|error"; then
-      : # denied — defeated
-    else
-      echo "FAIL $name${bk:+ ($bk)}: neither denied nor errored:"; echo "     $out"; bad=1
-    fi
-  done
-  if [ $bad -eq 0 ]; then echo "ok   $name"; else fail=1; fi
+  local name="$1" expr="$2"
+  local out
+  out=$("$PP" --grant "secret:$SB" -e "$expr" 2>&1 || true)
+  if printf '%s' "$out" | grep -q "$PLAINTEXT"; then
+    echo "FAIL $name: LEAKED plaintext of an out-of-scope secret"; echo "     $out"; fail=1
+  elif printf '%s' "$out" \
+       | grep -qiE "permission denied|no read access|no read or write|symbolic links|error"; then
+    echo "ok   $name"
+  else
+    echo "FAIL $name: neither denied nor errored:"; echo "     $out"; fail=1
+  fi
 }
 
 # Positive control: an in-scope secret read succeeds but is REDACTED — the
 # plaintext must never appear even for a legitimately-granted read.
-pc=0
-for bk in "" "--bytecode"; do
-  out=$("$PP" $bk --grant "secret:$SB" -e "print(\$secret(\"$SB/k.txt\"))" 2>&1 || true)
-  if printf '%s' "$out" | grep -q "$PLAINTEXT"; then
-    echo "FAIL redaction${bk:+ ($bk)}: plaintext printed for a granted secret"; echo "     $out"; pc=1
-  elif ! printf '%s' "$out" | grep -q "sealed"; then
-    echo "FAIL redaction${bk:+ ($bk)}: expected a redacted #<sealed> value:"; echo "     $out"; pc=1
-  fi
-done
-if [ $pc -eq 0 ]; then echo "ok   redaction (granted read is #<sealed>, not plaintext)"; else fail=1; fi
+out=$("$PP" --grant "secret:$SB" -e "print(\$secret(\"$SB/k.txt\"))" 2>&1 || true)
+if printf '%s' "$out" | grep -q "$PLAINTEXT"; then
+  echo "FAIL redaction: plaintext printed for a granted secret"; echo "     $out"; fail=1
+elif ! printf '%s' "$out" | grep -q "sealed"; then
+  echo "FAIL redaction: expected a redacted #<sealed> value:"; echo "     $out"; fail=1
+else
+  echo "ok   redaction (granted read is #<sealed>, not plaintext)"
+fi
 
 deny symlink-escape "print(\$secret(\"$SB/link-out\"))"
 deny dotdot-escape  "print(\$secret(\"$SB/../$OUT_BASE/outside.txt\"))"

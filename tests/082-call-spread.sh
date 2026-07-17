@@ -1,21 +1,20 @@
 #!/usr/bin/env bash
 # tests/082 — C2: call spread. `f(a, ...rest, b)` — a spread anywhere in an
 # argument list — lowers to `apply(f, list(a), rest, list(b))`; the `apply`
-# primitive (evaluator + VM) concatenates the segments and calls f. Spread-free
-# calls keep the ordinary `EApply` shape. Checked on BOTH backends, plus a
-# quasiquote template (parity) and the bare `apply` primitive directly.
+# primitive (evaluator) concatenates the segments and calls f. Spread-free
+# calls keep the ordinary `EApply` shape. Checked, plus a quasiquote template
+# and the bare `apply` primitive directly.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 run_ok() {
   local name="$1" file="$2" expected="$3"
-  local got_tw got_bc
-  got_tw=$("$PP"            "$file" 2>&1)
-  got_bc=$("$PP" --bytecode "$file" 2>&1)
-  if [ "$got_tw" = "$expected" ] && [ "$got_bc" = "$expected" ]; then
+  local got
+  got=$("$PP" "$file" 2>&1)
+  if [ "$got" = "$expected" ]; then
     ok "$name"
   else
     bad "$name" "expected: $(printf '%q' "$expected")" \
-        "tw: $(printf '%q' "$got_tw")" "bc: $(printf '%q' "$got_bc")"
+        "got: $(printf '%q' "$got")"
   fi
 }
 
@@ -91,16 +90,15 @@ print(callwith(1, xs))
 EOF
 run_ok "call-spread-in-quasiquote" "$TMP/qq.pp" '(1 2 3)'
 
-# (j) apply of a non-list segment errors cleanly on both backends.
+# (j) apply of a non-list segment errors cleanly.
 cat > "$TMP/bad.pp" <<'EOF'
 print(apply(list, 5))
 EOF
-got_tw=$("$PP" "$TMP/bad.pp" 2>&1 || true)
-got_bc=$("$PP" --bytecode "$TMP/bad.pp" 2>&1 || true)
-if [[ "$got_tw" == *error* ]] && [[ "$got_bc" == *error* ]]; then
+got=$("$PP" "$TMP/bad.pp" 2>&1 || true)
+if [[ "$got" == *error* ]]; then
   ok "apply-non-list-errors"
 else
-  bad "apply-non-list-errors" "tw: $got_tw" "bc: $got_bc"
+  bad "apply-non-list-errors" "got: $got"
 fi
 
 exit $fail

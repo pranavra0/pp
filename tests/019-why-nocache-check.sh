@@ -14,7 +14,7 @@
 #               body a second time and compare result hashes; a divergence
 #               flags the node as volatile and the run exits nonzero.
 #
-# Runs under an isolated HOME; both backends.
+# Runs under an isolated HOME; single engine.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -96,21 +96,7 @@ if run --check --grant process "$TMP/vol.pp"; then
 else echo "ok   check-volatile-exit"; fi
 assert "check-volatile-flagged" "volatile" present
 
-# --- (e) VM parity ---
-rm -rf "$TMP/.pp"
-printf 'V1\n' > "$WORK/data.txt"
-run --bytecode why --grant "fs:$WORK:ro" "$TMP/p.pp"
-assert "vm-why-first-build" "\[why\].*miss" present
-run --bytecode why --grant "fs:$WORK:ro" "$TMP/p.pp"
-assert "vm-why-hit"         "\[why\].*hit"  present
-run --bytecode --no-cache --grant "fs:$WORK:ro" "$TMP/p.pp"
-assert "vm-nocache"         "COMPUTE"       present
-rm -rf "$TMP/.pp"
-if run --bytecode --check --grant process "$TMP/vol.pp"; then
-  echo "FAIL vm-check-volatile-exit: expected nonzero exit"; cat "$TMP/out"; fail=1
-else echo "ok   vm-check-volatile-exit"; fi
-assert "vm-check-volatile"  "volatile"      present
-
 rm -rf "$TMP"
+
 if [ "$fail" -eq 0 ]; then echo "=== WHY / NO-CACHE / CHECK TEST PASSED ==="; fi
 exit $fail

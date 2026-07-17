@@ -10,7 +10,7 @@
 #   re-reconcile restores the tree from the store with ZERO tool re-runs —
 #   the desired map (node-cached) carries refs, the store carries bytes.
 #
-# Runs under an isolated HOME; both backends.
+# Runs under an isolated HOME; single engine.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -77,16 +77,6 @@ run --grant "fs:$OUT:rw" --reconcile "$OUT" "$TMP/bad.pp"
 assert "dangling-blob-errors" "blob" present
 if [ -f "$OUT/x" ]; then echo "FAIL dangling-not-written"; fail=1
 else echo "ok   dangling-not-written"; fi
-
-# --- (d) VM parity: build + restore under --bytecode ---
-rm -rf "$TMP/.pp" "$OUT"
-run --bytecode --grant "fs:$OUT:wo" --grant process --reconcile "$OUT" "$TMP/b.pp"
-assert "vm-build-compiles" "COMPILE" present
-check_file "vm-built"      "$OUT/a.o" "TOOL-OUT"
-rm -rf "$OUT"
-run --bytecode --grant "fs:$OUT:wo" --grant process --reconcile "$OUT" "$TMP/b.pp"
-assert "vm-restore-no-recompile" "COMPILE" absent
-check_file "vm-restored"   "$OUT/a.o" "TOOL-OUT"
 
 rm -rf "$TMP"
 if [ "$fail" -eq 0 ]; then echo "=== BLOB RECONCILE TEST PASSED ==="; fi

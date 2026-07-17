@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # pins: LAW-39
 # Sealed cells: a confidential read is a distinct value kind, banned at the
-# node boundary in both directions and both backends (SPEC law 39).
+# node boundary in both directions (SPEC law 39).
 #
 # `--grant secret:<path>` mints CapSecret. A read covered by CapSecret and
 # NOT by CapFilesystem returns VSealed instead of VString: print redacts
@@ -37,7 +37,7 @@ printf 'SECRETDATA\n' > "$TMP/secret/data.txt"
 SECRET="$TMP/secret/data.txt"
 
 # =====================================================================
-# (1) sealed read redacts on print; unseal round-trips — both backends
+# (1) sealed read redacts on print; unseal round-trips
 # =====================================================================
 cat > "$TMP/print-sealed.pp" <<EOF
 print(slurp("$SECRET"))
@@ -45,16 +45,13 @@ EOF
 cat > "$TMP/print-unsealed.pp" <<EOF
 print(unseal(slurp("$SECRET")))
 EOF
-for bc in "" "--bytecode"; do
-  tag=$([ -z "$bc" ] && echo tw || echo vm)
-  rm -rf "$TMP/.pp"
-  "$PP" $bc --grant "secret:$TMP/secret" "$TMP/print-sealed.pp" > "$TMP/out" 2>&1
-  assert "$tag-sealed-print-redacted"     "#<sealed>"  present
-  assert "$tag-sealed-print-no-leak"      "SECRETDATA" absent
-  rm -rf "$TMP/.pp"
-  "$PP" $bc --grant "secret:$TMP/secret" "$TMP/print-unsealed.pp" > "$TMP/out" 2>&1
-  assert "$tag-unseal-round-trips"        "SECRETDATA" present
-done
+rm -rf "$TMP/.pp"
+"$PP" --grant "secret:$TMP/secret" "$TMP/print-sealed.pp" > "$TMP/out" 2>&1
+assert "sealed-print-redacted"     "#<sealed>"  present
+assert "sealed-print-no-leak"      "SECRETDATA" absent
+rm -rf "$TMP/.pp"
+"$PP" --grant "secret:$TMP/secret" "$TMP/print-unsealed.pp" > "$TMP/out" 2>&1
+assert "unseal-round-trips"        "SECRETDATA" present
 
 # =====================================================================
 # (2) secret bytes NEVER under ~/.pp/store (recursive grep, whole store —
@@ -83,8 +80,7 @@ else
 fi
 
 # =====================================================================
-# (3) node boundary ban: free-var side and result side, both directions,
-#     both backends — and stderr BYTE-IDENTICAL between backends.
+# (3) node boundary ban: free-var side and result side, both directions
 # =====================================================================
 cat > "$TMP/ban-freevar.pp" <<EOF
 let s = slurp("$SECRET")
@@ -96,15 +92,8 @@ EOF
 
 for case_name in ban-freevar ban-result; do
   rm -rf "$TMP/.pp"
-  "$PP" --grant "secret:$TMP/secret" "$TMP/$case_name.pp" > "$TMP/tw-$case_name.err" 2>&1
-  rm -rf "$TMP/.pp"
-  "$PP" --bytecode --grant "secret:$TMP/secret" "$TMP/$case_name.pp" > "$TMP/bc-$case_name.err" 2>&1
-  assert "$case_name-names-sealed" "may not (be or contain a sealed value|return a sealed value)" present "$TMP/tw-$case_name.err"
-  if diff -u "$TMP/tw-$case_name.err" "$TMP/bc-$case_name.err" > "$TMP/diff-$case_name.out"; then
-    echo "ok   $case_name-stderr-identical-across-backends"
-  else
-    echo "FAIL $case_name-stderr-identical-across-backends"; cat "$TMP/diff-$case_name.out"; fail=1
-  fi
+  "$PP" --grant "secret:$TMP/secret" "$TMP/$case_name.pp" > "$TMP/$case_name.err" 2>&1
+  assert "$case_name-names-sealed" "may not (be or contain a sealed value|return a sealed value)" present "$TMP/$case_name.err"
 done
 
 # =====================================================================

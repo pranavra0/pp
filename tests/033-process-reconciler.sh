@@ -12,7 +12,7 @@
 #   Authority: --grant process is required. Start/stop operations are
 #   journaled intent/done pairs.
 #
-# Runs under an isolated HOME; both backends.
+# Runs under an isolated HOME; single engine.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -190,21 +190,7 @@ assert "stop-summary" "stopped=1" present "$TMP/out-stop"
 kill -0 "$PID_A" 2>/dev/null && { echo "FAIL stop-a: svc-a still alive"; fail=1; } \
   || echo "ok   stop-a"
 
-# --- (g) VM parity: bytecode backend supervises too ---
-rm -rf "$TMP/.pp"
-cat > "$TMP/supervise-vm.pp" <<EOF
-{"svc-vm" -> {"cmd" -> "$TMP/svc/run.sh", "args" -> ["$TMP/pid-vm"], "cwd" -> "$TMP"}}
-EOF
-"$PP" --bytecode --supervise --grant process \
-  "$TMP/supervise-vm.pp" > "$TMP/out-vm" 2>&1
-assert "vm-started" "started=" present
-wait_for 5 test -f "$TMP/pid-vm" || { echo "FAIL vm-pid: pidfile missing"; fail=1; }
-PID_VM=$(cat "$TMP/pid-vm")
-kill -0 "$PID_VM" 2>/dev/null && echo "ok   vm-alive" \
-  || { echo "FAIL vm-alive: pid $PID_VM not alive"; fail=1; }
-kill "$PID_VM" 2>/dev/null || true
-cleanup_services
-
 rm -rf "$TMP"
+
 if [ "$fail" -eq 0 ]; then echo "=== PROCESS RECONCILER TEST PASSED ==="; fi
 exit $fail

@@ -1,0 +1,20 @@
+"=== nested let in let* binding, captured by a closure ==="
+"a =>"-1
+""
+"=== nested let inside a collection literal in a binding ==="
+"b =>"-1
+""
+"=== two nested lets in sequential bindings, both captured ==="
+"c =>"33
+""
+"=== nested let in a mutual-let binding, captured ==="
+"d =>"4
+""
+"=== nested let in vector literal element, later var captured ==="
+"e =>"7
+""
+"=== deeper nesting: let inside let inside let* binding ==="
+"f =>"42
+""
+"=== ALL TESTS PASSED ==="
+# exit: 0

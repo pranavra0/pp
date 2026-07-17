@@ -1,0 +1,16 @@
+"=== 1. with-config reads keys ==="
+"name =>""pp"
+"version =>"2
+""
+"=== 2. config missing with default ==="
+"missing default =>""fallback"
+""
+"=== 3. config missing without default ==="
+"missing nil =>"nil
+""
+"=== 4. nested with-config shadows outer key ==="
+"nested x =>""inner"
+"nested y =>""outer-y"
+""
+"=== ALL TESTS PASSED ==="
+# exit: 0

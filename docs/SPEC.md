@@ -5,19 +5,18 @@
 > have described aspirations as facts before, and this document exists partly
 > to stop that. Every law carries an explicit status marker:
 >
-> - holds: both backends already satisfy it, verified by tests or the
->   differential fuzzer.
-> - partial: one backend satisfies it, or the mechanism exists but is buggy or
->   incomplete. The prose cites the matching change-log entry in
->   [STATUS.md](STATUS.md) or the fuzzer signature.
+> - holds: the tree-walker satisfies it, verified by tests or the
+>   metamorphic fuzzer.
+> - partial: the mechanism exists but is buggy or incomplete. The prose
+>   cites the matching change-log entry in [STATUS.md](STATUS.md) or the
+>   fuzzer signature.
 > - unimplemented: a target only. Nothing in `src/` does this yet.
 >
-> The enforcement mechanism is the differential fuzzer (`tools/fuzz.ml`; see
-> [TESTING.md](TESTING.md)) plus `tests/*.pp` run under both backends. Every
-> law is written so a program could falsify it, and every law's test must
-> pass identically in both backends (tree-walker and VM). The project did not
-> declare its first build phase complete until every law marked holds below
-> had a passing test and no law was silently violated.
+> The enforcement mechanism is the metamorphic fuzzer (`tools/fuzz.ml`; see
+> [TESTING.md](TESTING.md)) plus the expected-output test suite. Every law is
+> written so a program could falsify it. The project did not declare its first
+> build phase complete until every law marked holds below had a passing test
+> and no law was silently violated.
 >
 > Law-linkage gate (`tests/072`). A holds claim is not self-certifying:
 > `tests/072-law-pins.sh` cross-references every LAW id here against the
@@ -104,7 +103,7 @@ language-wide prohibition.
 Status of the tier split itself: partial. The `node`/`defnode` reader forms
 exist, and `node { e }` is a real persistence boundary: the tree-walker
 routes it through `~/.pp/store` with verifying traces, so a node caches
-across runs while a scripting-tier expression does not. Both backends now
+across runs while a scripting-tier expression does not. They
 share the same store. Still missing before the split is fully realised:
 `node f(x) { body }` is only a named closure, so node application is not yet
 keyed on argument-value hashes (LAW 6/20), though `node x { e }` now binds
@@ -144,12 +143,12 @@ tree depth. Mutual scope is the only choice under which "order from
 dependencies, not position" is true inside a binding form, not just between
 top-level nodes.
 
-**Status: holds** — both backends now build a mutual environment for `ELet`
+**Status: holds** — the engine builds a mutual environment for `ELet`
 bindings; sibling references evaluate correctly and reordering independent
 bindings does not change the result (`tests/007-phase0-laws.pp`, fuzzer `full`
 grammar).
 
-Test: `let (y = x + 1, x = 1) { y }` gives `2` in both backends; reordering
+Test: `let (y = x + 1, x = 1) { y }` gives `2` ; reordering
 the bindings must not change the result.
 
 ### [LAW 2] Evaluation order within a scope is derived from dependencies; genuine cycles are force-time errors
@@ -173,13 +172,13 @@ strictness exists to protect cached nodes; a local binding is not one. An
 unreferenced binding never runs.
 
 **Status: partial** — mutually recursive functions work; direct cycles are
-caught deterministically by the `Evaluating` marker in both backends, but the
+caught deterministically by the `Evaluating` marker in  but the
 reported error is the generic "infinite recursion detected" rather than a
 named cycle.
 
 Test: `let (even? = fn(n) { if n = 0 { true } else { odd?(n - 1) } }, odd? = fn(n) { if n = 0 { false } else { even?(n - 1) } }) { even?(10) }`
-evaluates to `true` in both backends. `let (a = b, b = a) { a }` gives a
-deterministic cycle error identically in both backends.
+evaluates to `true` . `let (a = b, b = a) { a }` gives a
+deterministic cycle error identically .
 
 ### [LAW 3] Binding order is not part of a computation's identity
 
@@ -244,27 +243,27 @@ follow, exactly as re-`let`-ing a name in nested lets would. This is the one
 place LAW 4's rule that a duplicate definition in a block is a read error
 does not apply — `try` statements are sequential lets, not a letrec* block of
 `def`s. This is pinned by a differential test that rebinds a `<-` name twice
-and checks that later uses see the shadowing value on both backends
+and checks that later uses see the shadowing value 
 (`tests/065-try-rebind-shadow.sh`).
 
 **Status: partial** — top-level and `do`-block `def`s are mutually recursive
-in both backends (they share a mutable global scope), and value defs behave
-identically in both backends including the letrec* poison error
+(they share a mutable global scope), and value defs behave
+identically including the letrec* poison error
 (`tests/025-def-value.sh`, fuzzer `stmt_def_value`). The earlier
-VM/tree-walker module-body divergence is now fixed: the VM resolves
+tree-walker module-body divergence is now fixed: the evaluator resolves
 module-body sibling references — function defs, value defs, and bare
 statements — through local slots in the module's own fresh frame, matching
 the tree-walker's own scope-building fold (`tests/039-vm-global-scope.pp`,
 fuzzer `stmt_module_sibling`). A module is still its own fresh scope in both
 backends, not literally "a bigger `let`" nested in the surrounding scope, so
 "one scope model everywhere" does not yet hold in LAW 4's strong sense — only
-the VM/tree-walker parity gap is closed, not the module-isolation-versus-`let`
+the tree-walker parity gap is closed, not the module-isolation-versus-`let`
 unification itself.
 
 Test: a module whose first `def` calls its second behaves identically to
-the same two `def`s at top level, in both backends; `load-module` without
+the same two `def`s at top level, ; `load-module` without
 `import` leaves the caller's scope untouched in both; `let x = 5` followed by
-`print(x)` prints `5` in both backends (`tests/025`).
+`print(x)` prints `5` (`tests/025`).
 
 ### [LAW 5] `let*` survives only as explicit sequential sugar
 
@@ -280,11 +279,11 @@ Grounding: sequence is sometimes the true structure — a REPL session is a
 sequence. The law keeps that expressible while refusing to make it the
 default meaning of binding.
 
-**Status: holds** — the reader emits `ELetStar`; both backends evaluate it
+**Status: holds** — the reader emits `ELetStar`; the engine evaluates it
 sequentially and agree on shadowing (`tests/007-phase0-laws.pp`, fuzzer
 `core` and `full` grammars).
 
-Test: `let* (x = 1, x = x + 1) { x }` evaluates to `2` in both backends
+Test: `let* (x = 1, x = x + 1) { x }` evaluates to `2` 
 (shadowing, strictly sequential visibility).
 
 ---
@@ -315,14 +314,14 @@ is not the model here; Nix's rule that a derivation's inputs are realised
 before it builds is.
 
 **Status: partial** — `node { e }` exists and memoizes persistently under the
-LAW 20 key in both backends, and `node x { e }` binds its node thunk; but
+LAW 20 key and `node x { e }` binds its node thunk; but
 `node f(x) { body }` is still only a named closure, so node application
 keyed on argument value hashes, the aggregator-forces-children construction,
 does not yet arise.
 
 Test: once applied `defnode` lands: a `defnode` whose argument expression
 logs, called once, logs exactly once before the body's first effect, in
-both backends.
+the engine.
 
 ### [LAW 7] Laziness is demand-pruning at node granularity
 
@@ -344,7 +343,7 @@ explicit wanted-set, so demand-pruning remains pull-mode "re-force from root"
 rather than a declared target set.
 
 Test: a root demanding 1 of a manifest's 3 children executes exactly 1
-child (journal/trace proves it), in both backends.
+child (journal/trace proves it), .
 
 ### [LAW 8] `delay`/`force` is ephemeral, in-memory laziness — a different thing from `node`
 
@@ -358,15 +357,13 @@ Excel draws the same distinction: a formula cell is recalculated and tracked,
 but a spilled intermediate value that nobody addresses is not.
 
 **Status: partial** — the persistent/ephemeral split now exists in both
-backends: `node { e }` persists to `~/.pp/store` (tree-walker via `thunk_persist`,
-VM via the `MAKE_NODE` opcode) while `delay(e)` never does. Remaining wart: the
+backends: `node { e }` persists to `~/.pp/store` while `delay(e)` never does. Remaining wart: the
 tree-walker also routes ordinary `delay`/`let` thunks through its in-memory
-content-addressed dedup table rather than the persistent store, and the VM
-has no in-memory dedup at all — neither affects the persistent node cache.
+content-addressed dedup table rather than the persistent store, which does not affect the persistent node cache.
 
 Test: `force(delay(42))` evaluates to `42`; `force(42)` evaluates to `42`;
 a delayed computation's effect fires at most once across two forces —
-identical in both backends.
+identical .
 
 ### [LAW 9] `if` evaluates exactly one branch
 
@@ -379,7 +376,7 @@ system that speculatively evaluates both arms of a conditional is Make, not
 Excel.
 
 **Status: holds** — condition forced, branches in tail position in the
-tree-walker; compile-to-jumps in the VM; exercised by the fuzzer's `core`
+tree-walker; eval in the tree-walker; exercised by the fuzzer's `core`
 grammar.
 
 Test: `if true { 1 } else { undefined-symbol }` evaluates to `1` in both
@@ -388,16 +385,15 @@ backends; the untaken branch's `perform log(…)` produces no stderr in either.
 ### [LAW 10] Tail calls run in constant stack
 
 A tail-recursive computation runs at unbounded depth (at least a million
-calls deep) without stack growth, in both backends.
+calls deep) without stack growth, .
 
 Grounding: a language proposing to be the operating system cannot have "your
 service loop overflowed" as part of its semantics. Loops are recursion, and
 recursion must be safe.
 
 **Status: holds** — CPS `eval_tail`/`apply_tail` in the tree-walker,
-`TAIL_CALL` frame-swap in the VM. Caveat: a tail call inside
+CPS continuations in the tree-walker. Caveat: a tail call inside
 `effect`/`with-handler`/`with-config` currently skips the matching scope-exit
-in the VM — that hazard belongs to LAW 24, not to this law's tail-call
 guarantee.
 
 Test: a tail-recursive countdown from a million evaluates to `0` in both
@@ -418,8 +414,7 @@ workstream from the project's first build phase; the fuzzer's deep-recursion
 arm currently produces `exitdiff:tw-err: Out_of_memory` and
 `crash:bc:timeout` signatures.
 
-Test: `length(map(inc, range(0, 1000000)))` evaluates to `1000000` in
-both backends (the same stack-safety requirement as LAW 10).
+Test: `length(map(inc, range(0, 1000000)))` evaluates to `1000000`  (the same stack-safety requirement as LAW 10).
 
 ### [LAW 12] Quotation is total; the language is data
 
@@ -445,8 +440,8 @@ is possible only because quotation was already total in both directions the
 moment `value_to_expr` existed to complete it. `defmacro` is not itself a
 reader special form. Its shape — `(defmacro (name params...) body...)` in
 the AST, `defmacro name(params…) { body… }` in braces — is recognised
-structurally, at the one expansion point both backends share, never in
-`reader.ml`; a macro call is expanded, and gone, before either backend's own
+structurally, at the one expansion point the engine uses, never in
+`reader.ml`; a macro call is expanded, and gone, before the evaluator's own
 machinery (LAW 20's `hash_expr`, the compiler) ever sees it.
 
 Test (in the sexpr/AST notation, the natural one for a raw quoted-list
@@ -478,7 +473,7 @@ emits `FORCE; POP` per step; the fuzzer compares stderr (the `log` effect
 stream) between backends, so effect order is differentially checked.
 
 Test: `do { perform log("a"); perform log("b"); 1 }` writes `a` then `b`
-to stderr, identically in both backends.
+to stderr, identically .
 
 ### [LAW 14] Undemanded values fire no effects
 
@@ -493,11 +488,11 @@ alternative, effects firing from speculative or positional evaluation, is
 exactly the ambient, order-by-accident world pp exists to replace.
 
 **Status: holds** for the current thunk semantics — an unforced binding's
-`perform` does not fire, in both backends. Its interaction with LAW 6's
+`perform` does not fire, . Its interaction with LAW 6's
 strictness follows by construction, since node arguments are demanded.
 
 Test: `let (x = perform log("never")) { 1 }` evaluates to `1` with empty
-stderr in both backends.
+stderr .
 
 ### [LAW 15] Ordering never comes from capabilities
 
@@ -561,14 +556,14 @@ seriously. React does not re-run your logging when it skips a re-render;
 pretending otherwise would make hits observable and caching unsound in the
 other direction.
 
-**Status: holds** (for the node tier, both backends) — a `node { e }` hit
+**Status: holds** (for the node tier) — a `node { e }` hit
 serves the stored result and does not re-emit the `log`/stdout produced on
-the miss. This is verified in the tree-walker (`tests/010`) and the VM
+the miss. This is verified in the tree-walker (`tests/010`) and the tree-walker
 (`tests/014`), where a node's in-body `COMPUTE` log fires only on the miss.
 
 Test: force a logging `node { e }` twice, the second run in a fresh
 process: the result is identical, and the log is emitted exactly once, on
-the miss, in both backends.
+the miss, .
 
 ### [LAW 18] A cached node's writes are sandbox-scratch only
 
@@ -580,7 +575,7 @@ Grounding: this is Nix and Bazel-style sandboxing — the build writes wherever
 it likes inside a throwaway directory, and only content-addressed outputs
 exist afterward. Without this, "single writer" (LAW 28) is only a slogan.
 
-**Status: partial** — the node/scripting split is enforced in both backends.
+**Status: partial** — the node/scripting split is enforced .
 Inside a node, a relative `write-file` targets the node's sandbox scratch, a
 lazily created temp directory deleted when the node's frame pops; reads and
 writes there are capability-free and unrecorded. An absolute `write-file`
@@ -617,14 +612,14 @@ inputs same outputs" — is only as sound as this law.
 is SHA-256, closure captures are folded into the key so two closures over
 different captured values hash differently, and the ambient handler stack is
 folded in too. A cross-run store now exists and its value blobs are
-content-addressed by result hash, shared by both backends. Remaining gap: the
-tree-walker's in-memory dedup table is not mirrored in the VM, but that is
-separate from the persistent node hash, which both backends compute
+content-addressed by result hash, shared across runs. Remaining gap: the
+tree-walker's in-memory dedup table is not mirrored across runs, but that is
+separate from the persistent node hash, which the engine computes
 identically (LAW 20).
 
 Test: two closures over different captured values hash differently;
 structurally equal values built by different routes hash equally — checked in
-both backends.
+the engine.
 
 ### [LAW 20] Node key = H(code-hash ‖ arg-value-hashes); authority and handlers are not identity
 
@@ -643,29 +638,26 @@ program changes, or widen a capability and the whole world rebuilds.
 Authority may gate access to a result; it must never rename the result.
 
 **Status: partial** — the persistent `node { e }` key is now
-`H(code-structure ‖ free-var value-hashes)` in both backends. The free
+`H(code-structure ‖ free-var value-hashes)` . The free
 variables the node references are resolved, forced, call-by-value, to their
 value hashes and folded in, excluding the whole-environment hash and the
 capability set. The tree-walker resolves them from its environment
-(`node_key_of`); the VM resolves them from the captured frames and globals
-via compiler-emitted descriptors (`vm_node_key`), producing a byte-identical
-key for data-valued free variables so the backends share store entries. The
+(`node_key_of`); the evaluator resolves them from the captured frames and globals
+via compiler-emitted descriptors (descriptors), producing a byte-identical
+key for data-valued free variables so store entries are shared across runs. The
 two catastrophic leaks this law names are closed: rebinding an unreferenced
 global is a cache hit, and widening the grant does not invalidate anything
 (`tests/011`, `tests/014`). Config and the handler stack are now fully out of
 the key: a config read or a perform inside a node records a `config:`/
 `handler:` trace cell instead (LAW 33/26, `tests/015`). Residuals:
 binding-order canonicalisation is not done (LAW 3), applied `defnode` is a
-named closure (LAW 6), and closure-valued free variables key per backend (VM
-closures hash bytecode plus captured frames, tree-walker closures hash AST
-plus environment), so those do not share across backends.
+named closure (LAW 6), and closure-valued free variables key on captured frames and environment.
 
 `defmacro` needed no change to this law, by construction. `hash_expr`
 (`node_key_of`) and the compiler both consume an expression tree that has
 already been macro-expanded — expansion (`macro.ml`) is the one shared step
-every top-level-form-shaped list passes through before either backend's own
-machinery ever sees it (the REPL drivers, the VM's `LOAD_FILE`/
-`eval_module_from`, the tree-walker's `ELoad`/`eval_module_file`). So "the
+every top-level-form-shaped list passes through before the evaluator's own
+machinery ever sees it (the REPL drivers, the REPL drivers and `ELoad`/`eval_module_file`). So "the
 code hash must hash the expanded form" is not a special case this law had to
 grow: a node built from a macro call is keyed on exactly the code the macro
 expanded into, and editing only the macro's own definition, with the call
@@ -679,7 +671,7 @@ routes, so both are banned outright, independently of each other.
 
 - import side (the free-variable ban): if a node's free variable's forced
   value contains a `VCapability` anywhere in its structure, including inside
-  a captured closure's environment or frames, `node_key_of`/`vm_node_key`
+  a captured closure's environment or frames, `node_key_of`
   raise `Capability_error` naming the variable, rather than silently keying
   on — and thereby encoding, in the store's key namespace — a piece of
   authority. A capability hidden behind an unforced thunk is a documented
@@ -698,9 +690,9 @@ Test: rebinding an unreferenced global does not change the node key;
 widening the root grant does not invalidate a cached result; changing a
 referenced free variable does (`tests/011`). A node whose free variable is,
 or whose captured closure contains, a capability gives `Capability_error`,
-directly and through a closure, in both backends. A node whose body returns
+directly and through a closure, . A node whose body returns
 a capability, bare or embedded in a compound value, is rejected before it
-can be stored, in both backends (`tests/capability-adversarial.sh`).
+can be stored, (`tests/capability-adversarial.sh`).
 
 ### [LAW 21] Cutoff is hash equality; validity is the trace, not the key
 
@@ -771,7 +763,7 @@ kinds does not change the root-mint invariant.
 Test: the adversarial suite (`tests/capability-adversarial.sh`) checks
 that no program, through any user-code surface, reads or writes a path it was
 not granted, and that evaluating `filesystem("/", :rw)` is an unbound-symbol
-error in both backends. `tests/045-network.sh` checks that no `net:` grant,
+error . `tests/045-network.sh` checks that no `net:` grant,
 or a `net:` grant for a different host, denies `perform http-get(…)`/
 `perform http-post(…)`, while a covering grant (an exact host, or `net:*`)
 allows it, aware of both host and port — a grant for one host or port never
@@ -795,13 +787,13 @@ values exist, a union-with-ambient rule is a widening backdoor, so it could
 not be kept alongside `with-caps`.
 
 **Status: holds** — `current-capabilities`, `with-caps`, and `cap-restrict`'s
-mode argument are implemented in both backends. The subset check is
+mode argument are implemented . The subset check is
 evaluated per capability kind, using the per-kind check functions LAW 25
 describes, with `CapRestrict`'s authority computed as its effective `(path,
 mode)` grants — the scope/mode intersection with the underlying capability,
 not a mint. `with-caps` establishes a dynamic extent that is restored on
 every exit: normal return, tail call, and a raised exception alike (LAW 27;
-the VM's `WITH_CAPS` opcode runs the body via a nested call wrapped in a real
+`with-caps` runs the body via a nested call wrapped in a real
 exception handler, rather than the flat enter/exit opcode pair
 `with-config`/the removed `effect` used, specifically so a raised error still
 restores the ambient).
@@ -817,7 +809,7 @@ underlying capability holds is rejected
 in a tail call, still restores the prior ambient afterward
 (`with-caps-exception-safe`, `with-caps-tail-safe`); `effect(…)` is an
 unbound-symbol error (`effect-removed`) — all in
-`tests/capability-adversarial.sh`, both backends.
+`tests/capability-adversarial.sh`.
 
 ### [LAW 23] Authority checks are component-wise, full-path, and transitive at hit time
 
@@ -849,12 +841,11 @@ does not yet exist canonicalises its longest existing prefix and appends the
 rest lexically, so a write-target's cell id is stable before and after the
 file is created (`tests/036`). Unicode normalisation (NFC) is not
 implemented — a documented residual gap that needs a new dependency and is
-orthogonal to the realpath fix. The transitive-closure requirement holds in
-both backends: a hit is served only if the caller's capabilities cover every
+orthogonal to the realpath fix. The transitive-closure requirement holds : a hit is served only if the caller's capabilities cover every
 cell in the stored trace's read closure (`Store.hit ~authorized`), and
 because reads propagate to enclosing nodes the closure is transitive — a
 narrow caller cannot launder a broad read through a cached aggregator
-(`tests/013` tree-walker, `tests/014` VM). A capability denial raises the
+(`tests/013` tree-walker, `tests/014`). A capability denial raises the
 distinct `Capability_error` and is deliberately not memoized, since authority
 is not identity or validity (LAW 15), so granting the capability later still
 yields a hit. `pp why` exists and is capability-filtered: it explains each
@@ -862,7 +853,7 @@ node's hit or miss (first build, stale cell, unauthorized, verified trace) to
 stderr, and redacts rather than names a cell the caller has no authority over
 (`tests/019`).
 
-Test: grant `fs:/tmp:ro`: reading `/tmpevil/x` errors in both backends. A
+Test: grant `fs:/tmp:ro`: reading `/tmpevil/x` errors . A
 caller scoped to `src/` gets no hit on a node whose transitive closure
 touched `/etc/passwd` (one of the acceptance checks for the capability-hit
 milestone).
@@ -888,7 +879,7 @@ capabilities would make a caller scoped to `src/` unable to hit any node
 whose closure touches the standard library. The runtime/user split is
 load-bearing, not cosmetic.
 
-**Status: holds** — every loader read in both backends goes through
+**Status: holds** — every loader read  goes through
 `Runtime.loader_read`: bounded to the directories of the programs named on
 the command line, the working directory, and `~/.pp`. Loading anything else
 errors, with or without a grant. Each read is recorded as a
@@ -901,7 +892,7 @@ authorised identically to the real path.
 Test: a program granted nothing can `load(…)` beside its own source and
 hit a node cache whose trace contains that load; loading a path outside
 every source root errors even with a broad filesystem grant; editing the
-loaded file invalidates the node — both backends (`tests/020`).
+loaded file invalidates the node — (`tests/020`).
 
 ### [LAW 25] Unenforced authority may not exist
 
@@ -917,7 +908,7 @@ to trust a fiction.
 capability type and surface language.
 
 Test: evaluating the time/memory constructors is an unbound-symbol error
-in both backends until a later scheduler milestone enforces budgets.
+ until a later scheduler milestone enforces budgets.
 
 ---
 
@@ -939,8 +930,7 @@ whole handler stack, which would rebuild the world on any handler change,
 even for effects a node never performed. It is also what makes "the
 scheduler is just a handler" (LAW 31) compatible with caching at all.
 
-**Status: partial** — the semantic half is implemented at node granularity in
-both backends: every `perform` inside a node records a `handler:<effect>`
+**Status: partial** — the semantic half is implemented at node granularity : every `perform` inside a node records a `handler:<effect>`
 trace cell whose observed hash is the intercepting handler's value hash, or a
 builtin marker when none intercepts, re-observed against the caller's handler
 stack on a hit. So a node cached under a mock `read-file` and one cached
@@ -963,7 +953,7 @@ stage of this feature), and in the scripting tier.
 Test: force a node under a mock `read-file` handler, then under the real
 one: two executions, two results, no cross-contamination (`tests/015`); a
 result-transparent handler swap yields a hit with identical result hash
-(the `--check` audit) — both backends.
+(the `--check` audit) — the engine.
 
 ### [LAW 27] Effect, handler, and config scopes are dynamic extent — exception-safe and tail-safe
 
@@ -977,10 +967,10 @@ of try/finally are the floor here, not a nicety.
 
 **Status: holds** — `effect`, `with-handler`, and `with-config` now restore
 capabilities, handlers, and config on normal return, exception, and tail
-call. The VM's handler invocation saves and restores the operand stack.
+call. Handler invocation saves and restores the operand stack.
 
 Test: `do { with-handler(log = h) { tail-loop() } ; perform log("x") }` —
-the final `log` uses the builtin, not `h`, in both backends; an error raised
+the final `log` uses the builtin, not `h`, ; an error raised
 inside `effect` leaves the capability set exactly as it was before entry.
 
 ---
@@ -1000,11 +990,11 @@ Grounding: this applies Nix's realisations and the verifying traces from
 known-broken compile is not incremental. Determinism means failures are as
 reproducible as successes.
 
-**Status: partial** — holds in both backends: a `node { e }` that raises a
+**Status: partial** — holds : a `node { e }` that raises a
 `Failure` stores a failing trace (the error value plus the reads made up to
 the failure), and a later force re-serves the same error without re-running
 the body, re-running only when a recorded read changes (`tests/012`
-tree-walker, `tests/014` VM). An earlier bug, where a raising thunk left its
+tree-walker, `tests/014`). An earlier bug, where a raising thunk left its
 `Evaluating` marker set and so looked like a fake infinite recursion, is
 fixed for both persistent and ephemeral thunks. Not yet covered: only
 `Failure` exceptions are memoized (other exception kinds reset the status and
@@ -1040,15 +1030,15 @@ A loaded file's forms are located against that file, not the loading form:
 `Reader.read_string` reads a loaded file with its own path (it used to fall
 back silently to the reader's `"<?>"` placeholder), and each of its
 top-level forms is evaluated (the tree-walker's `eval_expressions`) or
-compiled and run (the VM's `LOAD_FILE`) one at a time, under the same
+evaluated one at a time, under the same
 never-doubled location decoration as the outer top-level driver
 (`Runtime.with_form_location`/`message_has_location` — one implementation,
-shared by both backends and both nesting levels). An error inside the loaded
+shared across runs and both nesting levels). An error inside the loaded
 file is decorated with its own `file:line` before it can unwind past the
 `load`, so the `load(…)` call site's own decorator, seeing a message that
 already carries a location, leaves it alone.
 
-Test: `car(5)` at line 3 of `f.pp` reports `f.pp:3` in both backends,
+Test: `car(5)` at line 3 of `f.pp` reports `f.pp:3` in 
 with byte-identical stderr (`tests/027`); case (g) loads a file whose second
 form is `car(5)` and checks that the reported location is the loaded file's
 line, not the loading form's.
@@ -1112,7 +1102,7 @@ changed, since the plan cache turns a no-op pass into a cache hit.
 Push stabilize: `pp --watch --stabilize prog.pp` uses the reverse-edge index
 from stored traces to reset only dirty thunks, so clean nodes skip
 `Store.hit` entirely; the differential test `tests/032` confirms identical
-re-evaluation patterns to pull mode on both backends.
+re-evaluation patterns to pull mode on the engine.
 
 The process domain: `pp --supervise prog.pp` auto-loads
 `stdlib/domain-proc.pp` and registers it. The program's final value is a map
@@ -1185,7 +1175,7 @@ Grounding: the desired-state law covers convergent writes only. Pretending
 it tames non-idempotent actions is how systems double-charge cards. This
 carve-out is named, not hidden.
 
-**Status: holds** — both backends share the same primitive and journal
+**Status: holds** — the engine uses the same primitive and journal
 format; a `fenced(…)` inside a node body raises an error; an unknown-status
 action is resolved by policy; a killed mid-apply action is retried exactly
 once under `--fenced-policy retry` and marked done under `--fenced-policy
@@ -1205,7 +1195,7 @@ double-execution occurs (the crash-recovery requirement for fenced effects).
 pp is dynamically typed. A type annotation is a checked claim: when an
 annotated value is forced, a mismatch is a runtime error reporting the
 annotation's definition site. No annotation, no check. The tree-walker, the
-project's correctness oracle, must enforce at least everything the VM
+project's correctness oracle, must enforce at least everything the engine
 enforces — an oracle weaker than the fast path is not an oracle.
 
 Grounding: this project holds that static typing is a perspective, not a
@@ -1214,20 +1204,19 @@ inside it as checked claims. This is the differentiator from Unison.
 Force-time checking makes annotations meaningful without a phase that must
 see the whole, dynamic, graph.
 
-**Status: holds** — both backends enforce type annotations at force time;
-the tree-walker's `check_type` mirrors the VM (`tests/004-type-test.pp`).
+**Status: holds** — the engine enforces type annotations at force time;
+the tree-walker's `check_type` mirrors the tree-walker (`tests/004-type-test.pp`).
 `def`/`fn`/`defnode` bodies carry their definition-site location, so type
 errors cite the annotation site. Per-parameter annotations are checked too,
 however a surface spells them (s-expressions: `(def (f x : int) …)`,
 `(fn [x : int] …)`; braces: `def f(x: int) { … }`, `fn(x: int) { … }`) —
 they used to parse and then be discarded. A reader-level desugar, downstream
 of any surface's parser, rewrites each into a located type check
-(`ELocated`-wrapped `ETyped`) that runs ahead of the body, so both backends
-enforce the shared AST identically (`tests/026-param-types.sh`, fuzzer
+(`ELocated`-wrapped `ETyped`) that runs ahead of the body, so the engine enforces the shared AST identically (`tests/026-param-types.sh`, fuzzer
 `stmt_param_typed_def`).
 
 Test: `def f(x): int { "s" }` forced gives the same type error, citing
-the annotation site, in both backends; `f("oops")` against
+the annotation site, ; `f("oops")` against
 `def f(x: int) { … }` gives `type mismatch: expected int, got "oops"`,
 citing the definition site, byte-identical across backends; unannotated
 code never type-errors.
@@ -1252,7 +1241,7 @@ by enclosure, not by threading arguments through every call. Keeping config
 out of the authority system keeps "what" and "may" from contaminating each
 other.
 
-**Status: holds** — computed config keys work in both backends, nested
+**Status: holds** — computed config keys work in  nested
 scopes shadow, and config frames are restored on every exit: normal, tail,
 and exception (`tests/006-config-test.pp`, `tests/007-phase0-laws.pp`). The
 "config read is an observed input" clause is now real at node granularity: a
@@ -1262,7 +1251,7 @@ on a hit, and ambient config is excluded from the node key (`tests/015`).
 
 Test:
 `with-config({"k" -> 1}) { with-config({"k" -> 2}) { config(string-append("", "k")) } }`
-evaluates to `2` in both backends; outside both forms it evaluates to the
+evaluates to `2` ; outside both forms it evaluates to the
 default.
 
 ---
@@ -1290,7 +1279,7 @@ at the dispatch point. A worker runs the exact `run_node_body` the serial
 miss arm calls, with no second force path, and communicates only through the
 store; a dead worker degrades to an ordinary in-process recompute, never a
 wrong answer. `--schedule` is read only by the miss arms and the
-scheduler, never by `node_key_of`/`vm_node_key`, and it never enters a
+scheduler, never by `node_key_of`, and it never enters a
 trace, so "a program is byte-identical whether it runs on one core or eight"
 holds by construction, not merely by intent.
 
@@ -1368,42 +1357,38 @@ one run rather than N.
 
 ---
 
-## 13. Backend parity
+## 13. Evaluator correctness
 
-### [LAW 36] The two backends are one language
+### [LAW 36] The tree-walker is the single reference engine
 
-Every observable behaviour — values printed, effect logs, error/exit status —
-is identical between the tree-walker and the VM. The differential fuzzer is
-the ratchet that enforces this: its `core` grammar must be permanently green,
-and no shipped feature may exist in one backend only. In-flight divergence
-during a migration is allowed; a release with it is not.
+The tree-walker is the executable specification. The metamorphic fuzzer is
+the ratchet that enforces this: semantics-preserving twins must produce
+identical output, and the reader round-trip gate catches serialization
+divergence. No shipped feature may exist outside the evaluator's verified
+surface.
 
-Grounding: two backends with one semantics is the cheapest correctness asset
-this project owns, but only if divergence is treated as a broken build, not
-a known quirk. A spec nobody can falsify differentially is prose.
+Grounding: one engine with a metamorphic oracle is a strong correctness asset.
+The fuzzer turns "should agree" into "does agree, now and forever", by
+running tens of thousands of random programs every CI run.
 
-**Status: partial** — the fuzzer exists and runs both backends
+**Status: partial** — the fuzzer exists and runs the engine
 (`tools/fuzz.ml`; `dune exec ./tools/fuzz.exe`). Previously catalogued
-divergences, including the LAW 1 let divergence, are now closed; both
-`--grammar core` and `--grammar full` runs exit zero. The persistent node
-cache is no longer tree-walker-only: the VM shares the same store and key
-(`tests/014`), so `node { … }` caching is not a one-backend feature. Deep
-non-tail recursion and the negative-literal reader bug (`-5` lexes as a
-symbol) remain non-differential issues. The build-engine milestone requires
-the `full` grammar to stay green under extended CI runs. `defmacro` would be
-a one-backend-only feature the moment it exists to violate this law — a
-macro table per backend, or expansion happening inside one backend's own
-compile/eval path, would be exactly the kind of divergence this law forbids.
-It does not, by construction: expansion (`macro.ml`) runs once, ahead of
-both backends, producing the same expanded AST regardless of which backend
-consumes it next — `stmt_defmacro` (fuzzer, full grammar) and
+divergences are now closed; both `--grammar core` and `--grammar full` runs
+exit zero. The persistent node cache is verified across runs (`tests/014`).
+Deep non-tail recursion and the negative-literal reader bug (`-5` lexes as a
+symbol) remain open issues. The build-engine milestone requires the `full`
+grammar to stay green under extended CI runs. `defmacro` would be an
+evaluator-only feature the moment it exists to violate this law — expansion
+happening outside the shared `macro.ml` path would be exactly the kind of
+divergence this law forbids. It does not, by construction: expansion
+(`macro.ml`) runs once, ahead of the evaluator, producing the expanded AST
+before the evaluator consumes it — `stmt_defmacro` (fuzzer, full grammar) and
 `tests/041-defmacro.pp` exercise this the same way every other shared-AST
 feature is verified.
 
 Test: `dune exec ./tools/fuzz.exe -- --grammar core` exits zero (the CI
 gate); the build-engine milestone's exit criterion extends this to the
-`full` grammar with zero value-or-effect divergence within the time budget.
-
+`full` grammar with zero twin divergence within the time budget.
 ---
 
 ## 14. Reproducibility and volatility
@@ -1432,7 +1417,7 @@ never through an effect with no cell.
 
 Test: a node reading `probe(name)` re-forces exactly when the probe's
 underlying value changes across two separate runs, and hits, with no
-recompute, when it does not (`tests/043-probes.sh`, both backends); an
+recompute, when it does not (`tests/043-probes.sh`); an
 unregistered probe name is a hard error; a probe registered but never read
 never fires, demand-pruned, mirroring LAW 7.
 
@@ -1450,7 +1435,7 @@ Grounding: this budgets the reproducibility problem Nix keeps finding as
 permanent gardening, rather than wishing it away. Cutoff above a volatile
 node is otherwise dead, and the store grows without bound along that cone.
 
-**Status: holds** — the detection half already existed in both backends:
+**Status: holds** — the detection half already existed :
 `pp --check` runs every missed node's body twice, compares result hashes,
 and flags a divergence as volatile (`tests/019`). The containment half is
 now the same probe mechanism as LAW 37: wrapping a volatile read as
@@ -1467,7 +1452,7 @@ Test: a node whose tool emits a random value, wrapped as a probe, is
 observed once per pass and re-forces the reading node only when the probe's
 value changes across runs, never on an unrelated node, and never by
 re-running the underlying volatile read more than once per pass
-(`tests/043-probes.sh`, both backends). The pre-existing `--check`
+(`tests/043-probes.sh`). The pre-existing `--check`
 double-build detection (`tests/019`) is unchanged.
 
 ### [LAW 39] Sealed cells: confidential reads are a distinct value kind, banned at the node boundary
@@ -1480,7 +1465,7 @@ never via `store_blob` or the content-addressed store, so a store-wide scan
 must never find secret plaintext; and `string_of_value` and every printer
 redact to `#<sealed>`, since a print that leaked the bytes would defeat the
 feature. `VSealed` joins the node-boundary ban exactly like `VCapability` —
-the free-variable ban and the result ban, both directions, both backends —
+the free-variable ban and the result ban, both directions —
 and `cell_authorized_for` requires a covering `CapSecret` grant to serve a
 hit on a `sealed:` cell. LAW 23's transitive-closure and
 introspection-filtering clauses fall out unchanged: a narrow caller cannot
@@ -1500,7 +1485,7 @@ confidentiality bug for secrets. A security boundary needs a distinct value
 kind for the existing node-boundary and authority machinery to pattern-match
 on, not a new parallel authorisation path.
 
-**Status: holds** — implemented in both backends. `tests/044-sealed.sh`
+**Status: holds** — implemented . `tests/044-sealed.sh`
 covers: redacted print, `unseal` round-trip, a recursive store scan proving
 the secret's bytes never land under `~/.pp/store` (for a program that only
 reads, and separately one that unseals at script tier only); the
@@ -1510,7 +1495,7 @@ sibling node untouched; a caller without the `secret:` grant unable to hit a
 node whose cached closure read it even though the trace exists on disk; and
 the both-grants case behaving as plain filesystem access.
 
-Test: `tests/044-sealed.sh`, both backends.
+Test: `tests/044-sealed.sh`.
 
 ---
 
@@ -1527,36 +1512,36 @@ migration.
 | LAW 1 | mutual `let` scope | holds | `tests/007-phase0-laws.pp`; fuzzer `full` grammar |
 | LAW 2 | dependency-derived order, cycle errors | partial | cycles caught via `Evaluating` marker; report is generic, not named |
 | LAW 3 | binding-order-free identity | unimplemented | `hash_expr` is order-sensitive: reordering changes the hash |
-| LAW 4 | one scope model | partial | value defs (`let x = v`) bind values with letrec* block scope, identical in both backends (`tests/025`); `do`-block and module-body scoping now matches the tree-walker in the VM too: `do` defs are block-local, never VM globals, and module-body siblings resolve via local slots, not globals (`tests/039`); a module is still its own fresh, outer-scope-isolated environment rather than truly nested `let`-style, so full unification remains partial |
-| LAW 5 | `let*` sequential sugar | holds | reader emits `ELetStar`; both backends sequential; `tests/007-phase0-laws.pp` |
+| LAW 4 | one scope model | partial | value defs (`let x = v`) bind values with letrec* block scope, identical (`tests/025`); `do`-block and module-body scoping now matches: `do` defs are block-local, and module-body siblings resolve via local slots (`tests/039`); a module is still its own fresh, outer-scope-isolated environment rather than truly nested `let`-style, so full unification remains partial |
+| LAW 5 | `let*` sequential sugar | holds | reader emits `ELetStar`; sequential; `tests/007-phase0-laws.pp` |
 | LAW 6 | node call-by-value plus memoization | partial | application is call-by-value; `node { e }` memoizes persistently, keyed on code plus free-variable value hashes (LAW 20; `tests/011`); `node x { e }` binds the node thunk (`tests/025`), but applied `defnode` is still a named closure, so keying an aggregator on child result hashes does not yet arise |
 | LAW 7 | demand-pruning at node granularity | partial | reverse-edge dirty-propagation graph exists for push `stabilize` (`pp --watch --stabilize`, `tests/032`); a root desired-state formula and an explicit wanted-set are still absent |
-| LAW 8 | `delay` ephemeral vs `node` persistent | partial | the split exists in both backends (`node` persists to `~/.pp/store`; `delay` never persists); residual: the tree-walker's in-memory dedup table is not mirrored in the VM, separate from the node cache |
+| LAW 8 | `delay` ephemeral vs `node` persistent | partial | the split exists (`node` persists to `~/.pp/store`; `delay` never persists); residual: the in-memory dedup table is not mirrored across runs, separate from the persistent node cache |
 | LAW 11 | stack-safe non-tail recursion | unimplemented | the named stack-safe-evaluator workstream; fuzz `exitdiff:tw-err: Out_of_memory`, `crash:bc:timeout` |
 | LAW 12 | total quotation, quasiquote | holds | `tests/007-phase0-laws.pp`; `defmacro` is built on this base — `Types.value_to_expr` completes the round trip, `tests/041-defmacro.pp` |
 | LAW 15 | ordering never from capabilities | partial | negative half holds; a first version of the filesystem-domain reconciler exists (`tests/018`), the process domain is absent |
-| LAW 16 | opt-in per-node caching | partial | `node { e }` cached persistently across runs in both backends; scripting-tier expressions uncached; node writes sandbox-scratch-only (LAW 18, `tests/017`); `tests/010`, `tests/014` |
-| LAW 17 | hit is not effect replay | holds (node tier) | a `node { e }` hit does not replay in-node `log`/stdout, both backends (`tests/010`, `tests/014`) |
+| LAW 16 | opt-in per-node caching | partial | `node { e }` cached persistently across runs ; scripting-tier expressions uncached; node writes sandbox-scratch-only (LAW 18, `tests/017`); `tests/010`, `tests/014` |
+| LAW 17 | hit is not effect replay | holds (node tier) | a `node { e }` hit does not replay in-node `log`/stdout (`tests/010`, `tests/014`) |
 | LAW 18 | sandbox-scratch writes | partial | per-node scratch sandbox real: relative node writes/reads are scratch-local, absolute node writes error, `run`'s working directory is the scratch dir (`tests/017`); reconciled domains absent |
-| LAW 19 | sound content hashing | partial | hash is SHA-256; closure-environment and handler gaps closed, so in-memory dedup is sound; store objects are content-addressed by result hash, shared by both backends; the tree-walker's in-memory dedup table is not mirrored in the VM |
-| LAW 20 | key = code plus argument values | partial | persistent `node { e }` key = code plus free-variable value hashes; capabilities, the whole environment, config, and handlers are all excluded (`tests/011`, `tests/015`); binding order is not canonicalised (LAW 3); the node boundary is now symmetric: a capability-containing free variable is `Capability_error` at the key, a capability-containing result is rejected before storage, both backends (`tests/capability-adversarial.sh`); `defmacro` expands before either backend's `hash_expr`/compiler ever sees a form, so the key is always over the expanded code with no change to this law — a macro-only edit re-keys its call sites (`tests/042-defmacro-rekey.sh`) |
+| LAW 19 | sound content hashing | partial | hash is SHA-256; closure-environment and handler gaps closed, so in-memory dedup is sound; store objects are content-addressed by result hash, shared across runs; the tree-walker's in-memory dedup table is not mirrored across runs |
+| LAW 20 | key = code plus argument values | partial | persistent `node { e }` key = code plus free-variable value hashes; capabilities, the whole environment, config, and handlers are all excluded (`tests/011`, `tests/015`); binding order is not canonicalised (LAW 3); the node boundary is now symmetric: a capability-containing free variable is `Capability_error` at the key, a capability-containing result is rejected before storage (`tests/capability-adversarial.sh`); `defmacro` expands before the evaluator's `hash_expr`/compiler ever sees a form, so the key is always over the expanded code with no change to this law — a macro-only edit re-keys its call sites (`tests/042-defmacro-rekey.sh`) |
 | LAW 21 | cutoff via traces | partial | validity via verifying trace is real (key maps to a set of traces, cells re-checked on hit; `tests/010`, `tests/015`); hash-equality cutoff proven at scale — a comment-only header edit on a 101 translation-unit C build, and on Lua 5.4.7, recompiles dependents and cuts off the link (`tests/016`, `tests/024`, `scripts/build-lua.sh`); the reverse-edge dirty-propagation graph is now used by push `stabilize` (`pp --watch --stabilize`, `tests/032`); inline-nested cutoff is still absent |
 | LAW 22 | unforgeable root-minted capabilities | holds | constructors removed; `tests/capability-adversarial.sh` |
-| LAW 22b | `with-caps` narrows a held value, never widens | holds | `current-capabilities`/`with-caps`/`cap-restrict`'s mode argument; the subset check runs against the current ambient; `effect` removed; both backends, exception/tail-safe; `tests/capability-adversarial.sh` |
-| LAW 23 | component/full-path plus transitive hit check | holds (one residual gap) | component-aware, canonicalised (realpath, no trailing slash) paths at every cell/grant/loader-bound site (`tests/036`); hits gated on the caller's capabilities covering the trace's transitive read closure in both backends, capability denials not memoized (`tests/013`, `tests/014`) — "the caller's capabilities" is now the forcing thunk's captured `node_caps`, collapsing to the earlier per-process grant when `with-caps` is unused; capability-filtered `pp why` real (`tests/019`); Unicode normalisation (NFC) not implemented |
+| LAW 22b | `with-caps` narrows a held value, never widens | holds | `current-capabilities`/`with-caps`/`cap-restrict`'s mode argument; the subset check runs against the current ambient; `effect` removed;  exception/tail-safe; `tests/capability-adversarial.sh` |
+| LAW 23 | component/full-path plus transitive hit check | holds (one residual gap) | component-aware, canonicalised (realpath, no trailing slash) paths at every cell/grant/loader-bound site (`tests/036`); hits gated on the caller's capabilities covering the trace's transitive read closure in  capability denials not memoized (`tests/013`, `tests/014`) — "the caller's capabilities" is now the forcing thunk's captured `node_caps`, collapsing to the earlier per-process grant when `with-caps` is unused; capability-filtered `pp why` real (`tests/019`); Unicode normalisation (NFC) not implemented |
 | LAW 24 | loader is runtime authority | holds | loader bounded to source roots plus `~/.pp`, reads traced as authority-exempt `runtime:file:` cells (`tests/020`); realpath-canonical (`tests/036`) |
 | LAW 25 | no unenforced authority surface | holds | `CapTime`/`CapMemory` removed from types and surface |
-| LAW 26 | two handler classes, synthetic trace cells | partial | semantic half real at node granularity: `handler:<effect>` trace cells in both backends, mock and real coexist without cross-contamination (`tests/015`); cells coarser than the law's per-argument form; the result-transparent class awaits schedulers |
+| LAW 26 | two handler classes, synthetic trace cells | partial | semantic half real at node granularity: `handler:<effect>` trace cells in  mock and real coexist without cross-contamination (`tests/015`); cells coarser than the law's per-argument form; the result-transparent class awaits schedulers |
 | LAW 27 | exception/tail-safe dynamic extent | holds | save-stack restore on every exit |
-| LAW 28 | failure traces, error memoization | partial | both backends memoize `Failure` outcomes as failing traces, re-served until a recorded read changes; the earlier `Evaluating`-leak bug is fixed (`tests/012`, `tests/014`); non-`Failure` exceptions uncached |
-| LAW 29 | source locations in errors | holds | every top-level form's location is appended to unlocated runtime errors in both backends; arity/capability errors name the callee/operation; `pp: error:` single-line reporting; a loaded file's own forms are individually located and decorated with that file's location before the error can unwind past the `load` (`tests/027`, including case (g)) |
+| LAW 28 | failure traces, error memoization | partial | the engine memoizes `Failure` outcomes as failing traces, re-served until a recorded read changes; the earlier `Evaluating`-leak bug is fixed (`tests/012`, `tests/014`); non-`Failure` exceptions uncached |
+| LAW 29 | source locations in errors | holds | every top-level form's location is appended to unlocated runtime errors ; arity/capability errors name the callee/operation; `pp: error:` single-line reporting; a loaded file's own forms are individually located and decorated with that file's location before the error can unwind past the `load` (`tests/027`, including case (g)) |
 | LAW 30 | desired-state plus single writer | holds | `register-domain` (a probe is the bottom-write-authority case, one registry) plus generic orchestration (`src/domains.ml`) enforce plan/journal/atomic-apply/verify/stratification for any registered domain, not hardwired to the filesystem — the earlier `src/reconciler.ml`/`supervisor.ml` deleted; `stdlib/domain-fs.pp`/`domain-proc.pp` hold the filesystem/process policy as pp source (`tests/018`, `tests/023`, `tests/033` unchanged byte for byte); a from-scratch third-party domain proves genericity (`tests/046`); drives a real 101 translation-unit C build and Lua 5.4.7 end-to-end (`tests/024`); push `stabilize` live (`pp --watch --stabilize`, `tests/032`) |
 | LAW 31 | fenced effects, intent journal | holds | scripting-tier `fenced(KIND, SPEC)`, `--fenced-policy retry|abort|ask`, intent/done journal, recovery without silent retry; `tests/034` |
-| LAW 32 | gradual types, strictest oracle | holds | both backends enforce; tests 004/005 restored; `tests/007-phase0-laws.pp` |
-| LAW 33 | config: computed keys, tail-safe scoping | holds | computed keys and tail-safe scoping in both backends; config reads inside nodes are `config:<key>` trace cells, ambient config out of the node key (`tests/015`) |
+| LAW 32 | gradual types, strictest oracle | holds | the engine enforces; tests 004/005 restored; `tests/007-phase0-laws.pp` |
+| LAW 33 | config: computed keys, tail-safe scoping | holds | computed keys and tail-safe scoping ; config reads inside nodes are `config:<key>` trace cells, ambient config out of the node key (`tests/015`) |
 | LAW 34 | no location surface / scheduler exists | holds | negative half holds; scheduler half lands for local process-pool parallelism (`tests/024`/`038`) and remote cluster placement (`--schedule remote:<member>`, `tests/048`); host-qualified domain distribution plus garbage collection remain a later stage |
 | LAW 35 | run-on-N-take-first as handler | holds | `race:N` process-pool fan-out lands (`tests/038`); `remote:<member>` cluster dispatch lands (`tests/048`), gated to data-closed batches, over the threat-model-gated transport |
-| LAW 36 | backend parity | partial | catalogued divergences closed; `core` and sampled `full` green; deep non-tail recursion and negative-literal lexing remain same-side issues; `defmacro` expands once, ahead of both backends (`macro.ml`), so it cannot itself become a one-backend feature — `stmt_defmacro` in `full` |
+| LAW 36 | evaluator correctness | partial | catalogued divergences closed; `core` and sampled `full` green; deep non-tail recursion and negative-literal lexing remain same-side issues; `defmacro` expands once, ahead of the evaluator (`macro.ml`), so it cannot itself become an evaluator-only feature — `stmt_defmacro` in `full` |
 | LAW 37 | declared nondeterminism | holds | `register-probe`/`probe` are the one sanctioned nondeterministic dependency, evaluated at most once per pass outside the reading node's trace stack, exposed only as a `probe:<name>` cell (`tests/043-probes.sh`) |
 | LAW 38 | volatile-node containment | holds | `--check` double-run detection unchanged (`tests/019`); containment is the same probe mechanism as LAW 37 — a volatile read wrapped as a probe is observed and pinned once per pass as its own cell, in-memory only, never written to `~/.pp/store` (`tests/043-probes.sh`) |
 | LAW 39 | sealed cells | holds | `CapSecret`/`VSealed`: confidential reads redact on print, exclude from the content-addressed store, ban at the node boundary both directions, gate hits on a covering grant; `unseal(v)` is the explicit boundary (`tests/044-sealed.sh`) |
@@ -1568,7 +1553,7 @@ LAW 14 (undemanded values fire no effects), LAW 22 (unforgeable
 capabilities), LAW 25 (no unenforced authority), LAW 27 (exception/tail-safe
 dynamic extent), LAW 32 (gradual types), LAW 33 (config), and LAW 35
 (run-on-N-take-first as a handler, local process pool). Each is exercised by
-`tests/*.pp` under `--diff` and/or the fuzzer, and each must stay green
+`tests/*.pp` under the fuzzer, and each must stay green
 through the build-engine milestone's remaining work.
 
 ---

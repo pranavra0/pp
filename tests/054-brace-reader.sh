@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # tests/054 — the brace reader (SPEC Appendix B): a location-preserving
-# sexpr<->brace printer, tested across both readers and both backends.
+# sexpr<->brace printer, tested across both readers.
 #
 #   (a) a nontrivial .ppb program (infix precedence, pipeline, cell literals,
 #       and/or, map/vector literals, do/let/let*/if-else, node + needs,
 #       with-handler/with-config/config, defmacro, quote{}/quasiquote{}/
-#       unquote/splice, `;` separators, `#` comments) runs BYTE-IDENTICALLY
-#       under both backends;
+#       unquote/splice, `;` separators, `#` comments) runs correctly;
 #   (b) cross-surface loading: a .pp loads a .ppb and vice versa; a pinned
 #       island whose tree ships entry.ppb imports from a .pp program, and a
 #       .ppb program imports an island via the string-URI spelling;
@@ -14,11 +13,11 @@
 #       produces the same desugared message in both surfaces (condition
 #       rendered in s-expression notation), modulo only the file name;
 #   (d) `pp --emit-braces` on a real sexpr test file produces a .ppb whose
-#       output is byte-identical on both backends to the .pp original's;
+#       output matches the .pp original's;
 #   (e) `pp --roundtrip-braces` (AST + hash equality through the printer and
 #       the second reader, SPEC law 20) holds for every .pp in the tree;
 #   (f) the differential fuzzer's round-trip gate passes on a few hundred
-#       full-grammar programs (2 readers x 2 backends).
+#       full-grammar programs (2 readers).
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 FUZZ=${FUZZ:-tools/fuzz.exe}
@@ -29,7 +28,7 @@ case "$FUZZ" in /*) : ;; *) FUZZ="$PWD/$FUZZ" ;; esac
 ROOT="$PWD"
 STDLIB="$ROOT/stdlib/list.pp"
 
-# ---- (a) the nontrivial .ppb program, both backends ----
+# ---- (a) the nontrivial .ppb program ----
 # covers: comments, ';' separators, infix precedence, pipeline, infix
 # and/or (right-assoc desugar), operator-as-value, n-ary call form,
 # vector/map literals, quote{}/quasiquote{}/unquote/splice, type annotations
@@ -95,13 +94,10 @@ string-index
 2
 "lt"
 50'
-# fresh HOME per backend so node-cache hit/miss cannot skew stdout
-got_tw=$(HOME="$TMP/h-tw" "$PP" "$TMP/a/main.ppb" 2>"$TMP/a/tw.err")
-got_bc=$(HOME="$TMP/h-bc" "$PP" --bytecode "$TMP/a/main.ppb" 2>"$TMP/a/bc.err")
-if [ "$got_tw" = "$expected" ]; then ok "ppb-program-tw"
-else bad "ppb-program-tw" "expected: $(printf '%q' "$expected")" "got:      $(printf '%q' "$got_tw")" "stderr: $(cat "$TMP/a/tw.err")"; fi
-if [ "$got_bc" = "$expected" ]; then ok "ppb-program-vm"
-else bad "ppb-program-vm" "expected: $(printf '%q' "$expected")" "got:      $(printf '%q' "$got_bc")" "stderr: $(cat "$TMP/a/bc.err")"; fi
+# fresh HOME so node-cache hit/miss cannot skew stdout
+got=$(HOME="$TMP/h" "$PP" "$TMP/a/main.ppb" 2>"$TMP/a/err")
+if [ "$got" = "$expected" ]; then ok "ppb-program"
+else bad "ppb-program" "expected: $(printf '%q' "$expected")" "got:      $(printf '%q' "$got")" "stderr: $(cat "$TMP/a/err")"; fi
 
 # ---- (b) cross-surface loading + islands ----
 mkdir -p "$TMP/b"
@@ -119,11 +115,12 @@ cat > "$TMP/b/use2.ppb" <<'EOF'
 load("lib2.ppl")
 print(lib2-fn(4))
 EOF
+
 ( cd "$TMP/b" &&
-  [ "$("$PP" use.ppl 2>&1)" = "40" ] && [ "$("$PP" --bytecode use.ppl 2>&1)" = "40" ] ) \
+  [ "$("$PP" use.ppl 2>&1)" = "40" ] ) \
   && ok "ppl-loads-ppb" || bad "ppl-loads-ppb" "$(cd "$TMP/b" && "$PP" use.ppl 2>&1)"
 ( cd "$TMP/b" &&
-  [ "$("$PP" use2.ppb 2>&1)" = "400" ] && [ "$("$PP" --bytecode use2.ppb 2>&1)" = "400" ] ) \
+  [ "$("$PP" use2.ppb 2>&1)" = "400" ] ) \
   && ok "ppb-loads-ppl" || bad "ppb-loads-ppl" "$(cd "$TMP/b" && "$PP" use2.ppb 2>&1)"
 
 mkdir -p "$TMP/b/isl"
@@ -136,8 +133,7 @@ cat > "$TMP/b/useisl.ppl" <<EOF
 (print (isl-add 1))
 EOF
 if "$PP" --update "$TMP/b/useisl.ppl" >/dev/null 2>&1 \
-   && [ "$("$PP" "$TMP/b/useisl.ppl" 2>&1)" = "42" ] \
-   && [ "$("$PP" --bytecode "$TMP/b/useisl.ppl" 2>&1)" = "42" ]; then
+   && [ "$("$PP" "$TMP/b/useisl.ppl" 2>&1)" = "42" ]; then
   ok "ppb-island-from-ppl"
 else
   bad "ppb-island-from-ppl" "$("$PP" "$TMP/b/useisl.ppl" 2>&1)"
@@ -147,8 +143,7 @@ cat > "$TMP/b/useisl2.ppb" <<EOF
 import(island("file:$TMP/b/isl", "$PIN"))
 print(isl-add(9))
 EOF
-if [ -n "$PIN" ] && [ "$("$PP" "$TMP/b/useisl2.ppb" 2>&1)" = "50" ] \
-   && [ "$("$PP" --bytecode "$TMP/b/useisl2.ppb" 2>&1)" = "50" ]; then
+if [ -n "$PIN" ] && [ "$("$PP" "$TMP/b/useisl2.ppb" 2>&1)" = "50" ]; then
   ok "island-string-uri-from-ppb"
 else
   bad "island-string-uri-from-ppb" "pin=$PIN" "$("$PP" "$TMP/b/useisl2.ppb" 2>&1)"
@@ -168,8 +163,7 @@ import(island("file:$TMP/b/isl2"))
 print(isl2-add(1))
 EOF
 if "$PP" --update "$TMP/b/useisl3.pp" >/dev/null 2>&1 \
-   && [ "$("$PP" "$TMP/b/useisl3.pp" 2>&1)" = "42" ] \
-   && [ "$("$PP" --bytecode "$TMP/b/useisl3.pp" 2>&1)" = "42" ]; then
+   && [ "$("$PP" "$TMP/b/useisl3.pp" 2>&1)" = "42" ]; then
   ok "ppl-island-from-pp"
 else
   bad "ppl-island-from-pp" "$("$PP" "$TMP/b/useisl3.pp" 2>&1)"
@@ -185,8 +179,7 @@ cat > "$TMP/b/useisl4.ppl" <<EOF
 (print (isl3-add 2))
 EOF
 if "$PP" --update "$TMP/b/useisl4.ppl" >/dev/null 2>&1 \
-   && [ "$("$PP" "$TMP/b/useisl4.ppl" 2>&1)" = "43" ] \
-   && [ "$("$PP" --bytecode "$TMP/b/useisl4.ppl" 2>&1)" = "43" ]; then
+   && [ "$("$PP" "$TMP/b/useisl4.ppl" 2>&1)" = "43" ]; then
   ok "pp-island-from-ppl"
 else
   bad "pp-island-from-ppl" "$("$PP" "$TMP/b/useisl4.ppl" 2>&1)"
@@ -215,24 +208,20 @@ else
   bad "assert-message-parity" "pp:  $err_pp" "ppb: $err_ppb"
 fi
 
-# ---- (d) emit-braces on a real file: same output, both backends ----
+# ---- (d) emit-braces on a real file: same output ----
 # The tree is brace-surface; derive the sexpr (.ppl) form first, then emit
-# braces from IT — the emitted program must still behave byte-identically
-# to the original.
+# braces from IT — the emitted program must still behave correctly.
 "$PP" fmt --to-sexpr "$ROOT/tests/007-phase0-laws.pp" > "$TMP/007.ppl" 2>"$TMP/emit.err" \
   || bad "fmt-to-sexpr-007" "$(cat "$TMP/emit.err")"
 "$PP" --emit-braces "$TMP/007.ppl" > "$TMP/007.ppb" 2>"$TMP/emit.err"
 if [ $? -ne 0 ]; then bad "emit-braces-007" "$(cat "$TMP/emit.err")"; fi
-for be in "" "--bytecode"; do
-  tag=$([ -z "$be" ] && echo tw || echo vm)
-  o_pp=$(HOME="$TMP/h-007-$tag-pp" "$PP" $be "$ROOT/tests/007-phase0-laws.pp" 2>&1)
-  o_ppb=$(HOME="$TMP/h-007-$tag-ppb" "$PP" $be "$TMP/007.ppb" 2>&1)
-  if [ "$o_pp" = "$o_ppb" ] && printf '%s' "$o_ppb" | grep -q 'ALL TESTS PASSED'; then
-    ok "emit-007-diff-$tag"
-  else
-    bad "emit-007-diff-$tag" "outputs differ:" "$(diff <(printf '%s' "$o_pp") <(printf '%s' "$o_ppb") | head -6)"
-  fi
-done
+o_pp=$(HOME="$TMP/h-007-pp" "$PP" "$ROOT/tests/007-phase0-laws.pp" 2>&1)
+o_ppb=$(HOME="$TMP/h-007-ppb" "$PP" "$TMP/007.ppb" 2>&1)
+if [ "$o_pp" = "$o_ppb" ] && printf '%s' "$o_ppb" | grep -q 'ALL TESTS PASSED'; then
+  ok "emit-007-diff"
+else
+  bad "emit-007-diff" "outputs differ:" "$(diff <(printf '%s' "$o_pp") <(printf '%s' "$o_ppb") | head -6)"
+fi
 
 # ---- (e) round-trip (AST + hash equality, SPEC law 20) over the whole tree ----
 # The tree is brace-surface; --roundtrip-braces takes sexpr input (it

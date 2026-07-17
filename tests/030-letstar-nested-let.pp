@@ -1,9 +1,9 @@
-# tests/030 — regression pin for a VM slot-reuse bug caught by the fuzzer
+# tests/030 — regression pin for a slot-reuse bug caught by the fuzzer
 # (fuzz-failures/outdiff_* of 2026-07-10): a nested `let` inside a `let*`
-# binding RHS made the VM read the WRONG slot for a sibling binding (e.g.
+# binding RHS read the WRONG slot for a sibling binding (e.g.
 # x8 evaluated to x12's 48 instead of 97). Fixed in the working tree; these
-# four shrunk repros must print the tree-walker's answers under both
-# backends forever.
+# four shrunk repros must print the correct answers under the tree-walker
+# forever.
 let* (x7 = 0, x8 = let (x12 = 48) { 97 }) {
   print(if x8 { x8 } else {
     vector-get(vec[if true { 24 } else { 72 }, if false { 11 } else { x7 }, +(84, 71, 96)], 1) }) }

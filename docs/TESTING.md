@@ -1,8 +1,10 @@
 # pp testing
 
-pp's correctness rests on differential testing. Every test runs under both
-back ends — the tree-walker and the bytecode VM — and their output must
-match byte for byte. A fixed test suite and a fuzzer enforce this.
+pp's correctness rests on two pillars: an expected-output test suite and a
+metamorphic fuzzer. Every `.pp` test is checked against a blessed
+`tests/NNN-*.pp.expected` file that records the tree-walker's output. The
+fuzzer generates semantics-preserving program twins and asserts they produce
+identical output.
 
 This file describes the machinery only. Each test file's own header
 comment states what that test proves. Read the file, not a catalogue.
@@ -16,24 +18,14 @@ dune runtest --force  # re-run even if dune's cache says nothing changed
 
 `scripts/run-tests.sh` does two things:
 
-- runs every `tests/NNN-*.pp` under both back ends (`pp file` and
-  `pp --bytecode file`) and fails on any output difference
+- runs every `tests/NNN-*.pp` and diffs its stdout against
+  `tests/NNN-*.pp.expected`; a missing `.expected` file is a failure
 - runs each `tests/*.sh` shell suite in turn
 
 The shell suites cover what a single-process stdout diff cannot:
 multi-process store scenarios (mutating files, grants or globals between
 `pp` invocations), expected-output oracles, watch loops, and simulated
 cluster members.
-
-To run one differential file by hand:
-
-```sh
-pp --diff tests/007-phase0-laws.pp
-```
-
-The two checks are complementary. `--diff` compares the returned values
-of top-level forms. The suite diffs stdout, so it also catches print and
-effect-ordering divergences that do not change return values.
 
 Two proofs run outside `dune runtest` because they invoke dune or the
 network:
@@ -44,6 +36,7 @@ network:
   downloads the pinned tarball on first use
 
 The suite is slow: a full run takes about 3.5 minutes.
+
 
 ## Find what a test covers
 
@@ -56,10 +49,11 @@ awk 'FNR==1{d=0} /^#!/{next} /^# pins:/{next} /^#/ && !d {print FILENAME ": " su
 
 ## Add a test
 
-A differential `.pp` test needs no wiring: drop `tests/NNN-name.pp` in
-`tests/` and the driver's glob picks it up. A shell suite needs one
-invocation added to `scripts/run-tests.sh`, which calls each suite
-explicitly.
+A `.pp` test needs no wiring beyond its `.expected` file: drop
+`tests/NNN-name.pp` and a blessed `tests/NNN-name.pp.expected` in `tests/`
+and the driver's glob picks them up. To create the `.expected` file, run
+the test once and capture its output. A shell suite needs one invocation
+added to `scripts/run-tests.sh`, which calls each suite explicitly.
 
 Conventions:
 
@@ -71,7 +65,6 @@ Conventions:
   resolve it to an absolute path before changing directories
 - isolate the store: `TMP=$(mktemp -d); export HOME="$TMP"` keeps
   `~/.pp/store` inside the sandbox and off the developer's real store
-- run both back ends wherever the feature exists in both
 
 ## Standing gates
 
@@ -108,19 +101,39 @@ obligation to the build, so a change cannot ship unexamined.
   plain restart must neither crash nor produce anything but the
   byte-identical clean-build result.
 
-## The differential fuzzer
+## The metamorphic fuzzer
 
-`tools/fuzz.ml` generates random pp programs, runs each one under both
-back ends, and checks that they behave identically. It deduplicates
-divergences by signature, shrinks each one to a minimal repro, and
-writes it to a failure directory. It depends only on OCaml's `unix`
-library and is fully deterministic: program i under seed S is always the
-same program.
+`tools/fuzz.ml` generates random pp programs, then applies
+semantics-preserving transforms to produce a twin — a program that must
+behave identically to the original. It runs both the original and the
+twin, and asserts identical observable behavior: same exit status, same
+stdout, same effect log. A mismatch is deduplicated by signature, shrunk
+to a minimal repro, and written to a failure directory. The fuzzer
+depends only on OCaml's `unix` library and is fully deterministic:
+program i under seed S is always the same program.
+
+### The twin transforms
+
+Three transforms produce the semantics-preserving twin:
+
+- **do-wrap**: wraps the program's body in a `(do …)`, which is an
+  identity for a single expression — `(do e)` must produce identical
+  output to `e`.
+- **let-identity**: wraps a value expression in `(let ((_ e)) …)`, an
+  unused binding that must not change semantics.
+- **eta-identity**: eta-expands a `fn` application — `(f x)` becomes
+  `((fn (y) (f y)) x)` — which must be behaviorally identical.
+
+Transforms skip subtrees containing `def`, `fn`, `quote`, `quasiquote`,
+`load`, `load-module`, `defmacro` arguments, or `match` patterns, where
+the transform would change semantics or scoping.
+
+### The reader round-trip gate
 
 Every generated program also passes through `pp --roundtrip-braces`,
 which prints the sexpr AST as brace text, re-reads it with the brace
 reader, and asserts structural AST equality and hash equality (SPEC law
-20). Any failure gates the run like a backend mismatch.
+20). Any failure gates the run like a twin mismatch.
 
 ```sh
 dune build                                              # builds bin/pp + the fuzzer
@@ -138,25 +151,24 @@ Options (defaults in parens):
 | `--seed N` (0) | RNG seed. Program i is `Random.full_init [|seed; i|]`. |
 | `--count K` (1000) | number of programs |
 | `--max-depth D` (6) | expression-tree depth limit |
-| `--timeout-ms T` (5000) | per-backend wall-clock timeout; overrun = CRASH |
+| `--timeout-ms T` (5000) | per-run wall-clock timeout; overrun = CRASH |
 | `--out DIR` (`fuzz-failures`) | failure artifact directory |
 | `--grammar core\|full` (core) | grammar profile, see below |
 | `--start N` (0) | first iteration index (to reproduce a specific program) |
 | `--dump N` | print program N and exit |
 | `--pp PATH` (`bin/pp`) | interpreter binary |
 | `--stdlib PATH` (`$CWD/stdlib/list.pp`) | path baked into generated `(load …)` |
-| `--shrink-budget N` (300) | max backend-pair executions per shrink |
+| `--shrink-budget N` (300) | max twin-pair executions per shrink |
 
 ### Grammars
 
-- `core` — forms both back ends must agree on: literals, control flow,
+- `core` — forms that must always agree: literals, control flow,
   functions, definitions, the arithmetic and collection builtins,
   strings, `print`, literal-key config, and the stdlib list functions.
   Any non-PASS on `core` is a real bug; its exit code is the CI gate.
-- `full` — `core` plus everything that has ever divided the two back
-  ends: type annotations with deliberate ill-typed calls, modules and
-  computed config keys, effects and handlers, deep recursion, scoping
-  edge cases, and `defmacro`.
+- `full` — `core` plus harder surface: type annotations with deliberate
+  ill-typed calls, modules and computed config keys, effects and
+  handlers, deep recursion, scoping edge cases, and `defmacro`.
 
 The fuzzer never generates nondeterministic or security-sensitive
 forms: `random`, wall-clock reads, file writes, capability constructors
@@ -167,9 +179,9 @@ no language surface at all, so there is nothing to generate for it.
 
 | verdict | condition | CI effect |
 |---|---|---|
-| PASS | both exit 0, stdout identical, stderr identical | — |
-| MISMATCH | stdout differs, effect-log (stderr) differs while both exit 0, or exactly one backend errors | fails |
-| BOTH-ERROR | both exit non-zero; grouped by normalized error tag | soft class for now |
+| PASS | twin exit 0, stdout identical, stderr identical | — |
+| MISMATCH | stdout differs, effect-log (stderr) differs while twin exit 0 | fails |
+| BOTH-ERROR | twin exit non-zero; grouped by normalized error tag | soft class for now |
 | CRASH | either side times out, dies by signal, or exits > 128 | fails |
 
 Exit code is non-zero if and only if MISMATCH + CRASH > 0. Signatures
@@ -182,9 +194,9 @@ thousands of failures collapse to a handful of bug classes.
 fuzz-failures/<sanitized-signature>/
   <iter>.ppl         # up to 3 raw failing programs (sexpr text)
   <iter>.tw.out      # tree-walker status + stdout + stderr
-  <iter>.bc.out      # VM status + stdout + stderr
+  <iter>.twin.out    # twin status + stdout + stderr
   min.ppl            # shrunk minimal repro (not for BOTH-ERROR)
-  min.tw.out / min.bc.out
+  min.tw.out / min.twin.out
 ```
 
 Shrinking is greedy to a fixpoint: drop top-level forms, hoist a child
@@ -201,7 +213,7 @@ of a `--seed 0 --grammar full` run:
 ```sh
 dune exec ./tools/fuzz.exe -- --grammar full --seed 0 --dump 1234 > repro.ppl
 dune exec ./tools/fuzz.exe -- --grammar full --seed 0 --start 1234 --count 1
-pp repro.ppl; pp --bytecode repro.ppl
+pp repro.ppl
 ```
 
 Generated programs are sexpr text, so the redirected file takes the
@@ -211,7 +223,7 @@ and `--stdlib` must match the original run for byte-identity.
 ### Adding a grammar rule
 
 1. Verify the form against `src/` first: reader syntax, primitive
-   names, both back ends' handling. Do not invent function names.
+   names, the evaluator's handling. Do not invent function names.
 2. For a new expression production, add a weighted arm to the right
    typed generator in `fuzz.ml`. Keep it well-scoped and type-correct.
 3. For a new top-level production, write a `stmt_*` returning `sx list`

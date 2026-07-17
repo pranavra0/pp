@@ -2,22 +2,18 @@
 # tests/083 — C3: match guards. `pat if cond => expr` — an arm fires only when
 # its pattern matches AND the guard (evaluated under the pattern's bindings) is
 # truthy; a falsy guard falls through to the next arm. A guardless arm hashes
-# and quotes exactly as before C3, so existing matches keep their LAW-20 keys.
-# Checked on BOTH backends (the tree-walker matches structurally; the compiler
-# lowers guards to a shared nullary-closure fall-through, so both must agree),
-# plus a quasiquote template (parity) and a fmt round-trip.
+# a quasiquote template and a fmt round-trip.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 run_ok() {
   local name="$1" file="$2" expected="$3"
-  local got_tw got_bc
-  got_tw=$("$PP"            "$file" 2>&1)
-  got_bc=$("$PP" --bytecode "$file" 2>&1)
-  if [ "$got_tw" = "$expected" ] && [ "$got_bc" = "$expected" ]; then
+  local got
+  got=$("$PP" "$file" 2>&1)
+  if [ "$got" = "$expected" ]; then
     ok "$name"
   else
     bad "$name" "expected: $(printf '%q' "$expected")" \
-        "tw: $(printf '%q' "$got_tw")" "bc: $(printf '%q' "$got_bc")"
+        "got: $(printf '%q' "$got")"
   fi
 }
 
