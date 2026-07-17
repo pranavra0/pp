@@ -20,7 +20,7 @@ catch-all without understanding which match it belongs to.
 
 ## Direction
 
-Improve the architecture incrementally. Preserve behavior first; avoid a large
+Improve the architecture. Preserve behavior first; avoid a large
 rewrite. Every refactoring step should keep `dune build`, the full suite, and
 the required fuzzer green.
 
@@ -58,12 +58,13 @@ serialization.
 
 ### Phase 4: improve feedback quality
 
-- Fix or intentionally document every compiler warning.
+- Fix every compiler warning.
 - Add focused unit tests beneath the large shell integration tests.
 - Keep expected-output tests for language behavior and integration tests for
   cache/store/world behavior.
 - Keep historical design documentation separate from current implementation
-  claims.
+  claims
+- Don't leak things like "phases" into comments - don't overcomment - keep comments clear and focused on the task at hand. A comment is forever. The code around it moves, the tests move, the build moves, and the comment stays exactly as written with nothing to tell you it started lying. Comments have no tests. Write accordingly. If deleting a test or editing a workflow would make this sentence false, it does not belong in a comment.
 
 ## First recommended task
 
