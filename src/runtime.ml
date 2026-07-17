@@ -23,6 +23,27 @@ type invocation = {
 let invocation : invocation option ref = ref None
 let invocation_get () : invocation =
   match !invocation with Some i -> i | None -> failwith "invocation not set"
+type state = {
+  mutable observe_all : bool;
+  mutable observed_all : (string * string) list;
+  mutable proc_observer : string -> string option;
+  mutable probe_observer : string -> string option;
+  mutable keep_thunks : bool;
+  mutable fenced_actions : (string * value) list;
+  mutable island_fetch_enabled : bool;
+  mutable domain_cell_observer : string -> string -> string option;
+}
+
+let state = {
+  observe_all = false;
+  observed_all = [];
+  proc_observer = (fun _ -> None);
+  probe_observer = (fun _ -> None);
+  keep_thunks = false;
+  fenced_actions = [];
+  island_fetch_enabled = false;
+  domain_cell_observer = (fun _ _ -> None);
+}
 
 (* Content-addressed thunk store *)
 let thunk_store : (string, thunk) Hashtbl.t = Hashtbl.create 1024
@@ -46,10 +67,8 @@ let thunk_store : (string, thunk) Hashtbl.t = Hashtbl.create 1024
 (* Program-level observation collection for the reconciler's stratification
    check (LAW 30): when enabled (pp --reconcile), every recorded cell
    observation — whether or not a node frame is active — is also appended
-   here, so the reconciler can refuse a desired state whose computation read
-   its own domain. *)
-let observe_all = ref false
-let observed_all : (string * string) list ref = ref []
+   to [state.observed_all], so the reconciler can refuse a desired state
+   whose computation read its own domain. *)
 
 (* Record a (cell-id, observed-hash) world-read into every active trace frame.
    Deduplicated per frame on the (cell, hash) PAIR — not the cell alone: if one
@@ -60,7 +79,7 @@ let observed_all : (string * string) list ref = ref []
 let record_read (cell_id : string) (observed_hash : string) : unit =
   ignore (Effect.perform (Record_read (cell_id, observed_hash)));
   if Effect.perform Get_observe_all then
-    observed_all := (cell_id, observed_hash) :: !observed_all
+    state.observed_all <- (cell_id, observed_hash) :: state.observed_all
 
 (* ---- Per-node sandbox (LAW 18) ----
 
@@ -132,20 +151,18 @@ let sandbox_resolve ?(create = false) (path : string) : string option =
    kind (fs and proc keep their existing cell kinds even though only fs's
    is live), so this hook stays as its dormant counterpart rather than an
    asymmetric partial removal. *)
-let proc_observer : (string -> string option) ref = ref (fun _ -> None)
 
 let observe_proc (name : string) : string option =
-  !proc_observer name
+  state.proc_observer name
 
 (* Probes: Store-facing re-observation hook, wired in main.ml
    (`Runtime.probe_observer := Primitives.probe_observe_for_store`) exactly
    like [proc_observer] above and for the same reason — Store.ml cannot
    depend on Primitives.ml directly (Primitives already depends on Store, so
    the reverse would be a module cycle), so the hook is the indirection. *)
-let probe_observer : (string -> string option) ref = ref (fun _ -> None)
 
 let observe_probe (name : string) : string option =
-  !probe_observer name
+  state.probe_observer name
 
 let config_cell_id (key : string) : string = Cell.(to_string (Config key))
 let handler_cell_id (name : string) : string = Cell.(to_string (Handler name))
@@ -235,9 +252,8 @@ let stdlib_root () : string option =
    component); this is why a write-target's cell id is stable across the
    file's creation. No trailing slash (root "/" excepted).
 
-   NFC Unicode normalization is NOT implemented — a documented residual
-   (SPEC LAW 23, STATUS.md); it would need a new dependency (uunf) and is
-   orthogonal to the realpath handling here. *)
+   NFC Unicode normalization is applied by the dependency-free [Nfc]
+   normalizer after filesystem resolution. *)
 let canonical_path_impl (p : string) : string =
   let abs = if Filename.is_relative p then Filename.concat (Sys.getcwd ()) p else p in
   let strip_trailing s =
@@ -266,9 +282,12 @@ let canonical_path_impl (p : string) : string =
          | x -> x :: acc)
          [] remaining)
   in
-  match normalized_tail with
-  | [] -> real_existing
-  | _ -> real_existing ^ "/" ^ String.concat "/" normalized_tail
+  let resolved =
+    match normalized_tail with
+    | [] -> real_existing
+    | _ -> real_existing ^ "/" ^ String.concat "/" normalized_tail
+  in
+  Nfc.nfc_normalize resolved
 
 let canonical_path (p : string) : Paths.canonical =
   Paths.canonicalize ~realpath:canonical_path_impl p
@@ -331,19 +350,16 @@ let with_form_location (e : expr) (f : unit -> 'a) : 'a =
 (* --stabilize: when true, init skips Hashtbl.clear thunk_store so
    clean thunks remain Evaluated and skip Store.hit on re-execute.
    Set false for cold runs and --once; true for stabilize iterations. *)
-let keep_thunks = ref false
 
 (* ---- Fenced-effect registry (LAW 31) ----
    Scripting-tier `(fenced KIND SPEC)` registers an action here.  The
    reconciler/supervisor drains this list after convergent work, one action at
    a time, journaling intent/done around each. *)
-let fenced_actions : (string * value) list ref = ref []
 
 (* Island fetching (--fetch-islands / --update): runtime authority for the
    loader to run git and populate the island cache (LAW 24). NOT a user
    capability — procurement is the interpreter's job, and with it disabled
    (the default) island resolution never touches the network. *)
-let island_fetch_enabled = ref false
 
 
 let fenced_policy_name = function
@@ -386,11 +402,9 @@ let domain_registry : (string, domain_entry) Hashtbl.t = Hashtbl.create 16
    in main.ml (mirrors proc_observer/probe_observer just below) — Store
    cannot depend on Primitives directly (module-cycle reasons identical to
    those hooks). *)
-let domain_cell_observer : (string -> string -> string option) ref =
-  ref (fun _ _ -> None)
 
 let observe_domain_cell (name : string) (sub : string) : string option =
-  !domain_cell_observer name sub
+  state.domain_cell_observer name sub
 
 (* Per-pass pinned probe results: cleared at exactly the three points the
    watch loop clears Store.run_pins (main.ml) — probes are LAW 38's declared-
