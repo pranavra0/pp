@@ -468,7 +468,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       let body_start = current_offset st in
       (* Pass 1: collect def/value-def names for the block's letrec* scope. *)
       let saved_in_module = st.in_module in
-      st.in_module <- true;
+      st.in_module <- false;  (* CALL_MODULE handles isolation at runtime *)
       let (start_slot, def_map, val_map, restore) = collect_block_defs st exprs in
       (* Pass 2: compile each child, storing defs/value-defs into their slot
          (so later siblings can resolve them via LOAD_LOCAL) in addition to
