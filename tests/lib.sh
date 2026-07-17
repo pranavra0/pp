@@ -57,3 +57,30 @@ assert_count() {  # NAME PAT WANT FILE [TIMEOUT-SECS=10]
   if [ "$got" = "$want" ]; then ok "$name"
   else bad "$name" "expected $pat count $want, got $got" "--- $file ---" "$(cat "$file" 2>/dev/null)"; fi
 }
+
+assert_count_stable() {  # NAME PAT WANT FILE [TIMEOUT-SECS=1]
+  local name="$1" pat="$2" want="$3" file="$4" secs="${5:-1}"
+  local i=0 max=$(( secs * 10 )) got=0
+  while [ "$i" -lt "$max" ]; do
+    got=$(grep -cE "$pat" "$file" 2>/dev/null); got=${got:-0}
+    if [ "$got" -ne "$want" ]; then
+      bad "$name" "expected stable count $want, got $got" "--- $file ---" "$(cat "$file" 2>/dev/null)"
+      return
+    fi
+    sleep 0.1
+    i=$(( i + 1 ))
+  done
+  ok "$name"
+}
+
+# Explicit lifecycle vocabulary for integration tests. A command creates a
+# process; an evaluation is one cold, one-shot run; a watch pass is observed
+# by waiting for its output; and a REPL input is one logical submitted form.
+new_command() { "$PP" "$@"; }
+new_evaluation() { new_command --once "$@"; }
+new_watch_pass() {  # NAME PATTERN COUNT FILE [TIMEOUT-SECS]
+  assert_count "$@"
+}
+repl_input() {  # logical input lines; one command, many REPL inputs
+  printf '%s\n' "$@" | new_command
+}

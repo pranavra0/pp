@@ -197,35 +197,7 @@ two orchestration functions.
 
 The order matters. Later boundaries assume earlier ownership and tests.
 
-### 2. Write and enforce the state-lifetime inventory
 
-**Purpose:** make every mutation's owner and reset point explicit before moving
-state.
-
-**Work:**
-
-- Inventory every top-level `ref`, mutable record field, mutable thunk field,
-  module-level `Hashtbl`, lazy environment-dependent value, installed callback,
-  signal handler, and process counter in `src/`.
-- For each, record: owner, lifetime, constructor, reset operation, readers,
-  writers, fork behavior, thread/process safety, and whether persistence is
-  intentional.
-- Classify each as process service, invocation, command, evaluation session,
-  pass, dynamic scope, node, durable store, or test/diagnostic state.
-- Put the inventory in this roadmap while it drives work. Delete rows as state
-  gains an obvious code owner; do not turn the inventory into permanent prose.
-- Add a small script or test that lists top-level mutable declarations and fails
-  when new ones appear without an allowlisted owner. It is a drift detector, not
-  a ban on mutation.
-
-**Likely files:** this document, a test script, `scripts/run-tests.sh`.
-
-**Verify:** the inventory accounts for all search results from `ref`, `mutable`,
-and top-level `Hashtbl.create`; the drift test fails on a deliberate fixture.
-
-**Exit:** no unclassified process-global mutation remains.
-
-**Non-goal:** move state during the inventory task.
 
 ### 3. Characterize run, pass, and watch lifecycles
 

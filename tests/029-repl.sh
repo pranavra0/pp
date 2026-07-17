@@ -66,6 +66,55 @@ got=$(printf 'let x = 21\nx * 2\n' | repl | tail -1)
 if [ "$got" = "42" ]; then ok "defs-persist"
 else bad "defs-persist" "got: $(printf '%q' "$got")"; fi
 
+# ---- REPL input deliberately retains command state, but dynamic scopes unwind
+# after each submitted form. A macro and gensym counter survive between inputs;
+# config, handlers, errors, and their diagnostics do not. ---
+out=$(repl_input \
+  'defmacro repl-constant(x) { 42 }' \
+  'print(repl-constant(0))')
+if printf '%s\n' "$out" | grep -q '^42$'; then ok "macro-survives-repl-input"
+else bad "macro-survives-repl-input" "out: $(printf '%q' "$out")"; fi
+
+out=$(repl_input \
+  'print(gensym("repl"))' \
+  'print(gensym("repl"))')
+if printf '%s\n' "$out" | grep -q '^repl~1$' \
+   && printf '%s\n' "$out" | grep -q '^repl~2$'; then
+  ok "gensym-survives-repl-input"
+else
+  bad "gensym-survives-repl-input" "out: $(printf '%q' "$out")"
+fi
+
+out=$(repl_input \
+  'with-config({:mode -> "scoped"}) { print(config(:mode, "default")) }' \
+  'print(config(:mode, "default"))')
+if printf '%s\n' "$out" | grep -q '^"scoped"$' \
+   && printf '%s\n' "$out" | grep -q '^"default"$'; then
+  ok "config-does-not-survive-repl-input"
+else
+  bad "config-does-not-survive-repl-input" "out: $(printf '%q' "$out")"
+fi
+
+out=$(repl_input \
+  'with-handler(log = fn(x) { print("handled", x) }) { perform log("first") }' \
+  'perform log("second")' 2>"$TMP/handler-err")
+if printf '%s\n' "$out" | grep -q '^"handled""first"$' \
+   && ! grep -q 'handled.*second' "$TMP/handler-err" \
+   && grep -q '^\[info\] second$' "$TMP/handler-err"; then
+  ok "handler-does-not-survive-repl-input"
+else
+  bad "handler-does-not-survive-repl-input" \
+    "out: $(printf '%q' "$out")" "err: $(cat "$TMP/handler-err")"
+fi
+
+out=$(repl_input 'car(5)' '1 + 1')
+if printf '%s\n' "$out" | grep -q '^Error: ' \
+   && printf '%s\n' "$out" | grep -q '^2$'; then
+  ok "error-does-not-poison-next-repl-input"
+else
+  bad "error-does-not-poison-next-repl-input" "out: $(printf '%q' "$out")"
+fi
+
 # ---- (c) no prompts/banner when piped ----
 got=$(printf '1 + 2\n' | repl)
 if [ "$got" = "3" ]; then ok "no-prompt-when-piped"
@@ -76,6 +125,19 @@ rm -rf "$TMP/.pp"
 printf ':why on\nforce(node { 40 + 2 })\n' | repl > "$TMP/out"
 if grep -q "\[why\]" "$TMP/err" && grep -q "^42$" "$TMP/out"; then ok "why-toggle"
 else bad "why-toggle" "out: $(cat "$TMP/out")" "err: $(cat "$TMP/err")"; fi
+
+# Diagnostic mode is command state: it is visible to later work in the same
+# command, but a new command starts with the default quiet setting.
+printf 'force(node { 40 + 2 })\n' > "$TMP/diagnostic.pp"
+new_command --why "$TMP/diagnostic.pp" > "$TMP/diagnostic-one-out" 2> "$TMP/diagnostic-one-err"
+new_command "$TMP/diagnostic.pp" > "$TMP/diagnostic-two-out" 2> "$TMP/diagnostic-two-err"
+if grep -q '\[why\]' "$TMP/diagnostic-one-err" \
+   && ! grep -q '\[why\]' "$TMP/diagnostic-two-err"; then
+  ok "diagnostics-reset-at-new-command"
+else
+  bad "diagnostics-reset-at-new-command" \
+    "first: $(cat "$TMP/diagnostic-one-err")" "second: $(cat "$TMP/diagnostic-two-err")"
+fi
 
 # ---- (e) exit code control in the REPL ----
 ec=0; printf 'exit(4)\n' | repl || ec=$?
