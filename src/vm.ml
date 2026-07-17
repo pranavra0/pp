@@ -127,7 +127,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
         Hashtbl.replace globals name v;
         (* Keep the tree-walker's current-env view in sync so that
            eval-pp sees VM globals as its calling environment. *)
-        Primitives.current_env_ref := Types.extend_env !Primitives.current_env_ref name v;
+        Backend.r.current_env <- Types.extend_env Backend.r.current_env name v;
         incr pc;
         loop ()
 
@@ -269,7 +269,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
          | VClosure c when c.vm_bc == Types.dummy_bytecode ->
              (* Tree-walker closure invoked from bytecode — fall back to
                 the evaluator's apply. *)
-             let r = Backend.r.apply fn_val args !Primitives.current_env_ref in
+             let r = Backend.r.apply fn_val args Backend.r.current_env in
              push r;
              incr pc;
              loop ()
@@ -291,7 +291,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
         let fn_val = pop () in
         (match fn_val with
          | VClosure c when c.vm_bc == Types.dummy_bytecode ->
-             result := Backend.r.apply fn_val args !Primitives.current_env_ref
+             result := Backend.r.apply fn_val args Backend.r.current_env
          | VClosure c ->
              local_frames := build_call_frames c args;
              bc_ref := c.vm_bc;
@@ -361,7 +361,7 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
            (fun args ->
             match hv with
             | VClosure c when c.vm_bc == Types.dummy_bytecode ->
-                Backend.r.apply hv args !Primitives.current_env_ref
+                Backend.r.apply hv args Backend.r.current_env
             | VClosure c ->
                 run_isolated c.vm_bc c.vm_offset (build_call_frames c args)
             | VBuiltin (_, f) -> f args
@@ -630,7 +630,7 @@ and vm_node_key (t : thunk) : string =
       Node.fv_hash ~name v vm_force)
     t.node_fv
   in
-  Node.node_key_skeleton ~expr_hash:(hash_expr t.thunk_expr) fv_hashes
+  Hasher.node_key_skeleton ~expr_hash:(hash_expr t.thunk_expr) fv_hashes
 
 (* Force a persistent VM node through the store: hit verification, failure
    memoization, trace recording, and the --check audit all live in
@@ -670,8 +670,8 @@ let rec init () =
   (* Build an env from all globals so tree-walker callbacks (eval-pp)
      can see the same top-level bindings as the VM. *)
   let global_bindings = Hashtbl.fold (fun name v acc -> (name, v) :: acc) globals [] in
-  Primitives.current_env_ref := Types.env_of_bindings global_bindings;
-  if not !Runtime.keep_thunks then Hashtbl.clear thunk_store;
+  Backend.r.current_env <- Types.env_of_bindings global_bindings;
+  if not Runtime.state.keep_thunks then Hashtbl.clear thunk_store;
   Backend.r.force <- vm_force;
   (* Config-cell observations (LAW 33) hash the forced value; under the VM the
      forcing is vm_force (Evaluator.init is not run on this path). *)
