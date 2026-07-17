@@ -1,7 +1,7 @@
 # pp status
 
 This file lists what pp does today, verified by running the code. Update it
-as reality changes. Open work lives in [PLAN.md](PLAN.md) and design
+as reality changes. Open discrepancies live in the ledger below; design
 rationale lives in [DESIGN.md](DESIGN.md).
 
 > Verified by *running* `dune runtest` and the fuzzer (`dune exec
@@ -10,8 +10,8 @@ rationale lives in [DESIGN.md](DESIGN.md).
 
 ## What pp is
 
-pp is a Lisp with two backends: a tree-walking evaluator and a bytecode VM.
-Both share one persistent, content-addressed, trace-verified build engine.
+pp is a Lisp with a single tree-walking evaluator engine and one
+persistent, content-addressed, trace-verified build engine.
 
 pp is a proven incremental hermetic build engine. A 101-translation-unit C
 project builds through a real `build.pp` and meets every exit criterion for
@@ -40,9 +40,8 @@ each hit in practice while proving the build engine claim above:
 
 - Portability. The store format is portable: nothing under `~/.pp/store`
   is OCaml's Marshal format; everything is canonical s-expression text or
-  raw bytes under a `VERSION` stamp (`tests/037`). The one remaining use of
-  Marshal (bytecode hashing in `types.ml`) is in-memory only and never
-  persisted. CI (`.github/workflows/ci.yml`: `dune build`, `dune runtest`,
+  raw bytes under a `VERSION` stamp (`tests/037`). CI
+  (`.github/workflows/ci.yml`: `dune build`, `dune runtest`,
   the fuzzer, `scripts/build-lua.sh`) is green on both ubuntu-latest and
   macos-latest. Unicode NFC normalisation of cell ids is not implemented.
 - Releases. `pp --version` and the REPL banner report a real version from
@@ -53,8 +52,8 @@ each hit in practice while proving the build engine claim above:
   is wanted.
 - Ergonomics and the standard library. Both are still thin. The worst
   footgun — `(def x v)` silently creating a nullary closure — is fixed: a
-  non-list `def` is now a value binding (`tests/025`). Remaining gaps are
-  listed in [PLAN.md](PLAN.md).
+  non-list `def` is now a value binding (`tests/025`). Remaining gaps are the
+  open entries in the ledger below.
 
 ## What works today
 
@@ -102,18 +101,13 @@ The tree-walking evaluator applies functions strictly, call by value.
 trampoline that switches to a heap work queue past a depth threshold. Deep
 non-tail recursion is still bounded by the OCaml stack.
 
-The bytecode VM compiles to 29 opcodes; `--diff` runs a program on both
-backends and compares the results. `.ppc` bytecode serialisation is
-complete but unused: it is lossy, `cache.ml` has been deleted, and the
-value/trace store (`store.ml`) has replaced it in the tree-walker.
 
-Tail calls are optimised in both backends: CPS-style `eval_tail`/
-`apply_tail` in the tree-walker, a `TAIL_CALL` frame swap in the VM.
+Tail calls are optimised: CPS-style `eval_tail`/`apply_tail` in the
+tree-walker.
 
 Effects and handlers use a dynamic handler stack with builtin fallbacks
 for read-file, write-file and log. `do` evaluates each step strictly.
-Effect, handler and config scopes restore correctly on a normal return, an
-exception, and a tail call, in both backends.
+exception, and a tail call.
 
 Capability checking happens at the point a filesystem read or write is
 performed, and for `slurp`, gated on `--grant process` for the `run`
@@ -124,13 +118,10 @@ The tree-walker produces module values (`VEnvMap`).
 
 ### Caching and the persistent store
 
-`node { e }` marks a thunk as persistent. `force` in the tree-walker, and
-the `FORCE`/`vm_force` path in the VM, consult `~/.pp/store` (result
-objects keyed by hash, with a set of traces per node key). A second run of
-a pure node returns the stored result without re-running it, and without
-replaying its `log`/stdout output (LAW 17). The VM's node key is
-byte-identical to the tree-walker's for data-valued free variables, so the
-two backends share store entries (`tests/014`).
+`node { e }` marks a thunk as persistent. `force` consults `~/.pp/store`
+(result objects keyed by hash, with a set of traces per node key). A
+second run of a pure node returns the stored result without re-running it,
+and without replaying its `log`/stdout output (LAW 17).
 
 The store format is portable: objects, traces, fenced-action specs and
 process state serialise through a canonical, byte-stable s-expression
@@ -167,8 +158,7 @@ byte-identical result — this is why a comment-only header edit triggers a
 recompile but not a relink, whenever the build threads values through free
 variables. No dirty-propagation graph is needed for pull-mode caching; a
 reverse-edge graph now exists for push-mode `stabilize`, below.
-Inline-nested cutoff remains future work. Pinned by `tests/016-cutoff.sh`
-in both backends.
+Inline-nested cutoff remains future work.
 
 `config(k)` inside a node records a `config:<k>` cell (absence is a
 distinct observation); every `perform` records a `handler:<effect>` cell
@@ -177,10 +167,9 @@ nothing intercepts (LAW 33/26). Both re-check the caller's ambient config
 and handler stack on a hit. So changing a config value or handler a node
 never observed cannot invalidate it, and a node cached under a mock
 read-file and one cached under the real builtin coexist as two traces
-under one key. Fixing this exposed that same-arity VM closures all hashed
-identically; `hash_value` now hashes bytecode identity, entry offset and
-captured frames, guarding against cycles. Pinned by `tests/
-015-config-handler-cells.sh`.
+under one key. Fixing this exposed that same-arity closures all hashed
+identically; `hash_value` now hashes identity and captured frames,
+guarding against cycles. Pinned by `tests/015-config-handler-cells.sh`.
 
 A node that raises a Failure exception stores a failing trace (the error
 plus the reads made up to the failure); a later force re-serves the same
@@ -203,10 +192,8 @@ optional `fs_mode` argument (`:ro`/`:rw`/`:wo`, matching `--grant`'s names)
 that only ever narrows a grant — requesting a wider mode is a
 Capability_error. `with-caps(cap-expr) { body }` replaces the ambient
 capability set with exactly the requested value, checked against the
-current ambient, for the body's dynamic extent, in both backends, and
-restores correctly on exception and tail call (the VM runs the body
-through a real OCaml exception handler, unlike the flatter enter/exit
-pattern used by `with-config` and the removed `effect` form).
+current ambient, for the body's dynamic extent, and restores correctly on
+exception and tail call.
 
 The node boundary is enforced in both directions: a node's free variable
 that holds or contains a capability is a Capability_error at
@@ -234,23 +221,23 @@ A macro is a function from syntax-as-values to syntax-as-values:
 name(params) { body }` in braces. It receives its argument forms already
 converted to values by `quote_to_value`, runs its body through the
 tree-walker so expansion is backend-independent by construction, since it
-happens before either backend is chosen (LAW 36), and the result is
+happens before the evaluator runs (LAW 36), and the result is
 converted back to syntax by `Types.value_to_expr`.
 
-Expansion is the one shared step (`macro.ml`) both backends pass through
-before their own machinery sees a form. Because of this, LAW 20 needed no
+Expansion is the one shared step (`macro.ml`) the expansion boundary passes
+through before the evaluator sees a form. Because of this, LAW 20 needed no
 change: a node whose body comes from a macro call is keyed on the expanded
 code, so editing only the macro's definition re-keys any node that used it
 (`tests/042-defmacro-rekey.sh`).
 
 `defmacro` is not a reader special form — it parses as an ordinary
-application — so the compiler paths never need to know macros exist.
+application — so the evaluator never needs to see the unexpanded macro call.
 Macros are recognised only at the true top level of a file or REPL input,
 sequentially, like a value def; use before definition is an ordinary
 unbound-symbol error. They are not recognised inside `do`/`module`/`fn`/
 `node` bodies, including node bodies specifically: a `defmacro` there is
-left alone by the expander and fails as an ordinary unbound-symbol error,
-identically in both backends (`tests/042`).
+left alone by the expander and fails as an ordinary unbound-symbol error
+identically (`tests/042`).
 
 Hygiene is manual, not automatic: `gensym(["prefix"])` produces a symbol
 using `~` as a marker character the reader cannot parse, reset every run
@@ -261,11 +248,10 @@ redefinition; `tests/041-defmacro.ppl` keeps the original s-expression
 version, and `tests/056-defmacro-both-surfaces.sh` checks both).
 
 ### Running external tools
-
-`perform run(cmd, args…)` runs a process in both backends. It requires
-`--grant process` (denial raises Capability_error, never cached) and
-returns `{"exit" int, "out" str, "err" str}`. Inside a node, the child
-runs with the node's own scratch directory as its working directory;
+`perform run(cmd, args…)` runs a process. It requires `--grant process`
+(denial raises Capability_error, never cached) and returns
+`{"exit" int, "out" str, "err" str}`. Inside a node, the child runs
+with the node's own scratch directory as its working directory;
 relative slurp/read-file/write-file resolve into that scratch space,
 capability-free and unrecorded; an absolute write-file inside a node is an
 error (LAW 18); the scratch directory is deleted when the node's frame
@@ -335,7 +321,7 @@ restarting a service when its spec changes, compared structurally so key
 reordering alone never triggers a restart. It reaps and restarts a service
 killed with `kill -9` within one poll interval. Process state lives in
 `~/.pp/store/domain-state/proc/`, and every start/stop is journaled.
-Requires `--grant process`. Both backends. Pinned by `tests/
+Requires `--grant process`. Pinned by `tests/
 033-process-reconciler.sh`.
 
 Fenced effects handle actions that cannot simply be re-run, such as
@@ -345,7 +331,7 @@ inside a node body. Under `--reconcile` or `--supervise`, each action
 executes at most once per pass, journaled as `intent fenced KEY EPOCH KIND
 SPEC-HASH` before it runs and `done fenced KEY RESULT-HASH` after. On
 recovery, an intent with no matching done is resolved by `--fenced-policy
-retry|abort|ask`, never by silent retry. Both backends. Pinned by
+retry|abort|ask`, never by silent retry. Pinned by
 `tests/034-fenced-effects.sh`.
 
 ### Developer tools
@@ -356,7 +342,7 @@ redacted if the caller lacks authority over it, LAW 23c), or a hit with
 its verified trace. `--no-cache` skips reading the cache, so everything
 recomputes, but still stores fresh results and traces. `--check` re-runs
 each missed node's body and compares result hashes; a mismatch flags the
-node as volatile and fails the run. Both backends. Pinned by `tests/
+node as volatile and fails the run. Pinned by `tests/
 019-why-nocache-check.sh`.
 
 `pp --once file.pp` is the explicit one-shot mode, and the current
@@ -365,7 +351,7 @@ for content changes and re-runs on change, using the store's trace
 verification to skip unchanged nodes and recompute changed ones — proving
 `--watch` and `--once` collapse to the same store-level behaviour. `pp
 graph file.pp` runs the program, then scans `~/.pp/store/traces/` and
-prints the cell-to-node dependency graph. Both backends. Pinned by
+prints the cell-to-node dependency graph. Pinned by
 `tests/031-watch-once.sh`.
 
 `pp --watch --stabilize` uses a reverse-edge index built from stored
@@ -446,8 +432,8 @@ raises correctly inside a node under every schedule, are covered by
 The REPL supports multi-line input (paren-balanced, string- and
 comment-aware), a `~/.pp/history` file with Up/Down recall, raw-mode line
 editing on a terminal, deep-forced result printing, and `:why on|off` /
-`:help` / `:quit`. A piped session has no prompt and no banner. The VM REPL
-keeps globals across lines. Pinned by `tests/029-repl.sh`.
+`:help` / `:quit`. A piped session has no prompt and no banner.
+Pinned by `tests/029-repl.sh`.
 
 ### Probes, sealed values and network access
 
@@ -461,7 +447,7 @@ capability needed at the read site, since the authority was already spent
 evaluating the probe once. Results are pinned in memory only and cleared
 at the same points the store's run-level pins are cleared; nothing a probe
 returns is ever written to `~/.pp/store`. Reading an unregistered probe
-name is a hard error. Both backends. Pinned by `tests/043-probes.sh`.
+name is a hard error. Pinned by `tests/043-probes.sh`.
 
 `--grant secret:<path>` mints a secret capability, canonicalised like
 filesystem grants (LAW 39). `slurp`/`perform read-file` dispatch on which
@@ -471,8 +457,8 @@ sealed value, read from an in-memory pin and recorded as a `sealed:<path>`
 cell — its bytes are never written to a blob. Every printer redacts a
 sealed value to `#<sealed>`, and the codec refuses to encode it, so it can
 never reach the store as data either way. The node boundary bans a sealed
-value exactly like a capability, in both directions and both backends.
-Serving a cached hit on a sealed cell requires a covering secret grant.
+value exactly like a capability, in both directions. Serving a cached hit
+on a sealed cell requires a covering secret grant.
 `unseal(v)` is the one explicit way to get the string back — there is no
 other path. A recursive scan of `~/.pp/store` after a program reads a
 secret, and separately after one that unseals it, finds no secret bytes
@@ -486,7 +472,7 @@ the process one, since "may read this host" is a narrower claim than "may
 execute anything". Both are banned inside node bodies, since a network
 read is neither the declared non-determinism mechanism nor convergent, so
 it has no sound cached meaning. Results are `{"status" int, "body"
-string}`; a missing `curl` binary is a clean error. Both backends. Pinned
+string}`; a missing `curl` binary is a clean error. Pinned
 by `tests/045-network.sh`, which skips cleanly if `curl` or `python3` is
 absent.
 
@@ -497,7 +483,7 @@ surface, parsing to the exact same `Types.expr` the original s-expression
 reader always produced. Since LAW 20 keys computations on expanded code,
 surface syntax was never part of a program's identity, so this needed no
 change to node keys. The fuzzer checks print-then-reread and LAW-20 hash
-equality across both grammars and both backends. `pp fmt --to-braces`/
+equality across both grammars. `pp fmt --to-braces`/
 `--to-sexpr` is the lossless, comment-preserving transpiler.
 
 The whole tree — the standard library, `build.pp`, all 16 `tests/*.pp`
@@ -512,8 +498,8 @@ README, SPEC law examples and glossary use the brace surface throughout,
 keeping s-expressions only where quotation or macro or AST-identity is
 literally the point.
 
-This work changed no evaluator, VM, compiler, macro expander, store,
-codec, hasher, trace or capability code: a diff of `src/*.ml` outside
+This surface migration changed no evaluator, macro expander, store, codec,
+hasher, trace or capability code: a diff of `src/*.ml` outside
 `reader_braces.ml` and `main.ml`'s new `fmt` dispatch is empty.
 
 ### An end-to-end demonstration
@@ -613,7 +599,7 @@ direct `write-file` materialization rather than `--reconcile`. Pinned by
 `tests/048-remote-placement.sh` (an 8-translation-unit build with a real C
 compiler, byte-identical to a serial build; a cross-machine cache hit; the
 differing-file pinning case; a non-shippable value staying local; an
-unreachable member degrading cleanly; and VM parity).
+unreachable member degrading cleanly).
 
 The desired state passed to a domain can itself be host-qualified: `{host
 -> {domain -> desired}}`. `--member-name <n>` opts a run into taking only
@@ -665,34 +651,24 @@ simulation.
 
 ## Discrepancy ledger
 
-This is the punch list. "Fixed" means fixed and covered by a test. Open
-items are also tracked in [PLAN.md](PLAN.md).
+This is the punch list. "Fixed" means fixed and covered by a test.
 
 | # | Claim | Reality |
 |---|---|---|
-| D1 | Caching works across runs | Fixed. Node results and their verifying traces persist to `~/.pp/store` across processes, and both backends share the same store and key (`tests/014`). A hit re-verifies the node's recorded reads before serving (`tests/010`); nodes key on code plus free-variable value hashes, excluding environment and capabilities (`tests/011`); failures are memoised as failing traces (LAW 28, `tests/012`); hits are gated on the caller's authority over the transitive read closure (LAW 23b, `tests/013`); config and handler observations are trace cells, not key material (`tests/015`); value-keyed cutoff works (`tests/016`); the run effect records `tool:`/`tree:` cells (`tests/017`). The filesystem and process domains (`stdlib/domain-fs.pp`, `stdlib/domain-proc.pp`) now provide the reconciler this row originally flagged as missing. The `.ppc` bytecode serialiser remains unused. |
-| D2 | Islands fetch, pin and cache modules | Fixed. `(island <uri> "64-hex-pin")` is a content-addressed module: the pin is part of the code hash, so identity is structural, with no lockfile and no extra cell. It names an immutable tree under `~/.pp/islands/src/<pin>/`, checked against the pin on every resolve; tampering is a hard error. Both backends evaluate the pinned `entry.pp` as a module and share store entries. An unpinned form is a hard error naming the fix. `pp --update` re-resolves and rewrites pins in the source, refusing rather than half-writing. Fetching over git/github is opt-in (`--fetch-islands`), journaled, and governed by `THREAT-MODEL-islands.md`. `pp island-pins` inspects pins; `pp why` reports source drift. Pinned by `tests/035` and `tests/005`. |
-| D3 | The tree-walker is the correctness oracle | Fixed. Both backends enforce type annotations through the same `check_type` function; `tests/004` and `tests/005` run in the suite. |
+| D1 | Caching works across runs | Fixed. Node results and their verifying traces persist to `~/.pp/store` across processes. A hit re-verifies the node's recorded reads before serving (`tests/010`); nodes key on code plus free-variable value hashes, excluding environment and capabilities (`tests/011`); failures are memoised as failing traces (LAW 28, `tests/012`); hits are gated on the caller's authority over the transitive read closure (LAW 23b, `tests/013`); config and handler observations are trace cells, not key material (`tests/015`); value-keyed cutoff works (`tests/016`); the run effect records `tool:`/`tree:` cells (`tests/017`). The filesystem and process domains (`stdlib/domain-fs.pp`, `stdlib/domain-proc.pp`) now provide the reconciler this row originally flagged as missing. |
+| D2 | Islands fetch, pin and cache modules | Fixed. `(island <uri> "64-hex-pin")` is a content-addressed module: the pin is part of the code hash, so identity is structural, with no lockfile and no extra cell. It names an immutable tree under `~/.pp/islands/src/<pin>/`, checked against the pin on every resolve; tampering is a hard error. The tree-walker evaluates the pinned `entry.pp` as a module. An unpinned form is a hard error naming the fix. `pp --update` re-resolves and rewrites pins in the source, refusing rather than half-writing. Fetching over git/github is opt-in (`--fetch-islands`), journaled, and governed by `THREAT-MODEL-islands.md`. `pp island-pins` inspects pins; `pp why` reports source drift. Pinned by `tests/035` and `tests/005`. |
 | D4 | Deep thunk chains are handled | Partial. The trampoline handles forced thunk chains; deep non-tail evaluation recursion is still bounded by the OCaml stack. |
 | D5 | Hashing uses SHA-256 | Fixed. `hash_string` uses Cryptokit's SHA-256. |
 | D6 | Same hash means same thunk | Fixed. A closure's hash previously omitted its captured environment, so two colliding closures could return the wrong memoised result in the tree-walker. Fixed by folding the captured environment's hash into the closure hash, at constant time, with no traversal. Pinned by `tests/009`. |
-| D7 | The VM shares the caching story | Mostly fixed. The VM compiles `node` to a `MAKE_NODE` opcode and forces it through the same store, key, verifying traces, failure memoisation and capability gate as the tree-walker, sharing entries for data-valued free variables (`tests/014`). Remaining gap: the VM has no in-memory thunk dedup, since only the persistent node path is wired, and VM closures as free variables key per backend, because VM closures carry no captured environment. |
 | D8 | Capabilities are the whole security story | Mostly fixed. Path checks are component-aware and check the full path; `slurp` is gated; `random`, `CapTime` and `CapMemory` have been removed. Cache hits are gated on the caller's authority over the trace's transitive read closure; denials raise a distinct Capability_error and are not memoised. Loader reads (`load`/`island`) run under interpreter authority bounded to source roots plus `~/.pp`, traced as authority-exempt `runtime:file:` cells. |
-| D9 | VM effect and handler scoping is correct | Fixed. Save-stacks restore the exact prior scope; bodies compile non-tail so exits run before tail calls. |
-| D10 | Fexprs are operatives over syntax | Cut, and replaced. `def-fexpr` has been removed. Metaprogramming is served instead by `quote`/`quasiquote` and `defmacro`: one shared expansion point ahead of both backends, `value_to_expr` as `quote_to_value`'s inverse, and `gensym` for manual hygiene (`tests/041`, `tests/042-defmacro-rekey.sh`). |
+| D10 | Fexprs are operatives over syntax | Cut, and replaced. `def-fexpr` has been removed. Metaprogramming is served instead by `quote`/`quasiquote` and `defmacro`: one shared expansion point, `value_to_expr` as `quote_to_value`'s inverse, and `gensym` for manual hygiene (`tests/041`, `tests/042-defmacro-rekey.sh`). |
 | D11 | Quasiquote works | Fixed. The reader parses quasiquote, unquote and splicing; a runtime walker expands them, including nested forms, vectors and maps. |
-| D12 | Source locations are reported | Fixed. The reader emits locations and wraps `def`/`fn`/`defnode` bodies; the shared top-level driver appends a file and line to any unlocated runtime error in both backends, never doubled. Arity errors name the callee, capability errors name the operation, unbound-symbol text matches across backends, and an uncaught error prints as one line and exits 1 (`tests/027`). Errors inside a loaded file now cite that file's own line, not the loading form's line, in both backends (`tests/027`, case g). |
-| D13 | pp can run build tools as part of the language | Mostly fixed. `perform run(cmd, args…)` runs a process in both backends, gated on `--grant process`, returning `{"exit","out","err"}`, running with the node's sandbox as its working directory, and recording `tool:`/`tree:` cells so a tool or tree change invalidates the cached result. `write-file` inside a node is sandbox-scratch only. Pinned by `tests/017-run-effect.sh`. Remaining: `build.pp` itself needs nothing more to be written. |
+| D12 | Source locations are reported | Fixed. The reader emits locations and wraps `def`/`fn`/`defnode` bodies; the shared top-level driver appends a file and line to any unlocated runtime error, never doubled. Arity errors name the callee, capability errors name the operation, unbound-symbol text is consistent, and an uncaught error prints as one line and exits 1 (`tests/027`). Errors inside a loaded file now cite that file's own line, not the loading form's line (`tests/027`, case g). |
+| D13 | pp can run build tools as part of the language | Mostly fixed. `perform run(cmd, args…)` runs a process, gated on `--grant process`, returning `{"exit","out","err"}`, running with the node's sandbox as its working directory, and recording `tool:`/`tree:` cells so a tool or tree change invalidates the cached result. `write-file` inside a node is sandbox-scratch only. Pinned by `tests/017-run-effect.sh`. Remaining: `build.pp` itself needs nothing more to be written. |
 | D14 | `pc.pp` self-hosts the compiler | Cut. `pc.pp` and its test have been deleted. |
-| D15 | Backend parity holds in general | Fixed. VM `module` compiles all children; computed config keys work; non-final top-level expressions are forced. |
-| D16 | Error semantics are correct | Mostly fixed. A raising thunk resets rather than sticking, so the fake infinite-recursion report is gone (`tests/012`). A failing node run is memoised as a failing trace and re-served until a recorded read changes (LAW 28), in both backends (`tests/012`, `tests/014`). Exception-safe state restore for effect/handler/config scopes was already fixed. Remaining: only Failure exceptions are cached; reconciler-scoped failure epochs are future work. |
+| D16 | Error semantics are correct | Mostly fixed. A raising thunk resets rather than sticking, so the fake infinite-recursion report is gone (`tests/012`). A failing node run is memoised as a failing trace and re-served until a recorded read changes (LAW 28). Exception-safe state restore for effect/handler/config scopes was already fixed. Remaining: only Failure exceptions are cached; reconciler-scoped failure epochs are future work. |
 | D17 | Handlers and caching interact correctly | Fixed. The handler stack was not part of the thunk key, so a thunk memoised under one handler could be served under a different one. Fixed by folding each handler's value hash into the thunk key. Pinned by `tests/009`. At node granularity the handler stack is not key material at all — each perform records a `handler:<effect>` trace cell, re-checked at hit time (`tests/015`). |
 | D18 | Capabilities cannot be minted from user code | Fixed. `filesystem`, `network` and `process` are no longer builtins; capabilities enter only through `--grant`. |
 | D19 | The language is homoiconic | Fixed. `quote_to_value` handles every expression form; quasiquote expands at runtime. |
-| D20 | The VM handles load-module and the handler stack correctly | Fixed. `LOAD_MODULE_FILE` returns a module value; handler invocation saves and restores the operand stack. |
-| D21 | The VM reuses local slots correctly | Fixed, found by the fuzzer. The VM frame is one mutable array shared by every thunk and closure that captures it; a nested `let` inside a `let*` binding could compile to a thunk that clobbered a sibling's reused slot. Fixed by reserving a slot for a frame's whole lifetime instead of truncating on scope exit. Pinned by `tests/008`. |
-| D22 | The VM has no global-scope holes | Fixed, found while fixing the `def` footgun. Two divergences between the VM and the tree-walker, both from the VM resolving names it cannot place in a frame via a globals table: a top-level `do` block was leaking its defs past the block, and a module body was resolving sibling defs as globals instead of seeing earlier siblings the way the tree-walker does. Fixed by always binding a `do` block's defs as local slots, and by compiling a module body as a fresh zero-parameter closure so sibling defs get their own frame. Pinned by `tests/039-vm-global-scope.pp` and two new fuzzer generators, `stmt_do_scoped_def` and `stmt_module_sibling`, exercised in `--grammar full`. |
-| D23 | Module scope and top-level `let` agree between backends | Fixed. Inline `module { ... }` now runs with isolated globals via a new `CALL_MODULE` opcode, matching `eval_module_from` for file-loaded modules. The module body evaluates in a fresh globals table seeded with the initial environment; closures from the module body are not affected (they still capture frames, which don't include globals — a separate architectural residual). Pinned by `tests/039b-vm-module-scope.sh`. |
-| D24 | VM dynamic-extent scoping survives OCaml exceptions | Fixed. The WITH_HANDLER and WITH_CONFIG VM opcodes already used a `try/with` region pattern around `run_isolated` (the same nested-run shape as WITH_CAPS), restoring the outer handler/config on every exit including exceptions. The tree-walker's `EWithConfig` had a latent bug where the `match cfg with VMap _ -> try ... | _ -> failwith` structure allowed the body's exception to be swallowed; this was restructured to separate the map check from the body evaluation, so exceptions propagate correctly. Both backends now agree on exception paths. Pinned by `tests/079b-with-handler-exception.sh`. |
 | D25 | `let`-memoisation cannot silently cache a repeated `perform` call | Fixed, with an ongoing authoring discipline rather than a language change. A zero-argument closure containing a `perform`, called twice in the same dynamic extent with an unchanging environment and capability set, keyed identically under LAW 20 and silently replayed its first result instead of reading reality again — invisibly, with no error. Found in `stdlib/domain-proc.pp`, where a killed service could look "still alive" one call later. Fixed two ways: the domain orchestrator now pushes a fresh config layer, folded into the key, before every top-level observe/apply call, so the two calls a pass makes always get distinct keys; and, within a single call, the rule is now to never call a zero-argument `perform`-containing accessor more than once per dynamic extent — read it once and thread the result through as an ordinary argument instead. `stdlib/domain-proc.pp`'s own bookkeeping was restructured this way. |
 | D26 | Parallel scheduling actually parallelises reconciler builds | Fixed. Two bugs stacked. First, `stdlib/list.pp` defined its own pp-level `map`, which shadowed the batching-aware `map` builtin; because application is strict, this `map` forced each node inline, so the parallel dispatcher never saw any unevaluated nodes to batch — and since `--reconcile` and `--supervise` both auto-load `list.pp`, every reconciler-based build silently ran its work one item at a time under parallel or race scheduling or remote placement. Fixed by removing the pp-level `map`, with a note against re-adding it. Second, the `pp` binary loads the standard library from dune's build mirror, which a plain `dune build` was not refreshing — only `dune runtest` was — so the same program could fork six workers on one run and zero on the next, depending on which command last ran. Fixed by tying the standard library's mirror to dune's default build alias. `tests/024` now asserts a minimum fork count directly, via a fork-count log, rather than only a soft timing check: with both fixes in place, the 101-translation-unit build forks 101 of 101 compiles and runs about 3.3 times faster than serial, from a clean build. |

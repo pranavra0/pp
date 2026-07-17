@@ -16,7 +16,7 @@
 #   (any file:/tree: observation under ROOT) is an error — otherwise
 #   reconcile loops forever.
 #
-# Runs under an isolated HOME; both backends.
+# Runs under an isolated HOME; single engine.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -101,15 +101,6 @@ EOF
 run --grant "fs:$OUT:rw" --grant "fs:$OUT:ro" --reconcile "$OUT" "$TMP/strat.pp"
 assert "stratification-error" "tratification" present
 check_file "stratification-untouched" "$OUT/a.txt" "A2"
-
-# --- (h) VM parity ---
-rm -rf "$OUT"
-run --bytecode --grant "fs:$OUT:rw" --reconcile "$OUT" "$TMP/d1.pp"
-assert "vm-create-summary" "create=2" present
-check_file "vm-create-a"   "$OUT/a.txt"     "A1"
-check_file "vm-create-b"   "$OUT/sub/b.txt" "B1"
-run --bytecode --grant "fs:$OUT:rw" --reconcile "$OUT" "$TMP/d1.pp"
-assert "vm-null"           "create=0" present
 
 rm -rf "$TMP"
 if [ "$fail" -eq 0 ]; then echo "=== RECONCILER (Q4) TEST PASSED ==="; fi

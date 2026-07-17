@@ -1,7 +1,7 @@
 # pp
 
-pp is a content-addressed, capability-scoped language. It has two back ends
-that must produce identical output.
+pp is a content-addressed, capability-scoped language with a single
+tree-walking evaluator engine.
 
 Every value has a content hash. Two computations with the same code and
 inputs are the same computation, so caching and deduplication follow from
@@ -62,8 +62,8 @@ let (m = module { export double }) {
 - `stdlib/` — the pp standard library (`list`, `map`, `string`) and the
   domain policies (`domain-fs`, `domain-proc`) auto-loaded by
   `--reconcile`/`--supervise`
-- `tests/` — the differential test suite (see docs/TESTING.md)
-- `tools/` — the differential fuzzer
+- `tests/` — the test suite (see docs/TESTING.md)
+- `tools/` — the metamorphic fuzzer
 - `scripts/` — build and test entry points: `run-tests.sh`, `build-self.sh`,
   `build-lua.sh`, `build-manual.sh`
 - `examples/` — small standalone pp programs, also swept by the reader and
@@ -81,7 +81,6 @@ Read more:
 - [docs/manual/](docs/manual/) — reference manual, all examples run by pp
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the code fits together
 - [docs/STATUS.md](docs/STATUS.md) — what works, discrepancy ledger
-- [docs/PLAN.md](docs/PLAN.md) — the open work; finished work lives in git history
 - [AGENTS.md](AGENTS.md) — for AI coding agents
 
 Run `dune runtest` for the test suite.

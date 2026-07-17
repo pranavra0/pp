@@ -1,12 +1,11 @@
 (* pp macro expansion — defmacro: a function from syntax-as-values to
    syntax-as-values.
 
-   Architecture (LAW 20/36): expansion is the ONE shared step both backends
-   pass through before their own machinery ever sees a form — hash_expr
-   (the tree-walker's node key) and the compiler both operate on ALREADY-
-   EXPANDED ASTs, so LAW 20 ("the code hash must hash the expanded form")
+   Architecture (LAW 20/36): expansion is the ONE shared step every code
+   path passes through before its own machinery ever sees a form — hash_expr
+   (the node key) operates on ALREADY-EXPANDED ASTs, so LAW 20
    needs no change anywhere else: it is true by construction, because
-   neither node_key_of/vm_node_key nor compile_expr can ever observe a macro
+   node_key_of can never observe a macro
    call — it never survives past this module.
 
    `defmacro` is deliberately NOT a reader-level construct (no entry in
@@ -14,9 +13,8 @@
    body...)` parses as an ordinary application — EApply (ESymbol "defmacro",
    ...) — exactly like any unrecognized head symbol (reader.ml
    parse_special_form's fallthrough case). This module recognizes that SHAPE
-   at the expansion boundary, never in the reader, so the .ppc/compiler
-   paths stay untouched and honest: compiler.ml, vm.ml's opcodes, and
-   node_key_of/vm_node_key have no idea macros exist — they only ever see
+   at the expansion boundary, never in the reader, so the evaluator and
+   node_key_of have no idea macros exist — they only ever see
    the expr trees this module already rewrote.
 
    Scope/phasing (the simplest sound rule for each):
@@ -66,7 +64,7 @@
 open Types
 
 (* name -> (parameter names, body expr). Persistent, mutable, shared by both
-   backends (the whole point of a single expansion point) — reset at the
+   evaluation paths (the whole point of a single expansion point) — reset at the
    start of every fresh run (Evaluator.init, wired below), exactly like
    thunk_store/handler_stack/etc. Fixed-arity only: no variadic/rest-param
    macros (pp functions do not have rest params either). *)
@@ -87,14 +85,10 @@ let macro_error (name : string) (msg : string) : 'a =
   failwith (Printf.sprintf "macro '%s': %s" name msg)
 
 (* Attach [loc] to the TOP of [e] — but only if [e] isn't already ELocated.
-   Both backends' top-level-form consumers (evaluator.ml eval_expressions'
-   `step`, compiler.ml compile_program's `compile_all`) unwrap exactly ONE
-   ELocated layer before pattern-matching on EDef/EDefValue/etc. to decide
-   whether the form binds something; a DOUBLE wrap here would leave the
-   inner EDef invisible past that one unwrap, so the closure would be built
-   and then silently discarded instead of bound (tree-walker) — or, in the
-   compiler, matched by neither the EDef arm nor by anything that consumes
-   its own STORE_GLOBAL, so an extra POP would corrupt the operand stack.
+   The top-level evaluator unwraps exactly ONE ELocated layer before
+   pattern-matching on EDef/EDefValue/etc. to decide whether the form binds
+   something; a DOUBLE wrap would leave the inner EDef invisible past that
+   one unwrap, so the closure would be built and then silently discarded.
    apply_macro already wraps its OWN result in ELocated once (so a nested
    macro-call site keeps a location even when the ENCLOSING form is not
    itself the macro call); this function's job is only to add a wrap when
@@ -150,10 +144,10 @@ let match_defmacro (e : expr) : (string * string list * expr) option =
    parameters — NOT the calling program's top-level bindings. This is a
    deliberate, documented restriction: a macro cannot close over a
    user-defined helper function from the surrounding file. Threading "the
-   current top-level environment" through here would mean reconciling the
-   tree-walker's env-chain representation with the VM's globals-table one at
-   the one point that is supposed to be backend-agnostic — exactly the
-   seam LAW 36 exists to keep out of this module. Macros compose via
+   current top-level environment" through here would couple expansion to the
+   evaluator's mutable program environment at the one point that is supposed
+   to stay phase-separated — exactly the seam LAW 36 exists to keep out of
+   this module. Macros compose via
    ordinary data-structure primitives instead (the same restriction Racket's
    phase separation and Scheme's begin-for-syntax impose for the same
    reason). *)
@@ -238,11 +232,10 @@ let rec expand_expr (loc : (string * int) option) (e : expr) : expr =
                 (p, Option.map (expand_expr loc) guard, expand_expr loc body)) arms)
 
 (* The shared top-level driver hook: every call site that turns a fresh
-   `Reader.read_string` result into a list a backend is about to eval/compile
-   MUST pass it through here first (repl.ml's execute_string/
-   execute_string_bytecode/repl_loop, vm.ml's LOAD_FILE and
-   eval_module_from, evaluator.ml's ELoad/eval_module_file via
-   Primitives.expand_toplevel_ref). Walks the list IN ORDER, updating the
+   `Reader.read_string` result into a list the evaluator is about to process
+   MUST pass it through here first (repl.ml's execute_string/repl_loop and
+   evaluator.ml's ELoad/eval_module_file via Primitives.expand_toplevel_ref).
+   Walks the list IN ORDER, updating the
    global macro table as `defmacro` forms are found (so later forms — in
    THIS list, or a subsequent call, e.g. after a `load` returns — see them),
    and expanding every other form. A recognized `defmacro` is replaced by

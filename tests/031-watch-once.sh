@@ -10,7 +10,7 @@
 #   naturally skips unchanged nodes (hits) and recomputes changed ones (misses),
 #   proving the store-level collapse between one-shot and watch modes.
 #
-# Runs under an isolated HOME; both backends.
+# Runs under an isolated HOME; single engine.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 

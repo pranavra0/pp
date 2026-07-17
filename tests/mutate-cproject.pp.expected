@@ -1,0 +1,2 @@
+pp: error: mutate-cproject.pp expects: <op> <src-dir> <arg> at tests/mutate-cproject.pp:13 at tests/mutate-cproject.pp:13
+# exit: 1

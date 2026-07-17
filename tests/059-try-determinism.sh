@@ -62,8 +62,8 @@ else
       "per-form temp numbering not reset — hashes depend on parse history"
 fi
 
-# (c) The lowering must still be correct after the reset: both backends run
-#     a multi-bind try (with several temps in one form) and agree.
+# (c) The lowering must still be correct after the reset: a multi-bind try
+#     (with several temps in one form) must produce the correct output.
 cat > "$TMP/run.pp" <<'EOF'
 def divide(x, y) {
   if =(y, 0) { [:err, "div by zero"] } else { [:ok, x / y] }
@@ -79,13 +79,12 @@ print(compute(20, 2))
 print(compute(20, 0))
 EOF
 expected=$'(:ok 15)\n(:err "div by zero")'
-got_tw=$("$PP" "$TMP/run.pp" 2>&1)
-got_bc=$("$PP" --bytecode "$TMP/run.pp" 2>&1)
-if [ "$got_tw" = "$expected" ] && [ "$got_bc" = "$expected" ]; then
-  ok "try-lowering-differential"
+got=$("$PP" "$TMP/run.pp" 2>&1)
+if [ "$got" = "$expected" ]; then
+  ok "try-lowering-deterministic"
 else
-  bad "try-lowering-differential" \
-      "tw: $(printf '%q' "$got_tw")" "bc: $(printf '%q' "$got_bc")"
+  bad "try-lowering-deterministic" \
+      "got: $(printf '%q' "$got")"
 fi
 
 exit $fail

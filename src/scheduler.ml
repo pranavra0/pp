@@ -24,7 +24,6 @@
    ceiling). *)
 type policy = Serial | Parallel of int | Race of int | Remote of string
 
-
 type job = {
   j_key : string;
   j_run : unit -> Types.value;

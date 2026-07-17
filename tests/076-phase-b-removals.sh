@@ -1,51 +1,43 @@
 #!/usr/bin/env bash
 # tests/076 — four removed surface forms must no longer parse, and the forms
-# that replace or survive them must still work identically on both backends.
+# that replace or survive them must still work.
 #
 #   @ attributes           (@cache/@needs/@reads/@deprecated)  -> parse error
 #   postfix ? unwrap        (expr? / let x = expr?)             -> parse error
 #   cond {}                 (cond { t => r; ... })              -> gone
 #   cell literals           (file:"P" / env:"N" / tree:"R")     -> parse error
 #
-# Preserved / replacement forms exercised on both backends:
+# Preserved / replacement forms exercised:
 #   - try {} with `<-` propagation and a plain `let x = e` sequential binding
 #   - $file(...) observation (the one observation surface)
-#
-# Differential: the tree-walker and the bytecode VM must agree byte for byte.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
-# A removed form must produce a parse error mentioning $needle, identically on
-# both backends (both must fail; both must contain the needle).
+# A removed form must produce a parse error mentioning $needle.
 run_removed() {
   local name="$1" src="$2" needle="$3"
   printf '%s\n' "$src" > "$TMP/case.pp"
-  local out_tw out_bc rc_tw rc_bc
-  out_tw=$("$PP" "$TMP/case.pp" 2>&1); rc_tw=$?
-  out_bc=$("$PP" --bytecode "$TMP/case.pp" 2>&1); rc_bc=$?
-  if [ $rc_tw -eq 0 ] || [ $rc_bc -eq 0 ]; then
-    bad "$name" "expected a parse error, but it parsed" \
-        "tw(rc=$rc_tw): $out_tw" "bc(rc=$rc_bc): $out_bc"
+  local out rc
+  out=$("$PP" "$TMP/case.pp" 2>&1); rc=$?
+  if [ $rc -eq 0 ]; then
+    bad "$name" "expected a parse error, but it parsed" "out: $out"
     return
   fi
-  if [[ "$out_tw" == *"$needle"* ]] && [[ "$out_bc" == *"$needle"* ]]; then
+  if [[ "$out" == *"$needle"* ]]; then
     ok "$name"
   else
-    bad "$name" "error text missing needle '$needle'" \
-        "tw: $out_tw" "bc: $out_bc"
+    bad "$name" "error text missing needle '$needle'" "out: $out"
   fi
 }
 
-# A preserved form must succeed and agree byte for byte across backends.
+# A preserved form must succeed and produce the expected output.
 run_ok() {
   local name="$1" file="$2" expected="$3"
-  local got_tw got_bc
-  got_tw=$("$PP" "$file" 2>&1)
-  got_bc=$("$PP" --bytecode "$file" 2>&1)
-  if [ "$got_tw" = "$expected" ] && [ "$got_bc" = "$expected" ]; then
+  local got
+  got=$("$PP" "$file" 2>&1)
+  if [ "$got" = "$expected" ]; then
     ok "$name"
   else
-    bad "$name" "tw: $(printf '%q' "$got_tw")" "bc: $(printf '%q' "$got_bc")" \
-        "expected: $(printf '%q' "$expected")"
+    bad "$name" "got: $(printf '%q' "$got")" "expected: $(printf '%q' "$expected")"
   fi
 }
 

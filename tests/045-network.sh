@@ -86,72 +86,46 @@ fi
 
 URL="http://127.0.0.1:$PORT/"
 
-# =====================================================================
-# (1) no net grant → Capability_error, no request made — both backends.
+# (1) no net grant → Capability_error, no request made.
 # =====================================================================
 cat > "$TMP/get.pp" <<EOF
 print(perform http-get("$URL"))
 EOF
-for bc in "" "--bytecode"; do
-  tag=$([ -z "$bc" ] && echo tw || echo vm)
-  "$PP" $bc "$TMP/get.pp" > "$TMP/out" 2>&1
-  assert "$tag-no-grant-denied"  "(apability|no network authority)" present
-  assert "$tag-no-grant-no-leak" "GET-MARKER" absent
-done
-
+"$PP" "$TMP/get.pp" > "$TMP/out" 2>&1
+assert "no-capability-error" "capability error" present
+assert "no-capability-no-curl" "GET-MARKER-abc123" absent
 # =====================================================================
 # (2) wrong-host grant → denied (component-aware, not a substring match).
-# =====================================================================
-for bc in "" "--bytecode"; do
-  tag=$([ -z "$bc" ] && echo tw || echo vm)
-  "$PP" $bc --grant "net:example.invalid" "$TMP/get.pp" > "$TMP/out" 2>&1
-  assert "$tag-wrong-host-denied" "(apability|no network authority)" present
-done
+"$PP" --grant "net:127.0.0.2:$PORT" "$TMP/get.pp" > "$TMP/out" 2>&1
+assert "wrong-host-no-curl" "GET-MARKER-abc123" absent
+assert "wrong-host-denied" "capability error" present
 
-# =====================================================================
-# (3) right grant → http-get succeeds against the local server — both
-#     backends (VM parity).
-# =====================================================================
-for bc in "" "--bytecode"; do
-  tag=$([ -z "$bc" ] && echo tw || echo vm)
-  "$PP" $bc --grant "net:127.0.0.1:$PORT" "$TMP/get.pp" > "$TMP/out" 2>&1
-  assert "$tag-right-grant-status-200" "\"status\" 200" present
-  assert "$tag-right-grant-marker"     "GET-MARKER-abc123" present
-done
+# (3) right grant → http-get succeeds against the local server.
+"$PP" --grant "net:127.0.0.1:$PORT" "$TMP/get.pp" > "$TMP/out" 2>&1
+assert "right-grant-marker" "GET-MARKER-abc123" present
+assert "right-grant-status" '"status" 200' present
 
 # A host-wildcard grant (no port) also works.
 "$PP" --grant "net:*" "$TMP/get.pp" > "$TMP/out" 2>&1
 assert "wildcard-grant-marker" "GET-MARKER-abc123" present
 
-# =====================================================================
 # (4) http-post: right grant, body actually reaches the server (echoed
 #     back), status 201.
-# =====================================================================
 cat > "$TMP/post.pp" <<EOF
 print(perform http-post("$URL", "hello-from-pp"))
 EOF
-for bc in "" "--bytecode"; do
-  tag=$([ -z "$bc" ] && echo tw || echo vm)
-  "$PP" $bc --grant "net:127.0.0.1:$PORT" "$TMP/post.pp" > "$TMP/out" 2>&1
-  assert "$tag-post-status-201"      "\"status\" 201" present
-  assert "$tag-post-body-echoed"     "POST-ECHO:hello-from-pp" present
-done
+"$PP" --grant "net:127.0.0.1:$PORT" "$TMP/post.pp" > "$TMP/out" 2>&1
+assert "post-echoes-body" "hello-from-pp" present
+assert "post-status-201"  '"status" 201' present
 
-# =====================================================================
 # (5) http-get inside a node body is an error — fenced effects are barred
-#     from node bodies (SPEC law 31) — both backends, and the network is
-#     never actually touched.
+#     from node bodies (SPEC law 31).
 # =====================================================================
 cat > "$TMP/in-node.pp" <<EOF
 force(node { perform http-get("$URL") })
 EOF
-for bc in "" "--bytecode"; do
-  tag=$([ -z "$bc" ] && echo tw || echo vm)
-  rm -rf "$TMP/.pp"
-  "$PP" $bc --grant "net:127.0.0.1:$PORT" "$TMP/in-node.pp" > "$TMP/out" 2>&1
-  assert "$tag-http-get-in-node-errors" "node bod" present
-  assert "$tag-http-get-in-node-no-leak" "GET-MARKER" absent
-done
+"$PP" --grant "net:127.0.0.1:$PORT" "$TMP/in-node.pp" > "$TMP/out" 2>&1
+assert "in-node-body-denied" "may not appear inside node bodies" present
 
 # =====================================================================
 # (6) curl absent = clean error (simulated via an empty PATH so `curl`

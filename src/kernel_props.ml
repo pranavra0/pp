@@ -117,7 +117,7 @@ type value_tag =
   (* runtime-only: never appears as a literal in parsed source, carries
      functions/refs so is neither (=)-comparable nor generatable as syntax *)
   | Vt_closure | Vt_builtin | Vt_capability | Vt_thunk | Vt_envmap
-  | Vt_bytecode | Vt_sealed
+  | Vt_sealed
 
 (* RATCHET: exhaustive over every value constructor. *)
 let value_kind : value -> value_tag = function
@@ -137,7 +137,6 @@ let value_kind : value -> value_tag = function
   | VCapability _ -> Vt_capability
   | VThunk _ -> Vt_thunk
   | VEnvMap _ -> Vt_envmap
-  | VBytecode _ -> Vt_bytecode
   | VSealed _ -> Vt_sealed
 
 (* A value constructor's surface story: [Syntactic] values are what a literal
@@ -155,17 +154,16 @@ let value_surface : value_tag -> value_surface = function
   | Vt_capability -> Runtime_only "authority token, LAW 22 — not literal"
   | Vt_thunk -> Runtime_only "mutable evaluation cell"
   | Vt_envmap -> Runtime_only "module export table"
-  | Vt_bytecode -> Runtime_only "compiled unit"
   | Vt_sealed -> Runtime_only "confidential bytes, redacted surface"
 
 let all_value_tags =
   [ Vt_nil; Vt_bool; Vt_int; Vt_float; Vt_string; Vt_keyword; Vt_symbol;
     Vt_pair; Vt_vector; Vt_map; Vt_set;
-    Vt_closure; Vt_builtin; Vt_capability; Vt_thunk; Vt_envmap; Vt_bytecode;
+    Vt_closure; Vt_builtin; Vt_capability; Vt_thunk; Vt_envmap;
     Vt_sealed ]
 (* If this fires, a value_tag was added without extending [all_value_tags];
    value_kind's exhaustiveness is what told you a *value* constructor appeared. *)
-let () = assert (List.length all_value_tags = 18)
+let () = assert (List.length all_value_tags = 17)
 
 let syntactic_value_tags =
   List.filter (fun t -> value_surface t = Syntactic) all_value_tags
@@ -223,7 +221,7 @@ and gen_value_of_tag ~(mode : mode) (st : rng) (depth : int) (tag : value_tag) :
         List.sort_uniq (fun a b -> compare (hash_value a) (hash_value b)) elts in
       VSet uniq
   | Vt_closure | Vt_builtin | Vt_capability | Vt_thunk | Vt_envmap
-  | Vt_bytecode | Vt_sealed ->
+  | Vt_sealed ->
       failwith "gen_value_of_tag: runtime-only value has no syntax"
 
 (* ========================================================= CAPABILITIES == *)

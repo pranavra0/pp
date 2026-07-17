@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # tests/025 — (def x v) / (defnode x e) value-binding semantics.
 #
-# The differential suite only proves the backends AGREE; this oracle pins what
-# they agree ON:
+# The expected-output suite pins what the language means:
 #   (a) (def x v) binds the value of v — not a nullary closure.
 #   (b) The RHS runs at definition time (statement semantics), but is not
 #       deep-forced: (def d (delay e)) binds an unforced thunk.
@@ -12,7 +11,7 @@
 #   (d) (defnode x e) binds the node thunk of e — forcing it hits the store.
 #   (e) A value def's RHS referencing a name defined by a LATER top-level form
 #       errors (top level is sequential for value defs).
-# Both backends, isolated HOME.
+# Isolated HOME.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 # assert_out NAME FLAGS FILE EXPECTED-STDOUT (exact match)
@@ -43,8 +42,7 @@ def f(n) { n + x }
 print(f(10))
 EOF
 expected=$'5\n6\n15'
-assert_out "value-binding-tw" ""           "$TMP/a.pp" "$expected"
-assert_out "value-binding-vm" "--bytecode" "$TMP/a.pp" "$expected"
+assert_out "value-binding" ""           "$TMP/a.pp" "$expected"
 
 # ---- (b) RHS runs at def time; delay is not forced ----
 cat > "$TMP/b.pp" <<'EOF'
@@ -53,8 +51,7 @@ let d = delay(print(999))
 print(222)
 EOF
 expected=$'111\n222'
-assert_out "def-time-effects-tw" ""           "$TMP/b.pp" "$expected"
-assert_out "def-time-effects-vm" "--bytecode" "$TMP/b.pp" "$expected"
+assert_out "def-time-effects" ""           "$TMP/b.pp" "$expected"
 
 # ---- (c) letrec* block scope + referenced-before-definition error ----
 cat > "$TMP/c.pp" <<'EOF'
@@ -65,23 +62,20 @@ def g(n) {
 print(g(5))
 EOF
 expected="11"
-assert_out "block-letrec-tw" ""           "$TMP/c.pp" "$expected"
-assert_out "block-letrec-vm" "--bytecode" "$TMP/c.pp" "$expected"
+assert_out "block-letrec" ""           "$TMP/c.pp" "$expected"
 
 cat > "$TMP/c2.pp" <<'EOF'
 print(do { let a = b + 1; let b = 2
   a
 })
 EOF
-assert_err "premature-ref-tw" ""           "$TMP/c2.pp" "b: referenced before its definition"
-assert_err "premature-ref-vm" "--bytecode" "$TMP/c2.pp" "b: referenced before its definition"
+assert_err "premature-ref" ""           "$TMP/c2.pp" "b: referenced before its definition"
 
 # duplicate value-def name in one block is a reader error
 cat > "$TMP/c3.pp" <<'EOF'
 print(do { let a = 1; let a = 2; a })
 EOF
-assert_err "block-duplicate-def-tw" ""           "$TMP/c3.pp" "duplicate definition"
-assert_err "block-duplicate-def-vm" "--bytecode" "$TMP/c3.pp" "duplicate definition"
+assert_err "block-duplicate-def" ""           "$TMP/c3.pp" "duplicate definition"
 
 # ---- (d) defnode binds the node thunk; forcing caches in the store ----
 cat > "$TMP/d.pp" <<'EOF'
@@ -97,20 +91,19 @@ out=$("$PP" "$TMP/d.pp" 2>"$TMP/err")
 if [ "$out" = $'1\n42' ] && ! grep -q "COMPUTE" "$TMP/err"; then ok "defnode-run2-hits"
 else bad "defnode-run2-hits" "out: $out" "err: $(cat "$TMP/err")"; fi
 rm -rf "$TMP/.pp"
-out=$("$PP" --bytecode "$TMP/d.pp" 2>"$TMP/err")
-if [ "$out" = $'1\n42' ] && grep -q "COMPUTE" "$TMP/err"; then ok "vm-defnode-run1-computes"
-else bad "vm-defnode-run1-computes" "out: $out" "err: $(cat "$TMP/err")"; fi
-out=$("$PP" --bytecode "$TMP/d.pp" 2>"$TMP/err")
-if [ "$out" = $'1\n42' ] && ! grep -q "COMPUTE" "$TMP/err"; then ok "vm-defnode-run2-hits"
-else bad "vm-defnode-run2-hits" "out: $out" "err: $(cat "$TMP/err")"; fi
+out=$("$PP" "$TMP/d.pp" 2>"$TMP/err")
+if [ "$out" = $'1\n42' ] && grep -q "COMPUTE" "$TMP/err"; then ok "defnode-run1-computes"
+else bad "defnode-run1-computes" "out: $out" "err: $(cat "$TMP/err")"; fi
+out=$("$PP" "$TMP/d.pp" 2>"$TMP/err")
+if [ "$out" = $'1\n42' ] && ! grep -q "COMPUTE" "$TMP/err"; then ok "defnode-run2-hits"
+else bad "defnode-run2-hits" "out: $out" "err: $(cat "$TMP/err")"; fi
 
 # ---- (e) top-level forward reference from a value def errors ----
 cat > "$TMP/e.pp" <<'EOF'
 let a = later + 1
 let later = 2
 EOF
-assert_err "toplevel-forward-ref-tw" ""           "$TMP/e.pp" "unbound symbol: later"
-assert_err "toplevel-forward-ref-vm" "--bytecode" "$TMP/e.pp" "unbound symbol: later"
+assert_err "toplevel-forward-ref" ""           "$TMP/e.pp" "unbound symbol: later"
 
 rm -rf "$TMP"
 if [ "$fail" -eq 0 ]; then echo "=== DEF VALUE-BINDING TEST PASSED ==="; fi

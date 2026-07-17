@@ -3,9 +3,8 @@
 # default. Covers the scriptable parts:
 #   (a) multi-line input: a form left open continues onto following lines
 #       (brace/paren/bracket/string nesting, comment-aware — see
-#       Reader_braces.needs_more_input), both backends;
-#   (b) definitions persist across lines (including in the VM REPL, which
-#       used to reset its globals on every line);
+#       Reader_braces.needs_more_input);
+#   (b) definitions persist across lines;
 #   (c) piped/non-tty sessions emit no prompts or banner — stdout is just
 #       the printed values;
 #   (d) :why toggles the node-cache explainer;
@@ -28,21 +27,17 @@ repl() {  # FLAGS... <<< input on stdin
 # to the following newline (no trailing space) is its own separate matter —
 # not what this case is testing, so the operator and both operands sit on
 # one interior line and only the grouping parens span multiple lines.
-for flags in "" "--bytecode"; do
-  got=$(printf '(\n1 + 2\n)\n' | repl $flags)
-  if [ "$got" = "3" ]; then ok "multiline${flags:+-vm}"
-  else bad "multiline${flags:+-vm}" "got: $(printf '%q' "$got")"; fi
-done
+got=$(printf '(\n1 + 2\n)\n' | repl)
+if [ "$got" = "3" ]; then ok "multiline"
+else bad "multiline" "got: $(printf '%q' "$got")"; fi
 # strings and '#' comments don't confuse the balance
 got=$(printf 'string-append("a(b", # comment\n"c)d")\n' | repl)
 if [ "$got" = '"a(bc)d"' ]; then ok "multiline-string-comment"
 else bad "multiline-string-comment" "got: $(printf '%q' "$got")"; fi
 # a '{'-delimited block (a def body) holds the form open across lines too
-for flags in "" "--bytecode"; do
-  got=$(printf 'def f(x) {\nx + 1\n}\nf(41)\n' | repl $flags | tail -1)
-  if [ "$got" = "42" ]; then ok "multiline-block${flags:+-vm}"
-  else bad "multiline-block${flags:+-vm}" "got: $(printf '%q' "$got")"; fi
-done
+got=$(printf 'def f(x) {\nx + 1\n}\nf(41)\n' | repl | tail -1)
+if [ "$got" = "42" ]; then ok "multiline-block"
+else bad "multiline-block" "got: $(printf '%q' "$got")"; fi
 
 # ---- (g) continuation is decided by exception TYPE, not error-message text ----
 # A genuine syntax error whose message happens to carry a magic word ("foo
@@ -65,13 +60,11 @@ if printf '%s\n' "$got" | grep -q 'def requires a parameter list' \
 else bad "incomplete-at-eof-clean-error" "got: $(printf '%q' "$got")"; fi
 
 # ---- (b) defs persist across lines ----
-for flags in "" "--bytecode"; do
-  got=$(printf 'let x = 21\nprint(x * 2)\n' | repl $flags | tail -1)
-  if [ "$got" = "nil" ]; then :; fi
-  got=$(printf 'let x = 21\nx * 2\n' | repl $flags | tail -1)
-  if [ "$got" = "42" ]; then ok "defs-persist${flags:+-vm}"
-  else bad "defs-persist${flags:+-vm}" "got: $(printf '%q' "$got")"; fi
-done
+got=$(printf 'let x = 21\nprint(x * 2)\n' | repl | tail -1)
+if [ "$got" = "nil" ]; then :; fi
+got=$(printf 'let x = 21\nx * 2\n' | repl | tail -1)
+if [ "$got" = "42" ]; then ok "defs-persist"
+else bad "defs-persist" "got: $(printf '%q' "$got")"; fi
 
 # ---- (c) no prompts/banner when piped ----
 got=$(printf '1 + 2\n' | repl)

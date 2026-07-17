@@ -4,7 +4,7 @@
 #
 # `$file`/`$env`/`$glob`/`$secret`/`$probe` accepted a STRING LITERAL only;
 # real code computes paths/names. All heads now parse an ordinary expression
-# list, so a computed name/default works — on both backends.
+# list, so a computed name/default works.
 #
 # The SAME table drives the normal reader and the quasiquote reader, so a
 # `$head(...)` inside a quasiquote template builds a value equal to what the
@@ -13,16 +13,14 @@ set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 run_both() {
   local name="$1" file="$2" expected="$3"
-  local got_tw got_bc
-  got_tw=$("$PP"            "$file" 2>&1)
-  got_bc=$("$PP" --bytecode "$file" 2>&1)
-  if [ "$got_tw" = "$expected" ] && [ "$got_bc" = "$expected" ]; then
+  local got
+  got=$("$PP" "$file" 2>&1)
+  if [ "$got" = "$expected" ]; then
     ok "$name"
   else
     bad "$name" \
         "expected: $(printf '%q' "$expected")" \
-        "tw:       $(printf '%q' "$got_tw")" \
-        "bc:       $(printf '%q' "$got_bc")"
+        "got:       $(printf '%q' "$got")"
   fi
 }
 

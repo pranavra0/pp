@@ -50,7 +50,6 @@
 #   tool: not pre-seeded — the member's own `cc` legitimately runs (a
 #             member always makes its own local observations), proven via
 #             ITS journal.
-#   VM parity — the same remote build under --bytecode.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 # ===========================================================================
@@ -118,7 +117,7 @@ fn(o) {
 EOF
   # \$BUILD is a per-run placeholder the shell fills in below (each cold
   # build gets its own BUILD dir, so the SAME build.pp text is reused
-  # byte-for-byte across serial/remote/degrade/vm runs). The node key is a
+  # byte-for-byte across serial/remote/degrade runs). The node key is a
   # hash of code plus argument values (SPEC law 20), so identical source
   # text is required for the byte-identical comparison below (case T6); a
   # literal path baked in per-run would change the program's hash between
@@ -222,18 +221,6 @@ EOF
   else bad "unreachable-member-same-tree-bytes" "$(cat "$TMP/tree-diff2.out")"; fi
   echo "B $NODEB/.pp/store" > "$NODEA/.pp/cluster/members"
 
-  # ---- VM parity: the same remote build under --bytecode. ----
-  BUILD_V="$TMP/build-vm"; mkdir -p "$BUILD_V"
-  rm -rf "$NODEA/.pp/store" "$NODEB/.pp/store"
-  GV=(--grant "fs:$SRC:ro" --grant "fs:$BUILD_V:rw" --grant process)
-  build_pp_for "$BUILD_V"
-  HOME="$NODEA" "$PP" --bytecode "${GV[@]}" --schedule remote:B "$TMP/build.pp" \
-    > "$TMP/vm.out" 2>&1
-  if [ -x "$BUILD_V/prog" ] && "$BUILD_V/prog"; then ok "vm-parity-binary-runs"
-  else bad "vm-parity-binary-runs" "$(tail -8 "$TMP/vm.out")"; fi
-  if diff -rq "$BUILD_S" "$BUILD_V" > "$TMP/tree-diff3.out" 2>&1; then
-    ok "vm-parity-same-tree-bytes"
-  else bad "vm-parity-same-tree-bytes" "$(cat "$TMP/tree-diff3.out")"; fi
 fi
 
 # ===========================================================================

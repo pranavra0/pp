@@ -1,0 +1,28 @@
+"=== control-flow macro (unless), via quasiquote ==="
+42
+nil
+""
+"=== gensym: a macro's own temp binding must not capture a ==="
+"=== caller variable of the same name (M3 hygiene discipline) ==="
+7
+9
+""
+"=== a macro building a (node ...) form ==="
+5
+""
+"=== nested macro use: one macro's expansion calls another macro ==="
+"hi"
+"hi"
+""
+"=== macro-generated def ==="
+15
+""
+"=== a macro built with list/quote (no quasiquote) ==="
+42
+""
+"=== redefining a macro changes later expansions ==="
+1
+2
+""
+"=== EXPECTED: 42 nil / 7 9 / 5 / hi hi / 15 / 42 / 1 2 ==="
+# exit: 0

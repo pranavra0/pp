@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/068 — `needs` is value-open (both backends).
+# tests/068 — `needs` is value-open.
 #
 # `needs` accepts ANY expression evaluating to a capability. The dotted
 # descriptors (`fs.read`/`fs.write`/`fs.rw`) are table-driven sugar
@@ -10,10 +10,9 @@
 # set stays closed; the vocabulary of named grants is open at the value
 # level.
 #
-# This pins: (a) sugar, named, and composed grants all run and agree across
-# backends; (b) a named grant genuinely NARROWS — the subset gate (SPEC law
-# 22b), not the reader, does the enforcing — denying a read outside its
-# scope identically on both backends.
+# This pins: (a) sugar, named, and composed grants all run and produce the
+# same result; (b) a named grant genuinely NARROWS — the subset gate (SPEC law
+# 22b), not the reader, does the enforcing.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 T=$(mktemp -d)
@@ -41,34 +40,29 @@ print(via-named())
 print(via-composed())
 EOF
 expected=$'"hello-grant"\n"hello-grant"\n"hello-grant"'
-got_tw=$("$PP"            "${GRANT[@]}" "$T/prog.pp" 2>&1)
-got_bc=$("$PP" --bytecode "${GRANT[@]}" "$T/prog.pp" 2>&1)
-if [ "$got_tw" = "$expected" ] && [ "$got_bc" = "$expected" ]; then
+got=$("$PP" "${GRANT[@]}" "$T/prog.pp" 2>&1)
+if [ "$got" = "$expected" ]; then
   ok "sugar-named-composed-grants-agree"
 else
   bad "sugar-named-composed-grants-agree" \
       "expected: $(printf '%q' "$expected")" \
-      "tw:       $(printf '%q' "$got_tw")" \
-      "bc:       $(printf '%q' "$got_bc")"
+      "got:      $(printf '%q' "$got")"
 fi
 
-# --- negative: a named grant NARROWS; reading outside its scope is denied,
-#     identically on both backends (the value, not the reader, restricts) -----
+# --- negative: a named grant NARROWS; reading outside its scope is denied
+#     (the value, not the reader, restricts) -----
 cat > "$T/neg.pp" <<EOF
 let narrow = cap-restrict(current-capabilities(), "$T/other", :ro)
 node blocked() needs narrow { slurp("$T/data.txt") }
 print(blocked())
 EOF
-neg_tw=$("$PP"            "${GRANT[@]}" "$T/neg.pp" 2>&1)
-neg_bc=$("$PP" --bytecode "${GRANT[@]}" "$T/neg.pp" 2>&1)
-if [ "$neg_tw" = "$neg_bc" ] \
-   && echo "$neg_tw" | grep -q "permission denied" \
-   && echo "$neg_tw" | grep -q "data.txt"; then
-  ok "named-grant-narrows-denies-identically"
+neg=$("$PP" "${GRANT[@]}" "$T/neg.pp" 2>&1)
+if echo "$neg" | grep -q "permission denied" \
+   && echo "$neg" | grep -q "data.txt"; then
+  ok "named-grant-narrows-denies"
 else
-  bad "named-grant-narrows-denies-identically" \
-      "tw: $(printf '%q' "$neg_tw")" \
-      "bc: $(printf '%q' "$neg_bc")"
+  bad "named-grant-narrows-denies" \
+      "got: $(printf '%q' "$neg")"
 fi
 
 exit $fail

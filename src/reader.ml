@@ -382,9 +382,9 @@ and parse_vector_param_list ps =
   List.rev !result
 
 (* Assemble a function's parameter names and body: each annotated parameter
-   desugars into a located type check run ahead of the body — both backends
-   compile/evaluate the shared desugared AST, so the checks are enforced
-   identically (LAW 32). An optional return annotation wraps the body. The
+   desugars into a located type check run ahead of the body, so the checks are
+   enforced at the same evaluator boundary (LAW 32). An optional return
+   annotation wraps the body. The
    desugar lives in Desugar, shared with the brace reader, so both surfaces
    produce the identical checked AST. *)
 and assemble_fn_body locate (params : (string * expr option) list)
@@ -600,7 +600,7 @@ and parse_defnode ps =
 (* (assert cond [msg]) — a located runtime check: a false/nil condition
    raises `assertion failed: <form>` (or the custom message); the location is
    attached by with_form_location, not baked in. Desugars to if+error via the
-   shared Desugar module, so both backends enforce the identical AST. *)
+   shared Desugar module. *)
 and parse_assert ps =
   let cond = parse_expr ps in
   let msg_opt = match peek ps with

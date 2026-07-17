@@ -34,7 +34,7 @@ val subseteq : t -> t list -> bool
 val hash : t -> string
 val to_string : t -> string
 
-(* ---- error text shared by both backends ---- *)
+(* ---- shared capability error text ---- *)
 val err_with_caps_widen : string
 
 (* ---- mode helpers ---- *)

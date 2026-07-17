@@ -19,7 +19,7 @@
 # header ⇒ COMPILE re-runs (its trace has the header's file cell), LINK hits
 # (same object value ⇒ same key, and its own trace never read the header).
 #
-# Runs under an isolated HOME; both backends.
+# Runs under an isolated HOME; single engine.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -89,25 +89,6 @@ run
 assert "src-edit-recompiles" "COMPILE"      present
 assert "src-edit-relinks"    "LINK"         present
 assert "src-edit-value"      "linked:BODY2" present
-
-# --- VM parity: same criteria under --bytecode, fresh store ---
-rm -rf "$TMP/.pp"
-printf 'H1\n' > "$TMP/h.h"
-printf 'BODY\n' > "$TMP/a.c"
-run --bytecode
-assert "vm-cold-compile"     "COMPILE"      present
-assert "vm-cold-link"        "LINK"         present
-run --bytecode
-assert "vm-null-no-compile"  "COMPILE"      absent
-assert "vm-null-no-link"     "LINK"         absent
-touch -t 202001010000 "$TMP/h.h" "$TMP/a.c"
-run --bytecode
-assert "vm-touch-no-work"    "COMPILE|LINK" absent
-printf 'H2 comment-only\n' > "$TMP/h.h"
-run --bytecode
-assert "vm-hdr-recompiles"   "COMPILE"      present
-assert "vm-hdr-link-cutoff"  "LINK"         absent
-assert "vm-hdr-value"        "linked:BODY"  present
 
 rm -rf "$TMP"
 if [ "$fail" -eq 0 ]; then echo "=== CUTOFF (LAW 21) TEST PASSED ==="; fi

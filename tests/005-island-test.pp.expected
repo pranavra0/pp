@@ -1,0 +1,3 @@
+"=== Island Semantics ==="
+pp: error: island: no pin for github:test/example; run pp --update at tests/005-island-test.pp:7
+# exit: 1

@@ -23,7 +23,7 @@
 #   - back-compat: a flat {domain -> desired} program with NO --member-name
 #     behaves exactly as it does without this feature at all.
 #
-# Runs under isolated HOMEs; both backends where meaningful.
+# Runs under isolated HOMEs.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 if ! command -v timeout >/dev/null 2>&1; then
@@ -90,11 +90,6 @@ else
   bad "unknown-member-name-is-an-error" "exit=$CODE" "$(cat "$TMP/out-badmember")"
 fi
 
-# VM parity.
-rm -rf "$HOSTA_HOME/.pp"; rm -rf "$ROOT_A"; mkdir -p "$ROOT_A"
-HOME="$HOSTA_HOME" "$PP" --bytecode --grant "fs:${ROOT_A}:rw" --member-name A "$TMP/prog-A.pp" \
-  > "$TMP/out-vm" 2>&1
-[ -f "$ROOT_A/a.txt" ] && ok "vm-parity-memberA" || bad "vm-parity-memberA" "$(cat "$TMP/out-vm")"
 
 # ===========================================================================
 # Part 2: kill -9 convergence still works on a member's OWN slice — the

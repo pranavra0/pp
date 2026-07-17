@@ -65,29 +65,26 @@ EOF
 
 run() { rm -f "$TMP/out"; "$PP" "$@" --grant "fs:$TMP:ro" "$TMP/prog.pp" > "$TMP/out" 2>&1; }
 
-for bc in "" "--bytecode"; do
-  tag=$([ -z "$bc" ] && echo tw || echo vm)
-  rm -rf "$TMP/.pp"
+rm -rf "$TMP/.pp"
 
-  printf '1\n' > "$COUNTER"
-  run $bc
-  assert "$tag-run1-cold-computes"      "COMPUTE"  present
-  assert "$tag-run1-value-1"            "\\[info\\] 1$" present
+printf '1\n' > "$COUNTER"
+run
+assert "run1-cold-computes"      "COMPUTE"  present
+assert "run1-value-1"            "\\[info\\] 1$" present
 
-  run $bc
-  assert "$tag-run2-unchanged-hit"      "COMPUTE"  absent
-  assert "$tag-run2-value-1"            "\\[info\\] 1$" present
+run
+assert "run2-unchanged-hit"      "COMPUTE"  absent
+assert "run2-value-1"            "\\[info\\] 1$" present
 
-  printf '2\n' > "$COUNTER"
-  run $bc
-  assert "$tag-run3-changed-recomputes" "COMPUTE"  present
-  assert "$tag-run3-value-2"            "\\[info\\] 2$" present
+printf '2\n' > "$COUNTER"
+run
+assert "run3-changed-recomputes" "COMPUTE"  present
+assert "run3-value-2"            "\\[info\\] 2$" present
 
-  printf '1\n' > "$COUNTER"
-  run $bc
-  assert "$tag-run4-revert-hit"         "COMPUTE"  absent
-  assert "$tag-run4-value-1"            "\\[info\\] 1$" present
-done
+printf '1\n' > "$COUNTER"
+run
+assert "run4-revert-hit"         "COMPUTE"  absent
+assert "run4-value-1"            "\\[info\\] 1$" present
 
 # =====================================================================
 # (2) probe value never lands under ~/.pp/store's objects/traces — a probe
@@ -144,31 +141,23 @@ else
 fi
 
 # =====================================================================
-# (4) unregistered probe errors, naming it — both backends
+# (4) unregistered probe errors, naming it
 # =====================================================================
 cat > "$TMP/prog-unreg.pp" <<'EOF'
 print(probe("no-such-probe"))
 EOF
-for bc in "" "--bytecode"; do
-  tag=$([ -z "$bc" ] && echo tw || echo vm)
-  rm -rf "$TMP/.pp"
-  "$PP" $bc "$TMP/prog-unreg.pp" > "$TMP/out" 2>&1
-  assert "$tag-unregistered-probe-errors" "no such probe registered: no-such-probe" present
-done
-
+rm -rf "$TMP/.pp"
+"$PP" "$TMP/prog-unreg.pp" > "$TMP/out" 2>&1
+assert "unregistered-probe-errors" "no such probe registered: no-such-probe" present
 # =====================================================================
 # (5) register-probe is script-tier only (trace_stack guard)
 # =====================================================================
 cat > "$TMP/prog-in-node.pp" <<EOF
 force(node { register-probe("x", fn() { 1 }, cap-none()) })
 EOF
-for bc in "" "--bytecode"; do
-  tag=$([ -z "$bc" ] && echo tw || echo vm)
-  rm -rf "$TMP/.pp"
-  "$PP" $bc "$TMP/prog-in-node.pp" > "$TMP/out" 2>&1
-  assert "$tag-register-probe-in-node-errors" "node bod" present
-done
-
+rm -rf "$TMP/.pp"
+"$PP" "$TMP/prog-in-node.pp" > "$TMP/out" 2>&1
+assert "register-probe-in-node-errors" "node bod" present
 # =====================================================================
 # (6) --watch: the SAME probe cell change, detected live by one
 #     long-running `pp --watch` process on a timer, with no special-cased

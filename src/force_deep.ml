@@ -2,7 +2,7 @@
 
    Extracted because this exact recursive walk was written three times
    (primitives, domain_prims, fenced) with identical bodies but the same
-   back-end hook each uses (Backend.r.force).  The scheduler-aware batch
+   evaluator hook (Backend.r.force). The scheduler-aware batch
    dispatch lives in Primitives.force_deep; this is the plain walk it (and
    others) delegate to. *)
 

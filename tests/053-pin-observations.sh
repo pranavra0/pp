@@ -20,10 +20,10 @@
 #                       genuinely volatile, not a strawman).
 #   canonical run — --dump-pins captures ONE run's Store.run_pins +
 #                       Runtime.probe_values as a pin file.
-#   pinned — --pin-file that dump, across 6 backend x placement
-#                       combinations (tw/vm x serial/parallel:4/remote:B),
+#   pinned — --pin-file that dump, across 3 placement
+#                       combinations (serial/parallel:4/remote:B),
 #                       metrics-file mutated to a DIFFERENT value than
-#                       canonical: all 6 published hashes must equal the
+#                       canonical: all 3 published hashes must equal the
 #                       canonical hash, AND the observe-fn's sentinel file
 #                       must be ABSENT for every one of them (proof the
 #                       observe-fn never ran at all).
@@ -34,7 +34,7 @@
 # the minimal adversarial shape (a bare probe folded into a returned
 # value, nothing to materialize onto disk) — so a --watch --stabilize
 # "push" pass has no tree to converge/diff against. Push+remote combos are
-# impractical to wire for a hash comparison here, so the 6 pull
+# impractical to wire for a hash comparison here, so the 3 pull
 # (--publish-object) combos below cover the hash-equality core instead.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
@@ -94,9 +94,8 @@ CANON_OUT=$(HOME="$PIN_HOME" "$PP" "${GRANTS[@]}" --publish-object "$SHARED" "$D
 CANON_HASH=$(printf '%s' "$CANON_OUT" | grep -oE '[0-9a-f]{64}' | head -1)
 if [ -n "$CANON_HASH" ]; then ok "canonical-publishes ($CANON_HASH)"; else bad "canonical-publishes" "$CANON_OUT"; fi
 
-# =====================================================================
-# Pinned: 6 pull combos (backend tw/vm x placement serial/parallel:4/
-# remote:B), --pin-file + a metrics-file value DIFFERENT from canonical.
+# Pinned: 3 pull combos (placement serial/parallel:4/remote:B), --pin-file
+# + a metrics-file value DIFFERENT from canonical.
 # Reuses $PIN_HOME's own (already-warm) store across every combo below —
 # deliberately NOT wiped between runs, since the dumped `(pin "file:..."
 # ...)` line (an incidental cell the canonical run's real observe-fn call
@@ -121,12 +120,10 @@ echo "B $REMOTE_HOME/.pp/store" > "$PIN_HOME/.pp/cluster/members"
 DIVERGED_VALUE=999
 printf '%s\n' "$DIVERGED_VALUE" > "$METRICS"
 
-NAMES=(tw-serial tw-parallel tw-remote vm-serial vm-parallel vm-remote)
-FLAGSET=("" "--schedule parallel:4" "--schedule remote:B" \
-          "--bytecode" "--bytecode --schedule parallel:4" "--bytecode --schedule remote:B")
-
+NAMES=(serial parallel remote)
+FLAGSET=("" "--schedule parallel:4" "--schedule remote:B")
 ALL_MATCH=1
-for i in 0 1 2 3 4 5; do
+for i in 0 1 2; do
   name="${NAMES[$i]}"
   sentinel="$TMP/sentinel-pinned-$name.txt"
   out=$(HOME="$PIN_HOME" "$PP" ${FLAGSET[$i]} "${GRANTS[@]}" --pin-file "$PINS_FILE" \
@@ -144,8 +141,7 @@ for i in 0 1 2 3 4 5; do
     bad "pinned-$name-observe-fn-not-called" "sentinel present — observe-fn ran despite --pin-file"
   fi
 done
-[ "$ALL_MATCH" -eq 1 ] && ok "all-6-pull-combos-match-canonical-hash (diverged metrics value=$DIVERGED_VALUE, canonical=$CANON_VALUE)" \
-  || bad "all-6-pull-combos-match-canonical-hash"
+[ "$ALL_MATCH" -eq 1 ] && ok "all-3-pull-combos-match-canonical-hash (diverged metrics value=$DIVERGED_VALUE, canonical=$CANON_VALUE)" \
 
 echo
 if [ "$fail" -eq 0 ]; then

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Push stabilize differential test.
+# Push stabilize test.
 #
 #   A 4-node program with a reverse-edge dependency graph:
 #     a reads f1
@@ -8,9 +8,8 @@
 #     d reads f3 independently
 #
 #   On each cell change, push stabilize must produce the same
-#   re-evaluation pattern as pull mode (both backends).
 #
-# Runs under an isolated HOME; both backends.
+# Runs under an isolated HOME.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -57,17 +56,9 @@ echo "F2-v1" > "$TMP/f2"
 echo "F3-v1" > "$TMP/f3"
 
 run_test() {
-  local backend="$1" label="$2" bc_flag="$3"
+  local label="$1"
   local out="$TMP/out-$label"
-  # Per-backend expected counts: the VM creates fresh thunks each run
-  # (doesn't re-use thunk_store), so reset_dirty is a no-op for bytecode.
-  # Both push and pull produce identical counts within each backend.
-  local step2_B step2_C step3_A step3_B step3_C
-  if [ "$backend" = "tree-walker" ]; then
-    step2_B=2; step2_C=2; step3_A=3; step3_B=3; step3_C=3
-  else
-    step2_B=3; step2_C=3; step3_A=3; step3_B=4; step3_C=4
-  fi
+  local step2_B=2 step2_C=2 step3_A=3 step3_B=3 step3_C=3
 
   # Reset file contents (prior test may have modified them)
   echo "F1-v1" > "$TMP/f1"
@@ -77,7 +68,7 @@ run_test() {
 
   # Start watch with stabilize in background
   timeout 35 "$PP" --watch --stabilize --watch-interval 0.3 --grant "fs:$TMP:ro" \
-    $bc_flag "$TMP/stab.pp" > "$out" 2>&1 &
+    "$TMP/stab.pp" > "$out" 2>&1 &
   local WATCH_PID=$!
 
   # --- Cold run assertions (poll until the cold pass has logged each node) ---
@@ -95,7 +86,7 @@ run_test() {
   assert_count "$label-step1-C" "C" 2 "$out"
   assert_count "$label-step1-D" "D" 1 "$out"
 
-  # --- Step 2: change f3 — D dirty (both), B/C also in VM. Poll D first. ---
+  # --- Step 2: change f3 — D dirty. Poll D first. ---
   echo "F3-v2" > "$TMP/f3"
   assert_count "$label-step2-D" "D" 2 "$out"
   assert_count "$label-step2-B" "B" "$step2_B" "$out"
@@ -113,10 +104,8 @@ run_test() {
   wait $WATCH_PID 2>/dev/null || true
 }
 
-echo "--- push stabilize: tree-walker ---"
-run_test "tree-walker" "tw" ""
+echo "--- push stabilize ---"
+run_test "push-stabilize"
 
-echo "--- push stabilize: bytecode ---"
-run_test "bytecode" "bc" "--bytecode"
 
 exit $fail

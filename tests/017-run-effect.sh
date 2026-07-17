@@ -18,7 +18,7 @@
 #   capability-free — scratch is node-local memory); absolute write-file
 #   inside a node is an error. Scripting-tier write-file is unchanged.
 #
-# Runs under an isolated HOME; both backends.
+# Runs under an isolated HOME; single engine.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -117,27 +117,6 @@ else echo "ok   node-write-no-leak"; fi
 run --grant "fs:$TMP:rw" "$TMP/e2.pp"
 if [ -f "$TMP/ok.txt" ]; then echo "ok   scripting-write-works"
 else echo "FAIL scripting-write-works: ok.txt missing"; cat "$TMP/out"; fail=1; fi
-
-# --- (f) VM parity ---
-rm -rf "$TMP/.pp"
-printf 'DATA1\n' > "$SRC/in.txt"
-run --bytecode --grant process --grant "fs:$SRC:ro" "$TMP/c.pp"
-assert "vm-run1-miss"      "RUN"    present
-assert "vm-run1-DATA1"     "DATA1"  present
-run --bytecode --grant process --grant "fs:$SRC:ro" "$TMP/c.pp"
-assert "vm-run2-hit"       "RUN"    absent
-printf 'DATA3\n' > "$SRC/in.txt"
-run --bytecode --grant process --grant "fs:$SRC:ro" "$TMP/c.pp"
-assert "vm-run3-stale"     "RUN"    present
-assert "vm-run3-DATA3"     "DATA3"  present
-rm -f "$TMP/a.o"
-run --bytecode --grant process "$TMP/d.pp"
-assert "vm-sandbox-OBJ"    "OBJ"    present
-if [ -f "$TMP/a.o" ]; then echo "FAIL vm-sandbox-leak: a.o escaped"; fail=1
-else echo "ok   vm-sandbox-no-leak"; fi
-run --bytecode --grant process --grant "fs:$TMP:rw" "$TMP/e1.pp"
-assert "vm-node-write-denied" "sandbox" present
-
 rm -rf "$TMP"
 if [ "$fail" -eq 0 ]; then echo "=== RUN EFFECT (D13) TEST PASSED ==="; fi
 exit $fail

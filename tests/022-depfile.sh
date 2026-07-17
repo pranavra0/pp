@@ -11,7 +11,7 @@
 #   tool produced no depfile, the adapter falls back to the coarse floor
 #   (tree: cells) — sound by default.
 #
-# Runs under an isolated HOME; both backends.
+# Runs under an isolated HOME; single engine.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -90,20 +90,6 @@ assert "fallback-run1-miss" "COMPUTE" present
 printf 'U3\n' > "$SRC/unrelated.txt"
 run "${G[@]}" "$TMP/nodep.pp"
 assert "fallback-coarse-stale" "COMPUTE" present
-
-# --- VM parity ---
-rm -rf "$TMP/.pp"
-printf 'U1\n' > "$SRC/unrelated.txt"
-run --bytecode "${G[@]}" "$TMP/c.pp"
-assert "vm-run1-miss"       "COMPUTE" present
-run --bytecode "${G[@]}" "$TMP/c.pp"
-assert "vm-run2-hit"        "COMPUTE" absent
-printf 'U4\n' > "$SRC/unrelated.txt"
-run --bytecode "${G[@]}" "$TMP/c.pp"
-assert "vm-unrelated-still-hit" "COMPUTE" absent
-printf 'H3\n' > "$SRC/h1.txt"
-run --bytecode "${G[@]}" "$TMP/c.pp"
-assert "vm-header-stale"    "COMPUTE" present
 
 rm -rf "$TMP"
 if [ "$fail" -eq 0 ]; then echo "=== DEPFILE ADAPTER (Q2) TEST PASSED ==="; fi

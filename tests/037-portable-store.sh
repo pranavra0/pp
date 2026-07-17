@@ -5,17 +5,17 @@
 #   (src/codec.ml) instead of OCaml Marshal, stamped by store/VERSION
 #   ("pp-store 1"). The bytes must be identical on any OS/arch/compiler.
 #
-#   Covers, both backends where applicable:
+#   Covers:
 #     (a) golden bytes — a fixed program's stored object file and trace file
 #         are byte-identical (names AND content) to fixtures checked into
-#         tests/fixtures/store-v1/, from both backends: the single-machine
+#         tests/fixtures/store-v1/: the single-machine
 #         cross-arch proof until Linux CI;
 #     (b) codec round-trip battery — a node result exercising negative ints,
 #         -0.0, 1e308, 0.1, nan, inf, -inf, strings with quotes/backslashes/
 #         newlines/control bytes/UTF-8, keywords, symbols, nested vectors,
 #         maps with map keys and mixed-type keys, sets, improper pairs:
 #         stored in one process, HIT in a second process (pp why says so),
-#         printed byte-identically — and the hit crosses backends;
+#         printed byte-identically — and the store round-trip works;
 #     (c) version bump — VERSION overwritten with "pp-store 0": next run
 #         exits 0, recomputes cold, re-stamps VERSION, wipes objects/ but
 #         preserves journal/ and blobs/;
@@ -26,7 +26,7 @@
 #     (e) legacy store — garbage (Marshal-era) bytes in objects/ and
 #         traces/ with no VERSION: next run wipes cleanly, rebuilds, exit 0.
 #
-# Runs under an isolated HOME; both backends.
+# Runs under an isolated HOME.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -80,9 +80,7 @@ golden_check() {  # LABEL
   done
 }
 golden_run
-golden_check "tw-golden"
-golden_run --bytecode
-golden_check "bc-golden"
+golden_check "golden"
 
 # --- (b) codec round-trip battery ---
 # printf embeds REAL control bytes (\x01, \x7f) and raw UTF-8 in the source
@@ -110,12 +108,12 @@ check_hit() {  # LABEL RUN-FLAGS...
   "$PP" why "$@" "$TMP/battery.pp" > /dev/null 2> "$TMP/why.out"
   assert "$label-why-hit" "hit — ok trace verified" present "$TMP/why.out"
 }
-battery "tw-battery"
-check_hit "tw-battery-hit"                       # tree-walker → tree-walker
-check_hit "tw-to-bc-battery-hit" --bytecode      # tree-walker → bytecode
-battery "bc-battery" --bytecode
-check_hit "bc-battery-hit" --bytecode            # bytecode → bytecode
-check_hit "bc-to-tw-battery-hit"                 # bytecode → tree-walker
+battery "battery-round1"
+check_hit "battery-round1-hit"
+check_hit "battery-round1-check2"
+battery "battery-round2"
+check_hit "battery-round2-hit"
+check_hit "battery-round2-check2"
 
 # --- (c) version bump: wipe + re-stamp, never crash; journal/blobs kept ---
 rm -rf "$TMP/.pp"
@@ -172,8 +170,7 @@ closure_case() {  # LABEL FLAGS...
   assert "$label-run2-fn-recomputes" "COMPUTE-FN" present
   assert "$label-run2-applied" "applied" present
 }
-closure_case "tw-closure"
-closure_case "bc-closure" --bytecode
+closure_case "closure"
 
 # --- (e) legacy (Marshal-era) store: garbage bytes, no VERSION → clean wipe ---
 rm -rf "$TMP/.pp"

@@ -4,7 +4,7 @@
 # guarantees:
 #
 #   1. Null rebuild executes ZERO external processes (the journal proves it)
-#      and completes in <3s.
+#      and completes in <3s (the first hit pass can cold-start the page cache).
 #   2. `touch` (mtime-only) on every input → zero recompiles.
 #   3. Edit one f5.c → exactly f5.o + link re-run.
 #   4. `rm -rf build/` → fully restored from the store, zero tool re-runs,
@@ -162,18 +162,6 @@ e7=$(execs)
 if grep -qE "apability" "$TMP/out" && [ "$e7" -eq "$e5" ]; then
   ok "c7-no-grant-no-hit-no-exec"
 else bad "c7-no-grant-no-hit-no-exec" "$(tail -3 "$TMP/out")"; fi
-
-# ---- VM parity: compile-node entries are shared cross-backend ----
-lv_before=$(links)
-run --bytecode "${G[@]}" --reconcile "$BUILD" "$TMP/build.pp"
-ev=$(execs); lv=$(links)
-if [ $((ev - e5)) -le 1 ] && [ $((lv - lv_before)) -le 1 ]; then
-  ok "vm-shares-compile-cache ($((ev - e5)) execs — at most its own link)"
-else bad "vm-shares-compile-cache: $((ev - e5)) new execs"; fi
-run --bytecode "${G[@]}" --reconcile "$BUILD" "$TMP/build.pp"
-ev2=$(execs)
-if [ "$ev2" -eq "$ev" ]; then ok "vm-null-zero-processes"
-else bad "vm-null-zero-processes: $((ev2 - ev)) new execs"; fi
 
 # ---- the same 101-TU build, cold, under --schedule parallel:N vs serial
 # (the DEFAULT —

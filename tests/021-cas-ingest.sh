@@ -12,7 +12,7 @@
 #   openly impure), and a scripting-tier `write-file` INVALIDATES the pin so
 #   pp's own writes stay coherent with later node reads.
 #
-# Runs under an isolated HOME; both backends.
+# Runs under an isolated HOME; single engine.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -98,16 +98,6 @@ printf 'ORIG3' > "$F"
 run --grant "fs:$TMP:rw" "$TMP/coherent.pp"
 assert "own-write-coherent"   "WRITTEN" present
 assert "own-write-not-stale"  "ORIG3"   absent
-
-# --- (e) VM parity: torn read under --bytecode ---
-rm -rf "$TMP/.pp"
-printf 'ORIG' > "$F"
-run --bytecode --grant "fs:$TMP:ro" --grant process "$TMP/torn.pp"
-vm_orig=$(grep -c "ORIG" "$TMP/out" || true)
-if [ "$vm_orig" -ge 2 ]; then echo "ok   vm-torn-snapshot"
-else echo "FAIL vm-torn-snapshot: expected ORIG twice, got $vm_orig"
-     echo "--- output ---"; cat "$TMP/out"; fail=1; fi
-assert "vm-no-mixed-view" "\[info\] CHANGED$" absent
 
 rm -rf "$TMP"
 if [ "$fail" -eq 0 ]; then echo "=== CAS INGEST (Q11) TEST PASSED ==="; fi

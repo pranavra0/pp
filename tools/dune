@@ -1,6 +1,5 @@
-; The differential fuzzer (docs/TESTING.md). Links the pp library for
-; in-process property checks; still shells out to the pp binary for
-; end-to-end differential testing.
+; The metamorphic fuzzer (docs/TESTING.md). Links the pp library for
+; in-process property checks and shells out to the single pp binary.
 ; Run:  dune exec fuzz -- --grammar full --count 1500
 (executable
  (name fuzz)

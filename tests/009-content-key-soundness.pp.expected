@@ -1,0 +1,10 @@
+"=== D6: closure capture must be part of the key ==="
+"d6a =>"1
+"d6b =>"2
+""
+"=== D17: installed handler must be part of the key ==="
+"d17a =>"1
+"d17b =>"2
+""
+"=== EXPECTED: d6a=1 d6b=2 d17a=1 d17b=2 ==="
+# exit: 0

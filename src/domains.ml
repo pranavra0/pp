@@ -244,7 +244,6 @@ let record_epoch (forced : value) : unit =
     Journal.append (Journal.Epoch { hash });
     Gcroots.record ~keep:(Runtime.invocation_get ()).gc_keep_epochs
       { Gcroots.gr_hash = hash;
-        gr_bytecode = (Runtime.invocation_get ()).program_bytecode;
         gr_grants = (Runtime.invocation_get ()).initial_grant_specs;
         gr_files = (Runtime.invocation_get ()).program_files;
         gr_reconcile_root = (Runtime.invocation_get ()).program_reconcile_root;

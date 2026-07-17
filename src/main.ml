@@ -62,9 +62,9 @@ let uses_domains () =
    returns {name -> desired} directly, one evaluation, N domains.
 
    (source-tag, content) pairs to run BEFORE the user's file(s), under the
-   SAME init (Repl.execute_sources_bytecode) so the domain registrations they
+   SAME init so the domain registrations they
    perform survive into the user program's evaluation — two SEPARATE
-   execute_*_bytecode calls would each re-init and wipe Runtime.domain_registry
+   calls would each re-init and wipe Runtime.domain_registry
    (Evaluator.init resets it every fresh run). *)
 let stdlib_glue_sources () : (string * string) list =
   if not (uses_domains ()) then []
@@ -122,17 +122,16 @@ let build_all_desired (v : Types.value) : Types.value =
    registration survive to reach the user's file. Falls back to the untouched
    per-file loop when no domain wiring is needed at all. *)
 let run_files (files : string list) : Types.value option =
-  let bytecode = (Runtime.invocation_get ()).program_bytecode in
   Runtime.state.fenced_actions <- [];
   if uses_domains () then
     let sources = stdlib_glue_sources ()
                   @ List.map (fun f -> (f, read_file_content f)) files in
-    match List.rev (Repl.execute_sources_bytecode bytecode sources) with
+    match List.rev (Repl.execute_sources sources) with
     | v :: _ -> Some v | [] -> None
   else
     List.fold_left (fun _ f ->
       Runtime.state.fenced_actions <- [];
-      match List.rev (Repl.execute_file_bytecode bytecode f) with
+      match List.rev (Repl.execute_file f) with
       | v :: _ -> Some v | [] -> None) None files
 
 let should_run_domains () =
@@ -214,8 +213,7 @@ let watch_loop ~files ~interval ~stabilize =
   let run_program () =
     (* Clear in-memory state for a fresh evaluation. The persistent store
        survives — this is the store-level collapse. run_files itself calls
-       Vm.init ()/Repl.init () (via execute_sources_bytecode /
-       execute_file_bytecode). *)
+       Repl.init () (via execute_sources / execute_file). *)
     Hashtbl.clear Store.run_pins;  (* clear pinned cell observations *)
     Hashtbl.clear Runtime.probe_values;  (* probes re-evaluate fresh each pass *)
     Hashtbl.clear Runtime.sealed_pins;   (* sealed bytes never survive a pass *)
@@ -369,8 +367,6 @@ let main () =
     let n = String.length s in
     if n > 0 && s.[n - 1] = '\n' then String.sub s 0 (n - 1) else s);
   Backend.r.home_dir <- (fun () -> Sys.getenv "HOME");
-  let bytecode = ref false in
-  let diff = ref false in
   let eval_str = ref None in
   let files = ref [] in
   let grants = ref [] in
@@ -446,7 +442,7 @@ let main () =
   let schedule_handler = function
     | spec :: rest ->
         (* Ambient — read only by the miss arms and Scheduler.dispatch_batch;
-           NEVER by node_key_of/vm_node_key, never in a trace (LAW 26/34). *)
+           NEVER by node_key_of, never in a trace (LAW 26/34). *)
         (match spec with
          | "serial" -> Scheduler.state.policy <- Scheduler.Serial
          | _ ->
@@ -514,10 +510,6 @@ let main () =
     { name = "--"; arity = -1; doc = ""; internal = true;
       handler = (fun rest -> program_argv := rest; []) };
 
-    doc_of "  pp --bytecode <file.pp>  Run via bytecode VM\n"
-      (flag "--bytecode" (fun () -> bytecode := true));
-    doc_of "  pp --diff <file.pp>      Run both backends and diff\n"
-      (flag "--diff" (fun () -> diff := true; bytecode := true));
     doc_of "  pp --update <file.pp>     Re-resolve islands and rewrite inline pins (implies --fetch-islands)\n"
       (flag "--update" (fun () ->
          Island.update_mode := true; Runtime.state.island_fetch_enabled <- true));
@@ -857,7 +849,6 @@ let main () =
     initial_capabilities = initial_caps;
     program_argv = !program_argv;
     program_files = List.rev !files;
-    program_bytecode = !bytecode;
     initial_grant_specs = List.rev !grants;
     program_reconcile_root = !reconcile_root;
     program_supervise = !supervise;
@@ -1010,8 +1001,7 @@ let main () =
   (* ---- `--gc-mark <outfile>` — internal, only `pp gc`'s own
      replay subprocess (src/store_gc.ml) sets this. Runs the recorded root
      program EXACTLY as a live pass would (registration glue, the user's
-     file(s), the same --grant/--bytecode/--reconcile/--supervise/
-     --member-name/--desired-object flags) so every Store.hit it makes
+     file(s), the same --grant/--reconcile/--supervise/
      marks its trace/object/blob(s) live (Store.gc_marking, turned on
      earlier, right after Store.init) — then STOPS: no run_domains_pass (no
      domain apply), no Fenced.recover_unknown/drain (already skipped
@@ -1051,36 +1041,16 @@ let main () =
     let _ = Runtime.with_top_level ~f:(fun () ->
       (match !eval_str, !files with
       | Some e, [] ->
-          if !diff then begin
-            Printf.eprintf "--diff not supported with -e\n"; exit 1
-          end;
-          let results = Repl.execute_string_bytecode !bytecode e in
+          let results = Repl.execute_string e in
           List.iter (fun v ->
             Printf.printf "%s\n" (Types.string_of_value v)
           ) results
-      | None, [] ->
-          if !bytecode then Repl.repl_bytecode ()
-          else Repl.repl ()
+      | None, [] -> Repl.repl ()
       | _, files ->
           let files = List.rev files in
           if !watch then
             watch_loop ~files ~interval:!watch_interval ~stabilize:!stabilize
-          else if !diff then begin
-            List.iter (fun f ->
-              let tw_results = Repl.execute_file f in
-              let bc_results = Repl.execute_file_bytecode true f in
-              let tw_strings = List.map Types.string_of_value tw_results in
-              let bc_strings = List.map Types.string_of_value bc_results in
-              if tw_strings <> bc_strings then begin
-                Printf.eprintf "--diff mismatch in %s\n" f;
-                Printf.eprintf "tree-walker (%d values):\n" (List.length tw_strings);
-                List.iter (Printf.eprintf "  %s\n") tw_strings;
-                Printf.eprintf "bytecode (%d values):\n" (List.length bc_strings);
-                List.iter (Printf.eprintf "  %s\n") bc_strings;
-                exit 1
-              end
-            ) files
-          end else begin
+          else begin
             let last = run_files files in
             run_domains_pass last;
             (match !dump_pins_file with

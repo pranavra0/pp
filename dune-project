@@ -7,9 +7,8 @@
  (name pp)
  (synopsis "A content-addressed, capability-scoped Lisp")
  (description
-  "pp is a content-addressed, capability-scoped Lisp with two back ends (a \
-   tree-walking interpreter and a bytecode VM) that must produce identical \
-   output. See AGENTS.md and docs/ for details.")
+  "pp is a content-addressed, capability-scoped Lisp with a single \
+   tree-walking evaluator. See AGENTS.md and docs/ for details.")
  (depends
   (ocaml (>= 5.1))
   dune-build-info

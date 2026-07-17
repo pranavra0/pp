@@ -35,7 +35,7 @@
 # Then the demo's OWN diagonal oracle (needs no pinning — deploy.pp's
 # desired root is a pure function of file:/sealed: cells, whose hashes
 # Store.observe_cell computes from disk bytes alone): 6 pull-row hashes
-# (backend tw/vm x placement serial/parallel:N/remote:B) via
+# (placement serial/parallel:N/remote:B) via
 # --publish-object, asserted string-equal; --schedule parallel:N/remote:B
 # --check, asserted green (the direct placement-transparency proof); 6
 # push-row materialized trees (backend x placement, via
@@ -421,22 +421,21 @@ HOME="$OCONTROL" "$PP" cluster-init > /dev/null 2>&1
 cp "$OCONTROL/.pp/cluster/secret" "$OCONTROL/.pp/cluster/id" "$OREMOTE/.pp/cluster/"
 echo "B $OREMOTE/.pp/store" > "$OCONTROL/.pp/cluster/members"
 
-NAMES=(tw-serial tw-parallel tw-remote vm-serial vm-parallel vm-remote)
-FLAGSET=("" "--schedule parallel:4" "--schedule remote:B" \
-          "--bytecode" "--bytecode --schedule parallel:4" "--bytecode --schedule remote:B")
+NAMES=(tw-serial tw-parallel tw-remote)
+FLAGSET=("" "--schedule parallel:4" "--schedule remote:B")
 
 # The diagonal oracle's whole claim is that placement is transparent: every
 # backend x placement combination materializes the SAME tree. Proving it needs
 # a real cc compile and (for the push rows) a watch process PER variant, which
 # is most of this suite's wall time. The inner loop runs a representative
-# cross-section — both backends, and both a same-process and a remote-member
-# placement — which still exercises every distinct code path; the exhaustive
-# 6-way sweep (all parallel:N and remote combinations) runs under PP_TEST_FULL,
+# cross-section — both a same-process and a remote-member placement — which
+# still exercises every distinct code path; the exhaustive 3-way sweep (all
+# parallel:N and remote combinations) runs under PP_TEST_FULL,
 # the nightly tier. row 0 is always included: the reference tree and row-7 tie
 # below are computed against it.
-if [ -n "${PP_TEST_FULL:-}" ]; then MATRIX=(0 1 2 3 4 5); else MATRIX=(0 2 3); fi
+if [ -n "${PP_TEST_FULL:-}" ]; then MATRIX=(0 1 2); else MATRIX=(0 2); fi
 
-# ---- Pull rows 1-6: --publish-object prints hash_value; assert equal ----
+# ---- Pull rows 1-3: --publish-object prints hash_value; assert equal ----
 declare -a PULL_HASHES
 for i in "${MATRIX[@]}"; do
   name="${NAMES[$i]}"
@@ -533,9 +532,9 @@ else
   bad "oracle-fresh-reconcile-of-row1-matches-reference" "$(cat "$TMP/oracle-fresh-diff.out")"
 fi
 
-# ---- Push rows 7-12: --watch --stabilize, seeded with WRONG content
+# ---- Push rows 4-6: --watch --stabilize, seeded with WRONG content
 # first (a real dirty->re-force pass), then diffed clean against the
-# reference tree; row 7 additionally diffed against the fresh tree. ----
+# reference tree; row 4 additionally diffed against the fresh tree. ----
 for i in "${MATRIX[@]}"; do
   name="${NAMES[$i]}"
   PHOSTS="$OTMP/push-$name-hosts"; PRUN="$OTMP/push-$name-run"
@@ -564,15 +563,15 @@ for i in "${MATRIX[@]}"; do
   wait "$W1" "$W2" 2>/dev/null || true
 
   if diff -rq "$REF_HOSTS" "$PHOSTS" > "$TMP/push-$name-diff.out" 2>&1; then
-    ok "oracle-push-row-$((i + 7))-$name-settled-tree-diff-clean"
+    ok "oracle-push-row-$((i + 4))-$name-settled-tree-diff-clean"
   else
-    bad "oracle-push-row-$((i + 7))-$name-settled-tree-diff-clean" "$(cat "$TMP/push-$name-diff.out")"
+    bad "oracle-push-row-$((i + 4))-$name-settled-tree-diff-clean" "$(cat "$TMP/push-$name-diff.out")"
   fi
   if [ "$i" -eq 0 ]; then
-    if diff -rq "$FRESH_HOSTS" "$PHOSTS" > "$TMP/push-row7-fresh-diff.out" 2>&1; then
-      ok "oracle-row7-tree-equals-fresh-reconcile-of-row1"
+    if diff -rq "$FRESH_HOSTS" "$PHOSTS" > "$TMP/push-row4-fresh-diff.out" 2>&1; then
+      ok "oracle-row4-tree-equals-fresh-reconcile-of-row1"
     else
-      bad "oracle-row7-tree-equals-fresh-reconcile-of-row1" "$(cat "$TMP/push-row7-fresh-diff.out")"
+      bad "oracle-row4-tree-equals-fresh-reconcile-of-row1" "$(cat "$TMP/push-row4-fresh-diff.out")"
     fi
   fi
 done

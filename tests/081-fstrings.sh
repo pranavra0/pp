@@ -3,20 +3,19 @@
 # take arbitrary expressions and lower through the generic `->string`. Ordinary
 # strings never interpolate; `{{`/`}}` are literal braces. f-strings lower to
 # `string-append`/`->string` (one-way sugar), so they round-trip through
-# `pp fmt` hash-preserved. Every case is checked on BOTH backends; a macro
-# template exercises the quasiquote path (parity).
+# `pp fmt` hash-preserved. Every case is checked; a macro template exercises
+# the quasiquote path.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 run_ok() {
   local name="$1" file="$2" expected="$3"
-  local got_tw got_bc
-  got_tw=$("$PP"            "$file" 2>&1)
-  got_bc=$("$PP" --bytecode "$file" 2>&1)
-  if [ "$got_tw" = "$expected" ] && [ "$got_bc" = "$expected" ]; then
+  local got
+  got=$("$PP" "$file" 2>&1)
+  if [ "$got" = "$expected" ]; then
     ok "$name"
   else
     bad "$name" "expected: $(printf '%q' "$expected")" \
-        "tw: $(printf '%q' "$got_tw")" "bc: $(printf '%q' "$got_bc")"
+        "got: $(printf '%q' "$got")"
   fi
 }
 
@@ -90,18 +89,16 @@ defmacro tag(label, val) {
 print(tag("count", 42))
 EOF
 run_ok "fstring-in-quasiquote" "$TMP/qq.pp" '"count=42"'
-
-# (k) empty interpolation {} is a clean error on both backends.
+# (k) empty interpolation {} is a clean error.
 cat > "$TMP/emptyhole.pp" <<'EOF'
 let x = 1
 print(f"bad {} hole")
 EOF
-got_tw=$("$PP" "$TMP/emptyhole.pp" 2>&1 || true)
-got_bc=$("$PP" --bytecode "$TMP/emptyhole.pp" 2>&1 || true)
-if [[ "$got_tw" == *"empty interpolation"* ]] && [[ "$got_bc" == *"empty interpolation"* ]]; then
+got=$("$PP" "$TMP/emptyhole.pp" 2>&1 || true)
+if [[ "$got" == *"empty interpolation"* ]]; then
   ok "empty-hole-errors"
 else
-  bad "empty-hole-errors" "tw: $got_tw" "bc: $got_bc"
+  bad "empty-hole-errors" "got: $got"
 fi
 
 # (l) f-strings round-trip through `pp fmt` hash-preserved (one-way desugar to

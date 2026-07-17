@@ -12,7 +12,7 @@
 # gets a fixture or an edge entry. Coverage is derived from the table, never a
 # hand-maintained list.
 #
-#   fixture:  tests/fixtures/adversarial/<head>.sh   (run under both backends)
+#   fixture:  tests/fixtures/adversarial/<head>.sh   (run)
 #   edge:     a bullet in DESIGN.md's "Honest edges" section whose first line
 #             names `$head`, verified present
 set -uo pipefail

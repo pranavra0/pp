@@ -4,7 +4,7 @@
 
    The handlers for these effects live in runtime.ml (impure, Unix-dependent).
    The split means anything that just needs the effect _types_ (e.g. the
-   backend hook record, evaluator, VM) links only the kernel, while the
+   backend hook record and evaluator) links only the kernel, while the
    run-time stack wiring stays in the main library. *)
 
 

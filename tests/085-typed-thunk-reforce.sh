@@ -9,24 +9,20 @@
 # the same memoised thunk twice.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
-
 # Two byte-identical ill-typed forms. BOTH lines must report the type
-# mismatch; neither may mention "infinite recursion". Checked on both backends.
+# mismatch; neither may mention "infinite recursion".
 prog='let (x: int = "oops") { x }
 let (x: int = "oops") { x }'
 
-for flags in "" "--bytecode"; do
-  name="reforce${flags:+-vm}"
-  out=$(printf '%s\n' "$prog" | "$PP" $flags 2>&1)
-  mismatches=$(printf '%s\n' "$out" | grep -c 'type mismatch: expected int')
-  if printf '%s\n' "$out" | grep -q 'infinite recursion'; then
-    bad "$name" "second force misreported a cycle instead of the type error" "$out"
-  elif [ "$mismatches" -eq 2 ]; then
-    ok "$name"
-  else
-    bad "$name" "expected two type-mismatch errors, got $mismatches" "$out"
-  fi
-done
+out=$(printf '%s\n' "$prog" | "$PP" 2>&1)
+mismatches=$(printf '%s\n' "$out" | grep -c 'type mismatch: expected int')
+if printf '%s\n' "$out" | grep -q 'infinite recursion'; then
+  bad "reforce" "second force misreported a cycle instead of the type error" "$out"
+elif [ "$mismatches" -eq 2 ]; then
+  ok "reforce"
+else
+  bad "reforce" "expected two type-mismatch errors, got $mismatches" "$out"
+fi
 
 rm -rf "$TMP"
 if [ "$fail" -eq 0 ]; then echo "=== TYPED THUNK RE-FORCE TEST PASSED ==="; fi

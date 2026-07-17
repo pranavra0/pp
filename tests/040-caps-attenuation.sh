@@ -4,7 +4,7 @@
 # capability set, and a node captures whatever capability set was in force
 # when it was CREATED, not whatever is live when it is later forced.
 #
-# The differential test below proves that capture-at-creation model, not
+# The test below proves the capture-at-creation model, not
 # merely that narrowing exists:
 #
 #   (a) a node CREATED under a NARROWED ambient, forced OUTSIDE that ambient
@@ -21,7 +21,7 @@
 # (process capability PRESERVED through an fs-only restrict — CapRestrict
 # narrows filesystem authority only; non-fs channels (process, network,
 # secret) pass through transparently via the check_*/CapRestrict unwrap).
-# Both backends, isolated HOME (a fresh ~/.pp/store per case, like tests/011/013).
+# Tree-walker, isolated HOME (a fresh ~/.pp/store per case, like tests/011/013).
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -57,10 +57,7 @@ EOF
 
 rm -rf "$TMP/.pp"
 "$PP" --grant "fs:$TMP:ro" "$TMP/direction-a.pp" > "$TMP/o" 2>&1
-assert "tw-narrowed-creation-denied-at-broad-force"  safe denied
-rm -rf "$TMP/.pp"
-"$PP" --bytecode --grant "fs:$TMP:ro" "$TMP/direction-a.pp" > "$TMP/o" 2>&1
-assert "vm-narrowed-creation-denied-at-broad-force"  safe denied
+assert "plain-narrowed-creation-denied-at-broad-force"  safe denied
 
 # =====================================================================
 # (b) broad-creation succeeds under narrowed force
@@ -73,10 +70,7 @@ EOF
 
 rm -rf "$TMP/.pp"
 "$PP" --grant "fs:$TMP:ro" "$TMP/direction-b.pp" > "$TMP/o" 2>&1
-assert "tw-broad-creation-succeeds-under-narrowed-force"  leaked ok
-rm -rf "$TMP/.pp"
-"$PP" --bytecode --grant "fs:$TMP:ro" "$TMP/direction-b.pp" > "$TMP/o" 2>&1
-assert "vm-broad-creation-succeeds-under-narrowed-force"  leaked ok
+assert "plain-broad-creation-succeeds-under-narrowed-force"  leaked ok
 
 # =====================================================================
 # with-caps basic narrowing: slurp (scripting tier, no node)
@@ -92,17 +86,11 @@ with-caps(cap-restrict(current-capabilities(), "$TMP/other", :ro)) {
 }
 EOF
 
-for bc in "" "--bytecode"; do
-  tag=$([ -z "$bc" ] && echo tw || echo vm)
-  "$PP" $bc --grant "fs:$TMP:ro" "$TMP/wc-slurp-denied.pp" > "$TMP/o" 2>&1
-  assert "$tag-wc-slurp-narrowed-denied" safe denied
-  "$PP" $bc --grant "fs:$TMP:ro" "$TMP/wc-slurp-allowed.pp" > "$TMP/o" 2>&1
-  if grep -q "OK-OTHER" "$TMP/o"; then echo "ok   $tag-wc-slurp-narrowed-allowed"
-  else echo "FAIL $tag-wc-slurp-narrowed-allowed: expected OK-OTHER"; cat "$TMP/o"; fail=1; fi
-done
-
-# =====================================================================
-# with-caps basic narrowing: run (process capability PRESERVED through an
+"$PP" --grant "fs:$TMP:ro" "$TMP/wc-slurp-denied.pp" > "$TMP/o" 2>&1
+assert "plain-wc-slurp-narrowed-denied" safe denied
+"$PP" --grant "fs:$TMP:ro" "$TMP/wc-slurp-allowed.pp" > "$TMP/o" 2>&1
+if grep -q "OK-OTHER" "$TMP/o"; then echo "ok   plain-wc-slurp-narrowed-allowed"
+else echo "FAIL plain-wc-slurp-narrowed-allowed: expected OK-OTHER"; cat "$TMP/o"; fail=1; fi
 # fs-only restrict — CapRestrict narrows filesystem authority only;
 # non-fs channels pass through transparently).
 # =====================================================================
@@ -115,15 +103,12 @@ cat > "$TMP/wc-run-unrestricted.pp" <<EOF
 print(hash-map-get(perform run("echo", "hi"), "out"))
 EOF
 
-for bc in "" "--bytecode"; do
-  tag=$([ -z "$bc" ] && echo tw || echo vm)
-  "$PP" $bc --grant process --grant "fs:$TMP:ro" "$TMP/wc-run-restricted.pp" > "$TMP/o" 2>&1
-  if grep -q "hi" "$TMP/o"; then echo "ok   $tag-wc-run-restricted-allowed"
-  else echo "FAIL $tag-wc-run-restricted-allowed: expected hi"; cat "$TMP/o"; fail=1; fi
-  "$PP" $bc --grant process --grant "fs:$TMP:ro" "$TMP/wc-run-unrestricted.pp" > "$TMP/o" 2>&1
-  if grep -q "hi" "$TMP/o"; then echo "ok   $tag-wc-run-unrestricted-allowed"
-  else echo "FAIL $tag-wc-run-unrestricted-allowed: expected hi"; cat "$TMP/o"; fail=1; fi
-done
+"$PP" --grant process --grant "fs:$TMP:ro" "$TMP/wc-run-restricted.pp" > "$TMP/o" 2>&1
+if grep -q "hi" "$TMP/o"; then echo "ok   plain-wc-run-restricted-allowed"
+else echo "FAIL plain-wc-run-restricted-allowed: expected hi"; cat "$TMP/o"; fail=1; fi
+"$PP" --grant process --grant "fs:$TMP:ro" "$TMP/wc-run-unrestricted.pp" > "$TMP/o" 2>&1
+if grep -q "hi" "$TMP/o"; then echo "ok   plain-wc-run-unrestricted-allowed"
+else echo "FAIL plain-wc-run-unrestricted-allowed: expected hi"; cat "$TMP/o"; fail=1; fi
 
 rm -rf "$TMP"
 if [ "$fail" -eq 0 ]; then echo "=== CAPS ATTENUATION (M3) TEST PASSED ==="; fi

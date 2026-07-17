@@ -1,0 +1,30 @@
+"=== LAW 1: mutual let sees siblings ==="
+"mutual let y =>"2
+""
+"=== LAW 5: let* is sequential ==="
+"let* x =>"2
+""
+"=== LAW 9: if prunes untaken branch ==="
+"if true =>"1
+""
+"=== LAW 10: tail calls in constant stack ==="
+"tail count 10000 =>"0
+""
+"=== LAW 12: quote special forms ==="
+"quote if =>"(if a b c)
+"quote let =>"(let ((a 1)) a)
+""
+"=== LAW 13/14: do orders effects; undemanded effects don't fire ==="
+[info] a
+[info] b
+"do value =>"1
+""
+"=== LAW 32: gradual types enforced ==="
+"typed-square 7 =>"49
+"typed y =>"42
+""
+"=== LAW 33: config dynamic scope ==="
+"computed config k =>"2
+""
+"=== ALL TESTS PASSED ==="
+# exit: 0

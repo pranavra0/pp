@@ -17,21 +17,18 @@
 # newline(s) after the then-block and only consume them when `else` actually
 # follows; if it doesn't, the newline is left alone so it can still terminate
 # the statement.
-#
-# This is a differential test: every case must agree, byte for byte, between
-# the tree-walker and the bytecode VM.
+# This test exercises every branch shape to ensure correct parsing.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 run_case() {
   local name="$1" file="$2" expected="$3"
-  local got_tw got_bc
-  got_tw=$("$PP" "$file" 2>&1)
-  got_bc=$("$PP" --bytecode "$file" 2>&1)
-  if [ "$got_tw" = "$expected" ] && [ "$got_bc" = "$expected" ]; then
+  local got
+  got=$("$PP" "$file" 2>&1)
+  if [ "$got" = "$expected" ]; then
     ok "$name"
   else
     bad "$name" \
-        "tw: $(printf '%q' "$got_tw")" "bc: $(printf '%q' "$got_bc")" \
+        "got: $(printf '%q' "$got")" \
         "expected: $(printf '%q' "$expected")"
   fi
 }

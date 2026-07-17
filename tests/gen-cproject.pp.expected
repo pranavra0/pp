@@ -1,0 +1,2 @@
+pp: error: gen-cproject.pp expects: <N> <src-dir> at tests/gen-cproject.pp:12 at tests/gen-cproject.pp:12
+# exit: 1

@@ -118,15 +118,6 @@ if [ "$iter_fail" -eq 0 ]; then
   ok "stress64-$ITERS-cold-iterations (every object/trace round-trips, sum=$EXPECTED_SUM each time)"
 fi
 
-# VM parity: `map` applies a VM-compiled closure via its bytecode, not the
-# tree-walker's `apply` over the closure's dummy `ELiteral VNil` body (a VM
-# closure's real code lives in vm_bc/vm_offset — routing it through the
-# tree-walker's apply would silently return VNil for every mapped element).
-rm -rf "$TMP/.pp"
-bc_out=$("$PP" --bytecode --grant process --schedule parallel:16 "$TMP/stress64.pp" 2>"$TMP/stress-bc.err")
-if [ "$bc_out" = "$EXPECTED_SUM" ]; then ok "stress64-bytecode-parallel-correct-sum"
-else bad "stress64-bytecode-parallel-correct-sum" "got '$bc_out', expected $EXPECTED_SUM" "$(cat "$TMP/stress-bc.err")"; fi
-
 # One cold run's journal: exactly 64 parseable exec lines (N concurrent
 # journal appends -> N lines, none torn/merged by Journal.append's hardened
 # single write_substring on an O_APPEND fd).
@@ -155,9 +146,9 @@ fi
 # ---- race:8 hammering a SINGLE key, trace lock disabled ----
 # PP_TRACE_LOCK=0 is an internal escape hatch (store.ml's with_trace_lock),
 # not a documented user switch: it disables the per-key lockf around
-# store_trace's read-modify-write so this test can demonstrate the
-# DESIGN's drop-soundness claim (docs/PLAN-phase3-parallel.md) holds even
-# without the lock, not just with it.
+# store_trace's read-modify-write so this test can demonstrate LAW 37's
+# drop-soundness (store.ml's store_trace comment) holds even without the
+# lock, not just with it.
 cat > "$TMP/onekey.pp" <<'EOF'
 def one() {
   force(node {

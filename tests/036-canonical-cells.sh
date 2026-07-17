@@ -25,7 +25,7 @@
 #   NFC Unicode normalization is NOT covered here — a documented residual
 #   (SPEC law 23; see docs/STATUS.md); this suite is realpath-only.
 #
-# Runs under an isolated HOME; both backends.
+# Runs under an isolated HOME; single engine.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -89,13 +89,6 @@ run --grant process --grant "fs:$SRC:ro" "$TMP/build.pp"
 assert "a2-cold-real-miss"    "RUN"   present
 run --grant process --grant "fs:$LINK:ro" "$TMP/build.pp"
 assert "a2-symlink-grant-hit" "RUN"   absent   # <- and the reverse direction
-
-# VM parity for the grant-spelling divergence
-rm -rf "$TMP/.pp"
-run --bytecode --grant process --grant "fs:$LINK:ro" "$TMP/build.pp"
-assert "vm-a2-cold-symlink-miss" "RUN" present
-run --bytecode --grant process --grant "fs:$SRC:ro" "$TMP/build.pp"
-assert "vm-a2-real-grant-hit"    "RUN" absent
 
 # --- (b) macOS /var vs /private/var: exercise whatever symlink layer the
 #         host's OWN tmp path already has. mktemp -d on macOS returns a path

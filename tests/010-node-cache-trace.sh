@@ -3,7 +3,7 @@
 # (SPEC law 21).
 #
 # Two facts about the persistent node cache (~/.pp/store) motivated this:
-#   1. it was tree-walker-only (the VM had no store of its own), and
+#   1. it was tree-walker-only (no store of its own existed), and
 #   2. it served STALE results: `(node (slurp path))` returned the old file
 #      contents after the file changed, because the node key hashes the path
 #      STRING, not what was read.
@@ -16,9 +16,7 @@
 #
 # The store lives at $HOME/.pp/store, so this test runs under an isolated HOME
 # and never touches the developer's real store. It exercises only the
-# tree-walker (the sole backend wired to the store) and separately pins the
-# documented VM behaviour (recomputes every run).
-set -uo pipefail
+# tree-walker (the sole backend wired to the store).
 PP=${PP:-bin/pp}
 # Resolve PP to an absolute path before we move cwd via HOME-isolated runs.
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -58,37 +56,24 @@ rm -rf "$TMP/.pp"
 
 printf 'V1\n' > "$DATA"
 run > /dev/null
-assert "tw-run1-miss-computes"  "COMPUTE" present   # cold: body runs
-assert "tw-run1-value-V1"       "V1"      present
+assert "run1-miss-computes"  "COMPUTE" present   # cold: body runs
+assert "run1-value-V1"       "V1"      present
 
 run > /dev/null
-assert "tw-run2-hit-no-recompute" "COMPUTE" absent  # unchanged file ⇒ trace verifies ⇒ hit
-assert "tw-run2-value-V1"         "V1"      present  # LAW 17: hit does not replay COMPUTE
+assert "run2-hit-no-recompute" "COMPUTE" absent  # unchanged file ⇒ trace verifies ⇒ hit
+assert "run2-value-V1"         "V1"      present  # LAW 17: hit does not replay COMPUTE
 
 printf 'V2\n' > "$DATA"
 run > /dev/null
-assert "tw-run3-stale-recomputes" "COMPUTE" present  # file changed ⇒ trace stale ⇒ miss
-assert "tw-run3-value-V2"         "V2"      present   # THE FIX: fresh content, not stale V1
-assert "tw-run3-not-stale-V1"     "^\[info\] V1$" absent
+assert "run3-stale-recomputes" "COMPUTE" present  # file changed ⇒ trace stale ⇒ miss
+assert "run3-value-V2"         "V2"      present   # THE FIX: fresh content, not stale V1
+assert "run3-not-stale-V1"     "^\[info\] V1$" absent
 
 # Trace SET (R9): reverting the file hits the ORIGINAL trace, still in the set.
 printf 'V1\n' > "$DATA"
 run > /dev/null
-assert "tw-run4-revert-hit"   "COMPUTE" absent
-assert "tw-run4-value-V1"     "V1"      present
-
-# The VM is now wired to the same store: a fresh-store run misses and
-# computes, an unchanged re-run hits, and editing the file re-computes — the same
-# trace-verified caching as the tree-walker.
-rm -rf "$TMP/.pp"
-printf 'V1\n' > "$DATA"
-"$PP" --bytecode --grant "fs:$TMP:ro" "$PROG" > "$TMP/out" 2>&1
-assert "vm-run1-miss-computes"    "COMPUTE" present
-"$PP" --bytecode --grant "fs:$TMP:ro" "$PROG" > "$TMP/out" 2>&1
-assert "vm-run2-hit-no-recompute" "COMPUTE" absent
-printf 'V2\n' > "$DATA"
-"$PP" --bytecode --grant "fs:$TMP:ro" "$PROG" > "$TMP/out" 2>&1
-assert "vm-run3-stale-recomputes" "COMPUTE" present
+assert "run4-revert-hit"   "COMPUTE" absent
+assert "run4-value-V1"     "V1"      present
 
 rm -rf "$TMP"
 if [ "$fail" -eq 0 ]; then

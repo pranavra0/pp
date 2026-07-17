@@ -1,6 +1,6 @@
-# stdlib/domain-proc.pp — Q13 process-domain policy (PLAN-m4-cells.md §Q13)
+# stdlib/domain-proc.pp — process-domain policy
 #
-# This is the POLICY that used to live in src/supervisor.ml: start/stop/
+# This is the POLICY half of the domain: start/stop/
 # restart decisions on spec-hash (here: spec VALUE) change. The TRUSTED
 # MECHANICS (fork/exec/reap, TERM->poll->KILL, per-domain state
 # persistence) are OCaml primitives (src/domain_prims.ml): proc-spawn,
@@ -10,8 +10,8 @@
 # The old procs/ state-file directory is replaced by domain-state-get/put
 # — generic, per-domain-scoped persistent storage. This domain maintains
 # its OWN index of tracked service names under the "known-services" key
-# (a plain pp list) since there is no OS process enumeration — "the
-# supervisor tracks its own pids" (PLAN-m4-cells.md), preserved exactly.
+# (a plain pp list) since there is no OS process enumeration — the
+# supervisor tracks its own pids.
 #
 # observe = reap zombies once per pass (the natural per-pass hook —
 # observe runs exactly once per domain per pass, same as
@@ -19,7 +19,7 @@
 # tracked service, {name -> :stopped} for a tracked-but-dead
 # one, and no entry at all for a name never seen.
 # desired = {service-name -> spec-map}  (spec: "cmd"/"args"/"env"/"cwd",
-# exactly the pre-Q13 shape)
+# the keys proc-spawn reads)
 # diff    = start (never seen, or seen-but-dead) / restart (alive, spec
 # changed — compared STRUCTURALLY, `=`, no hash needed since
 # diff has the actual values) / stop (tracked, alive, no
@@ -94,8 +94,8 @@ fn(acc, name) {
 def proc-plan-item(kind, name, spec) {
   {:kind -> kind, :name -> name, :spec -> spec}
 }
-# `desired`'s spec VALUES are lazy (hash-map/map literals force keys only,
-# PLAN-m4-cells.md / primitives.ml convention) — `observed`'s spec values
+# `desired`'s spec VALUES are lazy (hash-map/map literals force keys only —
+# the primitives.ml convention) — `observed`'s spec values
 # are NOT (they round-tripped through domain-state's Codec encode/decode).
 # Two more traps found the hard way, both closed the same way (force-deep
 # + compare by `hash-value`, never raw `=`, whenever one side may have

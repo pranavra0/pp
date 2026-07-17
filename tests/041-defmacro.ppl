@@ -1,15 +1,14 @@
-;; defmacro (M3, D10's promise) — differential test.
+;; defmacro (M3, D10's promise) — expected-output test.
 ;;
 ;; This is tests/041-defmacro.pp's twin, authored in the sexpr surface — the
 ;; AST-native notation `defmacro`/`quote`/`quasiquote` have always used
 ;; (M7 demoted it from "the syntax" to "the AST", never deprecated it: it is
 ;; exactly the pre-M7-migration original of this file, git show
-;; 393ed68:tests/041-defmacro.pp). tests/056-defmacro-both-surfaces.sh is
-;; the M7 S5 gate: this file and the .pp must produce byte-identical output
-;; on both backends — a macro author may write braces or sexprs and the
-;; language does not know the difference.
+;; the M7 S5 gate: this file and the .pp must produce byte-identical output —
+;; a macro author may write braces or sexprs and the language does not know
+;; the difference.
 ;;
-;; Expansion happens at ONE shared point before either backend ever sees a
+;; Expansion happens at ONE shared point before the evaluator ever sees a
 ;; form (macro.ml), so this file exercises it purely through observable
 ;; VALUES (never node-body `log` side effects — LAW 17's "a hit replays no
 ;; log" would make repeated `dune runtest` runs against a developer's real

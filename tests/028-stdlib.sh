@@ -9,7 +9,7 @@
 #   (f) file-exists?/dir? are capability-gated observations: recorded as
 #       stat: trace cells inside nodes (create/delete invalidates), and
 #       denied without an fs grant.
-# Both backends throughout, isolated HOME.
+# Isolated HOME.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 assert_out() {  # NAME FLAGS FILE EXPECTED [ARGS...]
@@ -30,17 +30,15 @@ print(string-trim("  x  "))
 print(string-sub("abcdef", 1, 3))
 EOF
 expected=$'"42"\n42\n6\nnil\n"x"\n"bcd"'
-assert_out "string-prims-tw" ""           "$TMP/a.pp" "$expected"
-assert_out "string-prims-vm" "--bytecode" "$TMP/a.pp" "$expected"
+assert_out "string-prims" ""           "$TMP/a.pp" "$expected"
 
 # ---- (b) argv ----
 cat > "$TMP/b.pp" <<'EOF'
 print(argv())
 EOF
 expected='("x" "y z" "3")'
-assert_out "argv-tw" ""           "$TMP/b.pp" "$expected" -- x "y z" 3
-assert_out "argv-vm" "--bytecode" "$TMP/b.pp" "$expected" -- x "y z" 3
-assert_out "argv-empty-tw" ""     "$TMP/b.pp" "nil"
+assert_out "argv" ""           "$TMP/b.pp" "$expected" -- x "y z" 3
+assert_out "argv-empty" ""     "$TMP/b.pp" "nil"
 
 # ---- (c) env-get ----
 cat > "$TMP/c.pp" <<'EOF'
@@ -48,8 +46,7 @@ print(env-get("PP_TEST_VAR"))
 print(env-get("PP_DEFINITELY_UNSET_VAR"))
 EOF
 expected=$'"hello"\nnil'
-PP_TEST_VAR=hello assert_out "env-get-tw" ""           "$TMP/c.pp" "$expected"
-PP_TEST_VAR=hello assert_out "env-get-vm" "--bytecode" "$TMP/c.pp" "$expected"
+PP_TEST_VAR=hello assert_out "env-get" ""           "$TMP/c.pp" "$expected"
 
 # ---- (d) exit-code control ----
 cat > "$TMP/d.pp" <<'EOF'
@@ -57,24 +54,20 @@ print(1)
 exit(3)
 print(2)
 EOF
-for flags in "" "--bytecode"; do
-  out=$("$PP" $flags "$TMP/d.pp" 2>"$TMP/err"); ec=$?
-  if [ "$ec" -eq 3 ] && [ "$out" = "1" ]; then ok "exit-code${flags:+-vm}"
-  else bad "exit-code${flags:+-vm}" "exit=$ec out=$out err=$(cat "$TMP/err")"; fi
-done
+out=$("$PP" "$TMP/d.pp" 2>"$TMP/err"); ec=$?
+if [ "$ec" -eq 3 ] && [ "$out" = "1" ]; then ok "exit-code"
+else bad "exit-code" "exit=$ec out=$out err=$(cat "$TMP/err")"; fi
 
 # ---- (e) assert failure reports form + location ----
 cat > "$TMP/e.pp" <<'EOF'
 let x = 2
 assert(x = 1)
 EOF
-for flags in "" "--bytecode"; do
-  if "$PP" $flags "$TMP/e.pp" >"$TMP/out" 2>"$TMP/err"; then
-    bad "assert-fails${flags:+-vm}" "expected failure"
-  elif grep -qE 'assertion failed: \(= x 1\) at .*e\.pp:2' "$TMP/err"; then
-    ok "assert-fails${flags:+-vm}"
-  else bad "assert-fails${flags:+-vm}" "stderr: $(cat "$TMP/err")"; fi
-done
+if "$PP" "$TMP/e.pp" >"$TMP/out" 2>"$TMP/err"; then
+  bad "assert-fails" "expected failure"
+elif grep -qE 'assertion failed: \(= x 1\) at .*e\.pp:2' "$TMP/err"; then
+  ok "assert-fails"
+else bad "assert-fails" "stderr: $(cat "$TMP/err")"; fi
 cat > "$TMP/e2.pp" <<'EOF'
 assert(false, "the sky is falling")
 EOF
@@ -111,12 +104,6 @@ run_f "${G[@]}"
 if [ "$(head -1 "$TMP/o")" = "false" ] && ! grep -q COMPUTE "$TMP/errf"; then
   ok "stat-run4-absent-trace-rehits"
 else bad "stat-run4-absent-trace-rehits" "$(cat "$TMP/o")" "$(cat "$TMP/errf")"; fi
-# VM parity on the stat cell path
-rm -rf "$TMP/.pp"
-run_f --bytecode "${G[@]}"
-grep -q COMPUTE "$TMP/errf" && ok "vm-stat-run1" || bad "vm-stat-run1"
-run_f --bytecode "${G[@]}"
-! grep -q COMPUTE "$TMP/errf" && ok "vm-stat-run2-hit" || bad "vm-stat-run2-hit"
 # no grant ⇒ capability error naming the operation
 if "$PP" "$TMP/f.pp" >"$TMP/o" 2>"$TMP/errf"; then
   bad "stat-no-grant-denied" "expected failure"

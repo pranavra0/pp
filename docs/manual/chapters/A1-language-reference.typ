@@ -73,8 +73,7 @@ At the top level, `let name = value` evaluates the value once and binds it;
 == Functions
 
 `fn` produces an anonymous function; `def` with a list head names one. There is
-no loop keyword — recursion is the loop, and both back ends run tail calls in
-constant stack.
+no loop keyword — recursion is the loop, and tail calls run in constant stack.
 
 #example("ref-fn")
 
@@ -136,7 +135,7 @@ Config is ambient, dynamically-scoped data, distinct from capabilities.
 
 `defmacro` defines a macro: it receives its arguments as unevaluated forms —
 s-expression data, the same trees `quote` yields — and returns a new form,
-expanded before either back end sees it. You write the macro in braces; it
+expanded before the evaluator sees it. You write the macro in braces; it
 consumes and produces the AST. A `quasiquote { ... }` template is the usual
 way to assemble the expansion: ordinary brace syntax with `unquote(e)` holes
 where the caller's forms go.
@@ -323,8 +322,8 @@ def classify(n) {
 ```
 
 Guards subsume the multi-way conditional: a `match` on the scrutinized value
-with guarded arms replaces what a `cond` chain would have spelled. Both
-backends agree on every pattern kind, and the lowering uses unshadowable
+with guarded arms replaces what a `cond` chain would have spelled. The
+engine agrees on every pattern kind, and the lowering uses unshadowable
 internal primitives — redefining `car` or `=` cannot change match semantics.
 The s-expression surface reads and writes the same form
 (`(match e (p body) (p if guard body) ...)`), so match files round-trip

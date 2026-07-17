@@ -1,7 +1,6 @@
 # tests/025-def-value.pp — def x = v with a non-list head is a VALUE binding,
-# not a nullary closure. Differential: both backends must produce identical
-# output. The expected-output oracle lives in tests/025-def-value.sh; this
-# file pins backend parity.
+# not a nullary closure. The expected-output oracle lives in
+# tests/025-def-value.sh; this file pins the behavior under the tree-walker.
 
 # simple value bindings, sequential visibility
 let x = 5
@@ -32,7 +31,7 @@ print(force(d))
 # do-block value defs: letrec*-style block scope, backpatched on execution
 print(do { let z = y * 2
   z + 1 })
-# inside a function body (non-top-level frame in the VM): value defs and
+# inside a function body (non-top-level frame): value defs and
 # function defs mix; the function sees the block-scoped value
 def g(n) {
   let m = n * 2

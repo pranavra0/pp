@@ -6,21 +6,18 @@
 # a trailing comma while the normal copy rejected it — like every other
 # comma list in the grammar. They are now one function
 # (Reader_braces.parse_handler_pairs), so:
-#   (a) with-handler runs, both backends, in ordinary code;
-#   (b) a with-handler quasiquote template expands and runs identically on both
-#       backends (the pair loop builds the same data either way);
+#   (a) with-handler runs in ordinary code;
+#   (b) a with-handler quasiquote template expands and runs identically;
 #   (c) a trailing comma is rejected in BOTH readers (the drift is gone).
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
-run_both() {
+run_one() {
   local name="$1" file="$2" expected="$3"
-  local tw bc
-  tw=$("$PP"            "$file" 2>&1)
-  bc=$("$PP" --bytecode "$file" 2>&1)
-  if [ "$tw" = "$expected" ] && [ "$bc" = "$expected" ]; then ok "$name"
+  local got
+  got=$("$PP" "$file" 2>&1)
+  if [ "$got" = "$expected" ]; then ok "$name"
   else bad "$name" "expected: $(printf '%q' "$expected")" \
-                   "tw:       $(printf '%q' "$tw")" \
-                   "bc:       $(printf '%q' "$bc")"; fi
+                   "got:       $(printf '%q' "$got")"; fi
 }
 
 # (a) ordinary with-handler, symbol + keyword names.
@@ -28,15 +25,15 @@ cat > "$TMP/n.pp" <<'EOF'
 def sink(m) { m }
 print(with-handler(log = sink, :warn = sink) { perform log("hi") })
 EOF
-run_both "normal-with-handler" "$TMP/n.pp" '"hi"'
+run_one "normal-with-handler" "$TMP/n.pp" '"hi"'
 
-# (b) with-handler quasiquote template expands+runs, both backends agree.
+# (b) with-handler quasiquote template expands+runs.
 cat > "$TMP/q.pp" <<'EOF'
 def h(m) { m }
 defmacro mk() { quasiquote { with-handler(log = h) { perform log("hi") } } }
 print(mk())
 EOF
-run_both "qq-with-handler-template" "$TMP/q.pp" '"hi"'
+run_one "qq-with-handler-template" "$TMP/q.pp" '"hi"'
 
 # (c) trailing comma rejected in BOTH readers (consistency fix).
 cat > "$TMP/tc-normal.pp" <<'EOF'

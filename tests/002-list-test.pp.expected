@@ -1,0 +1,32 @@
+"=== 1. map ==="
+"map +1 [1 2 3 4 5] =>"(2 3 4 5 6)
+""
+"=== 2. map is lazy (does not force unused elements) ==="
+"  computing"50
+"  computing"40
+"  computing"30
+"  computing"20
+"  computing"10
+"first element:"20
+"(only one computing message should appear)"
+""
+"=== 3. filter ==="
+"filter even? [1 2 3 4 5 6] =>"(2 4 6)
+""
+"=== 4. foldl ==="
+"foldl + 0 [1 2 3 4 5] =>"15
+"foldl string-append \"\" [\"a\" \"b\" \"c\"] =>""abc"
+""
+"=== 5. foldr ==="
+"foldr cons nil [1 2 3] =>"(1 2 3)
+""
+"=== 6. range ==="
+"take 5 (range 10 20) =>"(10 11 12 13 14)
+"foldl + 0 (range 1 6) =>"15
+""
+"=== 7. length ==="
+"length [1 2 3 4 5] =>"5
+"length nil =>"0
+""
+"=== ALL TESTS PASSED ==="
+# exit: 0

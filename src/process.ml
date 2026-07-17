@@ -224,7 +224,7 @@ let run_dep_effect (args : value list) : value =
   | _ -> failwith "run-dep! expects a depfile path, a command, and arguments"
 
 (* ---- write-file with the LAW 18 node/scripting split ----
-   Shared by both backends' builtin write-file. Inside a node: a relative
+   Shared by the builtin write-file implementation. Inside a node: a relative
    path writes node-local sandbox scratch (capability-free, unrecorded); an
    absolute path is an error — reconciled-domain writes go through the
    reconciler, never node bodies. Scripting tier: unchanged, capability-

@@ -1,0 +1,36 @@
+"42"
+"-7"
+42
+-13
+3.5
+nil
+6
+nil
+"padded"
+"bcd"
+""
+"a,b,c"
+""
+true
+false
+true
+false
+("a" "b" "c")
+2
+1
+true
+false
+false
+2
+(1 2 3 4)
+(3 2 1)
+20
+(3 4)
+true
+false
+7
+8
+nil
+nil
+nil
+# exit: 0

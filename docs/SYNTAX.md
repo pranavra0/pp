@@ -7,8 +7,7 @@ and every sigil with exactly one meaning. It supersedes the earlier
 the rejected alternatives and why.
 
 The surface described here is implemented. The migration plan that tracked
-it is retired to git history. Any surface work still open lives in
-[PLAN.md](PLAN.md).
+it is retired to git history.
 
 ---
 
@@ -313,7 +312,7 @@ def compute(x, y) {
 effect shapes don't use `try`.
 Bindings are sequential; rebinding a name shadows it, like `let*`. This is
 a documented exception to the rule against duplicate definitions in one
-block (LAW 4), and it is pinned by a differential test.
+block (LAW 4), and it is pinned by a behavior test.
 
 ### `collect`: accumulation, not short-circuit
 
@@ -354,10 +353,9 @@ multi-way conditional with no destructuring, use a flat `if`/`else if`
 chain, or `match` on the scrutinised value with guards. Map patterns may
 be added later as a new pattern kind; they will not add a new form.
 
-Both backends must agree on every pattern kind, and this is
-differential-tested. The compiler's lowering must use unshadowable
-internal primitives, so user code shadowing `car` or `=` cannot change
-match semantics.
+The engine must agree on every pattern kind, and this is exercised by the
+fuzzer. The lowering uses unshadowable internal primitives, so user code
+shadowing `car` or `=` cannot change match semantics.
 
 ---
 

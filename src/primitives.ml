@@ -4,6 +4,10 @@ open Types
 open Backend
 
 
+(* Reference to the current environment — updated by evaluator at eval entry *)
+let current_env_ref : env ref = ref Types.empty_env
+
+
 
 (* Force helpers for builtins *)
 let force_val (v : value) : value = Backend.r.force v
@@ -41,11 +45,9 @@ let gensym_counter = ref 0
 
    Two-phase protocol: (1) a non-forcing COLLECT walk over [v]'s structural
    spine gathers every reachable Unevaluated, thunk_persist thunk together
-   with its LAW-20 key (tree-walker node_key_of or VM vm_node_key, chosen per
-   t.vm_code — a single run can contain thunks from both backends, e.g. via
-   eval-pp), deduplicated by key; (2) those are handed to
-   Scheduler.dispatch_batch, which forks them (up to the policy's
-   concurrency) and reaps; (3) only THEN does the ordinary recursive walk
+   with its LAW-20 key (tree-walker node_key_of), deduplicated by key; (2)
+   those are handed to Scheduler.dispatch_batch, which forks them (up to the
+   policy's concurrency) and reaps; (3) only THEN does the ordinary recursive walk
    run — every node it reaches is now a cache hit (or, for a dead worker,
    falls through to an ordinary in-process compute — worker death degrades
    to serial, never a wrong answer). Under [Serial] policy, collection is
@@ -64,15 +66,10 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
   let seen_pairs : value list ref = ref [] in
   let jobs = ref [] in
   let race_width () = match Scheduler.state.policy with Scheduler.Race n -> n | _ -> 1 in
-  let key_of (t : thunk) : string =
-    if t.vm_code <> None then Backend.r.vm_node_key t else Backend.r.node_key_of t
+  let key_of (t : thunk) : string = Backend.r.node_key_of t
   in
   let job_run (t : thunk) (key : string) () : value =
-    let run () =
-      match t.vm_code with
-      | Some (bc, offset, frames) -> Backend.r.vm_run_thunk bc offset frames
-      | None -> Backend.r.eval t.thunk_expr t.thunk_env
-    in
+    let run () = Backend.r.eval t.thunk_expr t.thunk_env in
     Backend.r.run_node_body ~key ~run t
   in
   let rec walk (v : value) : unit =
@@ -145,17 +142,9 @@ let force_deep (v : value) : value =
    existing shape, same reason). *)
 
 (* Invoke a function value on already-evaluated args, without going through
-   EApply: a VM closure (non-empty bytecode) runs over a fresh frame filled
-   with the args; a tree-walker closure or a builtin goes through
-   Backend.r.apply. The one place this dispatch lives — callers that need an
-   arity check do it first, since the error wording is caller-specific. *)
+   EApply: all closures go through Backend.r.apply. *)
 let invoke (fn : value) (args : value list) : value =
-  match fn with
-  | VClosure c when Array.length c.vm_bc.code > 0 ->
-      let new_frame = Types.make_frame (List.length args) in
-      List.iteri (fun i a -> Types.frame_set new_frame i a) args;
-      Backend.r.vm_run_thunk c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
-  | _ -> Backend.r.apply fn args Backend.r.current_env
+  Backend.r.apply fn args !current_env_ref
 
 (* Call a zero-argument function value. *)
 let call_zero_arg (fn : value) : value =
@@ -378,8 +367,7 @@ let register_lists () =
      list becomes one apply. Only the list SPINES are forced (to splice them);
      elements pass through unforced, exactly as `cons`/`list` do, so a spread of
      unforced node thunks stays unforced — same discipline as `map`. Dispatch to
-     the callee (tree-walker vs VM closure vs builtin) reuses [call_with_args],
-     so both backends run it identically. *)
+     the callee (closure or builtin) reuses [call_with_args]. *)
   register "apply" (fun args ->
     match args with
     | f :: segs ->
@@ -420,24 +408,9 @@ let register_lists () =
     | [f; lst] ->
         let fn = force_val f in
         (* Apply [fn] to one (possibly unforced — e.g. a node thunk) arg
-           without forcing the RESULT. A VM-compiled closure's tree-walker
-           `body` is a dummy `ELiteral VNil` (compiler.ml/vm.ml MAKE_CLOSURE
-           carry the real code as bytecode, not an AST) — routing it through
-           `!apply_ref` (the tree-walker's `apply`) would silently evaluate
-           that dummy body and return VNil for every element instead of
-           actually calling the function. Same VM-closure-detection pattern
-           as `apply-pp` above: a VM closure runs via `!vm_run_thunk_ref`
-           (== Vm.run_isolated) over a fresh one-slot frame; anything else
-           (a tree-walker closure or a builtin) goes through `!apply_ref`. *)
+           without forcing the RESULT. All closures go through
+           Backend.r.apply via invoke. *)
         let apply1 (arg : value) : value =
-          (match fn with
-           | VClosure c when Array.length c.vm_bc.code > 0
-                             && List.length c.params <> 1 ->
-               let fname = match c.fn_name with Some n -> n | None -> "#<fn>" in
-               failwith (Printf.sprintf
-                 "arity mismatch calling %s: expected %d args, got 1"
-                 fname (List.length c.params))
-           | _ -> ());
           invoke fn [arg]
         in
         let rec go l =
@@ -609,7 +582,7 @@ let register_metaeval () =
         let exprs = Backend.r.expand_toplevel (Reader.read_string code) in
         (* Capture the calling env into a local ref — avoid clobbering
            current_env_ref during inner evaluations. *)
-        let local_env = ref Backend.r.current_env in
+        let local_env = ref !current_env_ref in
         let new_defs = ref [] in
         let rec go = function
           | [] ->
@@ -619,13 +592,11 @@ let register_metaeval () =
           | [EDef (name, params, body)] ->
               let closure = Types.make_closure ~name:(Some name) params body local_env in
               local_env := Types.extend_env !local_env name closure;
-              Backend.r.vm_define name closure;
               new_defs := (name, closure) :: !new_defs;
               if !new_defs = [] then VNil else VEnvMap (List.rev !new_defs)
           | [EDefValue (name, rhs)] ->
               let v = Backend.r.eval rhs !local_env in
               local_env := Types.extend_env !local_env name v;
-              Backend.r.vm_define name v;
               new_defs := (name, v) :: !new_defs;
               VEnvMap (List.rev !new_defs)
           | [last] ->
@@ -635,13 +606,11 @@ let register_metaeval () =
           | (EDef (name, params, body)) :: rest ->
               let closure = Types.make_closure ~name:(Some name) params body local_env in
               local_env := Types.extend_env !local_env name closure;
-              Backend.r.vm_define name closure;
               new_defs := (name, closure) :: !new_defs;
               go rest
           | (EDefValue (name, rhs)) :: rest ->
               let v = Backend.r.eval rhs !local_env in
               local_env := Types.extend_env !local_env name v;
-              Backend.r.vm_define name v;
               new_defs := (name, v) :: !new_defs;
               go rest
           | e :: rest ->
@@ -1117,24 +1086,6 @@ let register_ppc () =
     failwith "ppc-emit-constant: not yet implemented for self-hosting"
   );
 
-  register "ppc-finish" (fun args ->
-    match Backend.r.compiler_state with
-    | Some st ->
-        Backend.r.compiler_state <- None;
-        let bc = Backend.r.compiler_finish st in
-        Types.VBytecode bc
-    | None ->
-        failwith "ppc-finish: no active compiler state"
-  );
-
-  register "ppc-run" (fun args ->
-    let args = force_args args in
-    match args with
-    | [Types.VBytecode bc] ->
-        Backend.r.vm_run_bytecode bc
-    | _ -> failwith "ppc-run expects a bytecode value"
-  );
-
   register "ppc-resolve-local" (fun args ->
     failwith "ppc-resolve-local: not yet implemented for self-hosting"
   );
@@ -1204,21 +1155,14 @@ let register_macros () =
 
 let register_match_aliases () =
   (* Unshadowable aliases for the primitives the `match` lowering
-     (Compiler.EMatch) compiles its structural condition/binding code
-     down to. The lowering builds ordinary EApply (ESymbol "car"/"cdr"
-     /"="/"nil?"/"not"/"error", ...) nodes; on the VM those compile to
-     LOAD_GLOBAL, which resolves whatever is CURRENTLY bound to that
-     name — so user code that shadows e.g. `car` (`def car(x) { ... }`)
-     silently redirects match's internal machinery, and the VM diverges
-     from the tree-walker (which matches structurally via
-     Types.match_pattern and is immune to shadowing). Register each of
+     compiles its structural condition/binding code
+     down to. Register each of
      these under a NUL-prefixed name — no pp source can contain a NUL,
      so no `def`/`let` can ever rebind it — pointing at the SAME builtin
-     value already registered under the plain name. Compiler.ml's match
-     lowering references the "\000"-prefixed name instead of the plain
+     value already registered under the plain name. The lowering
+     references the "\000"-prefixed name instead of the plain
      one, so it always reaches the true primitive regardless of
-     shadowing. Mirrors [dead_slot] above (compiler.ml) as an
-     unshadowable-by-construction identifier. *)
+     shadowing. *)
   List.iter (fun n ->
     match lookup n with
     | Some v -> Hashtbl.replace builtins ("\000" ^ n) v

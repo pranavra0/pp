@@ -17,7 +17,7 @@
 #   (b) argv ["a","b"] vs ["a:b"]: the ':' join made "argv:a:b" ambiguous.
 #
 # COMPUTE in output = the node body ran (miss); a hit does not replay it
-# (SPEC law 17). Runs under an isolated HOME; both backends.
+# (SPEC law 17). Runs under an isolated HOME.
 set -uo pipefail
 PP=${PP:-bin/pp}
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
@@ -42,20 +42,18 @@ perform log(force(node {
 }))
 EOF
 
-env_case() {  # BACKEND-FLAG (may be empty)
-  local flag="$1" tag="$2"
+env_case() {
   rm -rf "$TMP/.pp"
   unset PPTEST_A1
-  "$PP" $flag "$TMP/env.pp" > "$TMP/out" 2>&1
-  assert "$tag-env-unset-run1-miss" miss
-  PPTEST_A1=absent "$PP" $flag "$TMP/env.pp" > "$TMP/out" 2>&1
-  assert "$tag-env-value-absent-recomputes" miss   # old code: stale HIT
+  "$PP" "$TMP/env.pp" > "$TMP/out" 2>&1
+  assert "env-unset-run1-miss" miss
+  PPTEST_A1=absent "$PP" "$TMP/env.pp" > "$TMP/out" 2>&1
+  assert "env-value-absent-recomputes" miss
   unset PPTEST_A1
-  "$PP" $flag "$TMP/env.pp" > "$TMP/out" 2>&1
-  assert "$tag-env-unset-again-hits" hit            # absent observation round-trips
+  "$PP" "$TMP/env.pp" > "$TMP/out" 2>&1
+  assert "env-unset-again-hits" hit
 }
-env_case ""          "tw"
-env_case "--bytecode" "bc"
+env_case
 
 # ---- (b) argv observation: ["a","b"] vs ["a:b"] ----
 cat > "$TMP/argv.pp" <<'EOF'
@@ -65,18 +63,16 @@ perform log(force(node {
 }))
 EOF
 
-argv_case() {  # BACKEND-FLAG TAG
-  local flag="$1" tag="$2"
+argv_case() {
   rm -rf "$TMP/.pp"
-  "$PP" $flag "$TMP/argv.pp" -- a b > "$TMP/out" 2>&1
-  assert "$tag-argv-ab-run1-miss" miss
-  "$PP" $flag "$TMP/argv.pp" -- a:b > "$TMP/out" 2>&1
-  assert "$tag-argv-a-colon-b-recomputes" miss      # old code: stale HIT
-  "$PP" $flag "$TMP/argv.pp" -- a b > "$TMP/out" 2>&1
-  assert "$tag-argv-ab-again-hits" hit
+  "$PP" "$TMP/argv.pp" -- a b > "$TMP/out" 2>&1
+  assert "argv-ab-run1-miss" miss
+  "$PP" "$TMP/argv.pp" -- a:b > "$TMP/out" 2>&1
+  assert "argv-a-colon-b-recomputes" miss
+  "$PP" "$TMP/argv.pp" -- a b > "$TMP/out" 2>&1
+  assert "argv-ab-again-hits" hit
 }
-argv_case ""          "tw"
-argv_case "--bytecode" "bc"
+argv_case
 
 if [ "$fail" = 0 ]; then echo "=== 070 HASH-INJECTIVE NEAR-MISS: ALL PASS ==="; fi
 exit $fail

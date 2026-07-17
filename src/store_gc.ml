@@ -40,8 +40,7 @@ let default_grace_seconds = 2.0
 (* ---- Replay: spawn `pp <reconstructed argv> --gc-mark <outfile>` ---- *)
 
 let argv_of_root (r : Gcroots.root) (mark_out : string) : string list =
-  (if r.Gcroots.gr_bytecode then ["--bytecode"] else [])
-  @ List.concat_map (fun g -> ["--grant"; g]) r.Gcroots.gr_grants
+  List.concat_map (fun g -> ["--grant"; g]) r.Gcroots.gr_grants
   @ (match r.Gcroots.gr_reconcile_root with
      | Some root -> ["--reconcile"; root] | None -> [])
   @ (if r.Gcroots.gr_supervise then ["--supervise"] else [])

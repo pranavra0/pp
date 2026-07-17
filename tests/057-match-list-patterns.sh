@@ -1,24 +1,20 @@
 #!/usr/bin/env bash
-# tests/057 — Differential test for match list patterns. Kept as a shell
+# tests/057 — Test for match list patterns. Kept as a shell
 # script (not a .pp file) for its expected-output oracle; the sexpr surface
 # also represents match, and tests/084 covers its round-trip.
 # Also pins two match soundness fixes:
 #   - matching a list/tagged pattern against a non-pair scalar falls through
-#     (the compiler's `car`/`cdr` are now cons-guarded, matching the
-#     tree-walker) instead of crashing the VM;
+#     instead of crashing;
 #   - a match nested in another match's scrutinee no longer collides on the
 #     compiler's scrutinee temp (unique per instance now).
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 run_both() {
   local name="$1" file="$2" expected="$3"
-  local got_tw got_bc
-  got_tw=$("$PP" "$file" 2>&1)
-  got_bc=$("$PP" --bytecode "$file" 2>&1)
-  if [ "$got_tw" != "$expected" ]; then
-    bad "$name-tw" "expected: $(printf '%q' "$expected")" "got:      $(printf '%q' "$got_tw")"
-  elif [ "$got_bc" != "$expected" ]; then
-    bad "$name-bc" "expected: $(printf '%q' "$expected")" "got:      $(printf '%q' "$got_bc")"
+  local got
+  got=$("$PP" "$file" 2>&1)
+  if [ "$got" != "$expected" ]; then
+    bad "$name" "expected: $(printf '%q' "$expected")" "got:      $(printf '%q' "$got")"
   else
     ok "$name"
   fi
@@ -90,7 +86,7 @@ EOF
 run_both "list-pattern-spread-wildcard" "$TMP/spread-wildcard.pp" "30"
 
 # A list/tagged pattern matched against a NON-PAIR scalar must fall through
-# (not crash the VM on car(scalar)). Covers every scalar shape.
+# (not crash on car(scalar)). Covers every scalar shape.
 cat > "$TMP/scalar.pp" <<'EOF'
 def f(x) {
   match x {
@@ -107,8 +103,8 @@ EOF
 run_both "list-pattern-vs-scalar-falls-through" "$TMP/scalar.pp" \
   $'"fell-through"\n"fell-through"\n"fell-through"\n"fell-through"'
 
-# A match nested in another match's scrutinee (shared VM frame): the inner
-# result must reach the outer scrutinee intact on both backends.
+# A match nested in another match's scrutinee (shared frame): the inner
+# result must reach the outer scrutinee intact.
 cat > "$TMP/nested-scrut.pp" <<'EOF'
 def inner(k) { match k { 3 => 99; _ => 8 } }
 def f(s) {

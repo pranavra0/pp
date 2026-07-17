@@ -1,6 +1,6 @@
 (* runtime — the shared execution-state hub.
 
-   pp's per-pass mutable state and the coordination API the backends drive it
+   pp's per-pass mutable state and the coordination API the evaluator drives
    through: the ambient capability/config/handler stacks (now OCaml 5 effect
    handlers), the trace machinery ([record_read]) that turns world-reads into
    cell observations (LAW 21/23), the sandbox and loader seams, the observer
@@ -53,7 +53,6 @@ type invocation = {
   initial_capabilities : Capability.t list;
   program_argv : string list;
   program_files : string list;
-  program_bytecode : bool;
   initial_grant_specs : string list;
   program_reconcile_root : string option;
   program_supervise : bool;

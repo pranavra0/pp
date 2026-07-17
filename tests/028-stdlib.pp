@@ -1,7 +1,6 @@
 # tests/028-stdlib.pp — stdlib primitives + library files.
-# Differential: both backends must agree byte-for-byte. The expected-output
-# oracle (incl. argv/env/exit/file predicates, which need process-level
-# setup) lives in tests/028-stdlib.sh.
+# The expected-output oracle (incl. argv/env/exit/file predicates, which need
+# process-level setup) lives in tests/028-stdlib.sh.
 load("stdlib/list.pp")
 load("stdlib/string.pp")
 load("stdlib/map.pp")

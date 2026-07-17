@@ -5,7 +5,7 @@
 open Types
 
 (* Side-table: node_key → in-memory thunk. Populated by the force path
-   (evaluator.ml force / vm.ml force_node_thunk) on every node-key
+   (evaluator.ml force) on every node-key
    computation. Used by reset_dirty to mark only the dirty subset
    Unevaluated, leaving clean thunks Evaluated so they skip Store.hit
    entirely — the push-scheduler optimization. *)
