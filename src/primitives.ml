@@ -4,10 +4,6 @@ open Types
 open Backend
 
 
-(* Reference to the current environment — updated by evaluator at eval entry *)
-let current_env_ref : env ref = ref Types.empty_env
-
-
 
 (* Force helpers for builtins *)
 let force_val (v : value) : value = Backend.r.force v
@@ -67,7 +63,7 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
   let seen_keys : (string, unit) Hashtbl.t = Hashtbl.create 64 in
   let seen_pairs : value list ref = ref [] in
   let jobs = ref [] in
-  let race_width () = match !Scheduler.policy with Scheduler.Race n -> n | _ -> 1 in
+  let race_width () = match Scheduler.state.policy with Scheduler.Race n -> n | _ -> 1 in
   let key_of (t : thunk) : string =
     if t.vm_code <> None then Backend.r.vm_node_key t else Backend.r.node_key_of t
   in
@@ -131,7 +127,7 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
    [Serial], collection is skipped and this is exactly the original
    single-pass definition. *)
 let force_deep (v : value) : value =
-  (match !Scheduler.policy with
+  (match Scheduler.state.policy with
    | Scheduler.Serial -> ()
    | Scheduler.Parallel _ | Scheduler.Race _ | Scheduler.Remote _ ->
        (match collect_unevaluated_nodes v with
@@ -159,7 +155,7 @@ let invoke (fn : value) (args : value list) : value =
       let new_frame = Types.make_frame (List.length args) in
       List.iteri (fun i a -> Types.frame_set new_frame i a) args;
       Backend.r.vm_run_thunk c.vm_bc c.vm_offset (new_frame :: c.vm_frames)
-  | _ -> Backend.r.apply fn args !current_env_ref
+  | _ -> Backend.r.apply fn args Backend.r.current_env
 
 (* Call a zero-argument function value. *)
 let call_zero_arg (fn : value) : value =
@@ -613,7 +609,7 @@ let register_metaeval () =
         let exprs = Backend.r.expand_toplevel (Reader.read_string code) in
         (* Capture the calling env into a local ref — avoid clobbering
            current_env_ref during inner evaluations. *)
-        let local_env = ref !current_env_ref in
+        let local_env = ref Backend.r.current_env in
         let new_defs = ref [] in
         let rec go = function
           | [] ->

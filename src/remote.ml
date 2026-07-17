@@ -442,4 +442,4 @@ let dispatch_remote ~(member : string) (jobs : Scheduler.job list) : unit =
       member (Printexc.to_string e)
 
 let init () : unit =
-  Scheduler.remote_dispatch_hook := dispatch_remote
+  Scheduler.state.remote_dispatch <- dispatch_remote

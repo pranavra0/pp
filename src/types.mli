@@ -146,6 +146,7 @@ and opcode =
   | LOAD_MODULE_FILE of int
   | ISLAND of int * int option
   | READ_CONFIG
+  | UNBOUND of int
 
 and bytecode = {
   consts : value array;
@@ -173,6 +174,7 @@ type comp_state = {
   mutable param_names_of : (int, string list) Hashtbl.t;
   mutable closure_names_of : (int, string) Hashtbl.t;
   mutable cenv : cenv;
+  mutable in_module : bool;
 }
 
 val fresh_comp_state : unit -> comp_state

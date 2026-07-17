@@ -141,7 +141,7 @@ let stratification_check (write_domains : (string * Runtime.domain_entry) list) 
           "reconcile: stratification violation (LAW 30): the desired state for \
            domain '%s' observed its own domain: %s" name cell))
       write_domains)
-    !Runtime.observed_all
+    Runtime.state.observed_all
 
 (* ---- Per-domain pass ----
    observe fresh (never cached) under the domain's own cap; diff cached and

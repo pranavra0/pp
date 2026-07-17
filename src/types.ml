@@ -236,6 +236,7 @@ and opcode =
                                   resolves via Island at run time, then
                                   module-evaluates the pinned entry.pp *)
   | READ_CONFIG              (* pop key from stack; push config value or VNil *)
+  | UNBOUND of int           (* constant-pool index of name; fail with "unbound symbol: <name>" *)
 
 and bytecode = {
   consts : value array;
@@ -269,6 +270,7 @@ type comp_state = {
   mutable param_names_of : (int, string list) Hashtbl.t;
   mutable closure_names_of : (int, string) Hashtbl.t;
   mutable cenv : cenv;
+  mutable in_module : bool;
 }
 
 let fresh_comp_state () = {
@@ -281,6 +283,7 @@ let fresh_comp_state () = {
   param_names_of = Hashtbl.create 16;
   closure_names_of = Hashtbl.create 16;
   cenv = [];
+  in_module = false;
 }
 
 

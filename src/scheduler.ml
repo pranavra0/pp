@@ -24,10 +24,6 @@
    ceiling). *)
 type policy = Serial | Parallel of int | Race of int | Remote of string
 
-(* Ambient; set once from --schedule. Read only in the miss arms and here —
-   NEVER by node_key_of / vm_node_key, and it never enters a trace (LAW 26
-   by construction: this is a result-transparent handler). *)
-let policy : policy ref = ref Serial
 
 type job = {
   j_key : string;
@@ -46,6 +42,17 @@ type job = {
      depends on Evaluator, so a remote dispatcher living above both cannot
      be called directly from here). *)
   j_thunk : Types.thunk;
+}
+(* Ambient scheduler state.  Mutable fields keep the cycle-breaking seam
+   explicit without scattering reference cells through the runtime. *)
+type state = {
+  mutable policy : policy;
+  mutable remote_dispatch : member:string -> job list -> unit;
+}
+
+let state = {
+  policy = Serial;
+  remote_dispatch = (fun ~member:_ (_ : job list) -> ());
 }
 
 (* ---- Live-child bookkeeping (for SIGINT and race-loser kills) ---- *)
@@ -234,23 +241,11 @@ let run_concurrent (limit : int) (jobs : job list) : unit =
     if !live_count > 0 then reap_one ()
   done
 
-(* Set by src/remote.ml at startup (main.ml calls Remote.init ()) — Remote
-   sits ABOVE Evaluator/Transport/Token in the dependency graph, so its
-   dispatch function cannot be called directly from this (much lower)
-   module; this ref is the seam, exactly like Primitives.run_node_body_ref
-   etc. break the analogous cycle for Evaluator. A batch job this hook
-   leaves untouched (non-data-closed, unreachable member, a dead worker,
-   ...) is NOT re-run here — it simply stays Unevaluated, and the ORIGINAL
-   caller (force_deep_plain's recursive walk, or force_node's Miss arm)
-   forces it in-process exactly as it would for a dead local worker: never
-   a wrong answer, never a hang, no special-cased "retry locally" code
-   needed at this layer. The default no-op is therefore already the safe
-   degrade-to-local behavior, not just a placeholder. *)
-let remote_dispatch_hook : (member:string -> job list -> unit) ref =
-  ref (fun ~member:_ (_ : job list) -> ())
+(* Remote dispatch is installed by [Remote.init] into the shared scheduler
+   state.  The default is the safe local-degrade path. *)
 
 let dispatch_batch (jobs : job list) : unit =
-  match !policy with
+  match state.policy with
   | Serial -> run_serial jobs
   | Parallel n | Race n -> run_concurrent n jobs
-  | Remote member -> !remote_dispatch_hook ~member jobs
+  | Remote member -> state.remote_dispatch ~member jobs
