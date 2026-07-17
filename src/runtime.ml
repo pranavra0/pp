@@ -10,7 +10,6 @@ type invocation = {
   initial_capabilities : Capability.t list;
   program_argv : string list;
   program_files : string list;
-  program_bytecode : bool;
   initial_grant_specs : string list;
   program_reconcile_root : string option;
   program_supervise : bool;
@@ -303,13 +302,13 @@ let loader_read (path : string) : string =
 
    One implementation, shared by every driver that evaluates a sequence of
    located top-level-shaped forms: the top-level driver (repl.ml,
-   execute_file/execute_file_bytecode, both backends), the tree-walker's
-   `load` (evaluator.ml eval_expressions), and the VM's LOAD_FILE opcode
-   (vm.ml). Applying it at `load` granularity too (not just the outermost
-   top level) means an error inside a `load`ed
-   file is decorated with THAT file's line before it ever unwinds past the
-   loading form, so the `(load ...)` call site's own decorator (seeing a
-   message that already has a location) leaves it alone. *)
+   execute_file), and the tree-walker's
+   `load` (evaluator.ml eval_expressions). Applying it at `load`
+   granularity too (not just the outermost top level) means an error
+   inside a `load`ed file is decorated with THAT file's line before it
+   ever unwinds past the loading form, so the `(load ...)` call site's
+   own decorator (seeing a message that already has a location) leaves it
+   alone. *)
 let with_form_location (e : expr) (f : unit -> 'a) : 'a =
   match e with
   | ELocated ((file, line), _) ->

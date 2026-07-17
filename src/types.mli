@@ -82,7 +82,6 @@ and value =
   | VCapability of Capability.t
   | VThunk of thunk
   | VEnvMap of (string * value) list
-  | VBytecode of bytecode
   | VSealed of string
 
 (* ---- Function closure ---- *)
@@ -92,90 +91,22 @@ and closure = {
   params : string list;
   body : expr;
   env : env ref;
-  vm_bc : bytecode;
-  vm_offset : int;
-  vm_frames : frame list;
 }
 
 (* ---- Thunk (suspended computation) ---- *)
-
 and thunk = {
   mutable thunk_status : thunk_status;
   mutable thunk_hash : string option;
   thunk_expr : expr;
   mutable thunk_env : env;
-  vm_code : (bytecode * int * frame list) option;
   type_ann : expr option;
   thunk_loc : (string * int) option;
   config_hash : string;
   mutable thunk_persist : bool;
-  mutable node_fv : (string * int * int) list;
   mutable node_caps : Capability.t list;
 }
 
 and thunk_status = Unevaluated | Evaluating | Evaluated of value
-
-(* ---- Bytecode VM types ---- *)
-
-and opcode =
-  | PUSH of int
-  | LOAD_LOCAL of int * int
-  | STORE_LOCAL of int
-  | LOAD_GLOBAL of int
-  | STORE_GLOBAL of int
-  | POP
-  | DUP
-  | JUMP of int
-  | JUMP_IF_FALSE of int
-  | FORCE
-  | MAKE_THUNK of int * expr option * (string * int) option
-  | MAKE_NODE of int * expr * (string * int * int) list * expr option *
-      (string * int) option
-  | MAKE_CLOSURE of int * int
-  | CALL of int
-  | TAIL_CALL of int
-  | RETURN
-  | HALT
-  | WITH_CAPS of int
-  | PERFORM of int * int
-  | WITH_HANDLER of int * int
-  | WITH_CONFIG of int
-  | MAKE_MODULE of int
-  | IMPORT
-  | LOAD_FILE of int
-  | LOAD_MODULE_FILE of int
-  | ISLAND of int * int option
-  | READ_CONFIG
-
-and bytecode = {
-  consts : value array;
-  code : opcode array;
-  nparams_of : (int, int) Hashtbl.t;
-  param_names_of : (int, string list) Hashtbl.t;
-  closure_names_of : (int, string) Hashtbl.t;
-}
-
-and frame = { mutable slots : value array; mutable len : int; }
-
-(* ---- Compiler types ---- *)
-
-type cenv = string list list
-
-type def_info = { name : string; slot : int; }
-
-type comp_state = {
-  mutable ops : opcode list;
-  mutable ops_len : int;
-  mutable const_ht : (string, int) Hashtbl.t;
-  mutable consts : value list;
-  mutable consts_len : int;
-  mutable nparams_of : (int, int) Hashtbl.t;
-  mutable param_names_of : (int, string list) Hashtbl.t;
-  mutable closure_names_of : (int, string) Hashtbl.t;
-  mutable cenv : cenv;
-}
-
-val fresh_comp_state : unit -> comp_state
 
 (* ---- Environment constructors ---- *)
 
@@ -190,7 +121,6 @@ val hex_encode : string -> string
 val hash_string : string -> string
 val hash_concat : string list -> string
 val canonical_float_string : float -> string
-val dummy_bytecode : bytecode
 val hash_expr : expr -> string
 val hash_pattern : pattern -> string
 val hash_value : value -> string
@@ -215,14 +145,9 @@ val make_closure :
   ?name:string option -> string list -> expr -> env ref -> value
 
 val make_thunk :
-  ?vm_code:(bytecode * int * frame list) option ->
   ?type_ann:expr option ->
   ?thunk_loc:(string * int) option ->
   ?config_hash:string -> expr -> env -> value
-
-val make_frame : int -> frame
-val frame_get : frame -> int -> value
-val frame_set : frame -> int -> value -> unit
 
 (* ---- Quotation: expr -> value ---- *)
 

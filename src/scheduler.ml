@@ -25,7 +25,7 @@
 type policy = Serial | Parallel of int | Race of int | Remote of string
 
 (* Ambient; set once from --schedule. Read only in the miss arms and here —
-   NEVER by node_key_of / vm_node_key, and it never enters a trace (LAW 26
+   NEVER by node_key_of, and it never enters a trace (LAW 26
    by construction: this is a result-transparent handler). *)
 let policy : policy ref = ref Serial
 

@@ -5,7 +5,7 @@
    append-only, never-rotated, greppable audit-log record of a pass's root
    hash — this is GC's OWN bookkeeping, capped to the last
    [Runtime.gc_keep_epochs] entries, recording enough to REPLAY a root
-   program (files, --grant specs, --bytecode, --reconcile/--supervise/
+   program (files, --grant specs, --reconcile/--supervise/
    --member-name/--desired-object) — mark-by-replay's load-bearing
    precondition: traces do not record child-keys, so there is no on-disk
    node graph to walk; the only way to discover which store artifacts a
@@ -24,7 +24,6 @@ let roots_path () : string = Filename.concat Store.store_root "gc-roots"
 
 type root = {
   gr_hash : string;
-  gr_bytecode : bool;
   gr_grants : string list;
   gr_files : string list;
   gr_reconcile_root : string option;
@@ -49,7 +48,6 @@ let value_to_opt = function VString s -> Some s | _ -> None
 let root_to_value (r : root) : value =
   VMap [
     (VKeyword "hash", VString r.gr_hash);
-    (VKeyword "bytecode", VBool r.gr_bytecode);
     (VKeyword "grants", strs_to_value r.gr_grants);
     (VKeyword "files", strs_to_value r.gr_files);
     (VKeyword "reconcile-root", opt_to_value r.gr_reconcile_root);
@@ -74,7 +72,6 @@ let value_to_root (v : value) : root option =
            in
            Some {
              gr_hash = hash;
-             gr_bytecode = bool_of (find "bytecode");
              gr_grants = (match find "grants" with Some v -> value_to_strs v | None -> []);
              gr_files = (match find "files" with Some v -> value_to_strs v | None -> []);
              gr_reconcile_root =

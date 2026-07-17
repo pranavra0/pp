@@ -2335,7 +2335,7 @@ let read_one ?(source : string = "<?>") (input : string) : expr =
    from "the syntax" to "the AST", still fully supported forever (it is the
    macro layer: `quote`/`defmacro` still traffic in sexpr data). The reader's
    own "<?>" default label — reached ONLY by `pp -e` (repl.ml's
-   execute_string/execute_string_bytecode, called with no ~source, i.e. no
+   execute_string, called with no ~source, i.e. no
    real file at all) — also reads braces. Synthetic glue source tags main.ml builds for itself
    (e.g. "<stdlib:list.pp>", "<domain-glue:fs>" — literally sexpr text,
    `(load ...)`) are NOT this label and keep falling through to the sexpr

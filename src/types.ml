@@ -134,7 +134,6 @@ and value =
   | VCapability of Capability.t
   | VThunk of thunk
   | VEnvMap of (string * value) list  (* module export: list of (name, thunk) pairs *)
-  | VBytecode of bytecode
   | VSealed of string  (* A sealed (confidential) read's bytes — opaque
                           on purpose: string_of_value/print MUST redact
                           ("#<sealed>"), Codec.encode_value returns None (the
@@ -154,11 +153,8 @@ and value =
 and closure = {
   fn_name : string option;  (* optional name for debugging *)
   params : string list;
-  body : expr;              (* tree-walker: actual body; VM: ignored *)
-  env : env ref;            (* tree-walker: captured env; VM: ignored *)
-  vm_bc : bytecode;         (* VM: bytecode this closure belongs to *)
-  vm_offset : int;          (* VM: code offset of function body *)
-  vm_frames : frame list;   (* VM: captured frames at closure creation time *)
+  body : expr;
+  env : env ref;            (* captured environment *)
 }
 
 and thunk = {
@@ -166,22 +162,14 @@ and thunk = {
   mutable thunk_hash : string option;  (* precomputed content-addressable hash *)
   thunk_expr : expr;
   mutable thunk_env : env;
-  vm_code : (bytecode * int * frame list) option;  (* VM thunk: (bytecode, code_offset, captured_frames) *)
   type_ann : expr option;              (* lazy gradual type annotation *)
   thunk_loc : (string * int) option;   (* source location for error reporting *)
   config_hash : string;                (* ReaderT config snapshot identity *)
   mutable thunk_persist : bool;         (* persist across runs? true for node, false for delay/let *)
-  mutable node_fv : (string * int * int) list;
-    (* VM node thunks only: the node's free variables as (name, depth, slot),
-       Global encoded as (name, -1, -1). Lets the VM compute the LAW 20 node key
-       — code + free-var value hashes — from captured frames, since a VM thunk
-       carries bytecode+frames rather than an AST+env. Empty for every other
-       thunk. *)
   mutable node_caps : Capability.t list;
     (* The ambient capability set captured when this node value was
-       created, populated
-       unconditionally at both construction sites (ENode eval, VM MAKE_NODE) —
-       never left as the default [] for a persist thunk (empty ambient is a
+       created, populated unconditionally at construction — never left
+       as the default [] for a persist thunk (empty ambient is a
        legitimate captured value, distinct from "not yet captured"). Used by
        force_node as "the caller's capabilities" (LAW 23b): the hit gate and
        the miss recompute's ambient are THIS, not whatever is live in
@@ -192,96 +180,10 @@ and thunk = {
        changes without it), so a program that never uses with-caps is
        byte-for-byte unaffected. Meaningless (unused) on non-persist thunks. *)
 }
-
 and thunk_status =
   | Unevaluated
   | Evaluating
   | Evaluated of value
-
-
-(* ---- Bytecode VM types ---- *)
-and opcode =
-  | PUSH of int              (* constant-pool index *)
-  | LOAD_LOCAL of int * int  (* depth, slot *)
-  | STORE_LOCAL of int       (* slot in current frame *)
-  | LOAD_GLOBAL of int       (* constant-pool index of name *)
-  | STORE_GLOBAL of int
-  | POP | DUP
-  | JUMP of int              (* relative forward/backward offset in opcodes *)
-  | JUMP_IF_FALSE of int     (* pop; jump if VNil or VBool false *)
-  | FORCE                    (* pop thunk, force via recursive VM, push result *)
-  | MAKE_THUNK of int * expr option * ((string * int) option)
-                               (* code offset, optional type annotation, optional source location *)
-  | MAKE_NODE of int * expr * (string * int * int) list * expr option * ((string * int) option)
-                               (* persistent node: code offset, body AST (for the
-                                  code hash), free-var descriptors (name,depth,slot;
-                                  Global = -1,-1), type annotation, source location *)
-  | MAKE_CLOSURE of int * int(* code offset, nparams *)
-  | CALL of int | TAIL_CALL of int | RETURN | HALT
-  | WITH_CAPS of int         (* body code offset: with-caps' ⊆-gated, replace-
-                                 ambient region — a nested run_isolated call
-                                 (not a flat ENTER/EXIT pair), so an OCaml
-                                 try/with around it restores the ambient on
-                                 EVERY exit, including a raised exception
-                                 (LAW 27), not just normal return/tail-call *)
-  | PERFORM of int * int     (* cp idx of effect name, nargs *)
-  | WITH_HANDLER of int * int(* body code offset, handler count: handler region
-                                with try/with for Lookup_handler/Get_handlers *)
-  | WITH_CONFIG of int       (* body code offset: config scope region with
-                                try/with for Get_config effect *)
-  | MAKE_MODULE of int       (* nexports; pops name+thunk pairs, pushes VEnvMap *)
-  | IMPORT                   (* pop VEnvMap, merge bindings into current frame *)
-  | LOAD_FILE of int | LOAD_MODULE_FILE of int  (* cp idx of path *)
-  | ISLAND of int * int option (* cp idx of uri, cp idx of inline pin;
-                                  resolves via Island at run time, then
-                                  module-evaluates the pinned entry.pp *)
-  | READ_CONFIG              (* pop key from stack; push config value or VNil *)
-
-and bytecode = {
-  consts : value array;
-  code : opcode array;
-  nparams_of : (int, int) Hashtbl.t;          (* code offset -> param count *)
-  param_names_of : (int, string list) Hashtbl.t;  (* code offset -> param names *)
-  closure_names_of : (int, string) Hashtbl.t;  (* code offset -> optional def name *)
-}
-
-and frame = {
-  mutable slots : value array;
-  mutable len : int;
-}
-
-(* ---- Compiler types (referenced by primitives.ml) ---- *)
-
-type cenv = string list list
-
-type def_info = {
-  name : string;
-  slot : int;
-}
-
-type comp_state = {
-  mutable ops : opcode list;
-  mutable ops_len : int;
-  mutable const_ht : (string, int) Hashtbl.t;
-  mutable consts : value list;
-  mutable consts_len : int;
-  mutable nparams_of : (int, int) Hashtbl.t;
-  mutable param_names_of : (int, string list) Hashtbl.t;
-  mutable closure_names_of : (int, string) Hashtbl.t;
-  mutable cenv : cenv;
-}
-
-let fresh_comp_state () = {
-  ops = [];
-  const_ht = Hashtbl.create 128;
-  ops_len = 0;
-  consts = [];
-  nparams_of = Hashtbl.create 16;
-  consts_len = 0;
-  param_names_of = Hashtbl.create 16;
-  closure_names_of = Hashtbl.create 16;
-  cenv = [];
-}
 
 
 (* =================================================================== *)
@@ -331,18 +233,6 @@ let canonical_float_string (f : float) : string =
   else if f = Float.infinity then "inf"
   else if f = Float.neg_infinity then "-inf"
   else Printf.sprintf "%h" f
-
-(* Dummy bytecode for tree-walker closures — also the sentinel hash_value uses
-   (by physical equality) to tell a tree-walker closure from a VM one. *)
-let dummy_bytecode = { consts = [||]; code = [||]; nparams_of = Hashtbl.create 0; param_names_of = Hashtbl.create 0; closure_names_of = Hashtbl.create 0 }
-
-(* Content identity of a compiled bytecode unit: the marshalled consts+code
-   arrays. In-memory identity only — these bytes are never persisted (the
-   store never uses Marshal), so Marshal's same-version/same-arch
-   caveat is confined to this process. *)
-let hash_bytecode (bc : bytecode) : string =
-  try hash_string (Marshal.to_string (bc.consts, bc.code) [Marshal.Closures])
-  with _ -> hash_string "bytecode:unmarshalable"
 
 let rec hash_expr (e : expr) : string =
   match e with
@@ -437,36 +327,13 @@ and hash_pattern (p : pattern) : string =
       hash_concat ["p_tagged"; tag; ph]
 
 and hash_value (v : value) : string =
-  (* Frames already being hashed (physical identity): a closure captured in a
-     frame that captures the closure would otherwise recurse forever. A
-     re-encountered frame contributes a fixed cycle marker — deterministic,
-     because the traversal order is structural. *)
-  let visited_frames : frame list ref = ref [] in
-  let rec hash_frame (fr : frame) : string =
-    if List.memq fr !visited_frames then hash_string "frame:cycle"
-    else begin
-      visited_frames := fr :: !visited_frames;
-      let live = Array.sub fr.slots 0 fr.len in
-      hash_concat ("frame" :: Array.to_list (Array.map hash_val live))
-    end
-  and hash_val v =
+  let rec hash_val v =
     match v with
     | VThunk t ->
         (match t.thunk_hash with
          | Some h -> h  (* O(1): use precomputed content-addressable hash *)
          | None ->
-             (match t.vm_code with
-              | Some (bc, offset, frames) ->
-                  (* VM thunk: its AST/env fields are placeholders — identity is
-                     the bytecode region + entry offset + captured frames. *)
-                  hash_concat
-                    (["vm-thunk"; hash_bytecode bc; string_of_int offset]
-                     @ List.map hash_frame frames)
-              | None ->
-                  (* Should not happen in practice — all thunks go through
-                     make_thunk_ca. Fall back to structural hash using the
-                     env's cached hash. *)
-                  hash_concat ["thunk"; hash_expr t.thunk_expr; t.thunk_env.env_hash; t.config_hash]))
+             hash_concat ["thunk"; hash_expr t.thunk_expr; t.thunk_env.env_hash; t.config_hash])
     | VNil -> hash_string "nil"
     | VBool true -> hash_string "bool:true"
     | VBool false -> hash_string "bool:false"
@@ -481,9 +348,6 @@ and hash_value (v : value) : string =
         let parts = Array.to_list (Array.map hash_val vs) in
         hash_concat ("vector" :: parts)
     | VMap kvs ->
-        (* Hash each key/value once, then sort on the precomputed key hash —
-           the comparator must not re-hash per comparison (matches the VSet
-           arm below). *)
         let hashed = List.map (fun (k, v) -> (hash_val k, hash_val v)) kvs in
         let sorted = List.sort (fun (kh1,_) (kh2,_) ->
           String.compare kh1 kh2) hashed in
@@ -492,36 +356,12 @@ and hash_value (v : value) : string =
     | VSet vs ->
         let sorted = List.sort String.compare (List.map hash_val vs) in
         hash_concat ("set" :: sorted)
-    | VClosure { fn_name; params; body; env; vm_bc; vm_offset; vm_frames } ->
+    | VClosure { fn_name; params; body; env; _ } ->
         let name_part = match fn_name with Some n -> n | None -> "anon" in
-        if vm_bc == dummy_bytecode then
-          hash_concat ["closure"; name_part;
-                       hash_concat ("params" :: params);
-                       hash_expr body;
-                       (!env).env_hash]
-          (* The captured environment IS part of a closure's identity — two
-             closures with identical code but different captures must hash
-             differently, or an enclosing content-addressed thunk collides and
-             returns a stale result. We fold in the captured env's
-             PRECOMPUTED env_hash: O(1), no traversal, and no recursion back into
-             hash_value (env_hash is a fixed string computed at extend_env time),
-             so recursive/mutual closures terminate. This over-approximates —
-             it captures the whole visible env, not just free variables — which
-             is sound (at worst fewer cache hits); free-var-precise keying is a
-             later optimization. *)
-        else
-          (* VM closure: body is a placeholder (ELiteral VNil) and env is empty —
-             the code lives in vm_bc at vm_offset and the captures in vm_frames.
-             Hashing the placeholders made ALL same-arity VM closures collide,
-             which let a node cached under handler A be served under handler B
-             (LAW 26 trace cells compare handler hashes). Identity here is the
-             bytecode unit + entry offset + cycle-guarded captured frames. *)
-          hash_concat
-            (["vm-closure"; name_part;
-              hash_concat ("params" :: params);
-              hash_bytecode vm_bc;
-              string_of_int vm_offset]
-             @ List.map hash_frame vm_frames)
+        hash_concat ["closure"; name_part;
+                     hash_concat ("params" :: params);
+                     hash_expr body;
+                     (!env).env_hash]
     | VBuiltin (name, _) ->
         hash_concat ["builtin"; name]
     | VCapability cap ->
@@ -532,24 +372,17 @@ and hash_value (v : value) : string =
           hash_concat [name; hash_val v]
         ) sorted in
         hash_concat ("envmap" :: parts)
-    | VBytecode bc ->
-        (* Hash the actual consts+code, not just the instruction count:
-           two distinct units of equal length must not collide (LAW 20,
-           the same collision class hash_bytecode fixes for VM closures). *)
-        hash_concat ["bytecode"; hash_bytecode bc]
     | VSealed bytes ->
-        (* Hash the ACTUAL bytes (rotation invalidation needs it, LAW 39) —
-           this hash appears only inside trace lines under a `sealed:` cell
-           id, never in a printed value (string_of_value redacts). *)
         hash_concat ["sealed"; bytes]
   in
   hash_val v
 
 
+
 (* ---- Node-boundary authority ban (SPEC LAW 20) ----
 
    Structural scan for an embedded VCapability OR VSealed, used by BOTH
-   halves of the node boundary: the free-var ban (node_key_of / vm_node_key,
+   halves of the node boundary: the free-var ban (node_key_of,
    import side) and the result ban (run_node_body, export side). Named
    `contains_authority` (renamed from `contains_capability` once sealed
    values needed the same ban) because it now bans two different KINDS of
@@ -558,30 +391,24 @@ and hash_value (v : value) : string =
    a node boundary in either direction, both for the same reason (a node's key
    and result are content-addressed and shared across callers with different
    authority/clearance). Closure-env-aware — either kind could be bound in a
-   closure's captured environment/frames, not just sitting directly in the
+   closure's captured environment, not just sitting directly in the
    scanned value — but it must NEVER force an Unevaluated thunk (LAW 14): a
    capability or sealed value hidden behind an unforced thunk is invisible to
    this check, a documented residual (the layer-1 gap; layers 2/3 — the result
    ban and the use-time ⊆ gates / sealed cell_authorized_for — are the actual
    security floor).
 
-   BOTH closure representations need a cycle guard, not just the VM's:
-   - VM closures carry their capture as `vm_frames`, a mutable frame graph a
-     recursive closure can make self-referential; guarded with the SAME
-     physical-identity visited-list `hash_value`'s `hash_frame` uses above.
-   - Tree-walker closures carry their capture as `env.bindings` — and,
-     surprisingly, THIS CAN CYCLE TOO: a top-level `(def f ...)` passes
-     `make_closure` the very `env ref` cell that `eval_expressions` is about
-     to mutate to `extend_env`-cons `f`'s own binding onto (the letrec/mutual-
-     recursion trick both backends' top-level driver relies on), so
-     `f`'s captured env ends up containing `f` itself as its head binding —
-     walking it without a guard recurses forever, so any node with
-     closure-valued free vars would overflow the stack.
-     Guarded by `env_id` (unique per env node, `Types.fresh_env_id`) in a
-     hashtable — no physical/structural sharing needed, an id is already an
-     equality-comparable proxy for "the exact same env value". *)
+   Tree-walker closures carry their capture as `env.bindings` — and
+   THIS CAN CYCLE: a top-level `(def f ...)` passes
+   `make_closure` the very `env ref` cell that `eval_expressions` is about
+   to mutate to `extend_env`-cons `f`'s own binding onto (the letrec/mutual-
+   recursion trick the top-level driver relies on), so
+   `f`'s captured env ends up containing `f` itself as its head binding —
+   walking it without a guard recurses forever.
+   Guarded by `env_id` (unique per env node, `Types.fresh_env_id`) in a
+   hashtable — no physical/structural sharing needed, an id is already an
+   equality-comparable proxy for "the exact same env value". *)
 let contains_value_kind (is_target : value -> bool) (v : value) : bool =
-  let visited_frames : frame list ref = ref [] in
   let visited_envs : (int, unit) Hashtbl.t = Hashtbl.create 16 in
   let rec go (v : value) : bool =
     if is_target v then true
@@ -595,26 +422,16 @@ let contains_value_kind (is_target : value -> bool) (v : value) : bool =
     | VVector vs -> Array.exists go vs
     | VMap kvs -> List.exists (fun (k, v) -> go k || go v) kvs
     | VSet vs -> List.exists go vs
-    | VClosure { env; vm_bc; vm_frames; _ } ->
-        if vm_bc == dummy_bytecode then
-          go_env !env
-        else
-          List.exists go_frame vm_frames
+    | VClosure { env; _ } ->
+        go_env !env
     | VEnvMap bindings -> List.exists (fun (_, v) -> go v) bindings
     | VNil | VBool _ | VInt _ | VFloat _ | VString _ | VKeyword _
-    | VSymbol _ | VBuiltin _ | VBytecode _ -> false
+    | VSymbol _ | VBuiltin _ -> false
   and go_env (e : env) : bool =
     if Hashtbl.mem visited_envs e.env_id then false
     else begin
       Hashtbl.add visited_envs e.env_id ();
       List.exists (fun (_, v) -> go v) e.bindings
-    end
-  and go_frame (fr : frame) : bool =
-    if List.memq fr !visited_frames then false
-    else begin
-      visited_frames := fr :: !visited_frames;
-      let live = Array.sub fr.slots 0 fr.len in
-      Array.exists go live
     end
   in
   go v
@@ -758,27 +575,10 @@ let lookup_env (env : env) (name : string) : value option =
 
 
 let make_closure ?(name=None) params body env_ref =
-  VClosure { fn_name = name; params; body; env = env_ref; vm_bc = dummy_bytecode; vm_offset = 0; vm_frames = [] }
+  VClosure { fn_name = name; params; body; env = env_ref }
 
-let make_thunk ?vm_code:(vc=None) ?type_ann:(ta=None) ?thunk_loc:(tl=None) ?config_hash:(ch="") expr env =
-  VThunk { thunk_status = Unevaluated; thunk_hash = None; thunk_expr = expr; thunk_env = env; vm_code = vc; type_ann = ta; thunk_loc = tl; config_hash = ch; thunk_persist = false; node_fv = []; node_caps = [] }
-
-(* ---- Frame helpers ---- *)
-
-let make_frame n = { slots = Array.make n VNil; len = n }
-
-let frame_get f i =
-  if i < f.len then f.slots.(i) else VNil
-
-let frame_set f i v =
-  if i >= Array.length f.slots then begin
-    let ncap = max (Array.length f.slots * 2) (i + 1) in
-    let a = Array.make ncap VNil in
-    Array.blit f.slots 0 a 0 f.len;
-    f.slots <- a
-  end;
-  if i >= f.len then f.len <- i + 1;
-  f.slots.(i) <- v
+let make_thunk ?type_ann:(ta=None) ?thunk_loc:(tl=None) ?config_hash:(ch="") expr env =
+  VThunk { thunk_status = Unevaluated; thunk_hash = None; thunk_expr = expr; thunk_env = env; type_ann = ta; thunk_loc = tl; config_hash = ch; thunk_persist = false; node_caps = [] }
 
 (* ---- Quotation: expr -> value ---- *)
 
@@ -941,8 +741,6 @@ let rec string_of_value (v : value) : string =
        | Evaluated v -> "#<thunk: " ^ string_of_value v ^ ">")
   | VEnvMap bindings ->
       "#<envmap " ^ string_of_int (List.length bindings) ^ " exports>"
-  | VBytecode bc ->
-      "#<bytecode " ^ string_of_int (Array.length bc.code) ^ " ops>"
   | VSealed _ ->
       (* LAW 39: NEVER the bytes — a print that leaked them would defeat the
          whole feature. Every printer (REPL, `print`, debug) goes through
@@ -970,7 +768,7 @@ let rec string_of_value (v : value) : string =
    unrecognized car symbol.
 
    Values with no syntax — a closure, a builtin, a capability, an
-   unevaluated thunk, a module env-map, raw bytecode — cannot be expanded
+   unevaluated thunk, a module env-map, or a sealed value — cannot be expanded
    into a form at all: `failwith` here, and the caller (Macro.expand_expr)
    is responsible for naming the offending macro in the surfaced error.
    Callers should force-deep the value
@@ -1018,8 +816,6 @@ let rec value_to_expr (v : value) : expr =
       failwith "value_to_expr: cannot convert an unevaluated thunk to syntax"
   | VEnvMap _ ->
       failwith "value_to_expr: cannot convert a module (env-map) to syntax"
-  | VBytecode _ ->
-      failwith "value_to_expr: cannot convert bytecode to syntax"
   | VSealed _ ->
       failwith "value_to_expr: cannot convert a sealed value to syntax"
 

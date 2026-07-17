@@ -1,12 +1,11 @@
 (* pp macro expansion — defmacro: a function from syntax-as-values to
    syntax-as-values.
 
-   Architecture (LAW 20/36): expansion is the ONE shared step both backends
-   pass through before their own machinery ever sees a form — hash_expr
-   (the tree-walker's node key) and the compiler both operate on ALREADY-
-   EXPANDED ASTs, so LAW 20 ("the code hash must hash the expanded form")
+   Architecture (LAW 20/36): expansion is the ONE shared step every code
+   path passes through before its own machinery ever sees a form — hash_expr
+   (the node key) operates on ALREADY-EXPANDED ASTs, so LAW 20
    needs no change anywhere else: it is true by construction, because
-   neither node_key_of/vm_node_key nor compile_expr can ever observe a macro
+   node_key_of can never observe a macro
    call — it never survives past this module.
 
    `defmacro` is deliberately NOT a reader-level construct (no entry in
@@ -14,9 +13,8 @@
    body...)` parses as an ordinary application — EApply (ESymbol "defmacro",
    ...) — exactly like any unrecognized head symbol (reader.ml
    parse_special_form's fallthrough case). This module recognizes that SHAPE
-   at the expansion boundary, never in the reader, so the .ppc/compiler
-   paths stay untouched and honest: compiler.ml, vm.ml's opcodes, and
-   node_key_of/vm_node_key have no idea macros exist — they only ever see
+   at the expansion boundary, never in the reader, so the evaluator and
+   node_key_of have no idea macros exist — they only ever see
    the expr trees this module already rewrote.
 
    Scope/phasing (the simplest sound rule for each):
@@ -240,7 +238,7 @@ let rec expand_expr (loc : (string * int) option) (e : expr) : expr =
 (* The shared top-level driver hook: every call site that turns a fresh
    `Reader.read_string` result into a list a backend is about to eval/compile
    MUST pass it through here first (repl.ml's execute_string/
-   execute_string_bytecode/repl_loop, vm.ml's LOAD_FILE and
+   repl_loop, vm.ml's LOAD_FILE and
    eval_module_from, evaluator.ml's ELoad/eval_module_file via
    Primitives.expand_toplevel_ref). Walks the list IN ORDER, updating the
    global macro table as `defmacro` forms are found (so later forms — in

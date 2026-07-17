@@ -6,7 +6,7 @@
    entirely from VNil/VBool/VInt/VFloat/VString/VKeyword/VSymbol/VPair/
    VVector/VMap/VSet — data all the way down. Anything carrying code, a
    captured environment, a handle (VClosure, VThunk, VBuiltin, VCapability,
-   VEnvMap, VBytecode), or a sealed secret (VSealed) makes the WHOLE
+   VEnvMap), or a sealed secret (VSealed) makes the WHOLE
    containing value non-data: encoding returns [None]. The persistent store holds data; code values are
    process-local (see store.ml's store_object).
 
@@ -148,7 +148,7 @@ let rec encode (v : value) : string option =
      VSealed: confidentiality — encoding it would put secret bytes into
      ~/.pp/store/objects; the non-data law already covers it for free, same
      as every other opaque/handle kind. *)
-  | VClosure _ | VBuiltin _ | VCapability _ | VThunk _ | VEnvMap _ | VBytecode _
+  | VClosure _ | VBuiltin _ | VCapability _ | VThunk _ | VEnvMap _
   | VSealed _ -> None
 
 and encode_list_opt (vs : value list) : string list option =

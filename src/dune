@@ -19,7 +19,7 @@
  (modules fswalk runtime store journal gcroots node kernel_props
    reader reader_braces printer_braces printer_sexpr
    process scheduler domain_prims fenced island primitives domains
-   evaluator macro compiler stabilize vm repl
+   evaluator macro stabilize repl
    transport remote store_gc lint)
  (libraries pp.kernel unix)
  (flags -no-strict-sequence))

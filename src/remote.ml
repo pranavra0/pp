@@ -375,7 +375,6 @@ let ship_and_pull ~(member_home : string) (closed : Scheduler.job list) : unit =
     let argv =
       ["--remote-node"; token_file; pins_file; shared_root; keys_file; reply_file;
        "--schedule"; "serial"]
-      @ (if (Runtime.invocation_get ()).program_bytecode then ["--bytecode"] else [])
       @ (Runtime.invocation_get ()).program_files
     in
     let log_file = Filename.concat scratch "log" in

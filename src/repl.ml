@@ -64,34 +64,11 @@ let execute_file (path : string) : value list =
   close_in ch;
   execute_string ~source:path source
 
-(* Bytecode VM: compile and run *)
-let execute_string_bytecode ?(source : string = "<?>") (use_vm : bool) (input : string) : value list =
-  if use_vm then begin
-    let exprs = Reader_braces.read_dispatch ~source ~path:source input in
-    (* Vm.init () first: it calls Evaluator.init (), which resets the macro
-       table and wires up Primitives' force/eval/apply refs that macro
-       expansion's Evaluator.eval call needs — expansion must run AFTER
-       that, never before. *)
-    Vm.init ();
-    let expanded = Macro.expand_toplevel_list exprs in
-    List.map (fun e ->
-      with_toplevel_location e (fun () ->
-        let bc = Compiler.compile_program [e] in
-        Vm.run_program_expr bc)
-    ) expanded
-  end else
-    execute_string ~source input
-
-let execute_file_bytecode (use_vm : bool) (path : string) : value list =
-  let ch = open_in path in
-  let source = really_input_string ch (in_channel_length ch) in
-  close_in ch;
-  execute_string_bytecode ~source:path use_vm source
 
 (* ---- Run several sources under ONE init (main.ml's domain-glue
    wiring) ----
 
-   `execute_string`/`execute_string_bytecode` each call `init()`
+   `execute_string` calls `init()`
    unconditionally — correct for a single top-level run, but `init()`
    resets Runtime.domain_registry (Evaluator.init, alongside thunk_store/
    handler_stack/macro table), so two SEPARATE calls would make the second
@@ -100,30 +77,17 @@ let execute_file_bytecode (use_vm : bool) (path : string) : value list =
    snippet that loads stdlib/domain-fs.pp and calls register-domain, THEN
    the user's program — sharing one registry, one macro table, one
    thunk_store. This is init() once, then each source processed in order
-   (mirroring what execute_string/execute_string_bytecode do internally,
+   (mirroring what execute_string does internally,
    without the redundant re-inits) — byte-identical to today's single-file
    behavior when given a one-element list. *)
-let execute_sources_bytecode (use_vm : bool) (sources : (string * string) list) : value list =
-  if use_vm then begin
-    Vm.init ();
-    List.concat_map (fun (source, input) ->
-      let exprs = Reader_braces.read_dispatch ~source ~path:source input in
-      let expanded = Macro.expand_toplevel_list exprs in
-      List.map (fun e ->
-        with_toplevel_location e (fun () ->
-          let bc = Compiler.compile_program [e] in
-          Vm.run_program_expr bc))
-        expanded)
-      sources
-  end else begin
-    init ();
-    List.concat_map (fun (source, input) ->
-      let exprs =
-        Macro.expand_toplevel_list
-          (Reader_braces.read_dispatch ~source ~path:source input) in
-      List.map process_expr exprs)
-      sources
-  end
+let execute_sources (sources : (string * string) list) : value list =
+  init ();
+  List.concat_map (fun (source, input) ->
+    let exprs =
+      Macro.expand_toplevel_list
+        (Reader_braces.read_dispatch ~source ~path:source input) in
+    List.map process_expr exprs)
+    sources
 
 (* =================================================================== *)
 (*  Input machinery                                                     *)
@@ -297,23 +261,17 @@ let help_text =
   \  :quit          leave (also exit, quit, Ctrl-D)\n\
    A form left open continues on the next line; results print deep-forced.\n"
 
-let repl_loop ~(use_vm : bool) =
+let repl_loop () =
   init ();
-  if use_vm then Vm.init ();
   let tty = (try Unix.isatty Unix.stdin with _ -> false) in
   if tty then begin
-    Printf.printf "pp v%s%s — lazy, pure-by-default, content-addressed Lisp\n"
-      Version.string
-      (if use_vm then " [bytecode VM]" else "");
+    Printf.printf "pp v%s — lazy, pure-by-default, content-addressed Lisp\n"
+      Version.string;
     Printf.printf "Type :help for commands, :quit or Ctrl-D to leave.\n\n%!";
     load_history ()
   end;
   let eval_one (e : expr) : value =
-    if use_vm then
-      with_toplevel_location e (fun () ->
-        let bc = Compiler.compile_program [e] in
-        Vm.run_program_expr bc)
-    else process_expr e
+    process_expr e
   in
   (* Accumulate lines until the form closes. *)
   let rec read_form (acc : string) : string option =
@@ -344,12 +302,6 @@ let repl_loop ~(use_vm : bool) =
         else begin
           if tty then append_history input;
           (try
-             (* The macro table persists across REPL turns
-                (reset only by init ()/Vm.init () at repl_loop's start), so
-                a macro defined on one line is usable on a later one — same
-                sequential-top-level rule as a file. The interactive
-                REPL reads braces directly (not via read_dispatch's
-                extension sniffing — there is no file here at all). *)
              let exprs =
                Macro.expand_toplevel_list
                  (Reader_braces.read_string ~source:"<repl>" input) in
@@ -359,10 +311,6 @@ let repl_loop ~(use_vm : bool) =
              ) exprs
            with
            | Types.Pp_exit n -> exit n
-           (* Pp_error's printer renders "<msg> at file:line"; the rest are
-              unlocated. The final arm is a last resort for a genuinely
-              unexpected exception; its registered printer, if any, still keeps
-              it readable rather than a raw constructor. *)
            | Types.Pp_error _ as e -> Printf.printf "Error: %s\n%!" (Printexc.to_string e)
            | Failure msg -> Printf.printf "Error: %s\n%!" msg
            | Sys_error msg -> Printf.printf "Error: %s\n%!" msg
@@ -372,6 +320,4 @@ let repl_loop ~(use_vm : bool) =
         end
   in
   loop ()
-
-let repl () = repl_loop ~use_vm:false
-let repl_bytecode () = repl_loop ~use_vm:true
+ let repl () = repl_loop ()

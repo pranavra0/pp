@@ -47,7 +47,6 @@ type invocation = {
   initial_capabilities : Capability.t list;
   program_argv : string list;
   program_files : string list;
-  program_bytecode : bool;
   initial_grant_specs : string list;
   program_reconcile_root : string option;
   program_supervise : bool;

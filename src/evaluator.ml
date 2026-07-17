@@ -24,7 +24,7 @@ let make_thunk_ca (expr : expr) (env : env) : value =
   match Hashtbl.find_opt thunk_store h with
   | Some existing -> VThunk existing
   | None ->
-      let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env; vm_code = None; type_ann = None; thunk_loc = None; config_hash = cfg_hash; thunk_persist = false; node_fv = []; node_caps = [] } in
+      let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env; type_ann = None; thunk_loc = None; config_hash = cfg_hash; thunk_persist = false; node_caps = [] } in
       Hashtbl.add thunk_store h t;
       VThunk t
 
@@ -39,7 +39,7 @@ let make_thunk_ca_typed (expr : expr) (ty : expr) (loc : (string * int) option) 
   match Hashtbl.find_opt thunk_store h with
   | Some existing -> VThunk existing
   | None ->
-      let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env; vm_code = None; type_ann = Some ty; thunk_loc = loc; config_hash = cfg_hash; thunk_persist = false; node_fv = []; node_caps = [] } in
+      let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env; type_ann = Some ty; thunk_loc = loc; config_hash = cfg_hash; thunk_persist = false; node_caps = [] } in
       Hashtbl.add thunk_store h t;
       VThunk t
 
@@ -116,7 +116,7 @@ let cell_authorized_for (caps : Capability.t list) (cell_id : string) : bool =
 (* Trace replay for an already-Evaluated persistent node: replay its stored
    trace reads into the active trace frames so the caller's trace transitively
    captures this node's world-reads (same mechanism as Store.hit's hit-replay).
-   [key_of] is the backend's node-key function (node_key_of / vm_node_key). *)
+   [key_of] is the backend's node-key function (node_key_of). *)
 let replay_node_reads = Node.replay_node_reads
 
 (* Run a persistent node's body and store the result (LAW 21) or the failure
@@ -245,13 +245,7 @@ let rec force (v : value) : value =
               validity. A stale trace falls through to recompute. *)
            if t.thunk_persist then
              let nk = node_key_of t in
-             let run () =
-               match t.vm_code with
-               | Some (bc, code_offset, frames) ->
-                  Backend.r.vm_run_thunk bc code_offset frames
-               | None ->
-                   eval t.thunk_expr t.thunk_env
-             in
+              let run () = eval t.thunk_expr t.thunk_env in
              (match force_node ~key:nk ~run t with
               | result -> decr force_depth; force result
               | exception e -> decr force_depth; raise e)
@@ -265,10 +259,6 @@ and evaluate_and_store_no_key (t : thunk) : value =
   t.thunk_status <- Evaluating;
   let result =
     try
-      match t.vm_code with
-      | Some (bc, code_offset, frames) ->
-          Backend.r.vm_run_thunk bc code_offset frames
-      | None ->
           eval t.thunk_expr t.thunk_env
     with e ->
       (* An ephemeral thunk that raised must not be left `Evaluating`, or
@@ -730,15 +720,11 @@ and trampoline_force (v : value) : value =
                 if t.thunk_persist then begin
                   let h = node_key_of t in
                   let run () =
-                    match t.vm_code with
-                    | Some (bc, code_offset, frames) ->
-                        Backend.r.vm_run_thunk bc code_offset frames
-                    | None ->
-                        let saved = !force_depth in
-                        force_depth := 0;
-                        let r = eval t.thunk_expr t.thunk_env in
-                        force_depth := saved;
-                        r
+                    let saved = !force_depth in
+                    force_depth := 0;
+                    let r = eval t.thunk_expr t.thunk_env in
+                    force_depth := saved;
+                    r
                   in
                   let result = force_node ~key:h ~run t in
                   Queue.add result queue;
@@ -748,15 +734,11 @@ and trampoline_force (v : value) : value =
                   (* ephemeral thunk — no store check *)
                   t.thunk_status <- Evaluating;
                   let result =
-                    match t.vm_code with
-                    | Some (bc, code_offset, frames) ->
-                        Backend.r.vm_run_thunk bc code_offset frames
-                    | None ->
-                        let saved = !force_depth in
-                        force_depth := 0;
-                        let r = eval t.thunk_expr t.thunk_env in
-                        force_depth := saved;
-                        r
+                    let saved = !force_depth in
+                    force_depth := 0;
+                    let r = eval t.thunk_expr t.thunk_env in
+                    force_depth := saved;
+                    r
                   in
                   (match t.type_ann with
                    | Some ty -> Node.check_type result ty t.thunk_loc
