@@ -207,7 +207,20 @@ let poison_expr (name : string) : expr =
 let poison_thunk (name : string) (env : env) : value =
   make_thunk (poison_expr name) env
 
-(* ---- Force: evaluate a thunk on demand ---- *)
+
+(* Wrap a defnode body: if it already contains EWithCaps (from a needs clause),
+   leave it alone — the needs clause handles capability provisioning. Otherwise,
+   wrap in ENode to create a persistent node thunk keyed on argument values
+   (SPEC LAW 6/20). Strips ELocated wrappers when checking for EWithCaps since
+   assemble_fn_body adds location wrapping. *)
+let wrap_defnode_body (body : expr) : expr =
+  let rec has_with_caps e = match e with
+    | EWithCaps _ -> true
+    | ELocated (_, e') -> has_with_caps e'
+    | _ -> false
+  in
+  if has_with_caps body then body else ENode body
+
 
 (* Depth limit before switching to heap-allocated trampoline.
    OCaml's default stack handles ~10k small frames; 2000 gives
@@ -215,6 +228,35 @@ let poison_thunk (name : string) (env : env) : value =
    even for 10^6-deep recursion (~500 trampoline entries). *)
 let max_force_depth = 2000
 let force_depth = ref 0
+
+(* Continuation type for stack-safe evaluator.
+   Each non-tail evaluation position maps to a kont constructor
+   that captures "what to do with the result of this sub-expression."
+   Functions eval_machine/apply_kont are defined in the mutual
+   recursion block below (after trampoline_force). *)
+type kont =
+  | KStop                                          (* return final value to caller *)
+  | KForceThen of kont                             (* force result, then continue *)
+  | KIfBranch of expr * expr * env * kont          (* after condition: choose branch *)
+  | KApplyFn of expr list * env * kont             (* after fn eval: eval args *)
+  | KApplyArg of value * expr list * value list * env * kont
+                                                   (* after one arg: accumulate, next or apply *)
+  | KDoBody of expr list * env ref * (string, value) Hashtbl.t * kont
+                                                   (* after one do-expr: continue rest *)
+  | KWithCapsBody of expr * env * kont             (* after cap eval: check subseteq, eval body *)
+  | KWithHandlerH of string * (string * expr) list * (string * (value list -> value) * string) list * env * expr * kont
+                                                   (* after one handler eval: accumulate, next or install *)
+  | KMatchScrutinee of (pattern * expr option * expr) list * env * kont
+                                                   (* after scrutinee: try arms *)
+  | KImportExtend of env ref * kont                (* after mod eval: extend env *)
+  | KWithConfigBody of expr * env * kont           (* after map eval: check type, eval body *)
+  | KConfigKey of expr option * env * kont         (* after key eval: lookup or default *)
+
+(* Depth limit before switching to heap-allocated evaluation machine.
+   OCaml's default stack handles ~10k small frames; 2000 gives
+   ample headroom while keeping the kont chain allocation reasonable. *)
+let max_eval_depth = 2000
+let eval_depth = ref 0
 
 
 
@@ -286,7 +328,7 @@ and evaluate_and_store_no_key (t : thunk) : value =
   decr force_depth;
   force result
 
-(* LAW 20: a node's persistent key is its code structure plus the *value* hashes
+(* a node's persistent key is its code structure plus the *value* hashes
    of the free variables it references (forced, call-by-value — the key cannot
    exist before its inputs' values do). This deliberately omits the whole-env
    hash (so rebinding an unrelated global does not re-key the node), the
@@ -350,8 +392,19 @@ and is_data_closed (t : thunk) : bool =
 (* ---- Main Evaluator (non-tail) ---- *)
 
 and eval (e : expr) (env : env) : value =
-  Backend.r.current_env <- env;
-  eval_tail e env (fun v -> v)
+  incr eval_depth;
+  if !eval_depth > max_eval_depth then begin
+    let saved = !eval_depth in
+    eval_depth := 0;
+    let r = eval_machine e env KStop in
+    eval_depth := saved;
+    decr eval_depth;
+    r
+  end else begin
+    Backend.r.current_env <- env;
+    try eval_tail e env (fun v -> decr eval_depth; v)
+    with e -> decr eval_depth; raise e
+  end
 
 (* ---- Tail-position evaluator ---- *)
 (* eval_tail e env k: evaluates e in tail position with continuation k.
@@ -429,8 +482,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       k (make_closure ~name:(Some name) params body (ref env))
 
   | EDefNode (name, params, body) ->
-      k (make_closure ~name:(Some name) params body (ref env))
-
+      k (make_closure ~name:(Some name) params (wrap_defnode_body body) (ref env))
   | EDo exprs ->
       (* All but last are non-tail; last is tail.
          Uses a local env ref for threading — NOT current_env_ref,
@@ -453,7 +505,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
             env_ref := extend_env !env_ref name closure;
             go rest
         | (EDefNode (name, params, body)) :: rest ->
-            let closure = make_closure ~name:(Some name) params body env_ref in
+            let closure = make_closure ~name:(Some name) params (wrap_defnode_body body) env_ref in
             env_ref := extend_env !env_ref name closure;
             go rest
         | (EDefValue (name, rhs)) :: rest ->
@@ -579,7 +631,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
             let closure = make_closure ~name:(Some def_name) params body (ref env_acc) in
             extend_env env_acc def_name closure
         | EDefNode (def_name, params, body) ->
-            let closure = make_closure ~name:(Some def_name) params body (ref env_acc) in
+            let closure = make_closure ~name:(Some def_name) params (wrap_defnode_body body) (ref env_acc) in
             extend_env env_acc def_name closure
         | EDefValue (def_name, rhs) ->
             let v = eval rhs env_acc in
@@ -634,12 +686,12 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       k (eval_module_file (Island.entry_file tree))
   | EWithConfig (map_expr, body) ->
       let cfg = force (eval map_expr env) in
-      (match cfg with
-       | VMap _ ->
-           try eval_tail body env k
-           with effect Runtime.Get_config, kont ->
-             Effect.Deep.continue kont (cfg :: Effect.perform Runtime.Get_config)
-       | _ -> failwith "with-config expects a map")
+      (match cfg with VMap _ -> () | _ -> failwith "with-config expects a map");
+      begin
+        try eval_tail body env k
+        with effect Runtime.Get_config, kont ->
+          Effect.Deep.continue kont (cfg :: Effect.perform Runtime.Get_config)
+      end
   | EConfig (key_expr, default_opt) ->
       let key_val = force (eval key_expr env) in
       let key_name = match key_val with
@@ -770,6 +822,367 @@ and trampoline_force (v : value) : value =
         end
   in
   loop ()
+
+(* ---- Stack-safe machine evaluator (LAW 11) ---- *)
+
+and eval_machine (e : expr) (env : env) (k : kont) : value =
+  Backend.r.current_env <- env;
+  match e with
+  | ELiteral v -> apply_kont k v
+  | ESymbol name ->
+      (match lookup_env env name with
+       | Some v -> apply_kont k (force v)
+       | None ->
+           (match Primitives.lookup name with
+            | Some v -> apply_kont k v
+            | None -> failwith ("unbound symbol: " ^ name)))
+  | EIf (cond, then_e, else_e) ->
+      eval_machine cond env (KForceThen (KIfBranch (then_e, else_e, env, k)))
+  | ELet (bindings, body) ->
+      let thunks = List.map (fun (name, binding_expr) ->
+        (name, make_thunk_ca binding_expr env)
+      ) bindings in
+      let env_mutual = List.fold_left (fun e (name, thunk) ->
+        extend_env e name thunk
+      ) env thunks in
+      List.iter (fun (_, thunk) ->
+        match thunk with
+        | VThunk t -> t.thunk_env <- env_mutual
+        | _ -> ()
+      ) thunks;
+      eval_machine body env_mutual k
+  | EFn (params, body) ->
+      apply_kont k (make_closure ~name:None params body (ref env))
+  | EApply (fn_expr, arg_exprs) ->
+      eval_machine fn_expr env (KForceThen (KApplyFn (arg_exprs, env, k)))
+  | EQuote e ->
+      apply_kont k (Types.quote_to_value e)
+  | EDelay e ->
+      apply_kont k (make_thunk_ca e env)
+  | EForce e ->
+      eval_machine e env (KForceThen k)
+  | ENode e ->
+      let thunk_val = make_thunk_ca e env in
+      (match thunk_val with
+       | VThunk t ->
+           t.thunk_persist <- true;
+           t.node_caps <- Effect.perform Runtime.Get_capabilities
+       | _ -> ());
+      apply_kont k thunk_val
+  | EDef (name, params, body) ->
+      apply_kont k (make_closure ~name:(Some name) params body (ref env))
+  | EDefNode (name, params, body) ->
+      apply_kont k (make_closure ~name:(Some name) params (wrap_defnode_body body) (ref env))
+  | EDo exprs ->
+      let env_ref = ref env in
+      let poisons : (string, value) Hashtbl.t = Hashtbl.create 4 in
+      List.iter (function
+        | EDefValue (name, _) ->
+            let p = poison_thunk name !env_ref in
+            Hashtbl.replace poisons name p;
+            env_ref := extend_env !env_ref name p
+        | _ -> ()) exprs;
+      let rec go = function
+        | [] -> apply_kont k VNil
+        | [last] -> eval_machine last !env_ref k
+        | (EDef (name, params, body)) :: rest ->
+            let closure = make_closure ~name:(Some name) params body env_ref in
+            env_ref := extend_env !env_ref name closure;
+            go rest
+        | (EDefNode (name, params, body)) :: rest ->
+            let closure = make_closure ~name:(Some name) params (wrap_defnode_body body) env_ref in
+            env_ref := extend_env !env_ref name closure;
+            go rest
+        | (EDefValue (name, rhs)) :: rest ->
+            let v = eval rhs !env_ref in
+            (match Hashtbl.find_opt poisons name with
+             | Some (VThunk t) -> t.thunk_status <- Evaluated v
+             | _ -> ());
+            env_ref := extend_env !env_ref name v;
+            go rest
+        | (EImport mod_expr) :: rest ->
+            let mod_val = force (eval mod_expr !env_ref) in
+            (match mod_val with
+             | VEnvMap bindings ->
+                 env_ref := List.fold_left (fun e (n, v) ->
+                   extend_env e n v) !env_ref bindings;
+                 go rest
+             | _ -> failwith "import expects a module value")
+        | (ELoad path) :: rest ->
+            let contents = Runtime.loader_read path in
+            let exprs = Backend.r.expand_toplevel
+                          (Reader_braces.read_dispatch ~source:path ~path contents) in
+            ignore (eval_expressions exprs env_ref);
+            go rest
+        | (ELoadModule path) :: rest ->
+            (match eval_module_file path with
+             | VEnvMap bindings ->
+                 env_ref := List.fold_left (fun e (n, v) ->
+                   extend_env e n v) !env_ref bindings;
+                 go rest
+             | _ -> go rest)
+        | e :: rest ->
+            eval_machine e !env_ref (KDoBody (rest, env_ref, poisons, k))
+      in
+      go exprs
+  | EWithCaps (cap_expr, body) ->
+      eval_machine cap_expr env (KForceThen (KWithCapsBody (body, env, k)))
+  | EPerform (name, arg_exprs) ->
+      let args = List.map (fun e -> make_thunk_ca e env) arg_exprs in
+      let forced_args = List.map force args in
+      apply_kont k (perform_effect name forced_args)
+  | EWithHandler (handlers, body) ->
+      (match handlers with
+       | [] ->
+           begin
+             try eval_machine body env k
+             with
+             | effect (Runtime.Lookup_handler name), kont ->
+                 Effect.Deep.continue kont (Effect.perform (Runtime.Lookup_handler name))
+             | effect Runtime.Get_handlers, kont ->
+                 Effect.Deep.continue kont (Effect.perform Runtime.Get_handlers)
+           end
+       | (name, handler_expr) :: rest ->
+           eval_machine handler_expr env (KForceThen (KWithHandlerH (name, rest, [], env, body, k))))
+  | EDefValue (_, rhs) ->
+      apply_kont k (eval rhs env)
+  | ELetStar (bindings, body) ->
+      let rec nest env' = function
+        | [] -> eval_machine body env' k
+        | (name, expr) :: rest ->
+            let thunk = make_thunk_ca expr env' in
+            let env'' = extend_env env' name thunk in
+            nest env'' rest
+      in
+      nest env bindings
+  | EModule body_exprs ->
+      let base_env = Primitives.initial_env () in
+      let mod_env = ref base_env in
+      let poisons : (string, value) Hashtbl.t = Hashtbl.create 4 in
+      let prebound_env = List.fold_left (fun acc e ->
+        match e with
+        | EDefValue (name, _) ->
+            let p = poison_thunk name acc in
+            Hashtbl.replace poisons name p;
+            extend_env acc name p
+        | _ -> acc) !mod_env body_exprs in
+      mod_env := prebound_env;
+      let final_env = List.fold_left (fun (env_acc : env) e ->
+        match e with
+        | EDef (def_name, params, body) ->
+            let closure = make_closure ~name:(Some def_name) params body (ref env_acc) in
+            extend_env env_acc def_name closure
+        | EDefNode (def_name, params, body) ->
+            let closure = make_closure ~name:(Some def_name) params (wrap_defnode_body body) (ref env_acc) in
+            extend_env env_acc def_name closure
+        | EDefValue (def_name, rhs) ->
+            let v = eval rhs env_acc in
+            (match Hashtbl.find_opt poisons def_name with
+             | Some (VThunk t) -> t.thunk_status <- Evaluated v
+             | _ -> ());
+            extend_env env_acc def_name v
+        | EImport mod_expr ->
+            let mod_val = force (eval mod_expr env_acc) in
+            (match mod_val with
+             | VEnvMap bindings ->
+                 List.fold_left (fun e (n, v) -> extend_env e n v) env_acc bindings
+             | _ -> failwith "import within module expects a module value")
+        | _ ->
+            ignore (force (eval e env_acc));
+            env_acc
+      ) !mod_env body_exprs in
+      apply_kont k (VEnvMap (new_bindings ~dedup:true ~base:base_env.bindings final_env.bindings))
+  | EImport mod_expr ->
+      eval_machine mod_expr env (KForceThen k)
+  | ELoad path ->
+      let contents = Runtime.loader_read path in
+      let exprs = Backend.r.expand_toplevel
+                    (Reader_braces.read_dispatch ~source:path ~path contents) in
+      let env_ref = ref env in
+      apply_kont k (eval_expressions exprs env_ref)
+  | ELoadModule path ->
+      apply_kont k (eval_module_file path)
+  | ELocated (loc, ETyped (e, ty)) ->
+      apply_kont k (make_thunk_ca_typed e ty (Some loc) env)
+  | ELocated (_, e) -> eval_machine e env k
+  | ETyped (e, ty) ->
+      apply_kont k (make_thunk_ca_typed e ty None env)
+  | EIsland (uri, pin) ->
+      let tree = Island.resolve ~uri ~pin in
+      apply_kont k (eval_module_file (Island.entry_file tree))
+  | EWithConfig (map_expr, body) ->
+      eval_machine map_expr env (KForceThen (KWithConfigBody (body, env, k)))
+  | EConfig (key_expr, default_opt) ->
+      eval_machine key_expr env (KForceThen (KConfigKey (default_opt, env, k)))
+  | EMatch (scrutinee, arms) ->
+      eval_machine scrutinee env (KForceThen (KMatchScrutinee (arms, env, k)))
+
+and apply_kont (k : kont) (v : value) : value =
+  match k with
+  | KStop -> v
+  | KForceThen k' ->
+      apply_kont k' (force v)
+  | KIfBranch (then_e, else_e, env, k') ->
+      (match v with
+       | VBool true -> eval_machine then_e env k'
+       | VBool false -> eval_machine else_e env k'
+       | VNil -> eval_machine else_e env k'
+       | _ -> eval_machine then_e env k')
+  | KApplyFn (args, env, k') ->
+      let fn = v in
+      (match args with
+       | [] -> apply_tail_machine fn [] env k'
+       | arg :: rest ->
+           let frame = KApplyArg (fn, rest, [], env, k') in
+           eval_machine arg env (KForceThen frame))
+  | KApplyArg (fn, [], rev_args, env, k') ->
+      let args = List.rev (v :: rev_args) in
+      apply_tail_machine fn args env k'
+  | KApplyArg (fn, next :: rest, rev_args, env, k') ->
+      let frame = KApplyArg (fn, rest, v :: rev_args, env, k') in
+      eval_machine next env (KForceThen frame)
+  | KDoBody (rest, env_ref, poisons, k') ->
+      (match v with
+       | VEnvMap bindings ->
+           env_ref := List.fold_left (fun e (n, v) ->
+             extend_env e n v) !env_ref bindings
+       | _ -> ());
+      let rec go = function
+        | [] -> apply_kont k' VNil
+        | [last] -> eval_machine last !env_ref k'
+        | (EDef (name, params, body)) :: rem ->
+            let closure = make_closure ~name:(Some name) params body env_ref in
+            env_ref := extend_env !env_ref name closure;
+            go rem
+        | (EDefNode (name, params, body)) :: rem ->
+            let closure = make_closure ~name:(Some name) params (wrap_defnode_body body) env_ref in
+            env_ref := extend_env !env_ref name closure;
+            go rem
+        | (EDefValue (name, rhs)) :: rem ->
+            let v = eval rhs !env_ref in
+            (match Hashtbl.find_opt poisons name with
+             | Some (VThunk t) -> t.thunk_status <- Evaluated v
+             | _ -> ());
+            env_ref := extend_env !env_ref name v;
+            go rem
+        | (EImport mod_expr) :: rem ->
+            let mod_val = force (eval mod_expr !env_ref) in
+            (match mod_val with
+             | VEnvMap bindings ->
+                 env_ref := List.fold_left (fun e (n, v) ->
+                   extend_env e n v) !env_ref bindings;
+                 go rem
+             | _ -> failwith "import expects a module value")
+        | (ELoad path) :: rem ->
+            let contents = Runtime.loader_read path in
+            let exprs = Backend.r.expand_toplevel
+                          (Reader_braces.read_dispatch ~source:path ~path contents) in
+            ignore (eval_expressions exprs env_ref);
+            go rem
+        | (ELoadModule path) :: rem ->
+            (match eval_module_file path with
+             | VEnvMap bindings ->
+                 env_ref := List.fold_left (fun e (n, v) ->
+                   extend_env e n v) !env_ref bindings;
+                 go rem
+             | _ -> go rem)
+        | e :: rem ->
+            eval_machine e !env_ref (KDoBody (rem, env_ref, poisons, k'))
+      in
+      go rest
+  | KWithCapsBody (body, env, k') ->
+      let requested =
+        match v with
+        | VCapability c -> c
+        | _ -> failwith "with-caps expects a capability value"
+      in
+      if not (Capability.subseteq requested (Effect.perform Runtime.Get_capabilities)) then
+        raise (Capability_error Capability.err_with_caps_widen);
+      begin
+        try eval_machine body env k'
+        with effect Runtime.Get_capabilities, kont -> Effect.Deep.continue kont [requested]
+      end
+  | KWithHandlerH (name, rem_handlers, acc, env, body, k') ->
+      let handler_val = v in
+      let entry = (name, (fun args -> apply handler_val args env), hash_value handler_val) in
+      let acc' = entry :: acc in
+      (match rem_handlers with
+       | [] ->
+           let snew = List.map (fun (n,_,h) -> (n,h)) acc' in
+           begin
+             try eval_machine body env k'
+             with
+             | effect (Runtime.Lookup_handler name), kont ->
+                 (match List.find_opt (fun (n,_,_) -> n = name) acc' with
+                  | Some (_, fn, h) -> Effect.Deep.continue kont (Some (fn, h))
+                  | None -> Effect.Deep.continue kont (Effect.perform (Runtime.Lookup_handler name)))
+             | effect Runtime.Get_handlers, kont ->
+                 Effect.Deep.continue kont (snew @ Effect.perform Runtime.Get_handlers)
+           end
+       | (next_name, next_expr) :: rem ->
+           eval_machine next_expr env (KForceThen (KWithHandlerH (next_name, rem, acc', env, body, k'))))
+  | KMatchScrutinee (arms, env, k') ->
+      let v_forced = v in
+      let rec try_arms = function
+        | [] -> failwith "match failure"
+        | (pat, guard, body) :: rest ->
+            (match Types.match_pattern v_forced pat with
+             | Some binds ->
+                 let env' = List.fold_left (fun e (n, v) -> Types.extend_env e n v) env binds in
+                 let fires = match guard with
+                   | None -> true
+                   | Some g -> (match force (eval g env') with VBool false | VNil -> false | _ -> true)
+                 in
+                 if fires then eval_machine body env' k' else try_arms rest
+             | None -> try_arms rest)
+      in
+      try_arms arms
+  | KImportExtend (env_ref, k') ->
+      (match v with
+       | VEnvMap bindings ->
+           env_ref := List.fold_left (fun e (n, v) ->
+             extend_env e n v) !env_ref bindings;
+           apply_kont k' v
+       | _ -> failwith "import expects a module value")
+  | KWithConfigBody (body, env, k') ->
+      (match v with
+       | VMap _ -> ()
+       | _ -> failwith "with-config expects a map");
+      begin
+        try eval_machine body env k'
+        with effect Runtime.Get_config, kont ->
+          Effect.Deep.continue kont (v :: Effect.perform Runtime.Get_config)
+      end
+  | KConfigKey (default_opt, env, k') ->
+      let key_name = match v with
+        | VString s | VKeyword s | VSymbol s -> s
+        | _ -> failwith "config key must be a string, keyword, or symbol" in
+      Runtime.record_config_read key_name;
+      (match Runtime.config_lookup key_name with
+       | Some v -> apply_kont k' v
+       | None ->
+           (match default_opt with
+            | Some d -> eval_machine d env k'
+            | None -> apply_kont k' VNil))
+
+and apply_tail_machine (fn : value) (args : value list) (env : env) (k : kont) : value =
+  match fn with
+  | VClosure { fn_name; params; body; env = closure_env; _ } ->
+      if List.length params <> List.length args then begin
+        let fname = match fn_name with Some n -> n | None -> "#<fn>" in
+        failwith (Printf.sprintf "arity mismatch calling %s: expected %d args, got %d"
+                    fname (List.length params) (List.length args))
+      end;
+      Backend.r.current_env <- env;
+      let env' = List.fold_left2 (fun e param arg ->
+        extend_env e param arg
+      ) !closure_env params args in
+      eval_machine body env' k
+  | VBuiltin (_, f) ->
+      Backend.r.current_env <- env;
+      apply_kont k (f args)
+  | _ ->
+      failwith (Printf.sprintf "not a function: %s" (string_of_value fn))
 (* ---- Effect System ---- *)
 
 and perform_effect (name : string) (args : value list) : value =
@@ -919,10 +1332,6 @@ and eval_module_file (path : string) : value =
    own top-level forms), so every element is individually `ELocated`. *)
 and eval_expressions (exprs : expr list) (env : env ref) : value =
   let unwrap e = match e with ELocated (_, e') -> e' | _ -> e in
-  (* Evaluate ONE form, mutating `env` for defs/imports; wrapped in ITS OWN
-     location (LAW 29): an error escaping this form is decorated with
-     this form's file:line before it can unwind past a `load` that brought
-     it in — never doubled if a deeper form already located it. *)
   let step (e : expr) : value =
     Runtime.with_form_location e (fun () ->
       match unwrap e with
@@ -931,12 +1340,10 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
           env := extend_env !env name closure;
           closure
       | EDefNode (name, params, body) ->
-          let closure = make_closure ~name:(Some name) params body env in
+          let closure = make_closure ~name:(Some name) params (wrap_defnode_body body) env in
           env := extend_env !env name closure;
           closure
       | EDefValue (name, rhs) ->
-          (* Top level is sequential: the RHS is evaluated now (a forward
-             reference is an unbound-symbol error), the value bound. *)
           let v = eval rhs !env in
           env := extend_env !env name v;
           v
@@ -949,10 +1356,6 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
                mod_val
            | _ -> failwith "import expects a module value")
       | ELoad path ->
-          (* `~source:path`: the loaded file's OWN path (not the reader's
-             "<?>" default), so ITS forms are in turn correctly located.
-             Routed through the shared macro-expansion hook, same as every
-             other Reader.read_string call site. *)
           let contents = Runtime.loader_read path in
           let sub_exprs = Backend.r.expand_toplevel
                             (Reader_braces.read_dispatch ~source:path ~path contents) in

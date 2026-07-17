@@ -78,6 +78,19 @@ let extend_cenv (st : comp_state) (names : string list) : int * (unit -> unit) =
     | [] -> ()
   in
   (start_slot, restore)
+
+(* Strip ELocated wrappers to check if a defnode body has an EWithCaps
+   (from a needs clause). If so, leave the body unchanged; otherwise,
+   wrap it in ENode for persistent node keying (SPEC LAW 6/20). *)
+let wrap_defnode_body (body : expr) : expr =
+  let rec has_with_caps e = match e with
+    | EWithCaps _ -> true
+    | ELocated (_, e') -> has_with_caps e'
+    | _ -> false
+  in
+  if has_with_caps body then body else ENode body
+;;
+
 let rec emit_thunk_region ?type_ann:(ta=None) ?thunk_loc:(tl=None) (st : comp_state) (e : expr) : int =
   let jmp_idx = current_offset st in
   emit st (JUMP 0);  (* placeholder, patched after body *)
@@ -140,6 +153,26 @@ and emit_node_region ?type_ann:(ta=None) ?thunk_loc:(tl=None) (st : comp_state) 
   emit st (MAKE_NODE (body_start, e, fv_descs, ta, tl));
   body_start
 
+(* Like emit_closure_region, but for defnode: the closure body is a MAKE_NODE
+   region so that when the constructor is called with arguments, those arguments
+   occupy the local frame and become part of the node's captured free variables.
+   The resulting closure, when applied, creates a persistent node thunk keyed on
+   the argument value hashes (SPEC LAW 6/20). *)
+and emit_node_constructor_region ?(name=None) (st : comp_state) (params : string list) (body : expr) : int =
+  let jmp_idx = current_offset st in
+  emit st (JUMP 0);
+  let ctor_body_start = current_offset st in
+  let saved_cenv = st.cenv in
+  st.cenv <- params :: st.cenv;
+  compile_expr st body true;
+  emit st RETURN;
+  st.cenv <- saved_cenv;
+  backpatch_jump st jmp_idx;
+  Hashtbl.add st.nparams_of ctor_body_start (List.length params);
+  Hashtbl.add st.param_names_of ctor_body_start params;
+  (match name with Some n -> Hashtbl.add st.closure_names_of ctor_body_start n | None -> ());
+  emit st (MAKE_CLOSURE (ctor_body_start, List.length params));
+  ctor_body_start
 (* ---- Emit a closure region (body + JUMP-around + MAKE_CLOSURE) ---- *)
 
 and emit_closure_region ?(name=None) (st : comp_state) (params : string list) (body : expr) : int =
@@ -278,9 +311,14 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       let rec compile_subs = function
         | [] -> ()
         | [last] -> compile_expr st last tail
-        | (EDef (name, params, body)) :: rest
-        | (EDefNode (name, params, body)) :: rest ->
+        | (EDef (name, params, body)) :: rest ->
             ignore (emit_closure_region ~name:(Some name) st params body);
+            (match Hashtbl.find_opt def_map name with
+             | Some di -> emit st (STORE_LOCAL di.slot)
+             | None -> failwith ("compiler: def " ^ name ^ " not found"));
+            compile_subs rest
+        | (EDefNode (name, params, body)) :: rest ->
+            ignore (emit_node_constructor_region ~name:(Some name) st params (wrap_defnode_body body));
             (match Hashtbl.find_opt def_map name with
              | Some di -> emit st (STORE_LOCAL di.slot)
              | None -> failwith ("compiler: def " ^ name ^ " not found"));
@@ -325,10 +363,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       restore ()
 
   | EWithCaps (cap_expr, body) ->
-      (* Unlike EWithConfig/PUSH_HANDLER's flat ENTER/EXIT opcode pairs (which
-         restore on normal return and tail call but NOT on a raised
-         exception — the OCaml exception just unwinds past the EXIT opcode),
-         with-caps compiles its body as a SEPARATE region invoked by the
+      (* WITH_CAPS compiles its body as a SEPARATE region invoked by the
          single WITH_CAPS opcode via a nested run_isolated call, exactly like
          emit_thunk_region/emit_node_region: the body shares the surrounding
          cenv/frames (no new frame), but is reached by JUMPing over it here
@@ -336,8 +371,10 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
          is what lets vm.ml wrap it in a real OCaml try/with and restore
          current_capabilities on EVERY exit, including an exception — LAW 27,
          verified by tests/capability-adversarial.sh's with-caps-exception-
-         safe case. The body is compiled tail-within-its-own-region (a tail
-         call in it just returns to WITH_CAPS, which still runs the
+         safe case. EWithHandler and EWithConfig use the same region pattern
+         (try/with around run_isolated), so all three dynamic-extent forms
+         are exception-safe. The body is compiled tail-within-its-own-region
+         (a tail call in it just returns to WITH_CAPS, which still runs the
          restore), so this is not a TCO loss either. *)
       compile_expr st cap_expr false;
       emit st FORCE;
@@ -349,8 +386,13 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       backpatch_jump st jmp_idx;
       emit st (WITH_CAPS body_start)
 
-  | EDef (name, params, body) | EDefNode (name, params, body) ->
+  | EDef (name, params, body) ->
       ignore (emit_closure_region ~name:(Some name) st params body);
+      emit st (STORE_GLOBAL (intern_name st name));
+      if tail && st.cenv = [] then
+        emit st (LOAD_GLOBAL (intern_name st name))
+  | EDefNode (name, params, body) ->
+      ignore (emit_node_constructor_region ~name:(Some name) st params (wrap_defnode_body body));
       emit st (STORE_GLOBAL (intern_name st name));
       if tail && st.cenv = [] then
         emit st (LOAD_GLOBAL (intern_name st name))
@@ -426,7 +468,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       let body_start = current_offset st in
       (* Pass 1: collect def/value-def names for the block's letrec* scope. *)
       let saved_in_module = st.in_module in
-      st.in_module <- true;
+      st.in_module <- false;  (* CALL_MODULE handles isolation at runtime *)
       let (start_slot, def_map, val_map, restore) = collect_block_defs st exprs in
       (* Pass 2: compile each child, storing defs/value-defs into their slot
          (so later siblings can resolve them via LOAD_LOCAL) in addition to
@@ -436,10 +478,17 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       let count = ref 0 in
       List.iter (fun sub ->
         match sub with
-        | EDef (name, params, body)
-        | EDefNode (name, params, body) ->
+        | EDef (name, params, body) ->
             emit st (PUSH (intern st (VString name)));
             ignore (emit_closure_region ~name:(Some name) st params body);
+            emit st DUP;
+            (match Hashtbl.find_opt def_map name with
+             | Some di -> emit st (STORE_LOCAL di.slot)
+             | None -> failwith ("compiler: module def " ^ name ^ " not found"));
+            incr count
+        | EDefNode (name, params, body) ->
+            emit st (PUSH (intern st (VString name)));
+            ignore (emit_node_constructor_region ~name:(Some name) st params (wrap_defnode_body body));
             emit st DUP;
             (match Hashtbl.find_opt def_map name with
              | Some di -> emit st (STORE_LOCAL di.slot)
@@ -476,7 +525,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       Hashtbl.add st.nparams_of body_start 0;
       Hashtbl.add st.param_names_of body_start [];
       emit st (MAKE_CLOSURE (body_start, 0));
-      emit st (CALL 0)
+      emit st CALL_MODULE
 
 
   | ELoad path ->
