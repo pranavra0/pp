@@ -226,34 +226,6 @@ executable characterization.
 
 **Non-goal:** change those decisions.
 
-### 4. Separate immutable host services from `Backend.r`
-
-**Purpose:** remove host initialization order from the evaluator callback seam.
-
-**Work:**
-
-- Define an immutable `Host_services.t` containing only operations that touch or
-  describe the host: canonical realpath, time, home directory, and secret reads
-  and writes.
-- Construct production services once in application composition. Construct
-  explicit fake services in tests.
-- Pass the minimum service or operation to `Capability`, `Cap_token`, runtime
-  path logic, and callers that require it.
-- Remove the corresponding mutable fields and fallback stubs from `Backend.r`.
-- Treat missing services as an impossible construction state, not a runtime
-  “hook not installed” failure.
-
-**Likely files:** new host-services module, `src/backend.*`, `src/main.ml`,
-`src/cap_token.ml`, `src/capability.ml`, `src/runtime.ml`.
-
-**Verify:** token/capability tests, loader tests, cluster tests, suite. Run the
-full fuzzer if evaluator or types files change.
-
-**Exit:** `Backend` contains no filesystem, clock, secret, or home operation;
-tests can supply deterministic host services without mutating globals.
-
-**Non-goal:** remove evaluator callbacks yet.
-
 ### 5. Introduce an explicit invocation value
 
 **Purpose:** eliminate the global optional invocation and make CLI validation a
@@ -852,4 +824,4 @@ not only expected stdout.
 
 ## Immediate next action
 
-Execute roadmap item 2 only: write and enforce the state-lifetime inventory.
+Execute roadmap item 5 only: introduce an explicit invocation value.

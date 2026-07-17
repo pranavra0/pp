@@ -299,8 +299,8 @@ type decision =
   | DMiss
   | DDeny of string
 
-let decide ~(key : string) ~(token_text : string) : decision =
-  match Cap_token.token_to_caps token_text with
+let decide host ~(key : string) ~(token_text : string) : decision =
+  match Cap_token.token_to_caps host token_text with
   | Error reason -> DDeny reason
   | Ok caps ->
       let authorized = Evaluator.cell_authorized_for caps in
@@ -369,8 +369,8 @@ let reply_of_decision (key : string) (d : decision) : string =
    bytes cross on denial" is structural: the push calls are inside the
    DHit arm only, not a separate "push if authorized" flag a caller could
    forget to check). Returns the reply text to hand back to the requester. *)
-let serve_hit ~(key : string) ~(token_text : string) ~(shared_root : string) : string =
-  let d = decide ~key ~token_text in
+let serve_hit host ~(key : string) ~(token_text : string) ~(shared_root : string) : string =
+  let d = decide host ~key ~token_text in
   (match d with
    | DHit { result_hash; traces; blob_hashes } ->
        LocalDir.push_object shared_root ~hash:result_hash;

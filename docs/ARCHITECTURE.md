@@ -199,8 +199,9 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/desugar.ml` | Reader-level desugars shared by both readers (SPEC Appendix B). |
 | `src/comments.ml` | The side channel `pp fmt` uses to carry comments across a surface transpile. |
 | `src/cap_token.ml` | Signed capability grants — cluster tokens — for cross-machine authority. |
+| `src/host_services.ml` | The immutable interface for canonicalization, time, home discovery, and secret-file I/O; production operations are composed in `main.ml`, while tests use complete deterministic values. |
 | `src/effects.ml` | The OCaml 5 effect declarations that hold handler, config, and trace state in dynamic extent. |
-| `src/backend.ml` | The one record of init-time hook functions that breaks the kernel↔library dependency cycle. |
+| `src/backend.ml` | The evaluator-only record of init-time hook functions that breaks the kernel↔library dependency cycle. It contains no host operations. |
 | `src/version.ml` | Single source of truth for the version string. |
 
 ### Runtime library (`pp`)

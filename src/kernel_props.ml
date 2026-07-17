@@ -596,6 +596,33 @@ let fail prop detail = failures := { prop; detail } :: !failures
 
 let cap_checks = ref 0
 
+let host_services_property () =
+  let files = Hashtbl.create 4 in
+  Hashtbl.add files "/fake/.pp/cluster/secret" "test-secret";
+  Hashtbl.add files "/fake/.pp/cluster/id" "test-cluster";
+  let now = ref 1000. in
+  let host = Host_services.make
+      ~canonical_realpath:(fun p -> "/canonical" ^ p)
+      ~unix_time:(fun () -> !now) ~home_dir:(fun () -> "/fake")
+      ~read_secret:(Hashtbl.find files)
+      ~write_secret:(fun path value ->
+        if Hashtbl.mem files path then failwith "fake secret exists";
+        Hashtbl.add files path value)
+  in
+  Cap_token.write_secret_file host "/fake/new-secret" "new";
+  if Hashtbl.find_opt files "/fake/new-secret" <> Some "new" then
+    fail "host-services-fake" "deterministic secret writer was not used";
+  let token = Cap_token.mint host ~secret:"test-secret" ~cluster_id:"test-cluster"
+      ~specs:["fs:/scope:ro"] ~ttl_seconds:10 in
+  (match Cap_token.token_to_caps host token with
+   | Ok [cap] when Capability.check_fs_read cap
+                     (Paths.canonicalize ~realpath:(fun x -> x) "/canonical/scope/file") -> ()
+   | _ -> fail "host-services-fake" "deterministic fake did not mint and verify authority");
+  now := 1011.;
+  (match Cap_token.token_to_caps host token with
+   | Error msg when String.length msg >= 31 && String.sub msg 0 31 = "cluster token rejected: expired" -> ()
+   | _ -> fail "host-services-fake" "deterministic clock did not expire token")
+
 let cap_properties (st : rng) ~(count : int) : unit =
   let depth () = 1 + ri st 3 in
   let canon = Paths.canonicalize ~realpath:(fun x -> x) in
@@ -859,6 +886,7 @@ let run ~(seed : int) ~(count : int) : bool =
 
   (* (iv) capability algebra — narrowing, union, ⊆-gate soundness, ban *)
   cap_properties st ~count;
+  host_services_property ();
 
   (* report *)
   let fs = List.rev !failures in

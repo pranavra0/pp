@@ -7,23 +7,24 @@
 
 (* ---- Cluster identity: ~/.pp/cluster/{secret,id} ---- *)
 
-val cluster_dir : unit -> string
-val secret_path : unit -> string
-val id_path : unit -> string
+val cluster_dir : Host_services.t -> string
+val secret_path : Host_services.t -> string
+val id_path : Host_services.t -> string
 
 (* Writes [content] to a fresh file at [path] with mode 0600. *)
-val write_secret_file : string -> string -> unit
+val write_secret_file : Host_services.t -> string -> string -> unit
 
-val load_secret : unit -> string
-val load_cluster_id : unit -> string
+val load_secret : Host_services.t -> string
+val load_cluster_id : Host_services.t -> string
 
 (* ---- Mint and verify ---- *)
 
 (* Mint a fresh cluster token with [ttl_seconds] lifetime. *)
 val mint :
+  Host_services.t ->
   secret:string -> cluster_id:string -> specs:string list ->
   ttl_seconds:int -> string
 
 (* Verify a token against the local member's own secret and cluster id,
    returning a capability list ready to feed into cell_authorized_for. *)
-val token_to_caps : string -> (Capability.t list, string) result
+val token_to_caps : Host_services.t -> string -> (Capability.t list, string) result

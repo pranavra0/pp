@@ -30,17 +30,15 @@ open Codec
    anchors"). Losing it means re-minting AND redistributing; a member
    without a copy cannot mint OR verify tokens. *)
 
-(* Kernel purity: the HOME lookup and the secret-file read are effects, so
-   they go through Backend.r (home_dir / cap_read_secret), installed by the
-   impure entry point, exactly as the secret WRITE already does via
-   cap_write_secret. pp.kernel names no Unix directly. *)
-let cluster_dir () : string =
-  Filename.concat (Backend.r.home_dir ()) ".pp/cluster"
+(* Kernel purity: host effects arrive as a complete immutable service value;
+   pp.kernel names no Unix directly. *)
+let cluster_dir host : string =
+  Filename.concat (host.Host_services.home_dir ()) ".pp/cluster"
 
-let secret_path () : string = Filename.concat (cluster_dir ()) "secret"
-let id_path () : string = Filename.concat (cluster_dir ()) "id"
+let secret_path host : string = Filename.concat (cluster_dir host) "secret"
+let id_path host : string = Filename.concat (cluster_dir host) "id"
 
-let read_trimmed (path : string) : string = Backend.r.cap_read_secret path
+let read_trimmed host path = host.Host_services.read_secret path
 
 (* Writes [content] to a FRESH file at [path] with mode 0600, refusing to
    overwrite an existing file (O_CREAT + O_EXCL, one syscall — no
@@ -48,24 +46,23 @@ let read_trimmed (path : string) : string = Backend.r.cap_read_secret path
    no window where it exists world-readable, and re-running `cluster-init`
    can never silently clobber (and invalidate every token minted against)
    an existing secret. *)
-let write_secret_file (path : string) (content : string) : unit =
-  Backend.r.cap_write_secret path content
+let write_secret_file host path content = host.Host_services.write_secret path content
 
-let load_secret () : string =
-  try read_trimmed (secret_path ())
+let load_secret host : string =
+  try read_trimmed host (secret_path host)
   with _ ->
     failwith (Printf.sprintf
       "pp: no cluster secret at %s — run `pp cluster-init` on the root \
        machine, then copy that file to this one out of band (the \
        docs/THREAT-MODEL-cluster.md trust anchor; same posture as an ssh \
-       host key)" (secret_path ()))
+       host key)" (secret_path host))
 
-let load_cluster_id () : string =
-  try read_trimmed (id_path ())
+let load_cluster_id host : string =
+  try read_trimmed host (id_path host)
   with _ ->
     failwith (Printf.sprintf
       "pp: no cluster id at %s — run `pp cluster-init` (it writes id and \
-       secret together)" (id_path ()))
+       secret together)" (id_path host))
 
 (* `pp cluster-init`: mint a fresh secret + cluster id. Cryptokit's secure
    RNG (Random.secure_rng) is the entropy source — the same library
@@ -97,9 +94,9 @@ let payload_text (specs : string list) (cluster_id : string) (issued : int) (exp
 let mac_of (secret : string) (payload : string) : string =
   hex_encode (Cryptokit.hash_string (Cryptokit.MAC.hmac_sha256 secret) payload)
 
-let mint ~(secret : string) ~(cluster_id : string) ~(specs : string list)
+let mint host ~(secret : string) ~(cluster_id : string) ~(specs : string list)
     ~(ttl_seconds : int) : string =
-  let issued = int_of_float (Backend.r.get_unix_time ()) in
+  let issued = int_of_float (host.Host_services.unix_time ()) in
   let expires = issued + ttl_seconds in
   let payload = payload_text specs cluster_id issued expires in
   let mac = mac_of secret payload in
@@ -163,7 +160,7 @@ let parse_token (s : string) : parsed_token option =
    MAC -> cluster id -> expiry -> parse caps, in that order (see the module
    header): a forged or foreign-cluster token never reaches the capability
    parser at all. *)
-let verify ~(secret : string) ~(cluster_id : string) (token_text : string)
+let verify host ~(secret : string) ~(cluster_id : string) (token_text : string)
     : (Capability.t list, string) result =
   match parse_token token_text with
   | None -> Error "malformed cluster token (unparseable or foreign format)"
@@ -175,17 +172,17 @@ let verify ~(secret : string) ~(cluster_id : string) (token_text : string)
                under a different cluster secret)"
       else if pt.pt_cluster_id <> cluster_id then
         Error "cluster token rejected: minted for a different cluster id"
-      else if int_of_float (Backend.r.get_unix_time ()) > pt.pt_expires then
+      else if int_of_float (host.Host_services.unix_time ()) > pt.pt_expires then
         Error (Printf.sprintf "cluster token rejected: expired at %d" pt.pt_expires)
       else
-        (try Ok (List.map (fun spec -> Capability.mint ~realpath:Backend.r.realpath spec) pt.pt_specs)
+        (try Ok (List.map (fun spec -> Capability.mint ~realpath:host.canonical_realpath spec) pt.pt_specs)
          with Failure msg -> Error ("cluster token names an invalid capability: " ^ msg))
 
 (* Convenience for the wire path: verify against the LOCAL member's own
    secret/cluster id (~/.pp/cluster), returning a capability list ready to
    feed straight into `cell_authorized_for` — the wire-verified equivalent
    of `node_caps` locally. *)
-let token_to_caps (token_text : string) : (Capability.t list, string) result =
-  let secret = load_secret () in
-  let cluster_id = load_cluster_id () in
-  verify ~secret ~cluster_id token_text
+let token_to_caps host token_text =
+  let secret = load_secret host in
+  let cluster_id = load_cluster_id host in
+  verify host ~secret ~cluster_id token_text

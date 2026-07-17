@@ -300,10 +300,10 @@ let watch_loop ~files ~interval ~stabilize =
    dispatches to them so its body reads as a list of what pp can do rather than
    a wall of inline blocks. (The dispatcher, src/remote.ml, drives the token
    and transport machinery; these are the member-side entry points.) *)
-let run_mint_token ~(out : string) ~(ttl : int) ~(specs : string list) : unit =
-  let secret = Cap_token.load_secret () in
-  let cluster_id = Cap_token.load_cluster_id () in
-  Store.atomic_write out (Cap_token.mint ~secret ~cluster_id ~specs ~ttl_seconds:ttl)
+let run_mint_token host ~(out : string) ~(ttl : int) ~(specs : string list) : unit =
+  let secret = Cap_token.load_secret host in
+  let cluster_id = Cap_token.load_cluster_id host in
+  Store.atomic_write out (Cap_token.mint host ~secret ~cluster_id ~specs ~ttl_seconds:ttl)
 
 let run_transport_push (kind, id, root) : unit =
   match kind with
@@ -319,7 +319,7 @@ let run_transport_pull (kind, id, root) : unit =
   | "trace" -> Transport.LocalDir.pull_trace root ~key:id
   | _ -> failwith ("pp --transport-pull: unknown artifact kind " ^ kind)
 
-let run_serve_hit (key, token_file, shared_root, reply_file) : unit =
+let run_serve_hit host (key, token_file, shared_root, reply_file) : unit =
   let token_text = read_file_content token_file in
   (* Store.hit re-observes the trace's read cells, which performs the
      Lookup_handler/Record_read effects (observe_handler, file observation).
@@ -332,7 +332,7 @@ let run_serve_hit (key, token_file, shared_root, reply_file) : unit =
      no-op, so a synced node verifies exactly as it does locally. *)
   let reply =
     Runtime.with_top_level
-      ~f:(fun () -> Transport.serve_hit ~key ~token_text ~shared_root) ()
+      ~f:(fun () -> Transport.serve_hit host ~key ~token_text ~shared_root) ()
   in
   Store.atomic_write reply_file reply
 
@@ -347,26 +347,24 @@ let run_recv_hit (reply_file, shared_root) : unit =
 
 let main () =
   let args = List.tl (Array.to_list Sys.argv) in
-  (* Install the impure Backend hooks first, before ANY subcommand dispatch:
-     several modes (--serve-hit/--recv-hit/--transport-*, cluster-init,
-     --mint-token) call into Cap_token, which reaches the world only through
-     these hooks (home_dir / cap_read_secret / cap_write_secret), and some of
-     those modes exit before the rest of main runs. *)
-  Backend.r.realpath <- Runtime.canonical_path_impl;
-  Backend.r.get_unix_time <- (fun () -> Unix.time ());
-  Backend.r.cap_write_secret <- (fun path content ->
+  let write_secret path content =
     let fd = Unix.openfile path [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL] 0o600 in
     let oc = Unix.out_channel_of_descr fd in
     output_string oc content;
-    close_out oc);
-  Backend.r.cap_read_secret <- (fun path ->
+    close_out oc
+  in
+  let read_secret path =
     let ic = open_in_bin path in
     let len = in_channel_length ic in
     let s = really_input_string ic len in
     close_in ic;
     let n = String.length s in
-    if n > 0 && s.[n - 1] = '\n' then String.sub s 0 (n - 1) else s);
-  Backend.r.home_dir <- (fun () -> Sys.getenv "HOME");
+    if n > 0 && s.[n - 1] = '\n' then String.sub s 0 (n - 1) else s
+  in
+  let host = Host_services.make
+      ~canonical_realpath:Runtime.canonical_path_impl ~unix_time:Unix.time
+      ~home_dir:(fun () -> Sys.getenv "HOME") ~read_secret ~write_secret
+  in
   let eval_str = ref None in
   let files = ref [] in
   let grants = ref [] in
@@ -838,10 +836,10 @@ let main () =
     match !remote_node_args with
     | Some (token_file, _, _, _, _) ->
         let token_text = Store.read_raw token_file in
-        (match Cap_token.token_to_caps token_text with
+        (match Cap_token.token_to_caps host token_text with
          | Ok caps -> caps
          | Error reason -> failwith ("pp: --remote-node: token rejected: " ^ reason))
-    | None -> List.map (fun spec -> Capability.mint ~realpath:Backend.r.realpath spec) (List.rev !grants)
+    | None -> List.map (fun spec -> Capability.mint ~realpath:host.canonical_realpath spec) (List.rev !grants)
   in
 
   Runtime.invocation := Some {
@@ -863,7 +861,7 @@ let main () =
      running executable, so `--reconcile`/`--supervise`'s auto-loaded
      stdlib/domain-fs.pp / domain-proc.pp work from ANY cwd. *)
   Store.init ();
-  Remote.init ();
+  Remote.init host;
   (* `--gc-mark` (internal — only `pp gc`'s own replay
      subprocess, src/store_gc.ml, sets this) turns on Store.hit's
      mark-by-replay side channel for the whole remainder of this process. *)
@@ -936,34 +934,34 @@ let main () =
      as Failure/Transport.Transport_integrity_error to the top-level handler
      below, printed uniformly as "pp: error: ...". *)
   if !cluster_init_mode then begin
-    Store.ensure_dir (Cap_token.cluster_dir ());
-    if Sys.file_exists (Cap_token.secret_path ()) then
+    Store.ensure_dir (Cap_token.cluster_dir host);
+    if Sys.file_exists (Cap_token.secret_path host) then
       failwith (Printf.sprintf
         "pp cluster-init: a cluster secret already exists at %s — refusing \
          to overwrite (this would invalidate every token already minted \
          against it); remove it by hand first if you really mean to rotate"
-        (Cap_token.secret_path ()));
+        (Cap_token.secret_path host));
     let secret_hex = Hasher.hex_encode (Cryptokit.Random.string Cryptokit.Random.secure_rng 32) in
-    Cap_token.write_secret_file (Cap_token.secret_path ()) (secret_hex ^ "\n");
+    Cap_token.write_secret_file host (Cap_token.secret_path host) (secret_hex ^ "\n");
     let cluster_id = Hasher.hex_encode (Cryptokit.Random.string Cryptokit.Random.secure_rng 16) in
-    if not (Sys.file_exists (Cap_token.id_path ())) then
-      Store.atomic_write (Cap_token.id_path ()) (cluster_id ^ "\n");
+    if not (Sys.file_exists (Cap_token.id_path host)) then
+      Store.atomic_write (Cap_token.id_path host) (cluster_id ^ "\n");
     Printf.printf
       "pp cluster-init: minted %s (mode 0600) and cluster id %s\n\
        pp cluster-init: distribute BOTH files to other cluster members out \
        of band, at the same path (~/.pp/cluster/) — pp never transmits them\n"
-      (Cap_token.secret_path ()) cluster_id;
+      (Cap_token.secret_path host) cluster_id;
     exit 0
   end;
   (match !mint_token_args with
-   | Some (out, ttl) -> run_mint_token ~out ~ttl ~specs:(List.rev !grants); exit 0
+   | Some (out, ttl) -> run_mint_token host ~out ~ttl ~specs:(List.rev !grants); exit 0
    | None -> ());
   (match !transport_push_args with
    | Some a -> run_transport_push a; exit 0 | None -> ());
   (match !transport_pull_args with
    | Some a -> run_transport_pull a; exit 0 | None -> ());
   (match !serve_hit_args with
-   | Some a -> run_serve_hit a; exit 0 | None -> ());
+   | Some a -> run_serve_hit host a; exit 0 | None -> ());
   (match !recv_hit_args with
    | Some a -> run_recv_hit a; exit 0 | None -> ());
   (* ---- `pp gc` (explicit, never automatic) ---- *)
@@ -1111,7 +1109,7 @@ let main () =
           (line 1050), or a clean hit crashes on an unhandled effect. *)
        Runtime.with_top_level
          ~f:(fun () ->
-           Remote.serve_assigned_keys ~token_text ~keys_file ~shared_root
+           Remote.serve_assigned_keys host ~token_text ~keys_file ~shared_root
              ~reply_file) ()
    | None -> ());
 

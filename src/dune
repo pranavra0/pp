@@ -5,7 +5,7 @@
  (name pp_kernel)
  (public_name pp.kernel)
  (wrapped false)
- (modules types effects backend hasher blobref force_deep codec constant_time
+ (modules types effects backend host_services hasher blobref force_deep codec constant_time
    paths cell surface_tables capability desugar comments version cap_token nfc)
  (libraries cryptokit dune-build-info))
 
