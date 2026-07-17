@@ -131,6 +131,7 @@ and opcode =
   | MAKE_THUNK of int * expr option * (string * int) option
   | MAKE_NODE of int * expr * (string * int * int) list * expr option *
       (string * int) option
+  | CALL_MODULE
   | MAKE_CLOSURE of int * int
   | CALL of int
   | TAIL_CALL of int

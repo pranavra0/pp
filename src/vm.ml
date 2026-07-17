@@ -262,6 +262,31 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
         loop ()
 
 
+    | CALL_MODULE ->
+        let fn_val = pop () in
+        (match fn_val with
+         | VClosure c when List.length c.params = 0 ->
+             if c.vm_bc == Types.dummy_bytecode then
+               failwith "VM: CALL_MODULE on tree-walker closure";
+             let saved = Hashtbl.copy globals in
+             Hashtbl.clear globals;
+             let initial = Primitives.initial_env () in
+             List.iter (fun (n, v) -> Hashtbl.add globals n v) initial.bindings;
+             let r =
+               try run_isolated c.vm_bc c.vm_offset (build_call_frames c [])
+               with e ->
+                 Hashtbl.clear globals;
+                 Hashtbl.iter (Hashtbl.add globals) saved;
+                 raise e
+             in
+             Hashtbl.clear globals;
+             Hashtbl.iter (Hashtbl.add globals) saved;
+             (match r with
+              | VEnvMap _ -> push r; incr pc; loop ()
+              | _ -> failwith "VM: module body did not return a module value")
+         | _ ->
+             failwith (Printf.sprintf "VM: CALL_MODULE on non-closure: %s"
+                         (string_of_value fn_val)))
     | CALL n ->
         let args = pop_n n in
         let fn_val = pop () in

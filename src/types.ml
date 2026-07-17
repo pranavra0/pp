@@ -216,6 +216,8 @@ and opcode =
                                (* persistent node: code offset, body AST (for the
                                   code hash), free-var descriptors (name,depth,slot;
                                   Global = -1,-1), type annotation, source location *)
+  | CALL_MODULE              (* pop 0-param module constructor closure; run in
+                                isolated globals, returning VEnvMap of new bindings *)
   | MAKE_CLOSURE of int * int(* code offset, nparams *)
   | CALL of int | TAIL_CALL of int | RETURN | HALT
   | WITH_CAPS of int         (* body code offset: with-caps' ⊆-gated, replace-

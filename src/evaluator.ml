@@ -207,7 +207,20 @@ let poison_expr (name : string) : expr =
 let poison_thunk (name : string) (env : env) : value =
   make_thunk (poison_expr name) env
 
-(* ---- Force: evaluate a thunk on demand ---- *)
+
+(* Wrap a defnode body: if it already contains EWithCaps (from a needs clause),
+   leave it alone — the needs clause handles capability provisioning. Otherwise,
+   wrap in ENode to create a persistent node thunk keyed on argument values
+   (SPEC LAW 6/20). Strips ELocated wrappers when checking for EWithCaps since
+   assemble_fn_body adds location wrapping. *)
+let wrap_defnode_body (body : expr) : expr =
+  let rec has_with_caps e = match e with
+    | EWithCaps _ -> true
+    | ELocated (_, e') -> has_with_caps e'
+    | _ -> false
+  in
+  if has_with_caps body then body else ENode body
+
 
 (* Depth limit before switching to heap-allocated trampoline.
    OCaml's default stack handles ~10k small frames; 2000 gives
@@ -429,8 +442,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       k (make_closure ~name:(Some name) params body (ref env))
 
   | EDefNode (name, params, body) ->
-      k (make_closure ~name:(Some name) params body (ref env))
-
+      k (make_closure ~name:(Some name) params (wrap_defnode_body body) (ref env))
   | EDo exprs ->
       (* All but last are non-tail; last is tail.
          Uses a local env ref for threading — NOT current_env_ref,
@@ -453,7 +465,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
             env_ref := extend_env !env_ref name closure;
             go rest
         | (EDefNode (name, params, body)) :: rest ->
-            let closure = make_closure ~name:(Some name) params body env_ref in
+            let closure = make_closure ~name:(Some name) params (wrap_defnode_body body) env_ref in
             env_ref := extend_env !env_ref name closure;
             go rest
         | (EDefValue (name, rhs)) :: rest ->
@@ -579,7 +591,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
             let closure = make_closure ~name:(Some def_name) params body (ref env_acc) in
             extend_env env_acc def_name closure
         | EDefNode (def_name, params, body) ->
-            let closure = make_closure ~name:(Some def_name) params body (ref env_acc) in
+            let closure = make_closure ~name:(Some def_name) params (wrap_defnode_body body) (ref env_acc) in
             extend_env env_acc def_name closure
         | EDefValue (def_name, rhs) ->
             let v = eval rhs env_acc in
@@ -634,12 +646,12 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       k (eval_module_file (Island.entry_file tree))
   | EWithConfig (map_expr, body) ->
       let cfg = force (eval map_expr env) in
-      (match cfg with
-       | VMap _ ->
-           try eval_tail body env k
-           with effect Runtime.Get_config, kont ->
-             Effect.Deep.continue kont (cfg :: Effect.perform Runtime.Get_config)
-       | _ -> failwith "with-config expects a map")
+      (match cfg with VMap _ -> () | _ -> failwith "with-config expects a map");
+      begin
+        try eval_tail body env k
+        with effect Runtime.Get_config, kont ->
+          Effect.Deep.continue kont (cfg :: Effect.perform Runtime.Get_config)
+      end
   | EConfig (key_expr, default_opt) ->
       let key_val = force (eval key_expr env) in
       let key_name = match key_val with
@@ -919,10 +931,6 @@ and eval_module_file (path : string) : value =
    own top-level forms), so every element is individually `ELocated`. *)
 and eval_expressions (exprs : expr list) (env : env ref) : value =
   let unwrap e = match e with ELocated (_, e') -> e' | _ -> e in
-  (* Evaluate ONE form, mutating `env` for defs/imports; wrapped in ITS OWN
-     location (LAW 29): an error escaping this form is decorated with
-     this form's file:line before it can unwind past a `load` that brought
-     it in — never doubled if a deeper form already located it. *)
   let step (e : expr) : value =
     Runtime.with_form_location e (fun () ->
       match unwrap e with
@@ -931,12 +939,10 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
           env := extend_env !env name closure;
           closure
       | EDefNode (name, params, body) ->
-          let closure = make_closure ~name:(Some name) params body env in
+          let closure = make_closure ~name:(Some name) params (wrap_defnode_body body) env in
           env := extend_env !env name closure;
           closure
       | EDefValue (name, rhs) ->
-          (* Top level is sequential: the RHS is evaluated now (a forward
-             reference is an unbound-symbol error), the value bound. *)
           let v = eval rhs !env in
           env := extend_env !env name v;
           v
@@ -949,10 +955,6 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
                mod_val
            | _ -> failwith "import expects a module value")
       | ELoad path ->
-          (* `~source:path`: the loaded file's OWN path (not the reader's
-             "<?>" default), so ITS forms are in turn correctly located.
-             Routed through the shared macro-expansion hook, same as every
-             other Reader.read_string call site. *)
           let contents = Runtime.loader_read path in
           let sub_exprs = Backend.r.expand_toplevel
                             (Reader_braces.read_dispatch ~source:path ~path contents) in
