@@ -1,4 +1,4 @@
-(* pp runtime — shared mutable state used by both backends *)
+(* pp runtime — shared mutable state used by the evaluator *)
 include Effects
 open Types
 open Effect
@@ -156,7 +156,7 @@ let config_absent_hash = hash_string "config-cell:absent"
    installing a semantic handler later must invalidate (LAW 26). *)
 let builtin_handler_hash = hash_string "handler-cell:builtin"
 
-(* Innermost binding for [key] in the ambient config stack (both backends'
+(* Innermost binding for [key] in the ambient config stack (the evaluator's
    lookup rule: VString entry first, then VKeyword, outward per frame). *)
 let config_lookup (key : string) : value option =
   let rec find = function

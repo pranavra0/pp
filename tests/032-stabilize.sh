@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Push stabilize differential test.
+# Push stabilize test.
 #
 #   A 4-node program with a reverse-edge dependency graph:
 #     a reads f1

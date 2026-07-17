@@ -16,7 +16,7 @@
 #       output matches the .pp original's;
 #   (e) `pp --roundtrip-braces` (AST + hash equality through the printer and
 #       the second reader, SPEC law 20) holds for every .pp in the tree;
-#   (f) the differential fuzzer's round-trip gate passes on a few hundred
+#   (f) the metamorphic fuzzer's round-trip gate passes on a few hundred
 #       full-grammar programs (2 readers).
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
@@ -246,7 +246,7 @@ done
 [ "$rt_fail" = 0 ] && ok "roundtrip-whole-tree"
 
 # ---- (f) the fuzz gate: a few hundred full-grammar programs through
-#      2 readers x 2 backends ----
+#      2 readers produce one shared AST ----
 if [ ! -x "$FUZZ" ]; then
   bad "fuzz-roundtrip-gate" "fuzzer binary not found at $FUZZ"
 else

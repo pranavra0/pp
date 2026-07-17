@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/058 — Differential test for `collect` error partitioning.
+# tests/058 — `collect` error-partitioning test.
 # B2: `collect` is now a plain FUNCTION used in pipelines (the renamed
 # `collect-results` primitive); the `collect { }` reader block form is removed.
 # `collect(items)` partitions a list of [:ok, v]/[:err, e] — [:ok, values] if

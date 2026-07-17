@@ -54,9 +54,9 @@ let block_body ~(err : string -> unit) (exprs : expr list) : expr =
   | bs -> EDo bs
 
 (* Assemble a function's parameter names and body: each annotated parameter
-   desugars into a located type check run ahead of the body — both backends
-   compile/evaluate the shared desugared AST, so the checks are enforced
-   identically (LAW 32). An optional return annotation wraps the body. *)
+   desugars into a located type check run ahead of the body, so the checks are
+   enforced at the same evaluator boundary (LAW 32). An optional return
+   annotation wraps the body. *)
 let assemble_fn_body locate (params : (string * expr option) list)
     (ret_ty : expr option) (body : expr) : string list * expr =
   let names = List.map fst params in
@@ -96,7 +96,7 @@ let desugar_or (exprs : expr list) : expr =
    `assertion failed: <form>` (or the custom message). The source location is
    NOT baked into the message here — the enclosing form's [with_form_location]
    attaches it once (as Pp_error.pos), so it is never doubled. Desugars to
-   if+error so both backends enforce the shared AST identically. The
+   if+error through the shared AST. The
    message-less form renders the condition via quote_to_value/string_of_value —
    i.e. in AST (s-expression) notation in BOTH surfaces (Appendix B §B.4): the
    rendering is part of the hashed expression, so no reader may re-render it in

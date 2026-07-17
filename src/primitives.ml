@@ -367,8 +367,7 @@ let register_lists () =
      list becomes one apply. Only the list SPINES are forced (to splice them);
      elements pass through unforced, exactly as `cons`/`list` do, so a spread of
      unforced node thunks stays unforced — same discipline as `map`. Dispatch to
-     the callee (tree-walker vs VM closure vs builtin) reuses [call_with_args],
-     so both backends run it identically. *)
+     the callee (closure or builtin) reuses [call_with_args]. *)
   register "apply" (fun args ->
     match args with
     | f :: segs ->

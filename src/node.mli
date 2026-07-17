@@ -1,7 +1,7 @@
 (* node — the node-key skeleton and the one rebuilder.
 
-   Key skeleton — shared by both backends so the byte-identical format has
-   one definition.
+   Key skeleton — kept next to the one rebuilder so the byte-identical format
+   has one definition.
      
    [node_key_skeleton ~expr_hash fv_hashes] builds the node-key hash list
    from the expression hash and the list of pre-computed free-variable

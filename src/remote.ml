@@ -8,7 +8,7 @@
    Evaluator.cell_authorized_for, and Evaluator calls Scheduler — so this
    is the one place that can call all four), and wires itself into
    [Scheduler.remote_dispatch_hook] at [init] time, exactly the
-   cycle-breaking indirection evaluator.ml/vm.ml already use for
+   cycle-breaking indirection evaluator.ml already uses for
    Primitives.*_ref.
 
    THE CORE MOVE: a cluster member is a SEPARATE `pp` process with its own

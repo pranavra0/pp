@@ -196,7 +196,7 @@ fi
 # ---- (d) whole-tree sweep (the tree is brace-authored, so the direction
 #      is to-sexpr + to-braces). Each file is round-tripped as a private
 #      COPY under $TMP, never in the shared tree: this suite runs
-#      concurrently with the differential .pp cases and tests/054's own
+#      concurrently with the expected-output .pp cases and tests/054's own
 #      whole-tree read, so mutating a source file in place — even
 #      mutate-then-restore — would expose a torn/wrong-surface file to
 #      those readers. law-20 per-form hashes are path-independent, so a

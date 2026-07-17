@@ -312,7 +312,7 @@ def compute(x, y) {
 effect shapes don't use `try`.
 Bindings are sequential; rebinding a name shadows it, like `let*`. This is
 a documented exception to the rule against duplicate definitions in one
-block (LAW 4), and it is pinned by a differential test.
+block (LAW 4), and it is pinned by a behavior test.
 
 ### `collect`: accumulation, not short-circuit
 

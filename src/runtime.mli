@@ -1,6 +1,6 @@
 (* runtime — the shared execution-state hub.
 
-   pp's per-pass mutable state and the coordination API the backends drive it
+   pp's per-pass mutable state and the coordination API the evaluator drives
    through: the ambient capability/config/handler stacks (now OCaml 5 effect
    handlers), the trace machinery ([record_read]) that turns world-reads into
    cell observations (LAW 21/23), the sandbox and loader seams, the observer

@@ -43,8 +43,8 @@ let make_thunk_ca_typed (expr : expr) (ty : expr) (loc : (string * int) option) 
       Hashtbl.add thunk_store h t;
       VThunk t
 
-(* Runtime check for gradual type annotations. Shared by both backends (the
-   VM calls it too), so they fail identically by construction. *)
+(* Runtime check for gradual type annotations, kept at the evaluator boundary
+   so every typed value follows the same check path. *)
 
 (* LAW 23b: whether a set of capabilities permits reading a trace cell. Used
    to gate cache hits on the transitive read closure. The match is
@@ -116,14 +116,13 @@ let cell_authorized_for (caps : Capability.t list) (cell_id : string) : bool =
 (* Trace replay for an already-Evaluated persistent node: replay its stored
    trace reads into the active trace frames so the caller's trace transitively
    captures this node's world-reads (same mechanism as Store.hit's hit-replay).
-   [key_of] is the backend's node-key function (node_key_of). *)
+   [key_of] is the node-key function (node_key_of). *)
 let replay_node_reads = Node.replay_node_reads
 
 (* Run a persistent node's body and store the result (LAW 21) or the failure
-   (LAW 28) with its verifying trace. Shared by the tree-walker's force, the
-   trampoline, and the VM's force_node_thunk — the node caches identically
-   however it is demanded. [run] executes the body; the caller owns any
-   backend-specific bookkeeping (force_depth, operand-stack isolation). *)
+   (LAW 28) with its verifying trace. Shared by the evaluator's force and
+   trampoline paths — the node caches identically however it is demanded.
+   [run] executes the body. *)
 
 (* Serve a resolved Store.hit_result the same way in every miss-arm variant
    below: a verified hit (gated on LAW 23b authority), a re-served memoized
@@ -199,7 +198,7 @@ let new_bindings ?(dedup = false) ~(base : (string * value) list)
 (* letrec* poison for value defs in blocks: a fresh (non-content-addressed)
    thunk pre-bound at block entry so the whole block sees the binding; forcing
    it before the def executes raises, and the def backpatches it in place. The
-   error expression compiles/evaluates to the SAME text in both backends. *)
+   error expression evaluates to the same text wherever it is forced. *)
 let poison_expr (name : string) : expr =
   EApply (ESymbol "error",
           [ELiteral (VString (name ^ ": referenced before its definition"))])
@@ -606,14 +605,12 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       k (eval_module_file path)
 
   | ELocated (loc, ETyped (e, ty)) ->
-      (* Mirror the compiler (compiler.ml ELocated+ETyped): a located
-         annotation becomes a typed thunk carrying the location. *)
+      (* A located annotation becomes a typed thunk carrying the location. *)
       k (make_thunk_ca_typed e ty (Some loc) env)
   | ELocated (_, e) -> eval_tail e env k
   | ETyped (e, ty) ->
       (* Type annotations defer evaluation into a thunk whose result is
-         checked at force time — same semantics as the VM (compiler.ml
-         emit_thunk_region + vm.ml FORCE/check_type). *)
+         checked at force time. *)
       k (make_thunk_ca_typed e ty None env)
   | EIsland (uri, pin) ->
       (* Resolve the inline pin to the immutable cached tree (verified
@@ -690,9 +687,7 @@ and apply_tail (fn : value) (args : value list) (env : env) (k : value -> value)
 
   | VBuiltin (_, f) ->
       (* No re-wrapping of the error text: primitives name themselves in their
-         own messages, and the VM calls builtins unwrapped — wrapping here made
-         the two backends' error output differ (and mangled user `error`
-         messages into "builtin 'error' failed: …"). *)
+         own messages, and wrapping here would mangle user `error` messages. *)
       Primitives.current_env_ref := env;
       k (f args)
 

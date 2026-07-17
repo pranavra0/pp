@@ -7,7 +7,7 @@ has a single tree-walking evaluator engine.
 
 ```sh
 dune build            # builds bin/pp and the fuzzer
-dune runtest          # differential suite (slow — see docs/TESTING.md)
+dune runtest          # single-engine suite (slow — see docs/TESTING.md)
 pp file.pp            # bin/pp is on PATH via direnv; else `opam exec -- dune exec pp --`
 ```
 

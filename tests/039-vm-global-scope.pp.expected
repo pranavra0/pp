@@ -1,6 +1,0 @@
-98
-42
-32
-111
-pp: error: unbound symbol: scoped-x at tests/039-vm-global-scope.pp:32
-# exit: 1

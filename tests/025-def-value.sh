@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # tests/025 — (def x v) / (defnode x e) value-binding semantics.
 #
-# The differential suite only proves the backends AGREE; this oracle pins what
-# they agree ON:
+# The expected-output suite pins what the language means:
 #   (a) (def x v) binds the value of v — not a nullary closure.
 #   (b) The RHS runs at definition time (statement semantics), but is not
 #       deep-forced: (def d (delay e)) binds an unforced thunk.

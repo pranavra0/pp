@@ -242,7 +242,7 @@ twice is allowed: the second `<-` shadows the first for the statements that
 follow, exactly as re-`let`-ing a name in nested lets would. This is the one
 place LAW 4's rule that a duplicate definition in a block is a read error
 does not apply — `try` statements are sequential lets, not a letrec* block of
-`def`s. This is pinned by a differential test that rebinds a `<-` name twice
+`def`s. This is pinned by a behavior test that rebinds a `<-` name twice
 and checks that later uses see the shadowing value 
 (`tests/065-try-rebind-shadow.sh`).
 
@@ -253,11 +253,11 @@ identically including the letrec* poison error
 tree-walker module-body divergence is now fixed: the evaluator resolves
 module-body sibling references — function defs, value defs, and bare
 statements — through local slots in the module's own fresh frame, matching
-the tree-walker's own scope-building fold (`tests/039-vm-global-scope.pp`,
-fuzzer `stmt_module_sibling`). A module is still its own fresh scope in both
-backends, not literally "a bigger `let`" nested in the surrounding scope, so
+the evaluator's own scope-building fold (`tests/039-global-scope.pp`,
+fuzzer `stmt_module_sibling`). A module is still its own fresh scope, not
+literally "a bigger `let`" nested in the surrounding scope, so
 "one scope model everywhere" does not yet hold in LAW 4's strong sense — only
-the tree-walker parity gap is closed, not the module-isolation-versus-`let`
+the earlier module-isolation-versus-`let`
 unification itself.
 
 Test: a module whose first `def` calls its second behaves identically to
@@ -356,8 +356,8 @@ Grounding: conflating the two is how the store fills with micro-entries.
 Excel draws the same distinction: a formula cell is recalculated and tracked,
 but a spilled intermediate value that nobody addresses is not.
 
-**Status: partial** — the persistent/ephemeral split now exists in both
-backends: `node { e }` persists to `~/.pp/store` while `delay(e)` never does. Remaining wart: the
+**Status: partial** — the persistent/ephemeral split exists in the evaluator:
+`node { e }` persists to `~/.pp/store` while `delay(e)` never does. Remaining wart: the
 tree-walker also routes ordinary `delay`/`let` thunks through its in-memory
 content-addressed dedup table rather than the persistent store, which does not affect the persistent node cache.
 
@@ -379,8 +379,8 @@ Excel.
 tree-walker; eval in the tree-walker; exercised by the fuzzer's `core`
 grammar.
 
-Test: `if true { 1 } else { undefined-symbol }` evaluates to `1` in both
-backends; the untaken branch's `perform log(…)` produces no stderr in either.
+Test: `if true { 1 } else { undefined-symbol }` evaluates to `1`; the untaken
+branch's `perform log(…)` produces no stderr.
 
 ### [LAW 10] Tail calls run in constant stack
 
@@ -396,9 +396,8 @@ CPS continuations in the tree-walker. Caveat: a tail call inside
 `effect`/`with-handler`/`with-config` currently skips the matching scope-exit
 guarantee.
 
-Test: a tail-recursive countdown from a million evaluates to `0` in both
-backends, with no overflow (part of the stack-safety requirement both engines
-must meet).
+Test: a tail-recursive countdown from a million evaluates to `0` with no
+overflow.
 
 ### [LAW 11] Non-tail depth is a heap problem, not a crash
 
@@ -442,7 +441,7 @@ reader special form. Its shape — `(defmacro (name params...) body...)` in
 the AST, `defmacro name(params…) { body… }` in braces — is recognised
 structurally, at the one expansion point the engine uses, never in
 `reader.ml`; a macro call is expanded, and gone, before the evaluator's own
-machinery (LAW 20's `hash_expr`, the compiler) ever sees it.
+machinery (including LAW 20's `hash_expr`) ever sees it.
 
 Test (in the sexpr/AST notation, the natural one for a raw quoted-list
 literal — braces have no bare list literal outside `list(…)`, only calls and
@@ -468,9 +467,9 @@ whenever; `IO` actions happen in the order written. Effects are the boundary
 where the world's arrow of time enters, so they get an explicit, small,
 sequential sublanguage instead of leaking ordering into everything.
 
-**Status: holds** — the tree-walker forces every `do` step; the compiler
-emits `FORCE; POP` per step; the fuzzer compares stderr (the `log` effect
-stream) between backends, so effect order is differentially checked.
+**Status: holds** — the evaluator forces every `do` step; the fuzzer's
+metamorphic oracle compares stderr (the `log` effect stream) for each
+program and its semantics-preserving twin.
 
 Test: `do { perform log("a"); perform log("b"); 1 }` writes `a` then `b`
 to stderr, identically .
@@ -531,8 +530,8 @@ package is a pure function of its inputs because that is what makes the store
 possible, not because purity is a virtue in itself. The restriction is the
 feature.
 
-**Status: partial** — `node { e }` is opt-in and cached persistently in both
-backends: the same node forced in two processes runs once, the store serves
+**Status: partial** — `node { e }` is opt-in and cached persistently: the same
+node forced in two processes runs once, the store serves
 the second, and a scripting-tier expression is never cached (`tests/010`,
 `tests/014`). The purity half of the bargain is now partly enforced: node
 writes are confined to per-node sandbox scratch and absolute node writes error
@@ -587,8 +586,8 @@ through the reconciler" is vacuous for now, and the sandbox does not
 fail-close a tool's own absolute-path writes — the sandbox is hygiene, and
 traces are the actual soundness mechanism.
 
-Test: a node calling `perform write-file("/abs/x", …)` errors in both
-backends and the file is not written; the same call in scripting tier
+Test: a node calling `perform write-file("/abs/x", …)` errors and the file is
+not written; the same call in scripting tier
 succeeds; a node's scratch write never appears outside its sandbox
 (`tests/017`).
 
@@ -643,8 +642,8 @@ variables the node references are resolved, forced, call-by-value, to their
 value hashes and folded in, excluding the whole-environment hash and the
 capability set. The tree-walker resolves them from its environment
 (`node_key_of`); the evaluator resolves them from the captured frames and globals
-via compiler-emitted descriptors (descriptors), producing a byte-identical
-key for data-valued free variables so store entries are shared across runs. The
+producing a stable key for data-valued free variables so store entries are
+shared across runs. The
 two catastrophic leaks this law names are closed: rebinding an unreferenced
 global is a cache hit, and widening the grant does not invalidate anything
 (`tests/011`, `tests/014`). Config and the handler stack are now fully out of
@@ -654,7 +653,7 @@ binding-order canonicalisation is not done (LAW 3), applied `defnode` is a
 named closure (LAW 6), and closure-valued free variables key on captured frames and environment.
 
 `defmacro` needed no change to this law, by construction. `hash_expr`
-(`node_key_of`) and the compiler both consume an expression tree that has
+(`node_key_of`) consumes an expression tree that has
 already been macro-expanded — expansion (`macro.ml`) is the one shared step
 every top-level-form-shaped list passes through before the evaluator's own
 machinery ever sees it (the REPL drivers, the REPL drivers and `ELoad`/`eval_module_file`). So "the
@@ -707,8 +706,8 @@ free and exact — hash equality instead of user-supplied equality functions.
 This is the comment-only-header-edit story from DESIGN.md: a compile must
 re-run, but a link must not.
 
-**Status: partial** — the validity-is-the-trace half is real in both
-backends: each node key maps to a set of traces, every trace records the
+**Status: partial** — the validity-is-the-trace half is real: each node key
+maps to a set of traces, every trace records the
 `(file-cell, content-hash)` observations the node made, plus `config:` and
 `handler:` cells (LAW 33/26), and a hit is granted only if some trace's every
 observation still matches the world. So editing a file invalidates the node,
@@ -1016,14 +1015,14 @@ operating system should not answer riddles with stack-free strings.
 **Status: holds** — emitting `ELocated` for every top-level form, and
 wrapping `def`/`fn`/`defnode` bodies with their definition-site location, is
 an obligation on every reader, identical across surfaces (the current
-s-expression reader satisfies it). The shared top-level driver, in both
-backends, appends the enclosing form's `file:line` to any runtime error
+s-expression reader satisfies it). The shared top-level driver appends the
+enclosing form's `file:line` to any runtime error
 whose message does not already carry a location, so arbitrary top-level
 expression errors report where they happened, never doubled
 (`tests/027-error-messages.sh`). Parse errors include file and line. Arity
 errors name the function being called (`arity mismatch calling f: …`),
 capability errors name the operation (`read-file: capability error: …`), and
-unbound-symbol errors are byte-identical across backends. Uncaught errors
+unbound-symbol errors use one stable format. Uncaught errors
 print as one clean `pp: error: …` line with exit code 1.
 
 A loaded file's forms are located against that file, not the loading form:
@@ -1101,7 +1100,7 @@ changed, since the plan cache turns a no-op pass into a cache hit.
 
 Push stabilize: `pp --watch --stabilize prog.pp` uses the reverse-edge index
 from stored traces to reset only dirty thunks, so clean nodes skip
-`Store.hit` entirely; the differential test `tests/032` confirms identical
+`Store.hit` entirely; the test `tests/032` confirms the same
 re-evaluation patterns to pull mode on the engine.
 
 The process domain: `pp --supervise prog.pp` auto-loads
@@ -1218,7 +1217,7 @@ of any surface's parser, rewrites each into a located type check
 Test: `def f(x): int { "s" }` forced gives the same type error, citing
 the annotation site, ; `f("oops")` against
 `def f(x: int) { … }` gives `type mismatch: expected int, got "oops"`,
-citing the definition site, byte-identical across backends; unannotated
+citing the definition site; unannotated
 code never type-errors.
 
 ---
@@ -1489,8 +1488,8 @@ on, not a new parallel authorisation path.
 covers: redacted print, `unseal` round-trip, a recursive store scan proving
 the secret's bytes never land under `~/.pp/store` (for a program that only
 reads, and separately one that unseals at script tier only); the
-node-boundary ban both directions with byte-identical stderr across
-backends; rotation invalidating exactly the observing node, leaving a
+node-boundary ban both directions with stable stderr; rotation invalidating
+exactly the observing node, leaving a
 sibling node untouched; a caller without the `secret:` grant unable to hit a
 node whose cached closure read it even though the trace exists on disk; and
 the both-grants case behaving as plain filesystem access.
@@ -1622,7 +1621,7 @@ bindable names: `and` `assert` `config` `def` `defmacro` `delay` `do` `else`
 `module` `needs` `node` `or` `perform` `quasiquote` `quote` `reconcile`
 `splice` `unquote` `with-caps` `with-config` `with-handler`, plus the
 literals `true` `false` `nil`. No existing binding in the standard library,
-tests, or demos collides with these — this is verified, and a differential
+tests, or demos collides with these — this is verified, and a regression
 gate re-verifies it mechanically. An operator word (`and`, `or`, `mod`) or
 operator symbol (`+`, `-`, `<=`, …) in a non-infix position denotes its
 symbol: `foldl(+, 0, xs)` becomes `(foldl + 0 xs)`, and `mod(a, b)` becomes

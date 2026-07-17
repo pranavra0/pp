@@ -81,9 +81,9 @@ EOF
 expected=$'(:ok 15)\n(:err "div by zero")'
 got=$("$PP" "$TMP/run.pp" 2>&1)
 if [ "$got" = "$expected" ]; then
-  ok "try-lowering-differential"
+  ok "try-lowering-deterministic"
 else
-  bad "try-lowering-differential" \
+  bad "try-lowering-deterministic" \
       "got: $(printf '%q' "$got")"
 fi
 

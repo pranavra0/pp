@@ -1,8 +1,8 @@
-# defmacro: a differential test proving macro expansion is total, giving
+# defmacro: an expected-output test proving macro expansion is total, giving
 # metaprogramming without needing fexprs.
 #
-# Expansion happens at ONE shared point before either backend ever sees a
-# form (macro.ml), so this file exercises it purely through observable
+# Expansion happens at ONE shared point before evaluation ever sees a form
+# (macro.ml), so this file exercises it purely through observable
 # VALUES (never node-body `log` side effects — a cache hit replays no log,
 # per SPEC law 17, which would make repeated `dune runtest` runs against a
 # developer's real ~/.pp/store flaky if this were a fresh-vs-cached-run

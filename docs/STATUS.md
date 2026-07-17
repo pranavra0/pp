@@ -231,7 +231,7 @@ code, so editing only the macro's definition re-keys any node that used it
 (`tests/042-defmacro-rekey.sh`).
 
 `defmacro` is not a reader special form — it parses as an ordinary
-application — so the compiler paths never need to know macros exist.
+application — so the evaluator never needs to see the unexpanded macro call.
 Macros are recognised only at the true top level of a file or REPL input,
 sequentially, like a value def; use before definition is an ordinary
 unbound-symbol error. They are not recognised inside `do`/`module`/`fn`/
@@ -498,8 +498,8 @@ README, SPEC law examples and glossary use the brace surface throughout,
 keeping s-expressions only where quotation or macro or AST-identity is
 literally the point.
 
-This work changed no evaluator, VM, compiler, macro expander, store,
-codec, hasher, trace or capability code: a diff of `src/*.ml` outside
+This surface migration changed no evaluator, macro expander, store, codec,
+hasher, trace or capability code: a diff of `src/*.ml` outside
 `reader_braces.ml` and `main.ml`'s new `fmt` dispatch is empty.
 
 ### An end-to-end demonstration

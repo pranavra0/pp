@@ -4,7 +4,7 @@
 # MISS + recompute, proven via `pp why` and the journal), and reverting the
 # definition must hit again (SPEC law 20). This is possible only because
 # expansion happens BEFORE hash_expr ever sees the node's body (macro.ml is
-# the one shared point the backends both pass through): hash_expr operates on
+# the one shared expansion point): hash_expr operates on
 # the EXPANDED form, so a macro-only edit is not invisible to the store the
 # way it would be if the code hash were computed before/independent of
 # expansion.

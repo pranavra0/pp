@@ -37,7 +37,7 @@ val is_data_closed : Types.thunk -> bool
 
 val perform_effect : string -> Types.value list -> Types.value
 (** Dispatch a named effect with its (already-forced) argument list.
-    Shared by both backends so they cannot drift. *)
+    Shared by the evaluator's effect paths so they cannot drift. *)
 
 val replay_node_reads : Types.thunk -> (Types.thunk -> string) -> unit
 (** Trace replay for an already-Evaluated persistent node: replay its

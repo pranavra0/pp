@@ -64,7 +64,7 @@ print(f(4))
 EOF
 run_ok "falsy-guard-falls-through" "$TMP/fallthrough.pp" $'"three"\n"other"'
 
-# (d) several consecutive guarded arms (the compiler fall-through must stay
+# (d) several consecutive guarded arms (the evaluator fall-through must stay
 #     linear and correct across a chain of guards).
 cat > "$TMP/chain.pp" <<'EOF'
 def grade(n) {

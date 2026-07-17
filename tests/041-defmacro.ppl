@@ -1,4 +1,4 @@
-;; defmacro (M3, D10's promise) — differential test.
+;; defmacro (M3, D10's promise) — expected-output test.
 ;;
 ;; This is tests/041-defmacro.pp's twin, authored in the sexpr surface — the
 ;; AST-native notation `defmacro`/`quote`/`quasiquote` have always used

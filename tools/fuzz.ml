@@ -481,7 +481,7 @@ let stmt_with_config env d =
 let ty_name = function TInt -> "int" | TStr -> "string" | TBool -> "bool" | _ -> "int"
 
 let stmt_typed_let env d =
-  (* (let [x : ty e] (print x)) — VM enforces, tree-walker discards *)
+  (* (let [x : ty e] (print x)) — the evaluator must enforce the annotation *)
   let declared = [| TInt; TStr; TBool |].(Random.int 3) in
   let actual = if flip 0.6 then declared
                else [| TInt; TStr; TBool |].(Random.int 3) in
@@ -515,7 +515,7 @@ let stmt_param_typed_def env d =
    S [A "print"; S [A f; gen_of_ty env (d - 1) actual]]]
 
 let stmt_module env d =
-  (* (import (module ...)) — VM compiles only EDef children *)
+  (* (import (module ...)) — module children must all be evaluated *)
   let m = fresh "m" in
   let p = fresh "p" in
   let penv = { vars = [{ vname = p; vty = TInt; vne = false }];
@@ -533,8 +533,8 @@ let stmt_module_sibling env d =
      — a sibling function def, a sibling value def, and a bare in-module
      statement all resolve through the module's own local slots (a
      regression here would resolve any of these globally at construction
-     time and raise "unbound symbol" in the VM, since the tree-walker
-     already threads `env_acc` forward across module children — e.g.
+     time and raise "unbound symbol", since the evaluator threads `env_acc`
+     forward across module children — e.g.
      exactly `(import (module (def (f x) ...) (print (f 1))))`). *)
   let f = fresh "m" and a = fresh "m" and b = fresh "m" in
   let p = fresh "p" in
@@ -614,7 +614,7 @@ let stmt_island env d =
        S [A "print"; S [A "isl-add"; A (string_of_int (rint 0 9))]]]
 
 let stmt_config_computed env d =
-  (* computed config key — VM requires compile-time literal *)
+  (* computed config key — the evaluator accepts a runtime key expression *)
   let k = fresh "k" in
   let klen = String.length k in
   let k1 = String.sub k 0 (klen / 2) and k2 = String.sub k (klen / 2) (klen - klen / 2) in
@@ -641,8 +641,8 @@ let stmt_with_handler env d =
       S [A "print"; S [A "perform"; A "log"; gen_string env (d - 1)]]]]
 
 let stmt_handler_leak env d =
-  (* with-handler whose body ends in a tail call — if the VM never pops the
-     handler, a later perform diverges *)
+  (* with-handler whose body ends in a tail call — the handler must be popped
+     before a later perform *)
   let f = fresh "f" in
   let p = fresh "p" in
   let env' = { env with vars = { vname = p; vty = TInt; vne = false } :: env.vars } in
@@ -811,7 +811,7 @@ let devnull = lazy (Unix.openfile "/dev/null" [Unix.O_RDONLY] 0)
 let tmp_out = lazy (Filename.temp_file "ppfuzz" ".out")
 let tmp_err = lazy (Filename.temp_file "ppfuzz" ".err")
 
-let run_backend (args : string list) (file : string) : outcome =
+let run_pp (args : string list) (file : string) : outcome =
   let out_f = Lazy.force tmp_out and err_f = Lazy.force tmp_err in
   let fd_out = Unix.openfile out_f [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o600 in
   let fd_err = Unix.openfile err_f [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o600 in
@@ -1095,14 +1095,14 @@ let run_roundtrip (src : string) : outcome =
   let f = Lazy.force prog_file in
   let ch = open_out f in
   output_string ch src; close_out ch;
-  run_backend ["--roundtrip-braces"] f
+  run_pp ["--roundtrip-braces"] f
 
 (* Single walker run — writes the program file and runs `pp f`. *)
 let run_walker (src : string) : outcome =
   let f = Lazy.force prog_file in
   let ch = open_out f in
   output_string ch src; close_out ch;
-  run_backend [] f
+  run_pp [] f
 
 (* Single-engine verdict: a roundtrip failure always gates as Mismatch.
    Otherwise, check the walker outcome: crashes are hard failures,
@@ -1303,7 +1303,7 @@ let judge_meta (a : outcome) (b : outcome) : verdict =
 let run_single (src : string) : outcome =
   let f = Lazy.force prog_file in
   let ch = open_out f in output_string ch src; close_out ch;
-  run_backend [] f
+  run_pp [] f
 
 let run_metamorphic (src : string) (twin : string) : verdict =
   let p_out = run_single src in

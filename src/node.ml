@@ -23,7 +23,7 @@ let unbound_fv_hash ~(name : string) : string =
   hash_concat ["fv-unbound"; name]
 
 
-(* ---- Runtime type check (shared by both backends) --------------------- *)
+(* ---- Runtime type check (shared by the evaluator) --------------------- *)
 
 let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
   let type_name =
@@ -62,7 +62,7 @@ let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
    instead of the real type error (reproduced pre-fix by entering the same
    ill-typed `let (x: ty = ...)` form twice at the REPL). Callers invoke this
    after computing the body value and before marking the thunk Evaluated;
-   shared by both backends so the guard cannot drift between them. *)
+   shared by every typed-thunk path so the guard cannot drift. *)
 let enforce_type (t : thunk) (result : value) : unit =
   match t.type_ann with
   | None -> ()

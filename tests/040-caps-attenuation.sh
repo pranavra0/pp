@@ -4,7 +4,7 @@
 # capability set, and a node captures whatever capability set was in force
 # when it was CREATED, not whatever is live when it is later forced.
 #
-# The differential test below proves that capture-at-creation model, not
+# The test below proves the capture-at-creation model, not
 # merely that narrowing exists:
 #
 #   (a) a node CREATED under a NARROWED ambient, forced OUTSIDE that ambient

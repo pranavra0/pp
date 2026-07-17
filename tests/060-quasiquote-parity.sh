@@ -6,7 +6,7 @@
 # This is a brace-surface property: the bug it guards is the brace reader
 # lowering `[ ... ]` inside quasiquote to a vector instead of a list, so
 # a template `[a, b]` diverged from the literal `[a, b]` it stands for.
-# This check requires a fixed expected-value oracle rather than differential
+# This check requires a fixed expected-value oracle rather than metamorphic
 # fuzzing because the fuzzer generates sexpr, not brace, and cannot express
 # the template-equals-literal relation.
 #

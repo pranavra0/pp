@@ -1,5 +1,5 @@
 # TCO: tail-call optimization verification
-# All patterns pass at 10k in bytecode, 100k+ in native.
+# All patterns pass at 10k in the tree-walking evaluator.
 # Deep thunk chains (arithmetic accumulator patterns) may overflow
 # due to lazy thunk accumulation — a separate concern from TCO.
 

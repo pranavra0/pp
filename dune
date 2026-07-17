@@ -1,6 +1,6 @@
-; `dune runtest` — the differential test suite. Runs from the build root so
-; test files can `(load "stdlib/list.pp")`. The driver diffs both backends per
-; test file and runs the capability adversarial suite. See docs/TESTING.md.
+; `dune runtest` — the single-engine test suite. Runs from the build root so
+; test files can `(load "stdlib/list.pp")`. The driver checks expected output
+; and runs the shell oracles. See docs/TESTING.md.
 (rule
  (alias runtest)
  (deps

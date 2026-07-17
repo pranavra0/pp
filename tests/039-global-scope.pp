@@ -1,5 +1,5 @@
-# tests/039 — global-scope holes, fixed: a bare top-level do-block binds
-# its defs as local slots (never globals), and a module body compiles as
+# tests/039 — global-scope holes: a bare top-level do-block binds
+# its defs as local slots (never globals), and a module body evaluates as
 # a fresh closure so sibling defs resolve like letrec*.
 #
 # (a) a bare top-level `do { def x ... ... }` must keep its defs

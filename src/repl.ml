@@ -27,9 +27,9 @@ let init () =
 (* LAW 29: a runtime error escaping a top-level form reports that
    form's source location — unless its message already carries one (a
    " at …:<line>" suffix), so located errors are never double-located.
-   Runtime.with_form_location is the ONE implementation, shared by both
-   backends' top-level drivers here AND by `load` (evaluator.ml
-   eval_expressions, vm.ml LOAD_FILE) — so an error inside a `load`ed file
+   Runtime.with_form_location is the ONE implementation, shared by the
+   top-level driver here AND by `load` (evaluator.ml eval_expressions) — so
+   an error inside a `load`ed file
    is decorated with THAT file's line, not the loading form's. *)
 let with_toplevel_location = Runtime.with_form_location
 
@@ -250,7 +250,7 @@ let read_input ~(tty : bool) ~(prompt : string) : string option =
   else (try Some (read_line ()) with End_of_file -> None)
 
 (* =================================================================== *)
-(*  The REPL loop (both backends)                                       *)
+(*  The REPL loop                                                       *)
 (* =================================================================== *)
 
 let help_text =
