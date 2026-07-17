@@ -7,8 +7,7 @@ and every sigil with exactly one meaning. It supersedes the earlier
 the rejected alternatives and why.
 
 The surface described here is implemented. The migration plan that tracked
-it is retired to git history. Any surface work still open lives in
-[PLAN.md](PLAN.md).
+it is retired to git history.
 
 ---
 

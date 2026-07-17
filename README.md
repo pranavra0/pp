@@ -81,7 +81,6 @@ Read more:
 - [docs/manual/](docs/manual/) — reference manual, all examples run by pp
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the code fits together
 - [docs/STATUS.md](docs/STATUS.md) — what works, discrepancy ledger
-- [docs/PLAN.md](docs/PLAN.md) — the open work; finished work lives in git history
 - [AGENTS.md](AGENTS.md) — for AI coding agents
 
 Run `dune runtest` for the test suite.

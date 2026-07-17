@@ -30,8 +30,7 @@
 > first pinned group; the rest are paid down under the same gate.
 >
 > Cross-references: design rationale and the numbered design decisions live in
-> [DESIGN.md](DESIGN.md); the change ledger in [STATUS.md](STATUS.md); the
-> open plan in [PLAN.md](PLAN.md).
+> [DESIGN.md](DESIGN.md); the change ledger in [STATUS.md](STATUS.md).
 
 ---
 

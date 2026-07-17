@@ -43,8 +43,7 @@ network:
 - `scripts/build-lua.sh` — the same rebuild guarantees on Lua 5.4.7; it
   downloads the pinned tarball on first use
 
-The suite is slow: a full run takes about 3.5 minutes. The planned
-speedups are in docs/PLAN.md.
+The suite is slow: a full run takes about 3.5 minutes.
 
 ## Find what a test covers
 

@@ -1,7 +1,7 @@
 # pp status
 
 This file lists what pp does today, verified by running the code. Update it
-as reality changes. Open work lives in [PLAN.md](PLAN.md) and design
+as reality changes. Open discrepancies live in the ledger below; design
 rationale lives in [DESIGN.md](DESIGN.md).
 
 > Verified by *running* `dune runtest` and the fuzzer (`dune exec
@@ -53,8 +53,8 @@ each hit in practice while proving the build engine claim above:
   is wanted.
 - Ergonomics and the standard library. Both are still thin. The worst
   footgun — `(def x v)` silently creating a nullary closure — is fixed: a
-  non-list `def` is now a value binding (`tests/025`). Remaining gaps are
-  listed in [PLAN.md](PLAN.md).
+  non-list `def` is now a value binding (`tests/025`). Remaining gaps are the
+  open entries in the ledger below.
 
 ## What works today
 
@@ -665,8 +665,7 @@ simulation.
 
 ## Discrepancy ledger
 
-This is the punch list. "Fixed" means fixed and covered by a test. Open
-items are also tracked in [PLAN.md](PLAN.md).
+This is the punch list. "Fixed" means fixed and covered by a test.
 
 | # | Claim | Reality |
 |---|---|---|

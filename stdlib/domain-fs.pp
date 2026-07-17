@@ -1,6 +1,6 @@
-# stdlib/domain-fs.pp — Q13 filesystem-domain policy (PLAN-m4-cells.md §Q13)
+# stdlib/domain-fs.pp — filesystem-domain policy
 #
-# This is the POLICY that used to live in src/reconciler.ml: what counts as
+# This is the POLICY half of the domain: what counts as
 # create/update/delete, how a `blob:<hash>` reference resolves to bytes,
 # single-writer deletion. The TRUSTED MECHANICS (atomic materialize/remove,
 # whole-tree observation) are OCaml primitives (src/domain_prims.ml),

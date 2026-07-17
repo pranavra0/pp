@@ -35,8 +35,8 @@ executable outside dune's package machinery, for example by removing
    <last-tag>..HEAD` grouped by type (`feat:`, `fix:`, and so on) is the
    changelog. Put the result in the tag annotation, and in the GitHub
    release body if you make one.
-3. Update `docs/STATUS.md` and `docs/PLAN.md` wherever they reference
-   version numbers or open items that this release closes.
+3. Update `docs/STATUS.md` wherever it references version numbers or open
+   items that this release closes.
 4. Run the full local gate before tagging:
    ```sh
    eval "$(opam env)"

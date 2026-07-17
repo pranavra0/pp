@@ -155,9 +155,9 @@ fi
 # ---- race:8 hammering a SINGLE key, trace lock disabled ----
 # PP_TRACE_LOCK=0 is an internal escape hatch (store.ml's with_trace_lock),
 # not a documented user switch: it disables the per-key lockf around
-# store_trace's read-modify-write so this test can demonstrate the
-# DESIGN's drop-soundness claim (docs/PLAN-phase3-parallel.md) holds even
-# without the lock, not just with it.
+# store_trace's read-modify-write so this test can demonstrate LAW 37's
+# drop-soundness (store.ml's store_trace comment) holds even without the
+# lock, not just with it.
 cat > "$TMP/onekey.pp" <<'EOF'
 def one() {
   force(node {

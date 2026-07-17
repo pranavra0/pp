@@ -1,8 +1,8 @@
 # pp design: why it is shaped this way
 
-This document explains the rationale behind the plan in `PLAN.md`: 8 frozen
-design principles, the unified runtime model, 13 resolved design decisions,
-the honest edges, prior art, and a worked build example.
+This document holds the timeless rationale: 8 frozen design principles, the
+unified runtime model, 13 resolved design decisions, the honest edges, prior
+art, and a worked build example.
 
 For the semantic laws pp must obey, see `SPEC.md`; for implementation
 status, see `STATUS.md`; for definitions, see `GLOSSARY.md`.
