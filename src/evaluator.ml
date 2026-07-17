@@ -156,7 +156,7 @@ let force_node ~(key : string) ~(run : unit -> value) (t : thunk) : value =
   match Node.serve_hit ~t (Store.hit ~key ~authorized) with
   | Some v -> v
   | None ->
-      (match !Scheduler.policy with
+      (match Scheduler.state.policy with
        | Scheduler.Race n when n > 1 ->
            let job = { Scheduler.j_key = key;
                        j_run = (fun () -> Node.run_node_body ~key ~run t);
@@ -292,7 +292,7 @@ and node_key_of (t : thunk) : string =
       | Some v -> Node.fv_hash ~name v force
       | None -> Node.unbound_fv_hash ~name)
   in
-  Node.node_key_skeleton ~expr_hash:(Types.hash_expr e) fv_hashes
+  Hasher.node_key_skeleton ~expr_hash:(Types.hash_expr e) fv_hashes
 
 (* Remote placement: a
    node is data-closed iff every free var's FORCED value re-encodes under
@@ -966,7 +966,7 @@ let eval_and_force (e : expr) : value =
 
 (* Initialize the evaluator state *)
 let init () =
-  if not !Runtime.keep_thunks then Hashtbl.clear thunk_store;
+  if not Runtime.state.keep_thunks then Hashtbl.clear thunk_store;
   (* Probes: the registry is script-tier registration state, re-established
      by the program's own top-level `(register-probe ...)` forms on every
      fresh evaluation — reset it here unconditionally (like the macro table

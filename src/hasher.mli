@@ -9,3 +9,4 @@
 val hex_encode : string -> string
 val hash_string : string -> string
 val hash_concat : string list -> string
+val node_key_skeleton : expr_hash:string -> string list -> string

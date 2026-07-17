@@ -65,7 +65,7 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
   let seen_keys : (string, unit) Hashtbl.t = Hashtbl.create 64 in
   let seen_pairs : value list ref = ref [] in
   let jobs = ref [] in
-  let race_width () = match !Scheduler.policy with Scheduler.Race n -> n | _ -> 1 in
+  let race_width () = match Scheduler.state.policy with Scheduler.Race n -> n | _ -> 1 in
   let key_of (t : thunk) : string = Backend.r.node_key_of t
   in
   let job_run (t : thunk) (key : string) () : value =
@@ -124,7 +124,7 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
    [Serial], collection is skipped and this is exactly the original
    single-pass definition. *)
 let force_deep (v : value) : value =
-  (match !Scheduler.policy with
+  (match Scheduler.state.policy with
    | Scheduler.Serial -> ()
    | Scheduler.Parallel _ | Scheduler.Race _ | Scheduler.Remote _ ->
        (match collect_unevaluated_nodes v with

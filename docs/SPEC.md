@@ -508,8 +508,9 @@ authority and security; the DAG plus the reconciler are determinism and
 ordering.
 
 **Status: holds** as a constraint on current code — capabilities play no
-ordering role anywhere in `src/` — and unimplemented as a positive mechanism,
-since the reconciler does not yet exist.
+ordering role anywhere in `src/`, and the single-writer reconciler enforces
+ordering through data flow rather than capability consumption (`tests/018`,
+`tests/023`, `tests/033`). Capabilities remain authority and security only.
 
 Test: structural — no spec test may require capability consumption for
 its ordering claim, and the capability rewrite that removed the project's
@@ -579,12 +580,11 @@ Inside a node, a relative `write-file` targets the node's sandbox scratch, a
 lazily created temp directory deleted when the node's frame pops; reads and
 writes there are capability-free and unrecorded. An absolute `write-file`
 errors, even with a read-write grant. The scripting tier is unchanged. `run`
-executes with the scratch dir as its working directory, so tool outputs land
-there and only slurped values escape (`tests/017`). Remaining gaps:
-reconciled domains do not exist yet, so "writes to a reconciled domain go
-through the reconciler" is vacuous for now, and the sandbox does not
-fail-close a tool's own absolute-path writes — the sandbox is hygiene, and
-traces are the actual soundness mechanism.
+(`tests/017`). The reconciled-domain write path is now generic: filesystem and
+process domains apply desired state through the single writer
+(`stdlib/domain-fs.pp`, `stdlib/domain-proc.pp`), while a tool's own absolute-
+path writes remain outside the sandbox's control and traces provide the
+soundness boundary.
 
 Test: a node calling `perform write-file("/abs/x", …)` errors and the file is
 not written; the same call in scripting tier
@@ -937,8 +937,10 @@ under the real builtin coexist as two traces under one key and never
 cross-contaminate (`tests/015`). The recorded cell is coarser than the law's
 `handler:<code>:<effect>:<arg-hash> → result-hash` form, with no per-argument
 or per-result refinement yet, and the handler stack is still folded
-conservatively into the in-memory thunk key. The result-transparent class
-does not exist yet, since there are no scheduler handlers to classify.
+conservatively into the in-memory thunk key. The result-transparent class is
+implemented by the serial/parallel/race/remote scheduler handlers, which are
+excluded from node identity and traces; differential scheduling tests cover
+their result transparency (`tests/024`, `tests/038`, `tests/048`).
 `http-get`/`http-post` are newer builtin, semantic-class effects, dispatched
 through the same `perform_effect`/`handler:<effect>` machinery as
 `read-file`/`run` — no new handler category. They are banned inside node

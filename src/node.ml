@@ -2,8 +2,6 @@
 
 open Types
 
-let node_key_skeleton ~(expr_hash : string) (fv_hashes : string list) : string =
-  hash_concat (["node-key"; expr_hash] @ fv_hashes)
 
 let fv_hash ~(name : string) (v : value) (force : value -> value) : string =
   match force v with
