@@ -621,11 +621,13 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       k (eval_module_file (Island.entry_file tree))
   | EWithConfig (map_expr, body) ->
       let cfg = force (eval map_expr env) in
+      let eval_body () =
+        try eval_tail body env k
+        with effect Runtime.Get_config, kont ->
+          Effect.Deep.continue kont (cfg :: Effect.perform Runtime.Get_config)
+      in
       (match cfg with
-       | VMap _ ->
-           try eval_tail body env k
-           with effect Runtime.Get_config, kont ->
-             Effect.Deep.continue kont (cfg :: Effect.perform Runtime.Get_config)
+       | VMap _ -> eval_body ()
        | _ -> failwith "with-config expects a map")
   | EConfig (key_expr, default_opt) ->
       let key_val = force (eval key_expr env) in

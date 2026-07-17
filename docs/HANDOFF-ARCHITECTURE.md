@@ -192,40 +192,10 @@ two orchestration functions.
   counter states remain process-global.
 - Current documentation contains duplicated entries, incomplete prose, and
   implementation claims that have drifted.
-- The `with-config` branch in `evaluator.ml` reports an exhaustiveness warning
-  when rebuilt. Its fallback visually exists, which makes the warning evidence
-  that the effect-handler parse structure may not match the indentation.
 
 ## Ordered roadmap
 
 The order matters. Later boundaries assume earlier ownership and tests.
-
-### 1. Fix the `with-config` warning as a semantic bug
-
-**Purpose:** establish a warning-free baseline before structural work.
-
-**Work:**
-
-- Add a focused brace-surface test and, where useful, an s-expression parity
-  case that evaluates `with-config` with a non-map value.
-- Confirm the binary reports `with-config expects a map` with the correct source
-  location and does not crash or accept the value.
-- Inspect the parsed OCaml match/effect-handler association. Restructure with
-  explicit helper functions or parentheses so the fallback belongs to the
-  intended match.
-- Do not silence the warning with a catch-all outside the intended value match.
-- Make compiler warnings fatal in local/CI builds after the repository is clean,
-  using Dune configuration rather than relying on human review.
-
-**Likely files:** `src/evaluator.ml`, a new numbered test, `src/dune` or root
-Dune configuration.
-
-**Verify:** focused test, `dune build`, `dune runtest`, full fuzzer.
-
-**Exit:** a clean rebuild emits no warning; the non-map behavior and location are
-pinned.
-
-**Non-goal:** redesign config semantics or dynamic effects.
 
 ### 2. Write and enforce the state-lifetime inventory
 
@@ -910,6 +880,4 @@ not only expected stdout.
 
 ## Immediate next action
 
-Execute roadmap item 1 only: pin and fix the `with-config` warning, make warnings
-fatal, and run the build, suite, and full fuzzer. Do not begin the state refactor
-in the same change.
+Execute roadmap item 2 only: write and enforce the state-lifetime inventory.

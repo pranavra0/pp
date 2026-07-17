@@ -1,6 +1,10 @@
 ; `dune runtest` — the single-engine test suite. Runs from the build root so
 ; test files can `(load "stdlib/list.pp")`. The driver checks expected output
 ; and runs the shell oracles. See docs/TESTING.md.
+(env
+ (dev
+  (flags (:standard -warn-error @1..3@5..28@30..39@43@46..47@49..57@61..62-40))))
+
 (rule
  (alias runtest)
  (deps
