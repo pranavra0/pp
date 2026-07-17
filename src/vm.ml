@@ -400,6 +400,14 @@ let rec run (bc : bytecode) (start_pc : int) (frames : frame list) : value =
         incr pc;
         loop ()
 
+    | UNBOUND i ->
+        let name =
+          match (!bc_ref).consts.(i) with
+          | VString s -> s
+          | _ -> "?"
+        in
+        failwith ("unbound symbol: " ^ name)
+
     | IMPORT ->
         let mod_val = pop () in
         (match mod_val with

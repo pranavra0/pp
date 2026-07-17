@@ -47,69 +47,17 @@ fixture has violated this plan.
 Known divergences fixed before, or alongside, the refactor. Correct
 doesn't wait for pristine.
 
-- The VM and tree-walker diverge on module-level scoping: a module can
-  see a name bound by a top-level `let` in one engine but not the other.
-  This is open in the STATUS ledger; fix and pin differentially.
-- The VM's dynamic-extent scoping for `with-handler`/`with-config` is not
-  exception-safe. The dynamic-extent rework later in this plan (see "Hold
-  dynamic extent with OCaml 5 effect handlers") deletes this whole
-  mechanism class; fix there if that work is near, otherwise patch and
-  pin now.
+*(none — the module-scoping divergence (D23) and the VM dynamic-extent
+exception-safety gap (D24) have both been fixed)*
 
----
-
-## Part II — The sweep (prod-readiness)
-
-Run after Parts I and II, so it sweeps the final shape rather than a
-moving target.
-
-### Delete everything dead
-
-This is a one-time audit, not new CI, covering files, directories and
-docs:
-- every file in `src/`, `scripts/`, `tools/`, `demo/`, `examples/` and
-  `fuzz-failures/` is either reachable from the build or test graph, or
-  deleted.
-- every top-level directory gets one line in the README's layout section
-  stating its purpose; a directory that cannot fill in that line
-  honestly gets merged or deleted.
-- each file in `docs/` opens by stating what question it answers;
-  superseded plan documents are deleted, not archived, since git history
-  is the archive; ARCHITECTURE.md's file table and pipeline diagram get
-  re-pointed at the tree produced by the kernel-library split; delivery
-  narrative moves out of DESIGN.md, which keeps only the timeless
-  rationale.
-
-### Rewrite comments to state invariants
-
-A comment must be understandable with no other document open beside it.
-After that, one trailing pointer is welcome, but only to stable
-vocabulary: SPEC laws and GLOSSARY terms. Milestone letters, plan
-phases, "this commit", and test numbers used as justification are
-temporal scaffolding: true while the work happened, noise after merge.
-
-The pass: grep for temporal patterns (`M[0-9]`, phase letters,
-`stage [A-C]`, `PLAN-`, `tests/[0-9]` inside `.ml` comments, "this
-commit"). At each hit, rewrite the comment to state the invariant in
-place. Delete outright the comments that only justified a diff to its
-reviewer. Fix known-stale headers: `evaluator.ml:1` still reads "lazy,
-call-by-need evaluator", a description retired by a DESIGN.md decision
-on evaluation order.
-
-This is a one-time editorial pass plus a review norm, deliberately not a
-lint rule.
-
----
 
 ## Loose ends (small, independent, grab-bag)
 
-- SPEC caption re-pass: several law status captions are stale, citing
-  blockers ("process domain absent", "reconciled domains absent",
-  "awaits schedulers") that later work has since resolved. Re-verify
-  each partial law's caption against reality; the substantive partials
-  (SPEC laws 3, 11 and 20 on binding order and deep recursion; law 21 on
-  inline-nested cutoff; laws 8 and 19 on the VM dedup mirror) stay
-  honestly partial.
+- SPEC caption re-pass (verified 2026-07-16): 3 of 39 law captions are stale —
+  LAW 15 ("reconciler does not exist"), LAW 18 ("reconciled domains absent"),
+  LAW 26 ("awaits schedulers"). Each cites a resolved blocker. The 6
+  stay-honestly-partial laws (3, 8, 11, 19, 20, 21) remain correctly
+  partial. Fix the captions in SPEC.md.
 - NFC Unicode normalization for cell-id canonicalization is still
   unimplemented (`runtime.ml` says so): a documented residual until a
   dependency-free path exists.
@@ -144,22 +92,11 @@ replaces a bigger mechanism it retired:
 - `grep` finds one definition each of `force_deep`, the parse
   combinators, the string-coercion, `find_kv`, the tree walk, and one
   construction of the `"node-key"` skeleton, in the kernel.
-- `reader_braces.ml` under about 1,500 lines; `tests/061b-qq-head-coverage.sh`
-  deleted, in its own commit, after green, because nothing it checked
-  can diverge any more.
 - one flag table; `pp --help` and the parser cannot disagree.
-- `Capability.t` and `Path.canonical` abstract; `dune build` is the
-  proof that no module reaches around them.
-- DESIGN.md names the tree-walker as the executable specification; the
-  VM conforms via the differential suite.
-- zero manual push/pop of dynamic-extent state: no `with_ref`, no
-  `handler_save_stack`, no paired `push_`/`pop_trace_frame`;
-  `dune-project` floor at OCaml 5.1 or above.
 - `pp.kernel` lists no `unix`; the fuzzer runs at least one in-process
   property through the library.
 - no file in the repo is unreachable from the build, test or docs graph;
   every directory named in the README; every doc states its purpose.
-- the temporal-comment greps return zero hits in `src/`.
 - `dune runtest`, `build-self.sh` and `build-lua.sh` green; the store-v1
   golden fixture stays byte-identical to its pre-plan state.
 

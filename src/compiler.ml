@@ -186,7 +186,11 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
   | ESymbol name ->
       (match resolve st.cenv name with
        | `Local (depth, slot) -> emit st (LOAD_LOCAL (depth, slot))
-       | `Global -> emit st (LOAD_GLOBAL (intern_name st name)));
+       | `Global ->
+           if st.in_module && not (Hashtbl.mem Primitives.builtins name) then
+             emit st (UNBOUND (intern_name st name))
+           else
+             emit st (LOAD_GLOBAL (intern_name st name)));
       emit st FORCE
 
   | EIf (cond, then_e, else_e) ->
@@ -421,6 +425,8 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
       emit st (JUMP 0);
       let body_start = current_offset st in
       (* Pass 1: collect def/value-def names for the block's letrec* scope. *)
+      let saved_in_module = st.in_module in
+      st.in_module <- true;
       let (start_slot, def_map, val_map, restore) = collect_block_defs st exprs in
       (* Pass 2: compile each child, storing defs/value-defs into their slot
          (so later siblings can resolve them via LOAD_LOCAL) in addition to
@@ -462,6 +468,7 @@ and compile_expr (st : comp_state) (e : expr) (tail : bool) : unit =
             emit st POP
       ) exprs;
       restore ();
+      st.in_module <- saved_in_module;
       emit st (MAKE_MODULE !count);
       emit st RETURN;
       st.cenv <- saved_cenv;
