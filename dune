@@ -25,6 +25,8 @@
   docs/DESIGN.md
   build.pp
   scripts/run-tests.sh
+  scripts/check-state-inventory.sh
+  scripts/state-inventory.allow
   src/main.exe
   ; tests/054 drives the fuzzer's reader-roundtrip gate
   tools/fuzz.exe)
