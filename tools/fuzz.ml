@@ -6,9 +6,14 @@
    ALSO pushed through `pp --roundtrip-braces f`, which (in one process)
    reads the sexpr AST, prints it as location-preserving brace text
    (src/printer_braces.ml), re-reads that with the brace reader
-   (src/reader_braces.ml), and asserts structural AST equality AND LAW-20
-   `hash_expr` equality per top-level form. Any nonzero exit is a gating
    MISMATCH (`roundtrip:*` signature), shrunk like any other.
+
+   Metamorphic oracle: every generated program P is ALSO transformed into a
+   twin T(P) by 1–3 semantics-preserving wraps (do, let-identity, or
+   eta-identity) at random eligible positions, then P and T(P) are run
+   through the SAME single backend (`pp f`) and compared. Any divergence is
+   a single-engine bug — the oracle that will replace the differential
+   check once the bytecode VM is removed.
 
    OCaml stdlib + unix only.  Build+run:  dune exec ./tools/fuzz.exe -- ARGS
    Fully deterministic given --seed: program i is generated from
@@ -52,11 +57,12 @@ let dump_iter = ref (-1)
 let pp_bin = ref "bin/pp"
 let stdlib_path = ref ""   (* default computed from cwd *)
 let shrink_budget = ref 300
+let no_metamorphic = ref false
 
 let usage () =
   prerr_endline "usage: fuzz [--seed N] [--count K] [--max-depth D] [--timeout-ms T]";
   prerr_endline "            [--out DIR] [--grammar core|full] [--start N] [--dump N]";
-  prerr_endline "            [--pp PATH] [--stdlib PATH] [--shrink-budget N]";
+  prerr_endline "            [--pp PATH] [--stdlib PATH] [--shrink-budget N] [--no-metamorphic]";
   exit 2
 
 let parse_cli () =
@@ -74,6 +80,7 @@ let parse_cli () =
     | "--pp" :: v :: r -> pp_bin := v; go r
     | "--stdlib" :: v :: r -> stdlib_path := v; go r
     | "--shrink-budget" :: v :: r -> shrink_budget := int_of_string v; go r
+    | "--no-metamorphic" :: r -> no_metamorphic := true; go r
     | ("--help" | "-h") :: _ -> usage ()
     | x :: _ -> prerr_endline ("unknown argument: " ^ x); usage ()
   in
@@ -1005,6 +1012,7 @@ let sig_of_verdict = function
   | Pass -> None
   | Mismatch s | BothError s | Crash s -> Some s
 
+
 (* -------------------------------------------------------------- Shrink -- *)
 
 (* Since gen_program renders directly, the shrinker works on a re-parsed sx
@@ -1159,14 +1167,209 @@ let judge_full (tw : outcome) (bc : outcome) (rt : outcome) : verdict =
   | `Signal s -> Crash (Printf.sprintf "crash:rt:signal-%d" s)
   | _ -> Mismatch ("roundtrip:" ^ error_tag rt.err)
 
+(* ------------------------------------------------------------ Metamorphic -- *)
+
+(* One-engine oracle: derive twin T(P) from every program P via
+   semantics-preserving wraps, then run BOTH through `pp f` and compare. *)
+
+let special_form_heads =
+  ["def"; "defmacro"; "defnode"; "let"; "let*"; "module"; "import";
+   "load"; "quote"; "quasiquote"; "unquote"; "fn"; "match"; "effect";
+   "perform"; "with-handler"; "with-config"; "island"; "node"]
+
+let is_special_form_head s = List.mem s special_form_heads
+
+let is_literal_atom s =
+  (try ignore (int_of_string s); true with _ ->
+   try ignore (float_of_string s); true with _ ->
+   (String.length s >= 2 && s.[0] = '"' && s.[String.length s - 1] = '"')
+   || s = "true" || s = "false" || s = "nil")
+
+type eligible = { e_form : int; e_node : int }
+
+(* Collect eligible wrap positions by iterating with node_at directly.
+   This guarantees index consistency with replace_node/node_at. *)
+(* Simplified context check: only reject positions inside quote/quasiquote
+   or inside load/import/defmacro (non-expression argument positions). *)
+let is_expr_position form target =
+  let idx = ref (-1) in
+  let ok = ref true in
+  let found = ref false in
+  let rec count sx =
+    incr idx;
+    if !idx = target then ok := false
+    else if not !found then match sx with
+    | A _ -> ()
+    | S xs | V xs | C xs -> List.iter count xs
+  in
+  let rec go sx =
+    incr idx;
+    if !idx = target then ()
+    else if not !found then match sx with
+    | A _ -> ()
+    | V xs -> List.iter go xs
+    | C xs -> List.iter go xs
+    | S (A head :: args) ->
+        let skip = head = "quote" || head = "quasiquote"
+                   || head = "load" || head = "import" || head = "defmacro"
+                   || head = "def" || head = "fn" in
+        if skip then
+          List.iter count (A head :: args)
+        else if head = "let" || head = "let*" then
+          (* Count head and binding vector; walk body normally *)
+          let () = count (A head) in
+          (match args with
+           | bind :: rest -> count bind; List.iter go rest
+           | _ -> List.iter go args)
+        else if head = "match" then
+          let () = count (A head) in
+          (match args with
+           | scrut :: arms ->
+               go scrut;
+               List.iter (fun arm ->
+                 match arm with
+                 | S parts when List.length parts >= 2 ->
+                     let n = List.length parts in
+                     let () = incr idx in
+                     if !idx = target then ok := false
+                     else begin
+                       List.iter count (List.filteri (fun i _ -> i < n - 1) parts);
+                       go (List.nth parts (n - 1))
+                     end
+                 | _ -> go arm
+               ) arms
+           | _ -> ())
+        else
+          List.iter go (A head :: args)
+    | S xs ->
+        List.iter go xs
+  in
+  go form;
+  !ok
+
+let collect_eligible forms =
+  let result = ref [] in
+  List.iteri (fun fi form ->
+    let n = count_nodes form in
+    for node_i = 1 to n - 1 do
+      let sx = node_at form node_i in
+      let eligible = match sx with
+        | A s -> is_literal_atom s
+        | S (A head :: _) -> not (is_special_form_head head)
+        | S (_ :: _) -> true
+        | _ -> false
+      in
+      if eligible && is_expr_position form node_i then
+        result := { e_form = fi; e_node = node_i } :: !result
+    done
+  ) forms;
+  List.rev !result
+
+let apply_do_wrap (e : sx) : sx = S [A "do"; e]
+
+let apply_let_wrap (e : sx) : sx =
+  let name = fresh "t" in
+  S [A "let"; V [A name; e]; A name]
+
+let apply_eta_wrap (e : sx) : sx =
+  let name = fresh "t" in
+  S [S [A "fn"; S [A name]; A name]; e]
+
+let derive_twin (src : string) : string option =
+  let forms = parse_program src in
+  let eligible = collect_eligible forms in
+  if eligible = [] then None
+  else begin
+    let k = min (List.length eligible) (rint 1 3) in
+    let used = Hashtbl.create 3 in
+    let picks = ref [] in
+    while List.length !picks < k do
+      let idx = Random.int (List.length eligible) in
+      if not (Hashtbl.mem used idx) then begin
+        Hashtbl.add used idx true;
+        picks := (List.nth eligible idx) :: !picks
+      end
+    done;
+    let transforms = [apply_do_wrap; apply_let_wrap; apply_eta_wrap] in
+    let sorted_picks = List.sort (fun a b ->
+      let c = compare a.e_form b.e_form in
+      if c <> 0 then c else compare b.e_node a.e_node
+    ) !picks in
+    let new_forms = List.fold_left (fun acc picked ->
+      let form = List.nth acc picked.e_form in
+      let e = node_at form picked.e_node in
+      let t = List.nth transforms (Random.int 3) in
+      let wrapped = replace_node form picked.e_node (t e) in
+      List.mapi (fun j f -> if j = picked.e_form then wrapped else f) acc
+    ) forms sorted_picks in
+    Some (render_program new_forms)
+  end
+
+let judge_meta (a : outcome) (b : outcome) : verdict =
+  let crash_of side o = match o.status with
+    | `Timeout -> Some (Printf.sprintf "crash:%s:timeout" side)
+    | `Signal s -> Some (Printf.sprintf "crash:%s:signal-%d" side s)
+    | `Exit n when n > 128 -> Some (Printf.sprintf "crash:%s:exit-%d" side n)
+    | _ -> None
+  in
+  match crash_of "p" a, crash_of "t" b with
+  | Some s, _ | _, Some s -> Crash s
+  | None, None ->
+      let a_ok = a.status = `Exit 0 and b_ok = b.status = `Exit 0 in
+      if a_ok && b_ok then begin
+        if a.out <> b.out then
+          let (a_l, b_l) = first_diff_lines a.out b.out in
+          Mismatch ("metamorphic:outdiff:" ^ norm ~max_len:28 a_l ^ "|" ^ norm ~max_len:28 b_l)
+        else if a.err <> b.err then
+          let (a_l, b_l) = first_diff_lines a.err b.err in
+          Mismatch ("metamorphic:logdiff:" ^ norm ~max_len:28 a_l ^ "|" ^ norm ~max_len:28 b_l)
+        else Pass
+      end
+      else if a_ok && not b_ok then
+        Mismatch ("metamorphic:exitdiff:t-err:" ^ error_tag b.err)
+      else if b_ok && not a_ok then
+        Mismatch ("metamorphic:exitdiff:p-err:" ^ error_tag a.err)
+      else
+        let ta = error_tag a.err and tb = error_tag b.err in
+        if ta = tb then Pass
+        else Mismatch ("metamorphic:both-error:" ^ ta ^ "|" ^ tb)
+
+(* Run a single program through pp f and return the outcome *)
+let run_single (src : string) : outcome =
+  let f = Lazy.force prog_file in
+  let ch = open_out f in output_string ch src; close_out ch;
+  run_backend [] f
+
+let run_metamorphic (src : string) (twin : string) : verdict =
+  let p_out = run_single src in
+  let t_out = run_single twin in
+  judge_meta p_out t_out
+
+let is_meta_signature s =
+  String.length s >= 12 && String.sub s 0 12 = "metamorphic:"
+
 let shrink (src : string) (signature : string) : string =
+  let is_meta = is_meta_signature signature in
   let execs = ref 0 in
   let same_sig forms =
     if !execs >= !shrink_budget then false
     else begin
       incr execs;
-      let (tw, bc, rt) = run_all (render_program forms) in
-      sig_of_verdict (judge_full tw bc rt) = Some signature
+      if is_meta then begin
+        let text = render_program forms in
+        let h = Hashtbl.hash text in
+        Random.full_init [| h |];
+        name_counter := 0;
+        match derive_twin text with
+        | Some twin ->
+            let p_out = run_single text in
+            let t_out = run_single twin in
+            sig_of_verdict (judge_meta p_out t_out) = Some signature
+        | None -> false
+      end else begin
+        let (tw, bc, rt) = run_all (render_program forms) in
+        sig_of_verdict (judge_full tw bc rt) = Some signature
+      end
     end
   in
   let rec fixpoint forms =
@@ -1240,14 +1443,29 @@ let () =
   (* Round-trip accounting — every program is checked; failures are
      gating mismatches with a `roundtrip:` signature. *)
   let n_rt_checked = ref 0 and n_rt_fail = ref 0 in
+  let n_meta_checked = ref 0 and n_meta_fail = ref 0 in
   Printf.printf "pp-fuzz: grammar=%s seed=%d start=%d count=%d depth=%d timeout=%dms pp=%s\n%!"
     !grammar !seed !start_iter !count !max_depth !timeout_ms !pp_bin;
   for i = !start_iter to !start_iter + !count - 1 do
+    let meta_twin_src = ref None in
     let src = gen_program !grammar i in
     let (tw, bc, rt) = run_all src in
     incr n_rt_checked;
     if rt.status <> `Exit 0 then incr n_rt_fail;
-    let v = judge_full tw bc rt in
+    let v0 = judge_full tw bc rt in
+    let v = match v0 with
+      | Pass when not !no_metamorphic ->
+          incr n_meta_checked;
+          Random.full_init [| !seed; i; 0x4D354124 |];
+          (match derive_twin src with
+           | Some twin ->
+               meta_twin_src := Some twin;
+               let mv = run_metamorphic src twin in
+               if mv <> Pass then incr n_meta_fail;
+               mv
+           | None -> Pass)
+      | _ -> v0
+    in
     (match v with
      | Pass ->
          incr n_pass;
@@ -1276,31 +1494,49 @@ let () =
          in
          let dir = Filename.concat !out_dir (sanitize_sig s) in
          mkdir_p dir;
-         if info.examples < 3 then begin
-           info.examples <- info.examples + 1;
-           write_file (Filename.concat dir (Printf.sprintf "%d.ppl" i)) src;
-           write_file (Filename.concat dir (Printf.sprintf "%d.tw.out" i))
-             (outcome_to_string tw);
-           write_file (Filename.concat dir (Printf.sprintf "%d.bc.out" i))
-             (outcome_to_string bc);
-           if rt.status <> `Exit 0 then
-             write_file (Filename.concat dir (Printf.sprintf "%d.rt.out" i))
-               (outcome_to_string rt)
-         end;
-         (* shrink only the first exemplar of a signature; both-error is a
-            soft class — shrink mismatches and crashes only *)
-         if info.n_hits = 1 && kind <> `BothError then begin
-           let small = shrink src s in
-           info.min_repro <- small;
-           write_file (Filename.concat dir "min.ppl") small;
-           let (tw', bc') = run_both small in
-           write_file (Filename.concat dir "min.tw.out") (outcome_to_string tw');
-           write_file (Filename.concat dir "min.bc.out") (outcome_to_string bc')
-         end);
+        if info.examples < 3 then begin
+          info.examples <- info.examples + 1;
+          write_file (Filename.concat dir (Printf.sprintf "%d.ppl" i)) src;
+          write_file (Filename.concat dir (Printf.sprintf "%d.tw.out" i))
+            (outcome_to_string tw);
+          write_file (Filename.concat dir (Printf.sprintf "%d.bc.out" i))
+            (outcome_to_string bc);
+          if rt.status <> `Exit 0 then
+            write_file (Filename.concat dir (Printf.sprintf "%d.rt.out" i))
+              (outcome_to_string rt);
+          (match !meta_twin_src with
+           | Some twin ->
+               write_file (Filename.concat dir (Printf.sprintf "%d.twin.ppl" i)) twin
+           | None -> ())
+        end;
+        (* shrink only the first exemplar of a signature; both-error is a
+           soft class — shrink mismatches and crashes only *)
+        if info.n_hits = 1 && kind <> `BothError then begin
+          let small = shrink src s in
+          info.min_repro <- small;
+          write_file (Filename.concat dir "min.ppl") small;
+          if is_meta_signature s then begin
+            let h = Hashtbl.hash small in
+            Random.full_init [| h |];
+            name_counter := 0;
+            (match derive_twin small with
+             | Some twin ->
+                 write_file (Filename.concat dir "min.twin.ppl") twin;
+                 let p_out = run_single small in
+                 let t_out = run_single twin in
+                 write_file (Filename.concat dir "min.tw.out") (outcome_to_string p_out);
+                 write_file (Filename.concat dir "min.bc.out") (outcome_to_string t_out)
+             | None -> ())
+          end else begin
+            let (tw', bc') = run_both small in
+            write_file (Filename.concat dir "min.tw.out") (outcome_to_string tw');
+            write_file (Filename.concat dir "min.bc.out") (outcome_to_string bc')
+          end
+        end);
     let done_n = i - !start_iter + 1 in
     if done_n mod 200 = 0 then
-      Printf.printf "  ... %d/%d  pass=%d mismatch=%d both-error=%d crash=%d distinct-sigs=%d\n%!"
-        done_n !count !n_pass !n_mismatch !n_both !n_crash (Hashtbl.length sigs)
+      Printf.printf "  ... %d/%d  pass=%d mismatch=%d both-error=%d crash=%d meta-fail=%d distinct-sigs=%d\n%!"
+        done_n !count !n_pass !n_mismatch !n_both !n_crash !n_meta_fail (Hashtbl.length sigs)
   done;
   Printf.printf "\n==== pp-fuzz summary (grammar=%s, seed=%d, count=%d) ====\n"
     !grammar !seed !count;
@@ -1308,6 +1544,8 @@ let () =
     !n_pass !n_errpass !n_mismatch !n_both !n_crash;
   Printf.printf "roundtrip  %d checked, %d failed (2 readers x 2 backends)\n"
     !n_rt_checked !n_rt_fail;
+  Printf.printf "metamorphic %d checked, %d failed (single-backend oracle)\n"
+    !n_meta_checked !n_meta_fail;
   Printf.printf "distinct signatures: %d\n" (Hashtbl.length sigs);
   let sorted =
     Hashtbl.fold (fun s info acc -> (s, info) :: acc) sigs []
