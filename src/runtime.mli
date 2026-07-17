@@ -24,17 +24,23 @@ type _ Effect.t +=
   | Current_sandbox : string option ref option Effect.t
   | Get_domain : string option Effect.t
   | Get_observe_all : bool Effect.t
-val thunk_store : (string, Types.thunk) Hashtbl.t
-val observe_all : bool ref
-val observed_all : (string * string) list ref
+type state = {
+  mutable observe_all : bool;
+  mutable observed_all : (string * string) list;
+  mutable proc_observer : string -> string option;
+  mutable probe_observer : string -> string option;
+  mutable keep_thunks : bool;
+  mutable fenced_actions : (string * Types.value) list;
+  mutable island_fetch_enabled : bool;
+  mutable domain_cell_observer : string -> string -> string option;
+}
+val state : state
+val observe_proc : string -> string option
+val observe_probe : string -> string option
 val record_read : string -> string -> unit
 val remove_tree : string -> unit
 val current_sandbox : create:bool -> string option
 val sandbox_resolve : ?create:bool -> string -> string option
-val proc_observer : (string -> string option) ref
-val observe_proc : string -> string option
-val probe_observer : (string -> string option) ref
-val observe_probe : string -> string option
 val config_lookup : string -> Types.value option
 val observe_config : string -> string
 val observe_handler : string -> string
@@ -58,15 +64,13 @@ type invocation = {
 }
 val invocation : invocation option ref
 val invocation_get : unit -> invocation
+val thunk_store : (string, Types.thunk) Hashtbl.t
 
 val stdlib_root : unit -> string option
 val canonical_path : string -> Paths.canonical
 val canonical_path_impl : string -> string
 val loader_read : string -> string
 val with_form_location : Types.expr -> (unit -> 'a) -> 'a
-val keep_thunks : bool ref
-val fenced_actions : (string * Types.value) list ref
-val island_fetch_enabled : bool ref
 val fenced_policy_name : fenced_policy -> string
 
 type domain_entry = {
@@ -78,7 +82,6 @@ type domain_entry = {
   dm_observe_cell : Types.value option;
 }
 val domain_registry : (string, domain_entry) Hashtbl.t
-val domain_cell_observer : (string -> string -> string option) ref
 val observe_domain_cell : string -> string -> string option
 val probe_values : (string, Types.value) Hashtbl.t
 val sealed_pins : (string, string) Hashtbl.t

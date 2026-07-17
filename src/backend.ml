@@ -48,6 +48,7 @@ type t = {
   mutable macro_reset : unit -> unit;
   mutable compiler_finish : comp_state -> bytecode;
   mutable compiler_state : comp_state option;
+  mutable current_env : env;
   mutable get_unix_time : unit -> float;
   mutable cap_write_secret : string -> string -> unit;
   mutable cap_read_secret : string -> string;
@@ -76,6 +77,7 @@ let r : t = {
   compiler_finish =
     (fun _ -> failwith "Backend: compiler_finish hook not installed");
   compiler_state = None;
+  current_env = empty_env;
   realpath = (fun _ ->
     failwith "Backend: realpath hook not installed");
   get_unix_time = (fun () -> 0.);

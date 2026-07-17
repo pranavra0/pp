@@ -129,7 +129,7 @@ let register (kind : string) (spec : value) : unit =
      store_fenced_spec's own encode could see unforced thunks again and
      silently drop the write. force_hook is idempotent on non-thunk values,
      so re-forcing [forced] later is a no-op. *)
-  Runtime.fenced_actions := (kind, forced) :: !Runtime.fenced_actions
+  Runtime.state.fenced_actions <- (kind, forced) :: Runtime.state.fenced_actions
 
 (* Execute one current-pass fenced action: compute a fresh key from the current
    epoch, journal intent, run, journal done. *)
@@ -202,7 +202,7 @@ let recover_unknown ~(policy : Runtime.fenced_policy) : unit =
    starts fresh. *)
 let drain () : unit =
   ensure_epoch ();
-  let actions = List.rev !Runtime.fenced_actions in
-  Runtime.fenced_actions := [];
+  let actions = List.rev Runtime.state.fenced_actions in
+  Runtime.state.fenced_actions <- [];
   List.iter (fun (kind, spec) -> execute_current ~kind ~spec) actions;
   current_epoch := ""

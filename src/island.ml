@@ -179,7 +179,7 @@ let materialize ~(uri : string) ~(src_dir : string) : string =
    remote's hooks), strip .git, and materialize the tree. See
    docs/THREAT-MODEL-islands.md. *)
 let fetch_git (u : uri) : string =
-  if not !Runtime.island_fetch_enabled then
+  if not Runtime.state.island_fetch_enabled then
     failwith ("island: fetching is disabled; run pp --fetch-islands (or --update) for "
               ^ u.raw);
   let url = match u.scheme with
@@ -268,7 +268,7 @@ let resolve ~(uri : string) ~(pin : string option) : string =
                    "island: source dir for %s hashes %s but the pin is %s — run pp --update to re-pin"
                    u.raw (short h) (short p)))
         | SGit | SGitHub ->
-            if not !Runtime.island_fetch_enabled then
+            if not Runtime.state.island_fetch_enabled then
               failwith ("island: pin " ^ short p ^ " for " ^ u.raw
                         ^ " is not in the cache; run pp --fetch-islands")
             else begin

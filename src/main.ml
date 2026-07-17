@@ -123,7 +123,7 @@ let build_all_desired (v : Types.value) : Types.value =
    per-file loop when no domain wiring is needed at all. *)
 let run_files (files : string list) : Types.value option =
   let bytecode = (Runtime.invocation_get ()).program_bytecode in
-  Runtime.fenced_actions := [];
+  Runtime.state.fenced_actions <- [];
   if uses_domains () then
     let sources = stdlib_glue_sources ()
                   @ List.map (fun f -> (f, read_file_content f)) files in
@@ -131,7 +131,7 @@ let run_files (files : string list) : Types.value option =
     | v :: _ -> Some v | [] -> None
   else
     List.fold_left (fun _ f ->
-      Runtime.fenced_actions := [];
+      Runtime.state.fenced_actions <- [];
       match List.rev (Repl.execute_file_bytecode bytecode f) with
       | v :: _ -> Some v | [] -> None) None files
 
@@ -209,7 +209,7 @@ let snapshot_cell_hashes (cell_ids : string list) : (string * string) list =
    (hits) and recomputes changed ones (misses), so --watch and --once collapse
    to one store-level path. *)
 let watch_loop ~files ~interval ~stabilize =
-  Runtime.observe_all := true;
+  Runtime.state.observe_all <- true;
   let last_desired = ref None in
   let run_program () =
     (* Clear in-memory state for a fresh evaluation. The persistent store
@@ -219,29 +219,29 @@ let watch_loop ~files ~interval ~stabilize =
     Hashtbl.clear Store.run_pins;  (* clear pinned cell observations *)
     Hashtbl.clear Runtime.probe_values;  (* probes re-evaluate fresh each pass *)
     Hashtbl.clear Runtime.sealed_pins;   (* sealed bytes never survive a pass *)
-    Runtime.observed_all := [];     (* clear collected observations *)
+    Runtime.state.observed_all <- [];     (* clear collected observations *)
     (* Re-read and execute the program (plus, if --reconcile/--supervise is
        active, the domain-registration glue — run_files/uses_domains). *)
     let last = run_files files in
     last_desired := last;
     run_domains_pass last;
     (* Collect the cells we need to poll and snapshot their current hashes. *)
-    let cell_ids = List.sort_uniq compare (List.map fst !(Runtime.observed_all)) in
+    let cell_ids = List.sort_uniq compare (List.map fst Runtime.state.observed_all) in
     snapshot_cell_hashes cell_ids
   in
   let run_program_stabilize ~prev_snapshot changed_cells =
     let rev = Store.build_reverse_index () in
     let dirty = Store.dirty_keys_for changed_cells rev in
     Stabilize.reset_dirty dirty;
-    Runtime.keep_thunks := true;  (* set BEFORE run_files's internal init *)
+    Runtime.state.keep_thunks <- true;  (* set BEFORE run_files's internal init *)
     Hashtbl.clear Store.run_pins;  (* fresh world observations, not last run's pins *)
     Hashtbl.clear Runtime.probe_values;  (* probes re-evaluate fresh each pass *)
     Hashtbl.clear Runtime.sealed_pins;   (* sealed bytes never survive a pass *)
-    Runtime.observed_all := [];
+    Runtime.state.observed_all <- [];
     let last = run_files files in
     last_desired := last;
     run_domains_pass last;
-    let cell_ids = List.sort_uniq compare (List.map fst !(Runtime.observed_all)) in
+    let cell_ids = List.sort_uniq compare (List.map fst Runtime.state.observed_all) in
     let new_obs = snapshot_cell_hashes cell_ids in
     let new_set = List.map fst new_obs in
     let prev_clean = List.filter (fun (id, _) -> not (List.mem id new_set)) prev_snapshot in
@@ -249,7 +249,7 @@ let watch_loop ~files ~interval ~stabilize =
   in
   (* First iteration: cold run. *)
   if stabilize then begin
-    Runtime.keep_thunks := false;
+    Runtime.state.keep_thunks <- false;
     Stabilize.clear_side_table ()
   end;
   let snapshot = run_program () in
@@ -448,20 +448,20 @@ let main () =
         (* Ambient — read only by the miss arms and Scheduler.dispatch_batch;
            NEVER by node_key_of/vm_node_key, never in a trace (LAW 26/34). *)
         (match spec with
-         | "serial" -> Scheduler.policy := Scheduler.Serial
+         | "serial" -> Scheduler.state.policy <- Scheduler.Serial
          | _ ->
              (match String.split_on_char ':' spec with
               | ["parallel"; n] ->
                   (match int_of_string_opt n with
-                   | Some n when n > 0 -> Scheduler.policy := Scheduler.Parallel n
+                   | Some n when n > 0 -> Scheduler.state.policy <- Scheduler.Parallel n
                    | _ -> failwith ("invalid --schedule parallel width: " ^ n))
               | ["race"; n] ->
                   (match int_of_string_opt n with
-                   | Some n when n > 0 -> Scheduler.policy := Scheduler.Race n
+                   | Some n when n > 0 -> Scheduler.state.policy <- Scheduler.Race n
                    | _ -> failwith ("invalid --schedule race width: " ^ n))
               | ["remote"; m] ->
                   if m = "" then failwith "invalid --schedule remote spec: empty member name"
-                  else Scheduler.policy := Scheduler.Remote m
+                  else Scheduler.state.policy <- Scheduler.Remote m
               | _ -> failwith ("invalid --schedule spec: " ^ spec)));
         rest
     | [] -> failwith "--schedule requires a spec"
@@ -520,9 +520,9 @@ let main () =
       (flag "--diff" (fun () -> diff := true; bytecode := true));
     doc_of "  pp --update <file.pp>     Re-resolve islands and rewrite inline pins (implies --fetch-islands)\n"
       (flag "--update" (fun () ->
-         Island.update_mode := true; Runtime.island_fetch_enabled := true));
+         Island.update_mode := true; Runtime.state.island_fetch_enabled <- true));
     doc_of "  pp --fetch-islands        Allow git fetch for uncached island pins (default: off)\n"
-      (flag "--fetch-islands" (fun () -> Runtime.island_fetch_enabled := true));
+      (flag "--fetch-islands" (fun () -> Runtime.state.island_fetch_enabled <- true));
 
     doc_of "  pp --schedule serial|parallel:N|race:N|remote:MEMBER  Node-miss dispatch policy (default: serial); remote:<member> places misses on a cluster member (members: ~/.pp/cluster/members or $PP_CLUSTER_MEMBERS)\n"
       { name = "--schedule"; arity = 1; doc = ""; internal = false;
@@ -914,8 +914,8 @@ let main () =
   (match !pin_file with
    | Some path -> Remote.preseed_pins_from_file ~pins_file:path
    | None -> ());
-  Runtime.probe_observer := Primitives.probe_observe_for_store;
-  Runtime.domain_cell_observer := Primitives.domain_observe_cell_for_store;
+  Runtime.state.probe_observer <- Primitives.probe_observe_for_store;
+  Runtime.state.domain_cell_observer <- Primitives.domain_observe_cell_for_store;
 
   (* Collect every cell observation made by the program: needed for
      stratification (LAW 30) and for --watch polling. Unconditional (not
@@ -926,7 +926,7 @@ let main () =
      domains.ml performs after root evaluation to see anything at all.
      The cost is one list-cons per cell read; unused when nothing
      converges. *)
-  Runtime.observe_all := true;
+  Runtime.state.observe_all <- true;
   (* Recover any unknown-status fenced actions from a prior crash before
      applying new state (LAW 31). Skipped under `--gc-mark`: a GC
      replay must never perform a real recovery action — see the --gc-mark
@@ -1098,22 +1098,22 @@ let main () =
                    Runtime.probe_values;
                  Store.atomic_write path (Buffer.contents buf)
              | None -> ());
-            if !Store.check_mode && !Scheduler.policy <> Scheduler.Serial then
+            if !Store.check_mode && Scheduler.state.policy <> Scheduler.Serial then
               (match last with
                | None -> ()
                | Some v ->
                    let h_scheduled = Types.hash_value v in
-                   let saved_policy = !Scheduler.policy in
+                   let saved_policy = Scheduler.state.policy in
                    let policy_name = function
                      | Scheduler.Serial -> "serial"
                      | Scheduler.Parallel n -> Printf.sprintf "parallel:%d" n
                      | Scheduler.Race n -> Printf.sprintf "race:%d" n
                      | Scheduler.Remote m -> Printf.sprintf "remote:%s" m
                    in
-                   Scheduler.policy := Scheduler.Serial;
+                   Scheduler.state.policy <- Scheduler.Serial;
                    Hashtbl.clear Store.run_pins;
                    let last_serial = run_files files in
-                   Scheduler.policy := saved_policy;
+                   Scheduler.state.policy <- saved_policy;
                    (match last_serial with
                     | None -> ()
                     | Some v2 ->

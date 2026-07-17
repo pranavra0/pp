@@ -24,6 +24,7 @@ type t = {
   mutable macro_reset : unit -> unit;
   mutable compiler_finish : Types.comp_state -> Types.bytecode;
   mutable compiler_state : Types.comp_state option;
+  mutable current_env : Types.env;
   mutable get_unix_time : unit -> float;
   mutable cap_write_secret : string -> string -> unit;
   mutable cap_read_secret : string -> string;
