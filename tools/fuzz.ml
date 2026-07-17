@@ -1242,6 +1242,14 @@ let () =
   let n_rt_checked = ref 0 and n_rt_fail = ref 0 in
   Printf.printf "pp-fuzz: grammar=%s seed=%d start=%d count=%d depth=%d timeout=%dms pp=%s\n%!"
     !grammar !seed !start_iter !count !max_depth !timeout_ms !pp_bin;
+  (* Exercise the library directly as part of every fuzzer invocation.  The
+     differential loop below remains process-isolated; this call keeps the
+     kernel property ratchet in the same gate without duplicating a property
+     in the tool. *)
+  if not (Kernel_props.run ~seed:!seed ~count:1) then begin
+    prerr_endline "pp-fuzz: in-process kernel properties failed";
+    exit 1
+  end;
   for i = !start_iter to !start_iter + !count - 1 do
     let src = gen_program !grammar i in
     let (tw, bc, rt) = run_all src in
