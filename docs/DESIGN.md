@@ -198,7 +198,7 @@ actually did:
 
 ## Design decisions
 
-13 questions were open during the design of pp. Each is resolved below, in
+14 questions were open during the design of pp. Each is resolved below, in
 the order they were raised.
 
 ### Why laziness is demand-pruning at node granularity
@@ -441,6 +441,28 @@ replaces it, and there is no separate bytecode serialisation.
 
 Introspection is via `pp why <key>`, capability-filtered. `pp graph` is
 deferred to later work, since it needs the reverse index.
+
+### Durable-format evolution: retain `pp-store 1`
+
+The durable-format audit found no material benefit in changing the encoding.
+`src/kernel/codec.ml` already provides portable, canonical, byte-stable text
+for data values and rejects malformed or non-data values. Object and trace
+repositories write through the same atomic replacement boundary, and transport
+re-validates received objects, blobs, and traces before accepting them. The
+golden fixtures in `tests/fixtures/store-v1/` therefore pin useful behavior,
+not an incidental implementation detail.
+
+`src/runtime/store_layout.ml` keeps `pp-store 1` as the store-wide format
+identifier. A missing or different `VERSION` invalidates the versioned
+repositories (`objects/`, `traces/`, `fenced-specs/`, and `procs/`) and preserves
+raw blobs, the island cache, and the journal. This is invalidation rather than
+an attempted migration, so old bytes are never silently reinterpreted. No
+object, trace, blob, island, transport, or semantic content-key bytes change
+as part of the architecture work.
+
+A future format change must be a separate versioned decision with distinct
+fixtures and explicit transport behavior; it must not reuse `pp-store 1` or
+alter semantic content keys merely because storage encoding changes.
 
 ### Distribution: a scheduler handler over a process pool
 

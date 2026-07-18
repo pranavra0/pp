@@ -188,39 +188,6 @@ two orchestration functions.
 The order matters. Later boundaries assume earlier ownership and tests.
 
 
-### 20. Decide durable-format evolution separately
-
-**Purpose:** permit justified format improvement without hiding identity or data
-loss inside refactoring.
-
-**Default:** preserve byte compatibility throughout all preceding work.
-
-**Decision work:**
-
-- Audit whether extracted types or repositories expose a concrete benefit from a
-  format change: portability, canonicality, validation, forward compatibility,
-  or simpler recovery.
-- If there is no material benefit, retain the current version and delete this
-  task.
-- If changing it, write a dedicated design decision covering format/version
-  identifiers, object and trace compatibility, migration versus invalidation,
-  island/blob treatment, mixed-version cluster behavior, rollback, and failure
-  recovery.
-- Implement the new codec/version as a standalone change with old and new golden
-  fixtures. Never silently reinterpret old bytes.
-
-**Likely files:** codec, repository layout/version module, transport, golden
-fixtures, releasing/status/design documentation.
-
-**Verify:** portable-store tests, crash injection at every durable boundary,
-mixed-version transport tests, suite and required fuzzer.
-
-**Exit:** either an explicit decision to retain the format or a tested versioned
-transition with no ambiguous bytes.
-
-**Non-goal:** change semantic content keys merely because storage encoding
-changes.
-
 ### 21. Standardize errors and resource safety
 
 **Purpose:** make failure contracts as understandable as success paths.
@@ -342,5 +309,4 @@ not only expected stdout.
 
 ## Immediate next action
 
-Execute roadmap item 15 only: turn primitives into a declarative builtin
-layer.
+Execute roadmap item 21 only: standardize errors and resource safety.
