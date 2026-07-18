@@ -133,7 +133,7 @@ let require_domain_context (who : string) : Runtime.domain_entry * string =
   match Effect.perform Runtime.Get_domain with
   | None -> failwith (who ^ ": not running inside a domain's observe/diff/apply")
   | Some name ->
-      (match Hashtbl.find_opt Runtime.domain_registry name with
+      (match Session.find_domain (Effect.perform Runtime.Get_session) name with
        | None -> failwith (who ^ ": unknown current domain " ^ name)
        | Some entry ->
            if Capability.subseteq entry.Runtime.dm_cap (Effect.perform Runtime.Get_capabilities)

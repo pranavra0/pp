@@ -68,10 +68,6 @@ open Types
    start of every fresh run (Evaluator.init, wired below), exactly like
    thunk_store/handler_stack/etc. Fixed-arity only: no variadic/rest-param
    macros (pp functions do not have rest params either). *)
-let macro_table : (string, string list * expr) Hashtbl.t = Hashtbl.create 16
-
-let reset () : unit = Hashtbl.clear macro_table
-
 (* A guard against a macro whose expansion never stabilizes (each expansion
    producing another use of the same or another macro, forever). Expansion
    is a static, ahead-of-time pass over the program text — a
@@ -79,8 +75,6 @@ let reset () : unit = Hashtbl.clear macro_table
    runtime stack the way non-terminating recursive pp CODE would, so this
    is a plain counter, reset per top-level list. *)
 let max_expansions = 100_000
-let expansion_count = ref 0
-
 let macro_error (name : string) (msg : string) : 'a =
   failwith (Printf.sprintf "macro '%s': %s" name msg)
 
@@ -151,7 +145,7 @@ let match_defmacro (e : expr) : (string * string list * expr) option =
    ordinary data-structure primitives instead (the same restriction Racket's
    phase separation and Scheme's begin-for-syntax impose for the same
    reason). *)
-let apply_macro ~(name : string) ~(params : string list) ~(body : expr)
+let apply_macro expansion_count ~(name : string) ~(params : string list) ~(body : expr)
     ~(args : expr list) ~(loc : (string * int) option) : expr =
   incr expansion_count;
   if !expansion_count > max_expansions then
@@ -194,12 +188,13 @@ let apply_macro ~(name : string) ~(params : string list) ~(body : expr)
    typed bodies), and attached to the top of every expansion so an error
    inside expanded code still cites a real file:line — the macro CALL
    site's, not the macro DEFINITION's. *)
-let rec expand_expr (loc : (string * int) option) (e : expr) : expr =
+let rec expand_expr session expansion_count (loc : (string * int) option) (e : expr) : expr =
+  let expand_expr = expand_expr session expansion_count in
   match e with
   | ELocated (l, inner) -> ELocated (l, expand_expr (Some l) inner)
-  | EApply (ESymbol name, args) when Hashtbl.mem macro_table name ->
-      let (params, body) = Hashtbl.find macro_table name in
-      expand_expr loc (apply_macro ~name ~params ~body ~args ~loc)
+  | EApply (ESymbol name, args) when Session.find_macro session name <> None ->
+      let (params, body) = Option.get (Session.find_macro session name) in
+      expand_expr loc (apply_macro expansion_count ~name ~params ~body ~args ~loc)
   | EApply (fn, args) -> EApply (expand_expr loc fn, List.map (expand_expr loc) args)
   | EQuote _ -> e
   | ELiteral _ | ESymbol _ -> e
@@ -244,17 +239,17 @@ let rec expand_expr (loc : (string * int) option) (e : expr) : expr =
    top-level driver relies on (REPL/execute_string's `List.map`) is
    unaffected. *)
 let expand_toplevel_list (exprs : expr list) : expr list =
-  expansion_count := 0;
+  let session = Effect.perform Runtime.Get_session in
+  let expansion_count = ref 0 in
   List.map (fun e ->
     let loc, inner = match e with ELocated (l, i) -> (Some l, i) | _ -> (None, e) in
     match match_defmacro inner with
     | Some (name, params, body) ->
-        Hashtbl.replace macro_table name (params, body);
+        Session.set_macro session name (params, body);
         relocate loc (EQuote (ESymbol name))
     | None ->
-        relocate loc (expand_expr loc inner))
+        relocate loc (expand_expr session expansion_count loc inner))
     exprs
 
 let () =
-  Backend.r.expand_toplevel <- expand_toplevel_list;
-  Backend.r.macro_reset <- reset
+  Backend.r.expand_toplevel <- expand_toplevel_list

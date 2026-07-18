@@ -15,6 +15,7 @@
    [with_form_location] — all module-private). *)
 
 type _ Effect.t +=
+  | Get_session : Session.t Effect.t
   | Get_invocation : Invocation.t Effect.t
   | Get_capabilities : Capability.t list Effect.t
   | Get_config : Types.value list Effect.t
@@ -26,14 +27,7 @@ type _ Effect.t +=
   | Get_domain : string option Effect.t
   | Get_observe_all : bool Effect.t
 type state = {
-  mutable observe_all : bool;
-  mutable observed_all : (string * string) list;
-  mutable proc_observer : string -> string option;
-  mutable probe_observer : string -> string option;
-  mutable keep_thunks : bool;
-  mutable fenced_actions : (string * Types.value) list;
   mutable island_fetch_enabled : bool;
-  mutable domain_cell_observer : string -> string -> string option;
 }
 val state : state
 val observe_proc : string -> string option
@@ -47,8 +41,7 @@ val observe_config : string -> string
 val observe_handler : string -> string
 val record_config_read : string -> unit
 val record_handler_observation : string -> unit
-val with_top_level : Invocation.t -> f:('a -> 'b) -> 'a -> 'b
-val thunk_store : (string, Types.thunk) Hashtbl.t
+val with_top_level : Session.t -> Invocation.t -> f:('a -> 'b) -> 'a -> 'b
 
 val stdlib_root : unit -> string option
 val canonical_path : string -> Paths.canonical
@@ -56,7 +49,7 @@ val canonical_path_impl : string -> string
 val loader_read : string -> string
 val with_form_location : Types.expr -> (unit -> 'a) -> 'a
 
-type domain_entry = {
+type domain_entry = Session.domain_entry = {
   dm_namespace : string list;
   dm_observe : Types.value;
   dm_diff : Types.value option;
@@ -64,7 +57,4 @@ type domain_entry = {
   dm_cap : Capability.t;
   dm_observe_cell : Types.value option;
 }
-val domain_registry : (string, domain_entry) Hashtbl.t
 val observe_domain_cell : string -> string -> string option
-val probe_values : (string, Types.value) Hashtbl.t
-val sealed_pins : (string, string) Hashtbl.t

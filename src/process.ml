@@ -283,7 +283,7 @@ let sandbox_read (path : string) : string option =
        resolves to plain fs behavior: the deployment that also handed out an
        fs grant over the same path is saying "not secret HERE".
      - covered by CapSecret and NOT by CapFilesystem → VSealed, read via
-       Store.read_sealed_cell (bytes pinned in Runtime.sealed_pins,
+       Store.read_sealed_cell (bytes pinned in the session,
        in-memory only — store_blob/the CAS is never called for this path).
      `read-file` each keep their own message text via [cap_err]). *)
 let read_dispatch ~(tag : string) ~(cap_err : string -> string) (path : string) : value =

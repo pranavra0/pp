@@ -623,6 +623,18 @@ let host_services_property () =
    | Error msg when String.length msg >= 31 && String.sub msg 0 31 = "cluster token rejected: expired" -> ()
    | _ -> fail "host-services-fake" "deterministic clock did not expire token")
 
+let session_property () =
+  let a = Session.create () and b = Session.create () in
+  Session.set_macro a "only-a" ([], ELiteral (VInt 1));
+  Session.set_probe a "probe" (VInt 1);
+  Session.set_probe b "probe" (VInt 2);
+  Session.begin_pass a;
+  if Session.find_macro b "only-a" <> None
+     || Session.find_macro a "only-a" = None
+     || Session.find_probe a "probe" <> None
+     || Session.find_probe b "probe" <> Some (VInt 2) then
+    fail "session-isolation" "independent sessions or pass retention leaked"
+
 let cap_properties (st : rng) ~(count : int) : unit =
   let depth () = 1 + ri st 3 in
   let canon = Paths.canonicalize ~realpath:(fun x -> x) in
@@ -887,6 +899,7 @@ let run ~(seed : int) ~(count : int) : bool =
   (* (iv) capability algebra — narrowing, union, ⊆-gate soundness, ban *)
   cap_properties st ~count;
   host_services_property ();
+  session_property ();
 
   (* report *)
   let fs = List.rev !failures in

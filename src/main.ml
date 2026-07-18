@@ -120,17 +120,15 @@ let build_all_desired invocation (v : Types.value) : Types.value =
    ONE init — this is what lets `register-fs-domain`/`register-proc-domain`'s
    registration survive to reach the user's file. Falls back to the untouched
    per-file loop when no domain wiring is needed at all. *)
-let run_files invocation (files : string list) : Types.value option =
-  Runtime.state.fenced_actions <- [];
+let run_files ?(retain_thunks = false) invocation (files : string list) : Types.value option =
   if uses_domains invocation then
     let sources = stdlib_glue_sources invocation
                   @ List.map (fun f -> (f, read_file_content f)) files in
-    match List.rev (Repl.execute_sources sources) with
+    match List.rev (Repl.execute_sources ~retain_thunks sources) with
     | v :: _ -> Some v | [] -> None
   else
     List.fold_left (fun _ f ->
-      Runtime.state.fenced_actions <- [];
-      match List.rev (Repl.execute_file f) with
+      match List.rev (Repl.execute_file ~retain_thunks f) with
       | v :: _ -> Some v | [] -> None) None files
 
 let should_run_domains invocation =
@@ -206,39 +204,31 @@ let snapshot_cell_hashes (cell_ids : string list) : (string * string) list =
    persistent store's trace verification naturally skips unchanged nodes
    (hits) and recomputes changed ones (misses), so --watch and --once collapse
    to one store-level path. *)
-let watch_loop invocation ~files ~interval ~stabilize =
-  Runtime.state.observe_all <- true;
+let watch_loop session invocation ~files ~interval ~stabilize =
   let last_desired = ref None in
   let run_program () =
     (* Clear in-memory state for a fresh evaluation. The persistent store
        survives — this is the store-level collapse. run_files itself calls
        Repl.init () (via execute_sources / execute_file). *)
-    Hashtbl.clear Store.run_pins;  (* clear pinned cell observations *)
-    Hashtbl.clear Runtime.probe_values;  (* probes re-evaluate fresh each pass *)
-    Hashtbl.clear Runtime.sealed_pins;   (* sealed bytes never survive a pass *)
-    Runtime.state.observed_all <- [];     (* clear collected observations *)
+    Session.begin_pass session;
     (* Re-read and execute the program (plus, if --reconcile/--supervise is
        active, the domain-registration glue — run_files/uses_domains). *)
     let last = run_files invocation files in
     last_desired := last;
     run_domains_pass invocation last;
     (* Collect the cells we need to poll and snapshot their current hashes. *)
-    let cell_ids = List.sort_uniq compare (List.map fst Runtime.state.observed_all) in
+    let cell_ids = List.sort_uniq compare (List.map fst (Session.observations session)) in
     snapshot_cell_hashes cell_ids
   in
   let run_program_stabilize ~prev_snapshot changed_cells =
     let rev = Store.build_reverse_index () in
     let dirty = Store.dirty_keys_for changed_cells rev in
     Stabilize.reset_dirty dirty;
-    Runtime.state.keep_thunks <- true;  (* set BEFORE run_files's internal init *)
-    Hashtbl.clear Store.run_pins;  (* fresh world observations, not last run's pins *)
-    Hashtbl.clear Runtime.probe_values;  (* probes re-evaluate fresh each pass *)
-    Hashtbl.clear Runtime.sealed_pins;   (* sealed bytes never survive a pass *)
-    Runtime.state.observed_all <- [];
-    let last = run_files invocation files in
+    Session.begin_pass session;
+    let last = run_files ~retain_thunks:true invocation files in
     last_desired := last;
     run_domains_pass invocation last;
-    let cell_ids = List.sort_uniq compare (List.map fst Runtime.state.observed_all) in
+    let cell_ids = List.sort_uniq compare (List.map fst (Session.observations session)) in
     let new_obs = snapshot_cell_hashes cell_ids in
     let new_set = List.map fst new_obs in
     let prev_clean = List.filter (fun (id, _) -> not (List.mem id new_set)) prev_snapshot in
@@ -246,8 +236,7 @@ let watch_loop invocation ~files ~interval ~stabilize =
   in
   (* First iteration: cold run. *)
   if stabilize then begin
-    Runtime.state.keep_thunks <- false;
-    Stabilize.clear_side_table ()
+    Session.begin_watch session
   end;
   let snapshot = run_program () in
   let rec loop snapshot =
@@ -256,9 +245,7 @@ let watch_loop invocation ~files ~interval ~stabilize =
     (* Clear run pins so observe_cell reads the current world, not the
        snapshot from the last run (CAS-ingest pins the first read of a cell
        for the rest of a run). *)
-    Hashtbl.clear Store.run_pins;
-    Hashtbl.clear Runtime.probe_values;  (* probes re-evaluate fresh each pass *)
-    Hashtbl.clear Runtime.sealed_pins;   (* sealed bytes never survive a pass *)
+    Session.begin_pass session;
     (* Detect cell changes FIRST, before reconcile work, so config edits are
        noticed promptly. Then reconcile processes only when no cell changed —
        this still restarts killed services within one interval. *)
@@ -318,7 +305,7 @@ let run_transport_pull (kind, id, root) : unit =
   | "trace" -> Transport.LocalDir.pull_trace root ~key:id
   | _ -> failwith ("pp --transport-pull: unknown artifact kind " ^ kind)
 
-let run_serve_hit host invocation (key, token_file, shared_root, reply_file) : unit =
+let run_serve_hit host session invocation (key, token_file, shared_root, reply_file) : unit =
   let token_text = read_file_content token_file in
   (* Store.hit re-observes the trace's read cells, which performs the
      Lookup_handler/Record_read effects (observe_handler, file observation).
@@ -330,7 +317,7 @@ let run_serve_hit host invocation (key, token_file, shared_root, reply_file) : u
      builtin default the build itself recorded and makes Record_read a
      no-op, so a synced node verifies exactly as it does locally. *)
   let reply =
-    Runtime.with_top_level invocation
+    Runtime.with_top_level session invocation
       ~f:(fun () -> Transport.serve_hit host ~key ~token_text ~shared_root) ()
   in
   Store.atomic_write reply_file reply
@@ -394,7 +381,7 @@ let main () =
   let gc_mode = ref false in               (* `pp gc`: explicit, never automatic *)
   let gc_grace_seconds = ref Store_gc.default_grace_seconds in
   (* The observation-pinning seam — a standalone top-level generalization
-     of --remote-node's pin machinery (which pre-seeds Store.run_pins from
+     of --remote-node's pin machinery (which pre-seeds observation pins from
      the dispatcher's own granted fs-read scope before the disk is ever
      touched for a pinned cell), for pinning a DIFFERENT (adversarial)
      program's probe-in-desired-state reads, sans the token/keys/reply
@@ -592,7 +579,7 @@ let main () =
       | _ -> failwith ("invalid --gc-grace-seconds: " ^ s));
 
     (* ---- The observation-pinning seam ---- *)
-    doc_of "  pp --pin-file <path> <file.pp>  Preseed Store.run_pins/Runtime.probe_values from a (pin ...)/(pin-probe ...) file before running (the observation-pinning seam)\n"
+    doc_of "  pp --pin-file <path> <file.pp>  Preseed file and probe observations from a pin file before running\n"
       (opt1 "--pin-file" (fun path -> pin_file := Some path));
     doc_of "  pp --dump-pins <path> <file.pp>  After running, write every run_pins/probe_values entry as (pin ...)/(pin-probe ...) lines to <path>\n"
       (opt1 "--dump-pins" (fun path -> dump_pins_file := Some path));
@@ -851,6 +838,7 @@ let main () =
     | Ok invocation -> invocation
     | Error msg -> failwith ("pp: " ^ msg)
   in
+  let session = Session.create () in
   (* Loader authority bound: the interpreter may load source from
      the CLI-named programs' directories, the cwd, and ~/.pp — nothing else.
      Also reachable: the resolved stdlib/ dir next to the
@@ -881,7 +869,7 @@ let main () =
               (Blobref.blob_refs_in v)
         | None -> ())
    | None -> ());
-  (* Pre-seed Store.run_pins from the dispatcher's
+  (* Pre-seed observation pins from the dispatcher's
      wire BEFORE run_files ever executes a single expression — this member
      process must never observe its own disk for a pre-seeded cell, and
      the only way to make that structural (not just conventional) is to
@@ -899,8 +887,8 @@ let main () =
   (match !pin_file with
    | Some path -> Remote.preseed_pins_from_file ~pins_file:path
    | None -> ());
-  Runtime.state.probe_observer <- Primitives.probe_observe_for_store;
-  Runtime.state.domain_cell_observer <- Primitives.domain_observe_cell_for_store;
+  Session.set_probe_observer session Primitives.probe_observe_for_store;
+  Session.set_domain_observer session Primitives.domain_observe_cell_for_store;
 
   (* Collect every cell observation made by the program: needed for
      stratification (LAW 30) and for --watch polling. Unconditional (not
@@ -911,7 +899,6 @@ let main () =
      domains.ml performs after root evaluation to see anything at all.
      The cost is one list-cons per cell read; unused when nothing
      converges. *)
-  Runtime.state.observe_all <- true;
   (* Recover any unknown-status fenced actions from a prior crash before
      applying new state (LAW 31). Skipped under `--gc-mark`: a GC
      replay must never perform a real recovery action — see the --gc-mark
@@ -957,12 +944,12 @@ let main () =
   (match !transport_pull_args with
    | Some a -> run_transport_pull a; exit 0 | None -> ());
   (match !serve_hit_args with
-   | Some a -> run_serve_hit host invocation a; exit 0 | None -> ());
+   | Some a -> run_serve_hit host session invocation a; exit 0 | None -> ());
   (match !recv_hit_args with
    | Some a -> run_recv_hit a; exit 0 | None -> ());
   (* ---- `pp gc` (explicit, never automatic) ---- *)
   if !gc_mode then
-    (Runtime.with_top_level invocation
+    (Runtime.with_top_level session invocation
        ~f:(fun () -> Store_gc.run ~grace_seconds:!gc_grace_seconds) ();
      exit 0);
   (* ---- `--publish-object <shared-root>` — the by-hash
@@ -977,7 +964,7 @@ let main () =
      actions or journals (nothing here ever touches either). *)
   (match !publish_object_root with
    | Some shared_root ->
-       let last = Runtime.with_top_level invocation
+       let last = Runtime.with_top_level session invocation
            ~f:(fun () -> run_files invocation (List.rev !files)) () in
        (match last with
         | None -> failwith "pp: --publish-object: the program produced no value"
@@ -1007,7 +994,7 @@ let main () =
      construction: nothing below this branch ever runs. *)
   (match !gc_mark_out with
    | Some out ->
-       let last = Runtime.with_top_level invocation
+       let last = Runtime.with_top_level session invocation
            ~f:(fun () -> run_files invocation (List.rev !files)) () in
        (try
           let all = select_member_slice invocation (compute_all_desired invocation last) in
@@ -1037,7 +1024,7 @@ let main () =
           f updated skipped)
       (List.rev !files);
   begin
-    let _ = Runtime.with_top_level invocation ~f:(fun () ->
+    let _ = Runtime.with_top_level session invocation ~f:(fun () ->
       (match !eval_str, !files with
       | Some e, [] ->
           let results = Repl.execute_string e in
@@ -1048,23 +1035,22 @@ let main () =
       | _, files ->
           let files = List.rev files in
           if !watch then
-            watch_loop invocation ~files ~interval:!watch_interval ~stabilize:!stabilize
+            watch_loop session invocation ~files ~interval:!watch_interval ~stabilize:!stabilize
           else begin
             let last = run_files invocation files in
             run_domains_pass invocation last;
             (match !dump_pins_file with
              | Some path ->
                  let buf = Buffer.create 256 in
-                 Hashtbl.iter (fun cell hash -> Buffer.add_string buf (Remote.pin_line cell hash))
-                   Store.run_pins;
-                 Hashtbl.iter (fun name v ->
+                 Session.iter_run_pins session (fun cell hash ->
+                   Buffer.add_string buf (Remote.pin_line cell hash));
+                 Session.iter_probes session (fun name v ->
                    match Codec.encode_value v with
                    | Some text -> Buffer.add_string buf (Remote.pin_probe_line name text)
                    | None ->
                        Printf.eprintf
                          "[dump-pins] skipping non-data probe value for %s (code/handle/sealed)\n%!"
-                         name)
-                   Runtime.probe_values;
+                         name);
                  Store.atomic_write path (Buffer.contents buf)
              | None -> ());
             if !Store.check_mode && Scheduler.state.policy <> Scheduler.Serial then
@@ -1080,7 +1066,7 @@ let main () =
                      | Scheduler.Remote m -> Printf.sprintf "remote:%s" m
                    in
                    Scheduler.state.policy <- Scheduler.Serial;
-                   Hashtbl.clear Store.run_pins;
+                   Session.begin_pass session;
                    let last_serial = run_files invocation files in
                    Scheduler.state.policy <- saved_policy;
                    (match last_serial with
@@ -1108,7 +1094,7 @@ let main () =
           which performs Record_read/Get_observe_all — so this after-run serve
           must hold the same top-level observation context the run itself held
           (line 1050), or a clean hit crashes on an unhandled effect. *)
-       Runtime.with_top_level invocation
+       Runtime.with_top_level session invocation
          ~f:(fun () ->
            Remote.serve_assigned_keys host ~token_text ~keys_file ~shared_root
              ~reply_file) ()

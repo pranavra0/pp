@@ -578,7 +578,7 @@ documented gap is a capability hidden behind an unforced thunk, invisible
 to the free-variable ban without violating law 14.
 
 A further narrowing surfaced once parallel dispatch (see the distribution
-decision above) was in place: `Store.run_pins` is in-memory and
+decision above) was in place: observation pins are in-memory and
 per-process, so a forked worker inherits the pin table as of the fork
 instant through copy-on-write, but any cell it observes for the first
 time afterwards pins independently, in its own copy. N workers racing, or

@@ -122,7 +122,7 @@ let parse_pin_probe_line (line : string) : (string * string) option =
     Some (name, String.sub line i (n - 1 - i))
   else None
 
-(* ---- Member side: pre-seed Store.run_pins from the wire BEFORE anything
+(* ---- Member side: pre-seed observation pins from the wire BEFORE anything
    runs — the soundness crux of remote placement ----
 
    [read_file_cell]/[observe_cell] (store.ml) both consult [run_pins]
@@ -150,11 +150,11 @@ let parse_pin_probe_line (line : string) : (string * string) option =
    direct write instead of a pull).
 
    A `(pin-probe "NAME" <value>)` line is handled the same
-   pass, populating Runtime.probe_values DIRECTLY instead — no blob, no
+   pass, populating the session's probe cache directly — no blob, no
    CAS, no re-hash-before-trust step, since the value's bytes travel
    in-line in the pin file itself rather than by content-addressed
    reference. [probe_value_for] (primitives.ml) consults
-   Runtime.probe_values FIRST, unconditionally, before ever calling a
+   probe cache first, unconditionally, before ever calling a
    registered probe's observe-fn — so a pre-seeded entry here short-
    circuits the observe-fn for the whole pass exactly like an
    already-observed value would mid-pass.
@@ -177,7 +177,7 @@ let preseed_pins_from_file ~(pins_file : string) : unit =
                   | None ->
                       failwith ("pp: --pin-file: pin-probe " ^ name
                                 ^ ": undecodable value: " ^ value_text)
-                  | Some v -> Hashtbl.replace Runtime.probe_values name v)
+                  | Some v -> Session.set_probe (Effect.perform Runtime.Get_session) name v)
            else
              match parse_pin_line line with
              | None -> failwith ("pp: --pin-file: unparseable pin line: " ^ line)
@@ -195,7 +195,7 @@ let preseed_pins_from_file ~(pins_file : string) : unit =
                         failwith (Printf.sprintf
                           "pp: --pin-file: blob %s failed to re-verify \
                            (corrupt) — refusing to pin" hash)
-                      else Hashtbl.replace Store.run_pins cell hash))
+                      else Session.set_run_pin (Effect.perform Runtime.Get_session) cell hash))
 
 (* ---- "blob:<hash>" refs embedded in a node's RESULT value ----
 

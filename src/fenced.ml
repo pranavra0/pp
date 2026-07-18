@@ -12,17 +12,16 @@
 
 open Types
 
-let current_epoch = ref ""
-
 let epoch_counter = ref 0
 
 let new_epoch () : unit =
   incr epoch_counter;
-  current_epoch := Hasher.hash_string
+  Session.set_fenced_epoch (Effect.perform Runtime.Get_session) (Hasher.hash_string
       (Printf.sprintf "%f-%d-%d" (Unix.gettimeofday ()) (Unix.getpid ())
-         !epoch_counter)
+         !epoch_counter))
 
-let ensure_epoch () = if !current_epoch = "" then new_epoch ()
+let ensure_epoch () =
+  if Session.fenced_epoch (Effect.perform Runtime.Get_session) = "" then new_epoch ()
 
 let action_key ~(epoch : string) ~(kind : string) ~(spec_hash : string) : string =
   Hasher.hash_concat ["fenced"; epoch; kind; spec_hash]
@@ -129,19 +128,20 @@ let register (kind : string) (spec : value) : unit =
      store_fenced_spec's own encode could see unforced thunks again and
      silently drop the write. force_hook is idempotent on non-thunk values,
      so re-forcing [forced] later is a no-op. *)
-  Runtime.state.fenced_actions <- (kind, forced) :: Runtime.state.fenced_actions
+  Session.add_fenced_action (Effect.perform Runtime.Get_session) (kind, forced)
 
 (* Execute one current-pass fenced action: compute a fresh key from the current
    epoch, journal intent, run, journal done. *)
 let execute_current ~(kind : string) ~(spec : value) : unit =
   ensure_epoch ();
   let spec_hash = hash_spec spec in
-  let key = action_key ~epoch:!current_epoch ~kind ~spec_hash in
+  let epoch = Session.fenced_epoch (Effect.perform Runtime.Get_session) in
+  let key = action_key ~epoch ~kind ~spec_hash in
   if Journal.fenced_is_done key then ()
   else begin
     Store.store_fenced_spec ~hash:spec_hash spec;
     Journal.append (Journal.FencedIntent {
-      key; epoch = !current_epoch; kind; spec_hash });
+      key; epoch; kind; spec_hash });
     let result = run_command spec in
     Journal.append (Journal.FencedDone { key; result_hash = result_hash result })
   end
@@ -193,7 +193,7 @@ let recover_unknown ~(policy : Invocation.fenced_policy) : unit =
       (List.length unknowns) (Invocation.fenced_policy_name policy);
   List.iter (fun entry ->
     execute_recovery ~policy ~entry;
-    current_epoch := entry.Journal.fe_epoch) unknowns
+    Session.set_fenced_epoch (Effect.perform Runtime.Get_session) entry.Journal.fe_epoch) unknowns
 
 (* Drain all fenced actions registered during this evaluation.  Called once
    per reconcile pass, after all convergent fs/proc work.  Uses an existing
@@ -202,7 +202,6 @@ let recover_unknown ~(policy : Invocation.fenced_policy) : unit =
    starts fresh. *)
 let drain () : unit =
   ensure_epoch ();
-  let actions = List.rev Runtime.state.fenced_actions in
-  Runtime.state.fenced_actions <- [];
+  let actions = Session.take_fenced_actions (Effect.perform Runtime.Get_session) in
   List.iter (fun (kind, spec) -> execute_current ~kind ~spec) actions;
-  current_epoch := ""
+  Session.set_fenced_epoch (Effect.perform Runtime.Get_session) ""

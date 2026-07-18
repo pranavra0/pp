@@ -25,7 +25,7 @@ val force_node :
     on the caller's authority over the trace's read closure, LAW 23b),
     re-serve a memoized failure (LAW 28), or run and store on a miss. *)
 
-val init : unit -> unit
+val init : Session.t -> retain_thunks:bool -> unit
 (** Reset the evaluator state, clear the thunk store (unless
     [Runtime.keep_thunks] is set), reset the macro table and gensym
     counter, and wire the backend hooks for [force]/[eval]/[apply]. *)

@@ -133,7 +133,7 @@ let compute_plan ~(domain_name : string) ~(diff_closure : value)
 let has_prefix ~(prefix : string) (s : string) : bool =
   String.length s >= String.length prefix && String.sub s 0 (String.length prefix) = prefix
 
-let stratification_check (write_domains : (string * Runtime.domain_entry) list) : unit =
+let stratification_check session (write_domains : (string * Runtime.domain_entry) list) : unit =
   List.iter (fun (cell, _) ->
     List.iter (fun (name, entry) ->
       if List.exists (fun prefix -> has_prefix ~prefix cell) entry.Runtime.dm_namespace then
@@ -141,7 +141,7 @@ let stratification_check (write_domains : (string * Runtime.domain_entry) list) 
           "reconcile: stratification violation (LAW 30): the desired state for \
            domain '%s' observed its own domain: %s" name cell))
       write_domains)
-    Runtime.state.observed_all
+    (Session.observations session)
 
 (* ---- Per-domain pass ----
    observe fresh (never cached) under the domain's own cap; diff cached and
@@ -172,11 +172,9 @@ let with_domain (name : string) (cap : Capability.t) (f : unit -> 'a) : 'a =
    ...)` read (a key no program would query) but folded into
    make_thunk_ca's cfg_hash, so every call gets a distinct key and can
    never hit an in-memory thunk from a sibling call. *)
-let cache_bust_counter = ref 0
-
 let fresh_nonce_config () : value =
-  incr cache_bust_counter;
-  VMap [(VString "__pp_q13_cache_bust", VInt !cache_bust_counter)]
+  let n = Session.next_cache_bust (Effect.perform Runtime.Get_session) in
+  VMap [(VString "__pp_q13_cache_bust", VInt n)]
 let call_uncached (fn : value) (args : value list) : value =
   try Primitives.call_with_args fn args
   with effect Runtime.Get_config, k ->
@@ -253,6 +251,7 @@ let record_epoch invocation (forced : value) : unit =
   with _ -> ()
 
 let run_all invocation (all_desired : value) : unit =
+  let session = Effect.perform Runtime.Get_session in
   let forced = Primitives.force_deep all_desired in
   let entries = match forced with
     | VMap kvs -> kvs
@@ -266,7 +265,7 @@ let run_all invocation (all_desired : value) : unit =
       | other -> failwith ("reconcile: domain name must be a string or keyword, got "
                            ^ string_of_value other)
     in
-    match Hashtbl.find_opt Runtime.domain_registry name with
+    match Session.find_domain session name with
     | None -> failwith ("reconcile: no domain registered under name '" ^ name ^ "'")
     | Some entry ->
         (match entry.Runtime.dm_diff, entry.Runtime.dm_apply with
@@ -276,7 +275,7 @@ let run_all invocation (all_desired : value) : unit =
     entries
   in
   let write_domains = List.map (fun (n, e, _) -> (n, e)) resolved in
-  stratification_check write_domains;
+  stratification_check session write_domains;
   List.iter (fun (name, entry, desired) -> run_domain ~name ~entry ~desired) resolved;
   record_epoch invocation forced
 
@@ -284,6 +283,6 @@ let run_all invocation (all_desired : value) : unit =
    by main.ml to decide whether a bare register-domain-only program (no
    --reconcile/--supervise flag) should still run the generic pass. *)
 let any_write_domain_registered () : bool =
-  Hashtbl.fold (fun _ entry acc ->
+  Session.fold_domains (Effect.perform Runtime.Get_session) (fun _ entry acc ->
     acc || (entry.Runtime.dm_diff <> None && entry.Runtime.dm_apply <> None))
-    Runtime.domain_registry false
+    false

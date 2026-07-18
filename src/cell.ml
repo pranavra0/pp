@@ -40,7 +40,7 @@ type t =
                                read-cap) *)
   | Sealed of string       (* sealed (confidential) read, "sealed:<canonical-
                                path>" — hash of the secret bytes only; the bytes
-                               themselves never enter the CAS (Runtime.sealed_pins,
+                               themselves never enter the CAS (session-only pins,
                                in-memory-only) *)
   | Domain of { name : string; sub : string }
                            (* a third-party registered domain's own

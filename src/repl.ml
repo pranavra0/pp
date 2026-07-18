@@ -20,8 +20,8 @@ let global_env : env ref = ref empty_env
 
 (* ---- Initialization ---- *)
 
-let init () =
-  Evaluator.init ();
+let init ?(retain_thunks = false) session =
+  Evaluator.init session ~retain_thunks;
   global_env := Primitives.initial_env ()
 
 (* LAW 29: a runtime error escaping a top-level form reports that
@@ -35,7 +35,8 @@ let with_toplevel_location = Runtime.with_form_location
 
 (* Tree-walker: process a single expression *)
 let process_expr (e : expr) : value =
-  Runtime.with_top_level (Effect.perform Runtime.Get_invocation) ~f:(fun () ->
+  Runtime.with_top_level (Effect.perform Runtime.Get_session)
+    (Effect.perform Runtime.Get_invocation) ~f:(fun () ->
     with_toplevel_location e (fun () ->
       match eval_expressions [e] global_env with
       | VEnvMap _ as v -> v
@@ -47,8 +48,8 @@ let process_expr (e : expr) : value =
    `defmacro` earlier in the string must be visible to a use later in the
    SAME string, even though process_expr below evaluates one form at a
    time. *)
-let execute_string ?(source : string = "<?>") (input : string) : value list =
-  init ();
+let execute_string ?(retain_thunks = false) ?(source : string = "<?>") (input : string) : value list =
+  init ~retain_thunks (Effect.perform Runtime.Get_session);
   (* `.ppb` sources read with the brace reader (Reader_braces
      dispatches on the extension; every other source uses the
      sexpr reader). *)
@@ -58,11 +59,11 @@ let execute_string ?(source : string = "<?>") (input : string) : value list =
   List.map process_expr exprs
 
 (* Tree-walker: execute a source file *)
-let execute_file (path : string) : value list =
+let execute_file ?(retain_thunks = false) (path : string) : value list =
   let ch = open_in path in
   let source = really_input_string ch (in_channel_length ch) in
   close_in ch;
-  execute_string ~source:path source
+  execute_string ~retain_thunks ~source:path source
 
 
 (* ---- Run several sources under ONE init (main.ml's domain-glue
@@ -80,8 +81,8 @@ let execute_file (path : string) : value list =
    (mirroring what execute_string does internally,
    without the redundant re-inits) — byte-identical to today's single-file
    behavior when given a one-element list. *)
-let execute_sources (sources : (string * string) list) : value list =
-  init ();
+let execute_sources ?(retain_thunks = false) (sources : (string * string) list) : value list =
+  init ~retain_thunks (Effect.perform Runtime.Get_session);
   List.concat_map (fun (source, input) ->
     let exprs =
       Macro.expand_toplevel_list
@@ -262,7 +263,7 @@ let help_text =
    A form left open continues on the next line; results print deep-forced.\n"
 
 let repl_loop () =
-  init ();
+  init (Effect.perform Runtime.Get_session);
   let tty = (try Unix.isatty Unix.stdin with _ -> false) in
   if tty then begin
     Printf.printf "pp v%s — lazy, pure-by-default, content-addressed Lisp\n"

@@ -226,39 +226,6 @@ executable characterization.
 
 **Non-goal:** change those decisions.
 
-### 6. Create the evaluation session and lifecycle API
-
-**Purpose:** give per-run and per-pass mutable state one explicit owner.
-
-**Work:**
-
-- Define an abstract session record initially containing the thunk memo table,
-  macro registry/counter, domain registry, probe values, sealed pins,
-  observation accumulator, fenced-action queue, and other inventory items whose
-  lifetime is evaluation/pass scoped.
-- Expose constructors and named transitions matching the lifecycle tests:
-  create session, begin evaluation, begin pass, and retain/reset watch state.
-- Migrate one state family at a time. After each migration, delete its global
-  table/ref and direct clear sites.
-- Pass the session through orchestration and evaluator entry points. Do not add a
-  new global `current_session` ref.
-- Keep thunk mutation inside thunk values where it represents the state of that
-  thunk; the session owns collections of thunks, not every mutation in the
-  language.
-
-**Likely files:** new session module, `src/runtime.*`, `src/evaluator.*`,
-`src/main.ml`, `src/macro.*`, `src/primitives.ml`, `src/domains.ml`,
-`src/fenced.ml`, `src/repl.ml`, `src/stabilize.ml`.
-
-**Verify:** lifecycle tests after each state-family migration; suite and full
-fuzzer for evaluator changes.
-
-**Exit:** evaluation/pass state is reachable from one session owner; reset logic
-is not duplicated at call sites; independent sessions can coexist in one
-process.
-
-**Non-goal:** remove dynamic scope effects or redesign watch semantics.
-
 ### 7. Narrow `Runtime` to dynamic scope
 
 **Purpose:** make OCaml effects a clear strength rather than part of an umbrella
@@ -799,4 +766,4 @@ not only expected stdout.
 
 ## Immediate next action
 
-Execute roadmap item 6 only: create the evaluation session and lifecycle API.
+Execute roadmap item 7 only: narrow `Runtime` to dynamic scope.

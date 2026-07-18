@@ -46,7 +46,6 @@ val tree_hash : string -> string
 val blobs_dir : string
 val store_blob : string -> string
 val load_blob : string -> string option
-val run_pins : (string, string) Hashtbl.t
 val unpin_file : string -> unit
 val observe_cell : string -> string option
 val trace_verifies : trace -> bool

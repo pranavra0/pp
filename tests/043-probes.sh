@@ -88,7 +88,7 @@ assert "run4-value-1"            "\\[info\\] 1$" present
 
 # =====================================================================
 # (2) probe value never lands under ~/.pp/store's objects/traces — a probe
-#     is re-evaluated every pass (Runtime.probe_values is in-memory-only,
+#     is re-evaluated every pass (the probe cache is in-memory-only,
 #     cleared per pass; there is no separate "probe cache" on disk the way
 #     there is a node objects/traces store), per SPEC law 38's volatility
 #     exclusion. traces/ records only (cell-id, HASH) pairs, never the raw

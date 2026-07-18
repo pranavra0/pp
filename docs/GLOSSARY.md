@@ -84,7 +84,7 @@ brace-to-s-expression mapping.
   `probe(name)` reads it from anywhere. The observe function runs at most
   once per pass, under exactly `read-cap`, recording only a
   capability-free `probe:<name>` cell. pp never persists this:
-  `Runtime.probe_values` lives in memory and clears every pass, since a
+  Probe values live only in the session and clear every pass, since a
   probe is volatility, not something to cache.
 - sealed cell (real): a confidential read (SPEC law 39). `--grant
   secret:<path>` mints a `CapSecret`; a read covered by it, not by a

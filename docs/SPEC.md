@@ -1445,7 +1445,7 @@ the node body and into its own `probe:<name>` cell, observed and pinned once
 per pass, exactly the cell treatment this law asked for. So a node reading
 it re-forces only when the probe's value actually changes, and its
 instability never re-keys or invalidates anything beyond that one cell edge.
-Probe results are never written to `~/.pp/store` at all — `Runtime.probe_values`
+Probe results are never written to `~/.pp/store` at all — the session's probe cache
 is in-memory and cleared every pass — which is stronger than merely being
 excluded from shared caches, since there is no cache to exclude them from.
 

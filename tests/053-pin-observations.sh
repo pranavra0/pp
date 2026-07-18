@@ -4,7 +4,7 @@
 # --remote-node pin machinery (src/remote.ml's preseed_pins_from_file /
 # parse_pin_line) used for forked workers, plus a new `(pin-probe "NAME"
 # <codec-value>)` line kind that pins a register-probe's OWN value
-# directly into Runtime.probe_values, short-circuiting its observe-fn
+# directly into the session's probe cache, short-circuiting its observe-fn
 # entirely (Primitives.probe_value_for consults probe_values FIRST,
 # unconditionally, before ever calling a registered probe's fn).
 #
@@ -18,8 +18,8 @@
 #   unpinned control — publish twice with DIFFERENT metrics-file content:
 #                       the two hashes must DIFFER (proves the probe is
 #                       genuinely volatile, not a strawman).
-#   canonical run — --dump-pins captures ONE run's Store.run_pins +
-#                       Runtime.probe_values as a pin file.
+#   canonical run — --dump-pins captures one run's file and probe
+#                       observations as a pin file.
 #   pinned — --pin-file that dump, across 3 placement
 #                       combinations (serial/parallel:4/remote:B),
 #                       metrics-file mutated to a DIFFERENT value than

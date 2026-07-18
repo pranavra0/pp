@@ -5,8 +5,6 @@ open Backend
 
 
 (* Reference to the current environment — updated by evaluator at eval entry *)
-let current_env_ref : env ref = ref Types.empty_env
-
 
 
 (* Force helpers for builtins *)
@@ -31,8 +29,6 @@ let force_args (args : value list) : value list = List.map force_val args
    string literal: no user-written symbol can ever equal a gensym'd name,
    so gensym is unforgeable by construction, not merely unlikely to
    collide. *)
-let gensym_counter = ref 0
-
 (* ---- Scheduler-aware force-deep ----
 
    EApply forces every argument, so a compound value built by
@@ -144,7 +140,7 @@ let force_deep (v : value) : value =
 (* Invoke a function value on already-evaluated args, without going through
    EApply: all closures go through Backend.r.apply. *)
 let invoke (fn : value) (args : value list) : value =
-  Backend.r.apply fn args !current_env_ref
+  Backend.r.apply fn args (Session.current_env (Effect.perform Runtime.Get_session))
 
 (* Call a zero-argument function value. *)
 let call_zero_arg (fn : value) : value =
@@ -172,7 +168,7 @@ let call_with_args (fn : value) (args : value list) : value =
   | VBuiltin _ -> invoke fn args
   | _ -> failwith "domain function value is not a function"
 
-(* [Some v]: the probe's value for THIS pass — pinned in Runtime.probe_values
+(* [Some v]: the probe's value for this pass
    after the first read, so a probe fires AT MOST ONCE per pass no matter how
    many times it is read (demand-pruned: an unread probe never fires at all,
    since this function is never called for it). [None]: no probe registered
@@ -180,10 +176,11 @@ let call_with_args (fn : value) (args : value list) : value =
    `(probe name)`; an unverifiable trace cell for Store's re-observation, so
    a trace naming a probe this process never registered simply misses). *)
 let probe_value_for (name : string) : value option =
-  match Hashtbl.find_opt Runtime.probe_values name with
+  let session = Effect.perform Runtime.Get_session in
+  match Session.find_probe session name with
   | Some v -> Some v
   | None ->
-      (match Hashtbl.find_opt Runtime.domain_registry name with
+      (match Session.find_domain session name with
        | None -> None
        | Some entry ->
            let result =
@@ -193,7 +190,7 @@ let probe_value_for (name : string) : value option =
              | effect Runtime.In_node, k -> Effect.Deep.continue k false
              | effect Runtime.Get_capabilities, k -> Effect.Deep.continue k [entry.Runtime.dm_cap]
            in
-           Hashtbl.replace Runtime.probe_values name result;
+           Session.set_probe session name result;
            Some result)
 
 (* Store.observe_cell's "probe:" arm, via the Runtime.probe_observer hook
@@ -216,7 +213,7 @@ let probe_observe_for_store (name : string) : string option =
    such domain, or it declared no :observe-cell — cannot re-observe, the
    caller (Store.observe_cell) treats that as a forced miss. *)
 let domain_observe_cell_for_store (name : string) (sub : string) : string option =
-  match Hashtbl.find_opt Runtime.domain_registry name with
+  match Session.find_domain (Effect.perform Runtime.Get_session) name with
   | None -> None
   | Some { Runtime.dm_observe_cell = None; _ } -> None
   | Some { Runtime.dm_observe_cell = Some fn; dm_cap; _ } ->
@@ -582,7 +579,7 @@ let register_metaeval () =
         let exprs = Backend.r.expand_toplevel (Reader.read_string code) in
         (* Capture the calling env into a local ref — avoid clobbering
            current_env_ref during inner evaluations. *)
-        let local_env = ref !current_env_ref in
+        let local_env = ref (Session.current_env (Effect.perform Runtime.Get_session)) in
         let new_defs = ref [] in
         let rec go = function
           | [] ->
@@ -970,7 +967,7 @@ let register_domains () =
                                             ^ string_of_value other))
           | None -> failwith "register-domain: missing :write-cap"
         in
-        Hashtbl.replace Runtime.domain_registry name
+        Session.set_domain (Effect.perform Runtime.Get_session) name
           { Runtime.dm_namespace = namespace; dm_observe = observe;
             dm_diff = diff; dm_apply = apply; dm_cap = write_cap;
             dm_observe_cell = observe_cell };
@@ -999,14 +996,14 @@ let register_domains () =
           dm_cap = read_cap;
           dm_observe_cell = None;
         } in
-        Hashtbl.replace Runtime.domain_registry name entry;
+        Session.set_domain (Effect.perform Runtime.Get_session) name entry;
         let (_ : string) = name in (* suppress unused warning *)
         VNil
     | _ -> failwith "register-probe expects a name, an observe-fn, and a read capability");
   (* ---- `probe` primitive: one-time evaluated lazy read of a registered probe ----
      a pass evaluates observe-fn (via probe_value_for, above: OUTSIDE the
      trace stack, under exactly the registered read-cap) and pins the
-     result in Runtime.probe_values for the rest of the pass; every read
+     result in the session for the rest of the pass; every read
      (first or not) records ONLY the `probe:<name>` cell into the caller's
      trace, via the ordinary record_read every other cell-observing
      primitive uses (slurp's `file:`, env-get's `env:`, …) — capability-free
@@ -1149,8 +1146,8 @@ let register_macros () =
       | [VSymbol p] -> p
       | _ -> failwith "gensym expects an optional string/symbol prefix"
     in
-    incr gensym_counter;
-    VSymbol (Printf.sprintf "%s~%d" prefix !gensym_counter));
+    let n = Session.next_gensym (Effect.perform Runtime.Get_session) in
+    VSymbol (Printf.sprintf "%s~%d" prefix n));
   ()
 
 let register_match_aliases () =

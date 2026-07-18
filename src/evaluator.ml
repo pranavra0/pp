@@ -21,11 +21,12 @@ let make_thunk_ca (expr : expr) (env : env) : value =
   let cfg_hash = hash_concat ("cfg" :: List.map hash_value cfg) in
   let hh = hash_concat ("handlers" :: List.concat_map (fun (n,h)->[n;h]) handlers) in
   let h = hash_concat ["thunk"; Types.hash_expr expr; env.env_hash; caps_hash; cfg_hash; hh] in
-  match Hashtbl.find_opt thunk_store h with
+  let session = Effect.perform Runtime.Get_session in
+  match Session.find_thunk session h with
   | Some existing -> VThunk existing
   | None ->
       let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env; type_ann = None; thunk_loc = None; config_hash = cfg_hash; thunk_persist = false; node_caps = [] } in
-      Hashtbl.add thunk_store h t;
+      Session.add_thunk session h t;
       VThunk t
 
 let make_thunk_ca_typed (expr : expr) (ty : expr) (loc : (string * int) option) (env : env) : value =
@@ -36,11 +37,12 @@ let make_thunk_ca_typed (expr : expr) (ty : expr) (loc : (string * int) option) 
   let cfg_hash = hash_concat ("cfg" :: List.map hash_value cfg) in
   let hh = hash_concat ("handlers" :: List.concat_map (fun (n,h)->[n;h]) handlers) in
   let h = hash_concat ["thunk-typed"; Types.hash_expr expr; Types.hash_expr ty; env.env_hash; caps_hash; cfg_hash; hh] in
-  match Hashtbl.find_opt thunk_store h with
+  let session = Effect.perform Runtime.Get_session in
+  match Session.find_thunk session h with
   | Some existing -> VThunk existing
   | None ->
       let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env; type_ann = Some ty; thunk_loc = loc; config_hash = cfg_hash; thunk_persist = false; node_caps = [] } in
-      Hashtbl.add thunk_store h t;
+      Session.add_thunk session h t;
       VThunk t
 
 (* Runtime check for gradual type annotations, kept at the evaluator boundary
@@ -109,7 +111,7 @@ let cell_authorized_for (caps : Capability.t list) (cell_id : string) : bool =
      uses. An unregistered (in THIS process) domain name never verifies —
      the sound, conservative default, like Cell.Unknown. *)
   | Cell.Domain { name; sub = _ } ->
-      (match Hashtbl.find_opt Runtime.domain_registry name with
+      (match Session.find_domain (Effect.perform Runtime.Get_session) name with
        | Some entry -> Capability.subseteq entry.Runtime.dm_cap caps
        | None -> false)
 
@@ -213,30 +215,34 @@ let poison_thunk (name : string) (env : env) : value =
    ample headroom while keeping the trampoline nesting shallow
    even for 10^6-deep recursion (~500 trampoline entries). *)
 let max_force_depth = 2000
-let force_depth = ref 0
+let session () = Effect.perform Runtime.Get_session
+let force_depth () = Session.force_depth (session ())
+let set_force_depth n = Session.set_force_depth (session ()) n
+let incr_force_depth () = Session.incr_force_depth (session ())
+let decr_force_depth () = Session.decr_force_depth (session ())
 
 
 
 (* Main force entry-point: uses native stack for shallow chains,
    switches to trampoline when depth exceeds threshold. *)
 let rec force (v : value) : value =
-  incr force_depth;
+  incr_force_depth ();
   match v with
-  | _ when !force_depth > max_force_depth ->
-      let saved = !force_depth in
-      force_depth := 0;
+  | _ when force_depth () > max_force_depth ->
+      let saved = force_depth () in
+      set_force_depth 0;
       let r = trampoline_force v in
-      force_depth := saved;
-      decr force_depth;
+      set_force_depth saved;
+      decr_force_depth ();
       r
   | VThunk t ->
       (match t.thunk_status with
        | Evaluated result ->
-           decr force_depth;
+           decr_force_depth ();
            Node.replay_node_reads t node_key_of;
            force result
        | Evaluating ->
-           decr force_depth;
+           decr_force_depth ();
            failwith "infinite recursion detected (forcing a thunk already being evaluated)"
        | Unevaluated ->
            (* Persistent nodes route through the store. Identity is the
@@ -246,12 +252,12 @@ let rec force (v : value) : value =
              let nk = node_key_of t in
               let run () = eval t.thunk_expr t.thunk_env in
              (match force_node ~key:nk ~run t with
-              | result -> decr force_depth; force result
-              | exception e -> decr force_depth; raise e)
+              | result -> decr_force_depth (); force result
+              | exception e -> decr_force_depth (); raise e)
            else
              evaluate_and_store_no_key t)
   | _ ->
-      decr force_depth;
+      decr_force_depth ();
       v
 
 and evaluate_and_store_no_key (t : thunk) : value =
@@ -264,15 +270,15 @@ and evaluate_and_store_no_key (t : thunk) : value =
          the next force misreports "infinite recursion". Reset and re-raise the
          real error (ephemeral thunks are not failure-cached). *)
       t.thunk_status <- Unevaluated;
-      decr force_depth;
+      decr_force_depth ();
       raise e
   in
   (* enforce_type resets thunk_status on failure; also unwind force_depth,
      which is evaluator-local, so a failed check does not leak trampoline
      depth (the body-eval guard above already decrements on its own raise). *)
-  (try Node.enforce_type t result with e -> decr force_depth; raise e);
+  (try Node.enforce_type t result with e -> decr_force_depth (); raise e);
   t.thunk_status <- Evaluated result;
-  decr force_depth;
+  decr_force_depth ();
   force result
 
 (* LAW 20: a node's persistent key is its code structure plus the *value* hashes
@@ -339,7 +345,7 @@ and is_data_closed (t : thunk) : bool =
 (* ---- Main Evaluator (non-tail) ---- *)
 
 and eval (e : expr) (env : env) : value =
-  Primitives.current_env_ref := env;
+  Session.set_current_env (session ()) env;
   eval_tail e env (fun v -> v)
 
 (* ---- Tail-position evaluator ---- *)
@@ -348,7 +354,7 @@ and eval (e : expr) (env : env) : value =
    OCaml stack — this is how TCO works. *)
 
 and eval_tail (e : expr) (env : env) (k : value -> value) : value =
-  Primitives.current_env_ref := env;
+  Session.set_current_env (session ()) env;
   match e with
   | ELiteral v -> k v
 
@@ -690,7 +696,7 @@ and apply_tail (fn : value) (args : value list) (env : env) (k : value -> value)
   | VBuiltin (_, f) ->
       (* No re-wrapping of the error text: primitives name themselves in their
          own messages, and wrapping here would mangle user `error` messages. *)
-      Primitives.current_env_ref := env;
+      Session.set_current_env (session ()) env;
       k (f args)
 
   | _ ->
@@ -717,10 +723,10 @@ and trampoline_force (v : value) : value =
                 if t.thunk_persist then begin
                   let h = node_key_of t in
                   let run () =
-                    let saved = !force_depth in
-                    force_depth := 0;
+                    let saved = force_depth () in
+                    set_force_depth 0;
                     let r = eval t.thunk_expr t.thunk_env in
-                    force_depth := saved;
+                    set_force_depth saved;
                     r
                   in
                   let result = force_node ~key:h ~run t in
@@ -731,10 +737,10 @@ and trampoline_force (v : value) : value =
                   (* ephemeral thunk — no store check *)
                   t.thunk_status <- Evaluating;
                   let result =
-                    let saved = !force_depth in
-                    force_depth := 0;
+                    let saved = force_depth () in
+                    set_force_depth 0;
                     let r = eval t.thunk_expr t.thunk_env in
-                    force_depth := saved;
+                    set_force_depth saved;
                     r
                   in
                   (match t.type_ann with
@@ -955,29 +961,29 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
 
 (* Evaluate an expression in the initial environment *)
 let eval_program (e : expr) : value =
-  Runtime.with_top_level (Effect.perform Runtime.Get_invocation) ~f:(fun () ->
+  Runtime.with_top_level (Effect.perform Runtime.Get_session)
+    (Effect.perform Runtime.Get_invocation) ~f:(fun () ->
     let env = Primitives.initial_env () in
     eval e env
   ) ()
 
 (* Evaluate and force (for top-level expressions) *)
 let eval_and_force (e : expr) : value =
-  Runtime.with_top_level (Effect.perform Runtime.Get_invocation) ~f:(fun () ->
+  Runtime.with_top_level (Effect.perform Runtime.Get_session)
+    (Effect.perform Runtime.Get_invocation) ~f:(fun () ->
     force (eval_program e)
   ) ()
 
 (* Initialize the evaluator state *)
-let init () =
-  if not Runtime.state.keep_thunks then Hashtbl.clear thunk_store;
+let init session ~retain_thunks =
+  Session.begin_evaluation ~retain_thunks session;
   (* Probes: the registry is script-tier registration state, re-established
      by the program's own top-level `(register-probe ...)` forms on every
      fresh evaluation — reset it here unconditionally (like the macro table
      below), never gated on keep_thunks: a --watch pass always re-executes
      the whole program's top level, so stale entries from a prior pass must
      not survive into one that no longer registers them. Pinned per-pass
-     results (Runtime.probe_values) are a separate lifetime, cleared at the
-     three points main.ml's watch loop clears Store.run_pins. *)
-  Hashtbl.reset Runtime.domain_registry;
+     results have a separate pass lifetime. *)
   (* Reset the macro table AND the gensym counter at the start
      of every fresh run — the counter matters for LAW 20 stability (a
      gensym'd name can be baked into an expanded node's code, so re-running
@@ -985,8 +991,6 @@ let init () =
      program could hash differently run to run. Unconditional (not gated
      on Runtime.keep_thunks like thunk_store): both are derived fresh from
      source text each run, never persistent cache state. *)
-  Backend.r.macro_reset ();
-  Primitives.gensym_counter := 0;
   Backend.r.force <- force;
   Backend.r.eval <- eval;
   Backend.r.apply <- apply;

@@ -392,10 +392,8 @@ let load_blob (h : string) : string option =
   with _ -> None
 
 (* Per-run pin table: cell-id → content hash of the run's snapshot. *)
-let run_pins : (string, string) Hashtbl.t = Hashtbl.create 64
-
 let unpin_file (path : string) : unit =
-  Hashtbl.remove run_pins (file_cell_id path)
+  Session.remove_run_pin (Effect.perform Runtime.Get_session) (file_cell_id path)
 
 (* Re-observe a cell's current world state (one arm per Cell kind). *)
 let observe_cell (cell_id : string) : string option =
@@ -403,7 +401,7 @@ let observe_cell (cell_id : string) : string option =
   | Cell.File path ->
       (* A pinned cell re-observes its run snapshot, keeping validity
          decisions consistent with what this run's nodes actually read. *)
-      (match Hashtbl.find_opt run_pins cell_id with
+      (match Session.find_run_pin (Effect.perform Runtime.Get_session) cell_id with
        | Some h -> Some h
        | None -> hash_file_opt path)
   | Cell.RuntimeFile path ->
@@ -427,7 +425,7 @@ let observe_cell (cell_id : string) : string option =
   | Cell.Handler name -> (try Some (Runtime.observe_handler name) with _ -> None)
   | Cell.Proc name -> (try Runtime.observe_proc name with _ -> None)
   (* Probes: re-observing evaluates the probe (once per pass, pinned in
-     Runtime.probe_values — the SAME cache `(probe name)` reads) via the
+     the same session cache `(probe name)` reads) via the
      Runtime.probe_observer hook (Primitives.probe_observe_for_store, wired
      in main.ml — Store cannot depend on Primitives directly). A probe this
      process never registered returns None: cannot re-observe, never
@@ -439,7 +437,7 @@ let observe_cell (cell_id : string) : string option =
      over a fresh disk read so a re-observation inside the same pass never
      contradicts what was actually read. *)
   | Cell.Sealed path ->
-      (match Hashtbl.find_opt Runtime.sealed_pins cell_id with
+      (match Session.find_sealed_pin (Effect.perform Runtime.Get_session) cell_id with
        | Some bytes -> Some (hash_string bytes)
        | None -> hash_file_opt path)
   (* A third-party domain's own sub-cell, via the domain's own
@@ -490,7 +488,8 @@ let read_file_cell (path : string) : string =
     Runtime.record_read cell h;
     content
   in
-  match Hashtbl.find_opt run_pins cell with
+  let session = Effect.perform Runtime.Get_session in
+  match Session.find_run_pin session cell with
   | Some h ->
       (match load_blob h with
        | Some content -> serve content h
@@ -498,13 +497,13 @@ let read_file_cell (path : string) : string =
            (* Blob evicted mid-run: fall back to disk and re-pin. *)
            let content = read_raw path in
            let h' = store_blob content in
-           Hashtbl.replace run_pins cell h';
+           Session.set_run_pin session cell h';
            serve content h')
   | None ->
       let content = read_raw path in
       let h = hash_string content in
       ignore (store_blob content);
-      Hashtbl.replace run_pins cell h;
+      Session.set_run_pin session cell h;
       serve content h
 
 (* ---- Sealed cells: read as a CONFIDENTIAL cell observation ----
@@ -513,7 +512,7 @@ let read_file_cell (path : string) : string =
    decision lives in the caller — Process.ml's slurp/read-file paths) never
    calls [store_blob]/[read_file_cell]: the bytes must never reach
    ~/.pp/store, by design. Bytes instead
-   pin in Runtime.sealed_pins, in-memory only, keyed by the "sealed:<path>"
+   pin in the session, in-memory only, keyed by the "sealed:<path>"
    cell id exactly like [run_pins] keys a "file:<path>" cell id — same
    per-run consistency (first read of a run pins; later reads of the SAME
    cell in the SAME run serve the pin), different storage (never the CAS).
@@ -526,13 +525,14 @@ let sealed_cell_id (path : string) : string =
 
 let read_sealed_cell (path : string) : string =
   let cell = sealed_cell_id path in
-  match Hashtbl.find_opt Runtime.sealed_pins cell with
+  let session = Effect.perform Runtime.Get_session in
+  match Session.find_sealed_pin session cell with
   | Some bytes ->
       Runtime.record_read cell (hash_string bytes);
       bytes
   | None ->
       let bytes = read_raw path in
-      Hashtbl.replace Runtime.sealed_pins cell bytes;
+      Session.set_sealed_pin session cell bytes;
       Runtime.record_read cell (hash_string bytes);
       bytes
 

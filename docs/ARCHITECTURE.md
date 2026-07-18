@@ -12,7 +12,7 @@ flowchart TD
     src([source text])
     reader[reader]
     walker["tree-walker evaluator (evaluator.ml)"]
-    runtime["shared runtime state (runtime.ml)<br/>handler stack, capabilities,<br/>config, thunk store"]
+    runtime["dynamic evaluation scope (runtime.ml)<br/>plus owned session state (session.ml)"]
 
     src --> reader
     reader -- "expr (AST)" --> walker
@@ -99,15 +99,14 @@ continuations.
   `slurp` calls are checked at perform time, against the full path, matched
   component by component.
 
-## Shared state (`runtime.ml`)
+## Evaluation state
 
-The engine reads and writes one set of module-global references: the
-handler stack, the current capability set, the config stack, the thunk
-store, and the trace-frame stack nodes push while forcing so world-reads
-land in the right trace. This also covers the initial `--grant`
-capabilities, the registry of scripting-tier fenced actions
-(`Runtime.fenced_actions`), and the unknown-status policy
-(`Runtime.fenced_policy`).
+`Session.t` owns evaluation- and pass-lifetime state: thunk memoization,
+macros and gensyms, domains and probes, observations, sealed and file pins,
+fenced actions, and stabilization's node index. Its named lifecycle operations
+reset or retain those families at evaluation, pass, and watch boundaries.
+Independent sessions share no mutable evaluation state. `runtime.ml` provides
+the dynamic effect scope used while evaluating a session.
 
 ## The persistent node cache (`store.ml`)
 
@@ -214,6 +213,7 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/printer_braces.ml` | Renders an `expr` back to brace-surface text: the `pp fmt --to-braces` half. |
 | `src/printer_sexpr.ml` | Renders an `expr` back to s-expression text: the `--to-sexpr` half. |
 | `src/runtime.ml` | The mutable runtime state used by the engine. The immutable invocation is supplied explicitly at the top-level dynamic-scope boundary. |
+| `src/session.ml` | The abstract owner of evaluation/pass state and its `begin_evaluation`, `begin_pass`, and `begin_watch` lifecycle transitions. |
 | `src/evaluator.ml` | The tree-walking evaluator, the project's sole engine, holding `force`, `eval`, effects, the `thunk_store`, and the node rebuilder (`force_node`, `run_node_body`). |
 | `src/macro.ml` | `defmacro` expansion: a function from syntax-as-values to syntax, run at the expansion boundary. |
 | `src/primitives.ml` | Built-in functions and the initial environment. |

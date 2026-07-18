@@ -3,30 +3,15 @@ include Effects
 open Types
 open Effect
 
+type _ Effect.t += Get_session : Session.t Effect.t
+
 type state = {
-  mutable observe_all : bool;
-  mutable observed_all : (string * string) list;
-  mutable proc_observer : string -> string option;
-  mutable probe_observer : string -> string option;
-  mutable keep_thunks : bool;
-  mutable fenced_actions : (string * value) list;
   mutable island_fetch_enabled : bool;
-  mutable domain_cell_observer : string -> string -> string option;
 }
 
 let state = {
-  observe_all = false;
-  observed_all = [];
-  proc_observer = (fun _ -> None);
-  probe_observer = (fun _ -> None);
-  keep_thunks = false;
-  fenced_actions = [];
   island_fetch_enabled = false;
-  domain_cell_observer = (fun _ _ -> None);
 }
-
-(* Content-addressed thunk store *)
-let thunk_store : (string, thunk) Hashtbl.t = Hashtbl.create 1024
 
 (* ---- Trace recording: the verifying-trace cache-validity mechanism ----
 
@@ -59,7 +44,7 @@ let thunk_store : (string, thunk) Hashtbl.t = Hashtbl.create 1024
 let record_read (cell_id : string) (observed_hash : string) : unit =
   ignore (Effect.perform (Record_read (cell_id, observed_hash)));
   if Effect.perform Get_observe_all then
-    state.observed_all <- (cell_id, observed_hash) :: state.observed_all
+    Session.add_observation (Effect.perform Get_session) (cell_id, observed_hash)
 
 (* ---- Per-node sandbox (LAW 18) ----
 
@@ -133,7 +118,7 @@ let sandbox_resolve ?(create = false) (path : string) : string option =
    asymmetric partial removal. *)
 
 let observe_proc (name : string) : string option =
-  state.proc_observer name
+  ignore name; None
 
 (* Probes: Store-facing re-observation hook, wired in main.ml
    (`Runtime.probe_observer := Primitives.probe_observe_for_store`) exactly
@@ -142,7 +127,7 @@ let observe_proc (name : string) : string option =
    the reverse would be a module cycle), so the hook is the indirection. *)
 
 let observe_probe (name : string) : string option =
-  state.probe_observer name
+  Session.observe_probe (Effect.perform Get_session) name
 
 let config_cell_id (key : string) : string = Cell.(to_string (Config key))
 let handler_cell_id (name : string) : string = Cell.(to_string (Handler name))
@@ -352,7 +337,7 @@ let with_form_location (e : expr) (f : unit -> 'a) : 'a =
    `register-domain`, and `(probe name)`'s lookup / Store's re-observation
    hook both read this one table — stage 1's probe_registry generalized in
    place, not a parallel table. *)
-type domain_entry = {
+type domain_entry = Session.domain_entry = {
   dm_namespace : string list;
     (* Cell-id PREFIXES this domain owns, for stratification (LAW 30 full
        form) — []  for a probe (bottom write authority: nothing to
@@ -372,39 +357,29 @@ type domain_entry = {
        pattern generalized to third-party domains). *)
 }
 
-let domain_registry : (string, domain_entry) Hashtbl.t = Hashtbl.create 16
-
 (* Store-facing hook for a `domain:<name>:<sub>` cell's re-observation, wired
    in main.ml (mirrors proc_observer/probe_observer just below) — Store
    cannot depend on Primitives directly (module-cycle reasons identical to
    those hooks). *)
 
 let observe_domain_cell (name : string) (sub : string) : string option =
-  state.domain_cell_observer name sub
+  Session.observe_domain (Effect.perform Get_session) name sub
 
-(* Per-pass pinned probe results: cleared at exactly the three points the
-   watch loop clears Store.run_pins (main.ml) — probes are LAW 38's declared-
-   nondeterminism mechanism, so a value must never survive past the pass
-   that observed it (unlike sealed_pins below, which share the same clearing
-   points for a completely different reason — per-run read consistency,
-   not volatility). *)
-let probe_values : (string, value) Hashtbl.t = Hashtbl.create 16
+(* Probe results have pass lifetime because probes are LAW 38's declared
+   nondeterminism mechanism. *)
 
 (* ---- Sealed cells: in-memory-only bytes for a CapSecret-covered read ----
 
    A read covered by CapSecret and NOT by CapFilesystem returns VSealed and
-   pins the raw bytes here (cell-id -> bytes), keyed exactly like
-   Store.run_pins but NEVER touching store_blob/the CAS — that is the whole
-   point: secret bytes must never land under
+   pins the raw bytes in the session without touching the CAS — secret bytes
+   must never land under
    ~/.pp/store. Per-run consistency: the first read of a sealed cell in
    a run pins its bytes; later reads of the SAME cell in the SAME run serve
    the pin, so one run can never observe two versions of one secret. Cleared
-   at exactly the three points Store.run_pins is cleared (main.ml's watch
-   loop) — same points, different justification per cell kind. *)
-let sealed_pins : (string, string) Hashtbl.t = Hashtbl.create 16
-
-let with_top_level (invocation : Invocation.t) ~f x =
+   at the pass boundary. *)
+let with_top_level (session : Session.t) (invocation : Invocation.t) ~f x =
   try f x with
+  | effect Get_session, k -> Effect.Deep.continue k session
   | effect Get_invocation, k -> Effect.Deep.continue k invocation
   | effect Get_capabilities, k -> Effect.Deep.continue k (Invocation.initial_capabilities invocation)
   | effect Get_config, k -> Effect.Deep.continue k []
