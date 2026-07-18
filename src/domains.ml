@@ -320,7 +320,7 @@ let run_pass (pass : pass) : unit =
   record_epoch pass.invocation pass.forced_desired
 
 (* Whether at least one registered domain can actually be converged — used
-   by main.ml to decide whether a bare register-domain-only program (no
+   by command_reconcile.ml to decide whether a bare register-domain-only program (no
    --reconcile/--supervise flag) should still run the generic pass. *)
 let any_write_domain_registered () : bool =
   Session.fold_domains (Effect.perform Dynamic_scope.Get_session) (fun _ entry acc ->

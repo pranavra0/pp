@@ -35,7 +35,7 @@ let has_fs_write path =
     (Effect.perform Dynamic_scope.Get_capabilities)
 (* Capabilities.check_process recurses through CapCompose (and so, via
    check_process's own CapCompose arm, through however many levels a
-   domain's registered cap is typically exactly that round-trip (main.ml's
+   domain's registered cap is typically exactly that round-trip (command_run.ml's
    glue registers the proc domain's write-cap as `(current-capabilities)`
    itself, a single CapCompose value, not narrowed the way fs's is via
    cap-restrict), so `current_capabilities` inside observe/apply is a

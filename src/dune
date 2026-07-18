@@ -21,7 +21,8 @@
    process scheduler domain_prims fenced island primitives domains reconciliation
    evaluator evaluator_thunks evaluator_application evaluator_node evaluator_effects evaluator_scope evaluator_forms evaluator_match
    macro stabilize repl
-   transport remote store_gc lint)
+   transport remote store_gc lint cli app_context command_run command_reconcile command_watch
+   command_frontend command_developer command_cluster command_gc command_island command_eval command_dispatch)
  (libraries pp.kernel unix)
  (flags -no-strict-sequence))
 

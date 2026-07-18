@@ -73,14 +73,14 @@ let execute_file ?(retain_thunks = false) (path : string) : value list =
   execute_string ~retain_thunks ~source:path source
 
 
-(* ---- Run several sources under ONE init (main.ml's domain-glue
+(* ---- Run several sources under ONE init (command_run.ml's domain-glue
    wiring) ----
 
    `execute_string` calls `init()`
    unconditionally — correct for a single top-level run, but `init()`
    resets the session's domain registry (Evaluator.init, alongside thunk memo/
    handler_stack/macro table), so two SEPARATE calls would make the second
-   wipe out a `register-domain` a first call just performed. main.ml's
+   wipe out a `register-domain` a first call just performed. command_run.ml's
    --reconcile/--supervise auto-wiring needs exactly that: a small glue
    snippet that loads stdlib/domain-fs.pp and calls register-domain, THEN
    the user's program — sharing one registry, one macro table, one

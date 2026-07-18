@@ -96,7 +96,8 @@ continuations.
   restoring it on normal return, on exception, and on tail call.
 - Capabilities (`capability.ml`): authority tokens for filesystem,
   network, and process access. They enter the system only at the root,
-  through `--grant`, which `main.ml` parses into the initial capability set.
+  through `--grant`, which `cli.ml` parses and `app_context.ml` validates into
+  the initial capability set.
   User code cannot construct a capability, only narrow or combine one,
   using `cap-restrict` or `cap-compose`. Filesystem reads, writes, and
   `slurp` calls are checked at perform time, against the full path, matched
@@ -131,7 +132,7 @@ without splitting language semantics into competing engines.
 
 The operation graph contains:
 `force`, `eval`, and `apply`, plus a separate node-policy view for keying,
-rebuilding, and hit resolution. `main.ml` supplies that complete value to each
+rebuilding, and hit resolution. `app_context.ml` supplies that complete value to each
 new session. Consumers receive only the view they need; macro expansion receives
 frontend services explicitly at each source-entry boundary, and plain deep
 forcing receives only `force`. There are no installable evaluator callbacks.
@@ -250,7 +251,7 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/comments.ml` | The side channel `pp fmt` uses to carry comments across a surface transpile. |
 | `src/cap_token.ml` | Signed capability grants — cluster tokens — for cross-machine authority. |
 | `src/invocation.ml` | The abstract, immutable, validated command invocation: source roots, initial authority, program arguments/files, reconciliation and GC inputs. |
-| `src/host_services.ml` | The immutable interface for canonicalization, time, home discovery, and secret-file I/O; production operations are composed in `main.ml`, while tests use complete deterministic values. |
+| `src/host_services.ml` | The immutable interface for canonicalization, time, home discovery, and secret-file I/O; production construction lives in `app_context.ml`, while tests use complete deterministic values. |
 | `src/effects.ml` | The OCaml 5 effect declarations that hold handler, config, and trace state in dynamic extent. |
 | `src/evaluator_ops.ml` | Immutable, capability-shaped evaluator operations: semantic force/eval/apply and the narrower node-policy view. Each session receives a complete value at construction. |
 | `src/version.ml` | Single source of truth for the version string. |
@@ -302,6 +303,18 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/transport.ml` | Cross-machine sync of hash-named store artifacts, plus the capability-gated serve-hit path. |
 | `src/stabilize.ml` | The push scheduler: a side table from `node_key` to `thunk`, plus dirty reset using `Store_index`'s reverse edges. |
 | `src/repl.ml` | REPL and file-execution helpers. |
+| `src/cli.ml` | Raw flag collection, validation, typed invocation options, and canonical help rows; callbacks do not execute commands or mutate runtime policy. |
+| `src/app_context.ml` | Production host services and per-command invocation, store, scheduler, session, evaluator, and reconciliation composition. |
+| `src/command_dispatch.ml` | Command precedence, signal scope, and top-level command dispatch. |
+| `src/command_eval.ml` | Run/eval execution, pin dumps, and schedule transparency checks. |
+| `src/command_frontend.ml` | Format, surface emission, round-trip, comment, and hash comparison commands. |
+| `src/command_developer.ml` | Help, version, property, lint, graph, and island-pins command entry points. |
+| `src/command_run.ml` | Source execution, domain glue, desired-state construction, and host-slice selection. |
+| `src/command_reconcile.ml` | Recovery policy and reconcile/supervise pass execution. |
+| `src/command_watch.ml` | Watch polling and stabilize dirty propagation. |
+| `src/command_island.ml` | Island update command lifecycle. |
+| `src/command_cluster.ml` | Cluster initialization, transport, publish/serve, pin preparation, and remote member lifecycle. |
+| `src/command_gc.ml` | Explicit GC and mark-by-replay command lifecycle. |
 | `src/kernel_props.ml` | Derived generators and the kernel properties (hash injectivity, quote/printer round-trip) the fuzzer checks. |
 | `src/lint.ml` | The convention checker for pp source files. |
 | `src/fswalk.ml` | One shared filesystem tree walk for its several callers. |
@@ -310,12 +323,12 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 
 | File | Role |
 |---|---|
-| `src/main.ml` | The CLI entry point: the one typed flag table, `--grant` parsing, and dispatch to the REPL, a file, or `-e`. |
+| `src/main.ml` | Startup, CLI parse/validation, production host construction, dispatch, and top-level error-to-exit conversion. |
 | `tools/fuzz.ml` | The metamorphic fuzzer, described in [TESTING.md](TESTING.md). |
 
-## CLI surface (`main.ml`)
+## CLI surface (`src/cli.ml`)
 
 Run `pp --help` for the canonical flag list. This document does not
 duplicate it, since an earlier copy here drifted out of date. A single
-typed table drives help text, parsing, and dispatch together, so they
-cannot disagree.
+A single typed table drives help text and raw parsing; validated options are
+passed to command modules, so command behavior is not hidden in flag callbacks.

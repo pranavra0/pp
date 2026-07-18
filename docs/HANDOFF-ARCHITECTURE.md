@@ -174,8 +174,6 @@ two orchestration functions.
 
 - `evaluator.ml` still mixes language semantics, loading, capability gates, and
   lifecycle wiring.
-- `main.ml` owns option parsing, wiring, commands, watch loops, reconciliation,
-  and cluster behavior.
 - REPL, lint, fenced-action, and several counter states
   remain process-global.
 - Current documentation contains duplicated entries, incomplete prose, and
@@ -185,34 +183,6 @@ two orchestration functions.
 
 The order matters. Later boundaries assume earlier ownership and tests.
 
-
-### 18. Decompose the CLI into command modules
-
-**Purpose:** make application composition obvious and `main.ml` disposable.
-
-**Work:**
-
-- Separate raw option parsing, validation, dependency construction, and command
-  execution.
-- Define one handler per coherent command family: run/eval, fmt/lint, why/graph,
-  watch/stabilize, reconcile/supervise, island operations, cluster/transport,
-  GC, and developer/property commands.
-- Construct host services, invocation, store, session, scheduler, and evaluator
-  once per command as required.
-- Remove command behavior and lifecycle mutation from flag callbacks.
-- Keep `main.ml` to startup, parse/validate, composition, dispatch, and top-level
-  error-to-exit conversion.
-
-**Likely files:** `src/main.ml`, new app modules, `src/repl.ml`, command-specific
-modules.
-
-**Verify:** `pp --help`, every CLI shell test, suite; compare exit codes and
-stdout/stderr for representative commands.
-
-**Exit:** `main.ml` contains no language, cache, reconciliation, or cluster
-algorithm; each command's dependencies are visible in its constructor/call.
-
-**Non-goal:** change CLI spelling or output.
 
 ### 19. Introduce physical libraries and directory boundaries
 

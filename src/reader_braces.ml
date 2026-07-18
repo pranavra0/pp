@@ -2346,7 +2346,7 @@ let read_one ?(source : string = "<?>") (input : string) : expr =
    macro layer: `quote`/`defmacro` still traffic in sexpr data). The reader's
    own "<?>" default label — reached ONLY by `pp -e` (repl.ml's
    execute_string, called with no ~source, i.e. no
-   real file at all) — also reads braces. Synthetic glue source tags main.ml builds for itself
+   real file at all) — also reads braces. Synthetic glue source tags command_run.ml builds for itself
    (e.g. "<stdlib:list.pp>", "<domain-glue:fs>" — literally sexpr text,
    `(load ...)`) are NOT this label and keep falling through to the sexpr
    reader untouched. The interactive REPL no longer reaches this dispatcher

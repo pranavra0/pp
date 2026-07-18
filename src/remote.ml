@@ -18,7 +18,7 @@
    CI-loopback's shared disk, or scp'd identically in a real deployment)
    and runs it as an ordinary `pp` invocation, under `--schedule serial` —
    so it calls Node.rebuild itself, via its OWN completely
-   normal main.ml control flow, no second "evaluate on member" function
+   normal command dispatch control flow, no second "evaluate on member" function
    anywhere. Whatever nodes that run forces (our assigned batch keys, plus
    duplicate computation across machines is SOUND by determinism, LAW 37)
 
@@ -157,9 +157,9 @@ let parse_pin_probe_line (line : string) : (string * string) option =
    circuits the observe-fn for the whole pass exactly like an
    already-observed value would mid-pass.
 
-   Also called directly by main.ml's standalone `--pin-file` flag —
+   Also called directly by command_cluster.ml's standalone `--pin-file` flag —
    the SAME function, sans the --remote-node token/keys/reply
-   ceremony (which was always separate wiring in main.ml, never part of
+   ceremony (which is separate wiring in command_cluster.ml, never part of
    this function's own signature). *)
 let preseed_pins_from_file session ~(pins_file : string) : unit =
   if Sys.file_exists pins_file then
