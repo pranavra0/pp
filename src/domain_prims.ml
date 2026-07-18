@@ -18,6 +18,9 @@
 
 open Types
 
+let force value =
+  Session.force (Effect.perform Dynamic_scope.Get_session) value
+
 let require_no_node_body (who : string) : unit =
   if Effect.perform Dynamic_scope.In_node then
     failwith (who ^ ": may not be called inside a node body (writes are domain-apply-only)")
@@ -47,7 +50,7 @@ let has_process_cap () =
    see actual leaves, not unevaluated thunks — the same shape as
    Fenced.force_deep / Primitives.force_deep, duplicated here for the same
    reason those two are already duplicated rather than shared (small, and
-   each module's force_hook indirection is set up independently). *)
+   each caller supplying its evaluator's force operation). *)
 
 (* ---- tree-observe: {relpath -> content-hash}, fs-read-gated ----
    Moved from Reconciler.observed_files; returns a pp VMap instead of an
@@ -169,7 +172,7 @@ let domain_state_put (key : string) (v : value) : unit =
   | VNil -> if Sys.file_exists path then (try Sys.remove path with _ -> ())
   | _ ->
       Store.ensure_dir dir;
-      let forced = Force_deep.force_deep_plain v in
+      let forced = Force_deep.force_deep_plain ~force v in
       (match Codec.encode_value forced with
        | Some content -> Store.atomic_write path content
        | None -> failwith "domain-state-put: value is not serializable data")
@@ -183,9 +186,9 @@ let domain_state_put (key : string) (v : value) : unit =
 
 (* Field values in a spec map are lazy ("keys forced, values lazy" —
    primitives.ml's hash-map/map-insert): every lookup below forces the
-   value via force_hook before matching. *)
+   value before matching. *)
 let find_field kvs key =
-  Option.map (fun (_, v) -> Backend.r.force v)
+  Option.map (fun (_, v) -> force v)
     (List.find_opt (fun (k', _) -> string_like k' = Some key) kvs)
 
 let expect_string_field where kvs key =
@@ -199,14 +202,14 @@ let expect_opt_string_field where kvs key default_ =
   | None -> default_
 
 let expect_string_list_field where kvs key =
-  let one v = match string_like (Backend.r.force v) with Some s -> s | None -> failwith (Printf.sprintf "%s: %s elements must be strings, got %s" where key (string_of_value v)) in
+  let one v = match string_like (force v) with Some s -> s | None -> failwith (Printf.sprintf "%s: %s elements must be strings, got %s" where key (string_of_value v)) in
   match find_field kvs key with
   | None | Some VNil -> []
   | Some (VVector arr) -> Array.to_list (Array.map one arr)
   | Some (VPair _ as lst) ->
       let rec collect = function
         | VNil -> []
-        | VPair (a, d) -> one a :: collect (Backend.r.force d)
+        | VPair (a, d) -> one a :: collect (force d)
         | other -> failwith (Printf.sprintf "%s: %s must be a list/vector of strings, got %s"
                               where key (string_of_value other))
       in collect lst
@@ -218,8 +221,8 @@ let expect_env_field where kvs key =
   | None | Some VNil -> []
   | Some (VMap envkvs) ->
       List.map (fun (k, v) ->
-        let ks = match string_like (Backend.r.force k) with Some s -> s | None -> failwith (where ^ ": env key must be a string, got " ^ string_of_value k) in
-        let vs = match string_like (Backend.r.force v) with Some s -> s | None -> failwith (where ^ ": env value must be a string, got " ^ string_of_value v) in
+        let ks = match string_like (force k) with Some s -> s | None -> failwith (where ^ ": env key must be a string, got " ^ string_of_value k) in
+        let vs = match string_like (force v) with Some s -> s | None -> failwith (where ^ ": env value must be a string, got " ^ string_of_value v) in
         (ks, vs))
         envkvs
   | Some other -> failwith (where ^ ": " ^ key ^ " must be a map, got " ^ string_of_value other)
@@ -240,7 +243,7 @@ let proc_spawn (spec : value) : value =
   require_no_node_body "proc-spawn";
   if not (has_process_cap ()) then
     raise (Capability_error "proc-spawn: capability error: no process authority");
-  let kvs = match Backend.r.force spec with
+  let kvs = match force spec with
     | VMap kvs -> kvs
     | other -> failwith ("proc-spawn: spec must be a map, got " ^ string_of_value other)
   in
@@ -253,7 +256,7 @@ let proc_spawn (spec : value) : value =
     | Some p -> p
     | None -> failwith ("proc-spawn: command not found for service " ^ name ^ ": " ^ cmd)
   in
-  let spec_hash = Types.hash_value (Force_deep.force_deep_plain spec) in
+  let spec_hash = Types.hash_value (Force_deep.force_deep_plain ~force spec) in
   Journal.append (Journal.ProcStartIntent { name; spec_hash });
   Store.ensure_dir (domain_io_dir ());
   let argv = resolved :: args in

@@ -8,7 +8,10 @@ type domain_entry = {
 }
 type t
 
-val create : unit -> t
+val create : Evaluator_ops.t -> t
+val force : t -> Types.value -> Types.value
+val core_operations : t -> Evaluator_ops.core
+val node_operations : t -> Evaluator_ops.node
 val begin_evaluation : retain_thunks:bool -> t -> unit
 val begin_pass : t -> unit
 val begin_watch : t -> unit
@@ -23,6 +26,7 @@ val set_domain : t -> string -> domain_entry -> unit
 val fold_domains : t -> (string -> domain_entry -> 'a -> 'a) -> 'a -> 'a
 val find_probe : t -> string -> Types.value option
 val set_probe : t -> string -> Types.value -> unit
+val preseed_probe : t -> string -> Types.value -> unit
 val iter_probes : t -> (string -> Types.value -> unit) -> unit
 val find_sealed_pin : t -> string -> string option
 val set_sealed_pin : t -> string -> string -> unit
@@ -33,6 +37,7 @@ val add_fenced_action : t -> string * Types.value -> unit
 val take_fenced_actions : t -> (string * Types.value) list
 val find_run_pin : t -> string -> string option
 val set_run_pin : t -> string -> string -> unit
+val preseed_run_pin : t -> string -> string -> unit
 val remove_run_pin : t -> string -> unit
 val iter_run_pins : t -> (string -> string -> unit) -> unit
 val set_node_thunk : t -> string -> Types.thunk -> unit

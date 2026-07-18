@@ -469,12 +469,12 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
                forms are located against it (not the reader's "<?>"
                default) — LAW 29, via eval_expressions below,
                which per-form-locates each of the loaded file's forms.
-               Macro expansion: routed through the shared hook so a
+               Macro expansion runs at this source-entry boundary so a
                `load`ed file's macros are visible to the rest of THIS
                file's forms and vice versa (load is sequential evaluation,
                one shared macro table — Macro.ml's documented decision). *)
             let contents = Loader.read path in
-            let exprs = Backend.r.expand_toplevel
+            let exprs = expand_toplevel
                           (Reader_braces.read_dispatch ~source:path ~path contents) in
             ignore (eval_expressions exprs env_ref);
             go rest
@@ -584,10 +584,10 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       k mod_val
 
   | ELoad path ->
-      (* Same shared-expansion-hook treatment as EDo's ELoad
+      (* Same source-entry expansion treatment as EDo's ELoad
          arm above. *)
       let contents = Loader.read path in
-      let exprs = Backend.r.expand_toplevel
+      let exprs = expand_toplevel
                     (Reader_braces.read_dispatch ~source:path ~path contents) in
       let env_ref = ref env in
       k (eval_expressions exprs env_ref)
@@ -867,6 +867,12 @@ and has_fs_read (path : string) : bool =
 and has_fs_write (path : string) : bool =
   List.exists (fun cap -> Capability.check_fs_write cap (World_path.canonical path)) (Effect.perform Dynamic_scope.Get_capabilities)
 
+and expand_toplevel exprs =
+  Macro.expand_toplevel_list
+    { Macro.eval = eval;
+      force_deep = Primitives.force_deep;
+      initial_env = Primitives.initial_env }
+    exprs
 
 (* (load-module "file.pp"): evaluate the file against a fresh initial env and
    package the bindings it added as a module value. Shared by the tail
@@ -875,7 +881,7 @@ and eval_module_file (path : string) : value =
   let source = Loader.read path in
   (* Dispatch on [path]'s extension; the location label stays the
      reader's "<?>" default. *)
-  let exprs = Backend.r.expand_toplevel
+  let exprs = expand_toplevel
                 (Reader_braces.read_dispatch ~path source) in
   let mod_ref = ref (Primitives.initial_env ()) in
   ignore (eval_expressions exprs mod_ref);
@@ -919,10 +925,10 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
       | ELoad path ->
           (* `~source:path`: the loaded file's OWN path (not the reader's
              "<?>" default), so ITS forms are in turn correctly located.
-             Routed through the shared macro-expansion hook, same as every
+             Expanded at this source-entry boundary, same as every
              other Reader.read_string call site. *)
           let contents = Loader.read path in
-          let sub_exprs = Backend.r.expand_toplevel
+          let sub_exprs = expand_toplevel
                             (Reader_braces.read_dispatch ~source:path ~path contents) in
           eval_expressions sub_exprs env
       | _ ->
@@ -958,34 +964,20 @@ let eval_and_force (e : expr) : value =
   ) ()
 
 (* Initialize the evaluator state *)
+let resolve_if_hit t key =
+  match Store.hit ~key ~authorized:(cell_authorized_for t.node_caps) with
+  | Store.HitOk value -> t.thunk_status <- Evaluated value; true
+  | Store.HitFailed _ -> true
+  | Store.Miss -> false
+
+let operations = {
+  Evaluator_ops.core = { force; eval; apply };
+  node = {
+    key_of = node_key_of;
+    run_body = (fun ~key ~run thunk -> Node.run_node_body ~key ~run thunk);
+    resolve_hit = resolve_if_hit;
+  };
+}
+
 let init session ~retain_thunks =
-  Session.begin_evaluation ~retain_thunks session;
-  (* Probes: the registry is script-tier registration state, re-established
-     by the program's own top-level `(register-probe ...)` forms on every
-     fresh evaluation — reset it here unconditionally (like the macro table
-     below), never gated on keep_thunks: a --watch pass always re-executes
-     the whole program's top level, so stale entries from a prior pass must
-     not survive into one that no longer registers them. Pinned per-pass
-     results have a separate pass lifetime. *)
-  (* Reset the macro table AND the gensym counter at the start
-     of every fresh run — the counter matters for LAW 20 stability (a
-     gensym'd name can be baked into an expanded node's code, so re-running
-     the SAME source must reproduce the SAME counter sequence, or the same
-     program could hash differently run to run. Unconditional (not gated
-     on session thunk retention): both are derived fresh from
-     source text each run, never persistent cache state. *)
-  Backend.r.force <- force;
-  Backend.r.eval <- eval;
-  Backend.r.apply <- apply;
-  (* Let Primitives' scheduler-aware force-deep compute tree-walker
-     node keys and run node bodies without a dependency cycle (Primitives is
-     compiled before Evaluator). *)
-  Backend.r.node_key_of <- node_key_of;
-  Backend.r.run_node_body <- (fun ~key ~run t -> Node.run_node_body ~key ~run t);
-  Backend.r.resolve_if_hit <- (fun t key ->
-    (* Same node_caps-gated authority as force_node (LAW 23b) — this is
-       the force-deep collect pass's own pre-check of the same key. *)
-    match Store.hit ~key ~authorized:(cell_authorized_for t.node_caps) with
-    | Store.HitOk v -> t.thunk_status <- Evaluated v; true
-    | Store.HitFailed _ -> true (* known outcome; the ordinary force path re-raises it *)
-    | Store.Miss -> false);
+  Session.begin_evaluation ~retain_thunks session

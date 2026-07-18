@@ -163,7 +163,7 @@ let parse_pin_probe_line (line : string) : (string * string) option =
    the SAME function, sans the --remote-node token/keys/reply
    ceremony (which was always separate wiring in main.ml, never part of
    this function's own signature). *)
-let preseed_pins_from_file ~(pins_file : string) : unit =
+let preseed_pins_from_file session ~(pins_file : string) : unit =
   if Sys.file_exists pins_file then
     String.split_on_char '\n' (Store.read_raw pins_file)
     |> List.iter (fun line ->
@@ -177,7 +177,7 @@ let preseed_pins_from_file ~(pins_file : string) : unit =
                   | None ->
                       failwith ("pp: --pin-file: pin-probe " ^ name
                                 ^ ": undecodable value: " ^ value_text)
-                  | Some v -> Session.set_probe (Effect.perform Dynamic_scope.Get_session) name v)
+                  | Some v -> Session.preseed_probe session name v)
            else
              match parse_pin_line line with
              | None -> failwith ("pp: --pin-file: unparseable pin line: " ^ line)
@@ -195,7 +195,7 @@ let preseed_pins_from_file ~(pins_file : string) : unit =
                         failwith (Printf.sprintf
                           "pp: --pin-file: blob %s failed to re-verify \
                            (corrupt) — refusing to pin" hash)
-                      else Session.set_run_pin (Effect.perform Dynamic_scope.Get_session) cell hash))
+                      else Session.preseed_run_pin session cell hash))
 
 (* ---- "blob:<hash>" refs embedded in a node's RESULT value ----
 

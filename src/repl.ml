@@ -24,6 +24,12 @@ let init ?(retain_thunks = false) session =
   Evaluator.init session ~retain_thunks;
   global_env := Primitives.initial_env ()
 
+let macro_services () =
+  let core = Session.core_operations (Effect.perform Dynamic_scope.Get_session) in
+  { Macro.eval = core.eval;
+    force_deep = Primitives.force_deep;
+    initial_env = Primitives.initial_env }
+
 (* LAW 29: a runtime error escaping a top-level form reports that
    form's source location — unless its message already carries one (a
    " at …:<line>" suffix), so located errors are never double-located.
@@ -54,7 +60,7 @@ let execute_string ?(retain_thunks = false) ?(source : string = "<?>") (input : 
      dispatches on the extension; every other source uses the
      sexpr reader). *)
   let exprs =
-    Macro.expand_toplevel_list
+    Macro.expand_toplevel_list (macro_services ())
       (Reader_braces.read_dispatch ~source ~path:source input) in
   List.map process_expr exprs
 
@@ -85,7 +91,7 @@ let execute_sources ?(retain_thunks = false) (sources : (string * string) list) 
   init ~retain_thunks (Effect.perform Dynamic_scope.Get_session);
   List.concat_map (fun (source, input) ->
     let exprs =
-      Macro.expand_toplevel_list
+      Macro.expand_toplevel_list (macro_services ())
         (Reader_braces.read_dispatch ~source ~path:source input) in
     List.map process_expr exprs)
     sources
@@ -304,7 +310,7 @@ let repl_loop () =
           if tty then append_history input;
           (try
              let exprs =
-               Macro.expand_toplevel_list
+               Macro.expand_toplevel_list (macro_services ())
                  (Reader_braces.read_string ~source:"<repl>" input) in
              List.iter (fun e ->
                let v = eval_one e in

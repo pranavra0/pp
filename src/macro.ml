@@ -25,15 +25,12 @@
      sequential). A macro used before its own definition sees an ordinary
      unbound-symbol/application error, never a special "forward reference"
      diagnostic — same as calling an undefined function.
-   - `load`ed files share the SAME (global, mutable) macro table as their
+   - `load`ed files share the current session's macro table with their
      loader: `load` is sequential evaluation, so a macro the loaded file
      defines is visible to the rest of the LOADING file's forms that follow
      the `load`, and a loader's earlier macros are visible inside the loaded
      file. Every call site that turns a fresh `Reader.read_string` form list
-     into something a backend will see routes through
-     `expand_toplevel_list` (or, from evaluator.ml, which cannot depend on
-     this module without a cycle, through `Primitives.expand_toplevel_ref`,
-     which this module installs below).
+     into evaluation routes through `expand_toplevel_list`.
    - `defmacro` is NOT specially recognized inside `do`/`module`/`fn`/`def`/
      `node`/`delay`/... bodies: only the true top level (of a file, a REPL
      input, or a loaded file) counts. Anywhere else in the tree, a raw
@@ -63,10 +60,14 @@
 
 open Types
 
-(* name -> (parameter names, body expr). Persistent, mutable, shared by both
-   evaluation paths (the whole point of a single expansion point) — reset at the
-   start of every fresh run (Evaluator.init, wired below), exactly like
-   thunk_store/handler_stack/etc. Fixed-arity only: no variadic/rest-param
+type services = {
+  eval : expr -> env -> value;
+  force_deep : value -> value;
+  initial_env : unit -> env;
+}
+
+(* name -> (parameter names, body expr), owned by the current session and reset
+   at the start of every fresh evaluation. Fixed-arity only: no variadic/rest-param
    macros (pp functions do not have rest params either). *)
 (* A guard against a macro whose expansion never stabilizes (each expansion
    producing another use of the same or another macro, forever). Expansion
@@ -127,9 +128,7 @@ let match_defmacro (e : expr) : (string * string list * expr) option =
    value (Types.quote_to_value, total over every expr form), bind the macro's
    parameters to those values (plain values, not thunks — they are already
    fully-realized quoted data, and the macro body is expansion-time code,
-   not the program proper), run the body through the TREE-WALKER (LAW 36:
-   "the tree-walker is the oracle" — expansion is backend-independent by
-   construction, since it happens before either backend is even chosen),
+   not the program proper), run the body through the tree walker (LAW 36),
    force the result deeply (a macro body may itself end in a delay/thunked
    tail), and convert the resulting value back to syntax.
 
@@ -145,7 +144,7 @@ let match_defmacro (e : expr) : (string * string list * expr) option =
    ordinary data-structure primitives instead (the same restriction Racket's
    phase separation and Scheme's begin-for-syntax impose for the same
    reason). *)
-let apply_macro expansion_count ~(name : string) ~(params : string list) ~(body : expr)
+let apply_macro services expansion_count ~(name : string) ~(params : string list) ~(body : expr)
     ~(args : expr list) ~(loc : (string * int) option) : expr =
   incr expansion_count;
   if !expansion_count > max_expansions then
@@ -157,10 +156,10 @@ let apply_macro expansion_count ~(name : string) ~(params : string list) ~(body 
   let arg_values = List.map Types.quote_to_value args in
   let macro_env =
     List.fold_left2 (fun e p v -> Types.extend_env e p v)
-      (Primitives.initial_env ()) params arg_values
+      (services.initial_env ()) params arg_values
   in
   let result =
-    try Primitives.force_deep (Evaluator.eval body macro_env)
+    try services.force_deep (services.eval body macro_env)
     with
     | Failure msg -> macro_error name msg
     | Types.Capability_error msg -> macro_error name msg
@@ -188,13 +187,13 @@ let apply_macro expansion_count ~(name : string) ~(params : string list) ~(body 
    typed bodies), and attached to the top of every expansion so an error
    inside expanded code still cites a real file:line — the macro CALL
    site's, not the macro DEFINITION's. *)
-let rec expand_expr session expansion_count (loc : (string * int) option) (e : expr) : expr =
-  let expand_expr = expand_expr session expansion_count in
+let rec expand_expr services session expansion_count (loc : (string * int) option) (e : expr) : expr =
+  let expand_expr = expand_expr services session expansion_count in
   match e with
   | ELocated (l, inner) -> ELocated (l, expand_expr (Some l) inner)
   | EApply (ESymbol name, args) when Session.find_macro session name <> None ->
       let (params, body) = Option.get (Session.find_macro session name) in
-      expand_expr loc (apply_macro expansion_count ~name ~params ~body ~args ~loc)
+      expand_expr loc (apply_macro services expansion_count ~name ~params ~body ~args ~loc)
   | EApply (fn, args) -> EApply (expand_expr loc fn, List.map (expand_expr loc) args)
   | EQuote _ -> e
   | ELiteral _ | ESymbol _ -> e
@@ -226,19 +225,19 @@ let rec expand_expr session expansion_count (loc : (string * int) option) (e : e
               List.map (fun (p, guard, body) ->
                 (p, Option.map (expand_expr loc) guard, expand_expr loc body)) arms)
 
-(* The shared top-level driver hook: every call site that turns a fresh
+(* The shared top-level expansion: every call site that turns a fresh
    `Reader.read_string` result into a list the evaluator is about to process
    MUST pass it through here first (repl.ml's execute_string/repl_loop and
-   evaluator.ml's ELoad/eval_module_file via Primitives.expand_toplevel_ref).
+   evaluator.ml's ELoad/eval_module_file).
    Walks the list IN ORDER, updating the
-   global macro table as `defmacro` forms are found (so later forms — in
+   session macro table as `defmacro` forms are found (so later forms — in
    THIS list, or a subsequent call, e.g. after a `load` returns — see them),
    and expanding every other form. A recognized `defmacro` is replaced by
    `(quote name)` (evaluates to the macro's own name as a symbol — mirrors
    `def` returning its closure), so the 1:1 form-per-value contract every
    top-level driver relies on (REPL/execute_string's `List.map`) is
    unaffected. *)
-let expand_toplevel_list (exprs : expr list) : expr list =
+let expand_toplevel_list services (exprs : expr list) : expr list =
   let session = Effect.perform Dynamic_scope.Get_session in
   let expansion_count = ref 0 in
   List.map (fun e ->
@@ -248,8 +247,5 @@ let expand_toplevel_list (exprs : expr list) : expr list =
         Session.set_macro session name (params, body);
         relocate loc (EQuote (ESymbol name))
     | None ->
-        relocate loc (expand_expr session expansion_count loc inner))
+        relocate loc (expand_expr services session expansion_count loc inner))
     exprs
-
-let () =
-  Backend.r.expand_toplevel <- expand_toplevel_list

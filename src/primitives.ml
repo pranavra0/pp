@@ -1,14 +1,13 @@
 (* pp primitives — built-in functions *)
 
 open Types
-open Backend
 
-
-(* Reference to the current environment — updated by evaluator at eval entry *)
-
+let session () = Effect.perform Dynamic_scope.Get_session
+let core_operations () = Session.core_operations (session ())
+let node_operations () = Session.node_operations (session ())
 
 (* Force helpers for builtins *)
-let force_val (v : value) : value = Backend.r.force v
+let force_val (v : value) : value = (core_operations ()).force v
 let force_args (args : value list) : value list = List.map force_val args
 
 (* ---- gensym (defmacro hygiene) ----
@@ -62,11 +61,13 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
   let seen_pairs : value list ref = ref [] in
   let jobs = ref [] in
   let race_width () = match Scheduler.state.policy with Scheduler.Race n -> n | _ -> 1 in
-  let key_of (t : thunk) : string = Backend.r.node_key_of t
+  let node = node_operations () in
+  let core = core_operations () in
+  let key_of (t : thunk) : string = node.key_of t
   in
   let job_run (t : thunk) (key : string) () : value =
-    let run () = Backend.r.eval t.thunk_expr t.thunk_env in
-    Backend.r.run_node_body ~key ~run t
+    let run () = core.eval t.thunk_expr t.thunk_env in
+    node.run_body ~key ~run t
   in
   let rec walk (v : value) : unit =
     match v with
@@ -78,7 +79,7 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
              let k = key_of t in
              if not (Hashtbl.mem seen_keys k) then begin
                Hashtbl.add seen_keys k ();
-               if not (Backend.r.resolve_if_hit t k) then
+               if not (node.resolve_hit t k) then
                  jobs := { Scheduler.j_key = k; j_run = job_run t k;
                            j_width = race_width (); j_thunk = t }
                          :: !jobs
@@ -126,21 +127,21 @@ let force_deep (v : value) : value =
        (match collect_unevaluated_nodes v with
         | [] -> ()
         | jobs -> Scheduler.dispatch_batch jobs));
-  Force_deep.force_deep_plain v
+  Force_deep.force_deep_plain ~force:(core_operations ()).force v
 
 (* ---- Probes: shared evaluate-and-pin logic ----
 
    One implementation, used both by the `probe` primitive (registered below)
-   and by the Store-facing re-observation hook wired in main.ml
+   and by Store-facing re-observation wired in main.ml
    (Dynamic_scope.probe_observer) — so a live program's `(probe name)` read and a
    later trace-verification pass compute the identical value the identical
    way and can never disagree (mirrors Dynamic_scope.proc_observer/observe_proc's
    existing shape, same reason). *)
 
-(* Invoke a function value on already-evaluated args, without going through
-   EApply: all closures go through Backend.r.apply. *)
+(* Invoke a function value on already-evaluated args. *)
 let invoke (fn : value) (args : value list) : value =
-  Backend.r.apply fn args (Session.current_env (Effect.perform Dynamic_scope.Get_session))
+  (core_operations ()).apply fn args
+    (Session.current_env (Effect.perform Dynamic_scope.Get_session))
 
 (* Call a zero-argument function value. *)
 let call_zero_arg (fn : value) : value =
@@ -193,7 +194,7 @@ let probe_value_for (name : string) : value option =
            Session.set_probe session name result;
            Some result)
 
-(* Store.observe_cell's "probe:" arm, via the Dynamic_scope.probe_observer hook
+(* Store.observe_cell's "probe:" arm, via the session probe observer
    (wired in main.ml). Re-observing a probe cell at hit time evaluates the
    probe (once per pass, pinned — [probe_value_for] is the SAME cache
    `(probe name)` reads below, so a node forced earlier in this pass and one
@@ -380,7 +381,7 @@ let register_lists () =
 
   (* (map f lst) — the missing batch fan-out point: unlike EApply, which
      forces every argument inline one at a time, `map` applies [f] to each element via the
-     apply hook and conses the results WITHOUT forcing them: `(map compile
+     evaluator apply operation and conses the results WITHOUT forcing them: `(map compile
      names)` therefore yields a list of UNFORCED node thunks that
      force-deep can dispatch as one parallel batch, instead of the usual
      one-at-a-time-inline forcing every other application path gives you.
@@ -406,7 +407,7 @@ let register_lists () =
         let fn = force_val f in
         (* Apply [fn] to one (possibly unforced — e.g. a node thunk) arg
            without forcing the RESULT. All closures go through
-           Backend.r.apply via invoke. *)
+           the evaluator apply operation via invoke. *)
         let apply1 (arg : value) : value =
           invoke fn [arg]
         in
@@ -565,7 +566,7 @@ let register_metaeval () =
     let args = force_args args in
     match args with
     | [VString code] ->
-        (* Route through the same shared expansion hook as every other
+        (* Route through the same shared expansion boundary as every other
            top-level-shaped form list: eval-pp code may itself
            define or use macros, sequentially, exactly like a file's top
            level — and it must not see a stale macro table from a PRIOR
@@ -576,7 +577,13 @@ let register_metaeval () =
            macro table, so it can use macros already defined by the calling
            program and any it defines here are visible to LATER eval-pp
            calls in the same run, but never resets between them. *)
-        let exprs = Backend.r.expand_toplevel (Reader.read_string code) in
+        let core = core_operations () in
+        let macro_services = {
+          Macro.eval = core.eval;
+          force_deep;
+          initial_env;
+        } in
+        let exprs = Macro.expand_toplevel_list macro_services (Reader.read_string code) in
         (* Capture the calling env into a local ref — avoid clobbering
            current_env_ref during inner evaluations. *)
         let local_env = ref (Session.current_env (Effect.perform Dynamic_scope.Get_session)) in
@@ -592,13 +599,13 @@ let register_metaeval () =
               new_defs := (name, closure) :: !new_defs;
               if !new_defs = [] then VNil else VEnvMap (List.rev !new_defs)
           | [EDefValue (name, rhs)] ->
-              let v = Backend.r.eval rhs !local_env in
+              let v = core.eval rhs !local_env in
               local_env := Types.extend_env !local_env name v;
               new_defs := (name, v) :: !new_defs;
               VEnvMap (List.rev !new_defs)
           | [last] ->
               (* Pure expression: evaluate and force *)
-              force_val (Backend.r.eval last !local_env)
+              force_val (core.eval last !local_env)
           | (ELocated (_, inner)) :: rest -> go (inner :: rest)
           | (EDef (name, params, body)) :: rest ->
               let closure = Types.make_closure ~name:(Some name) params body local_env in
@@ -606,12 +613,12 @@ let register_metaeval () =
               new_defs := (name, closure) :: !new_defs;
               go rest
           | (EDefValue (name, rhs)) :: rest ->
-              let v = Backend.r.eval rhs !local_env in
+              let v = core.eval rhs !local_env in
               local_env := Types.extend_env !local_env name v;
               new_defs := (name, v) :: !new_defs;
               go rest
           | e :: rest ->
-              ignore (force_val (Backend.r.eval e !local_env));
+              ignore (force_val (core.eval e !local_env));
               go rest
         in go exprs
     | _ -> failwith "eval-pp expects a string"
@@ -926,7 +933,7 @@ let register_domains () =
     | None -> failwith (where ^ ": expected a string or keyword, got "
                          ^ string_of_value v)
   in
-  let find_kv = Force_deep.find_kv in
+  let find_kv = Force_deep.find_kv ~force:force_val in
   register "register-domain" (fun args ->
     if Effect.perform Dynamic_scope.In_node then
       failwith "register-domain: may not be called inside a node body (script-tier only, like fenced)";

@@ -28,7 +28,10 @@ val force_node :
 val init : Session.t -> retain_thunks:bool -> unit
 (** Reset the evaluator state, clear the thunk store (unless
     thunk retention is requested), reset the macro table and gensym
-    counter, and wire the backend hooks for [force]/[eval]/[apply]. *)
+    counter. *)
+
+val operations : Evaluator_ops.t
+(** The complete immutable operation graph for the sole evaluator. *)
 
 val is_data_closed : Types.thunk -> bool
 (** Check whether a thunk's free variables are data-closed (no capabilities

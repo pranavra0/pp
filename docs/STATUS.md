@@ -220,8 +220,7 @@ A macro is a function from syntax-as-values to syntax-as-values:
 `(defmacro (name params...) body...)` in s-expressions, or `defmacro
 name(params) { body }` in braces. It receives its argument forms already
 converted to values by `quote_to_value`, runs its body through the
-tree-walker so expansion is backend-independent by construction, since it
-happens before the evaluator runs (LAW 36), and the result is
+tree-walker before ordinary source evaluation begins (LAW 36), and the result is
 converted back to syntax by `Types.value_to_expr`.
 
 Expansion is the one shared step (`macro.ml`) the expansion boundary passes

@@ -624,7 +624,25 @@ let host_services_property () =
    | _ -> fail "host-services-fake" "deterministic clock did not expire token")
 
 let session_property () =
-  let a = Session.create () and b = Session.create () in
+  let a = Session.create Evaluator.operations
+  and b = Session.create Evaluator.operations in
+  let invocation =
+    match Invocation.create ~source_roots:[] ~initial_capabilities:[]
+      ~command_argv:[] ~program_argv:[] ~program_files:[]
+      ~initial_grant_specs:[] ~program_reconcile_root:None
+      ~program_supervise:false ~program_member_name:None
+      ~program_desired_object:None ~gc_keep_epochs:1
+      ~fenced_policy:Invocation.Abort with
+    | Ok invocation -> invocation
+    | Error message -> fail "evaluator-instance" message; assert false
+  in
+  let evaluate session n =
+    Dynamic_scope.with_top_level session invocation
+      ~f:(fun () -> (Session.core_operations session).eval
+          (ELiteral (VInt n)) Types.empty_env) ()
+  in
+  if evaluate a 1 <> VInt 1 || evaluate b 2 <> VInt 2 then
+    fail "evaluator-instance" "constructed evaluator operations crossed sessions";
   Session.set_macro a "only-a" ([], ELiteral (VInt 1));
   Session.set_probe a "probe" (VInt 1);
   Session.set_probe b "probe" (VInt 2);

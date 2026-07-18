@@ -34,10 +34,13 @@
 
 open Types
 
-let find_kv kvs key = Force_deep.find_kv kvs key
+let force value =
+  Session.force (Effect.perform Dynamic_scope.Get_session) value
+
+let find_kv kvs key = Force_deep.find_kv ~force kvs key
 
 let plan_map (plan : value) : (value * value) list =
-  match Backend.r.force plan with
+  match force plan with
   | VMap kvs -> kvs
   | other -> failwith ("domain diff: plan must be a map with :items and :summary, got "
                        ^ string_of_value other)
@@ -60,14 +63,14 @@ let summary_pair (entry : value) : string * string =
       failwith "domain diff: :summary entries must be 2-element [key value] pairs"
     else (arr.(0), arr.(1))
   in
-  let (k, v) = match Backend.r.force entry with
+  let (k, v) = match force entry with
     | VVector arr -> two_of arr
     | VPair (a, VPair (b, VNil)) -> (a, b)
     | other -> failwith ("domain diff: :summary entries must be [key value] pairs, got "
                          ^ string_of_value other)
   in
-  let ks = match string_like (Backend.r.force k) with Some s -> s | None -> failwith ("domain diff: :summary key must be a string, got " ^ string_of_value k) in
-  let vs = match Backend.r.force v with
+  let ks = match string_like (force k) with Some s -> s | None -> failwith ("domain diff: :summary key must be a string, got " ^ string_of_value k) in
+  let vs = match force v with
     | VString s -> s
     | other -> failwith ("domain diff: :summary value must be a string, got " ^ string_of_value other) in
   (ks, vs)
@@ -78,7 +81,7 @@ let plan_summary (plan : value) : (string * string) list =
   | Some (VPair _ as lst) ->
       let rec collect = function
         | VNil -> []
-        | VPair (a, d) -> summary_pair a :: collect (Backend.r.force d)
+        | VPair (a, d) -> summary_pair a :: collect (force d)
         | other -> failwith ("domain diff: :summary must be a list/vector of pairs, got "
                              ^ string_of_value other)
       in collect lst

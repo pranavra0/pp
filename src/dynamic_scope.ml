@@ -66,7 +66,8 @@ let config_lookup key =
 
 let observe_config key =
   match config_lookup key with
-  | Some value -> hash_value (Backend.r.force value)
+  | Some value ->
+      hash_value (Session.force (Effect.perform Get_session) value)
   | None -> config_absent_hash
 
 let observe_handler name =

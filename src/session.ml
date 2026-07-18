@@ -7,15 +7,18 @@ type domain_entry = {
   dm_observe_cell : Types.value option;
 }
 type t = {
+  operations : Evaluator_ops.t;
   thunks : (string, Types.thunk) Hashtbl.t;
   macros : (string, string list * Types.expr) Hashtbl.t;
   mutable gensym : int;
   domains : (string, domain_entry) Hashtbl.t;
   probes : (string, Types.value) Hashtbl.t;
+  preseeded_probes : (string, Types.value) Hashtbl.t;
   sealed_pins : (string, string) Hashtbl.t;
   mutable observations : (string * string) list;
   mutable fenced_actions : (string * Types.value) list;
   run_pins : (string, string) Hashtbl.t;
+  preseeded_run_pins : (string, string) Hashtbl.t;
   node_thunks : (string, Types.thunk) Hashtbl.t;
   mutable probe_observer : string -> string option;
   mutable domain_observer : string -> string -> string option;
@@ -25,18 +28,27 @@ type t = {
   mutable fenced_epoch : string;
 }
 
-let create () = {
+let create operations = {
+  operations;
   thunks = Hashtbl.create 1024; macros = Hashtbl.create 16; gensym = 0;
   domains = Hashtbl.create 16; probes = Hashtbl.create 16;
+  preseeded_probes = Hashtbl.create 16;
   sealed_pins = Hashtbl.create 16; observations = [];
   fenced_actions = [];
-  run_pins = Hashtbl.create 64; node_thunks = Hashtbl.create 256;
+  run_pins = Hashtbl.create 64; preseeded_run_pins = Hashtbl.create 64;
+  node_thunks = Hashtbl.create 256;
   probe_observer = (fun _ -> None); domain_observer = (fun _ _ -> None);
   current_env = Types.empty_env; force_depth = 0; cache_bust = 0; fenced_epoch = "";
 }
+let force t = t.operations.core.force
+let core_operations t = t.operations.core
+let node_operations t = t.operations.node
 let begin_pass t =
   Hashtbl.clear t.probes; Hashtbl.clear t.sealed_pins;
-  Hashtbl.clear t.run_pins; t.observations <- []
+  Hashtbl.clear t.run_pins;
+  Hashtbl.iter (Hashtbl.replace t.probes) t.preseeded_probes;
+  Hashtbl.iter (Hashtbl.replace t.run_pins) t.preseeded_run_pins;
+  t.observations <- []
 let begin_evaluation ~retain_thunks t =
   if not retain_thunks then begin Hashtbl.clear t.thunks; Hashtbl.clear t.node_thunks end;
   Hashtbl.clear t.macros; t.gensym <- 0; Hashtbl.clear t.domains;
@@ -53,6 +65,9 @@ let set_domain t = Hashtbl.replace t.domains
 let fold_domains t f init = Hashtbl.fold f t.domains init
 let find_probe t = Hashtbl.find_opt t.probes
 let set_probe t = Hashtbl.replace t.probes
+let preseed_probe t name value =
+  Hashtbl.replace t.preseeded_probes name value;
+  Hashtbl.replace t.probes name value
 let iter_probes t f = Hashtbl.iter f t.probes
 let find_sealed_pin t = Hashtbl.find_opt t.sealed_pins
 let set_sealed_pin t = Hashtbl.replace t.sealed_pins
@@ -63,6 +78,9 @@ let add_fenced_action t x = t.fenced_actions <- x :: t.fenced_actions
 let take_fenced_actions t = let xs = List.rev t.fenced_actions in t.fenced_actions <- []; xs
 let find_run_pin t = Hashtbl.find_opt t.run_pins
 let set_run_pin t = Hashtbl.replace t.run_pins
+let preseed_run_pin t cell hash =
+  Hashtbl.replace t.preseeded_run_pins cell hash;
+  Hashtbl.replace t.run_pins cell hash
 let remove_run_pin t = Hashtbl.remove t.run_pins
 let iter_run_pins t f = Hashtbl.iter f t.run_pins
 let set_node_thunk t = Hashtbl.replace t.node_thunks

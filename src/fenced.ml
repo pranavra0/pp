@@ -12,6 +12,9 @@
 
 open Types
 
+let force value =
+  Session.force (Effect.perform Dynamic_scope.Get_session) value
+
 let epoch_counter = ref 0
 
 let new_epoch () : unit =
@@ -27,11 +30,11 @@ let action_key ~(epoch : string) ~(kind : string) ~(spec_hash : string) : string
   Hasher.hash_concat ["fenced"; epoch; kind; spec_hash]
 
 let hash_spec (spec : value) : string =
-  Types.hash_value (Backend.r.force spec)
+  Types.hash_value (force spec)
 
 (* Deep-force and validate that the spec is a map. *)
 let force_spec_map (spec : value) : (value * value) list =
-  match Backend.r.force spec with
+  match force spec with
   | VMap kvs -> kvs
   | other -> failwith ("fenced: spec must be a map, got " ^ string_of_value other)
 
@@ -45,7 +48,7 @@ let run_command (spec : value) : value =
   let kvs = force_spec_map spec in
   let find key =
     List.find_opt (fun (k, _) ->
-      match Backend.r.force k with
+      match force k with
       | VString s | VKeyword s | VSymbol s -> s = key
       | _ -> false)
       kvs
@@ -54,13 +57,13 @@ let run_command (spec : value) : value =
   | None -> VMap []
   | Some (_, v) ->
       let argv =
-        match Backend.r.force v with
+        match force v with
         | VNil -> []
         | VPair _ as lst ->
             let rec collect = function
               | VNil -> []
               | VPair (a, d) ->
-                  (match Backend.r.force a with
+                  (match force a with
                    | VString s | VKeyword s | VSymbol s -> s
                    | other -> failwith ("fenced: run argv must be strings, got " ^ string_of_value other))
                   :: collect d
@@ -68,7 +71,7 @@ let run_command (spec : value) : value =
             in collect lst
         | VVector arr ->
             Array.to_list (Array.map (fun x ->
-              match Backend.r.force x with
+              match force x with
               | VString s | VKeyword s | VSymbol s -> s
               | other -> failwith ("fenced: run argv must be strings, got " ^ string_of_value other)) arr)
         | VString s -> ["/bin/sh"; "-c"; s]
@@ -115,7 +118,7 @@ let result_hash (v : value) : string = Types.hash_value v
 let register (kind : string) (spec : value) : unit =
   if Effect.perform Dynamic_scope.In_node then
     failwith "fenced: fenced effects may not appear inside node bodies (LAW 31)";
-  let forced = Force_deep.force_deep_plain spec in
+  let forced = Force_deep.force_deep_plain ~force spec in
   (match Codec.encode_value forced with
    | Some _ -> ()
    | None ->
@@ -126,7 +129,7 @@ let register (kind : string) (spec : value) : unit =
   (* Store the already-forced spec: hash_spec/run_command/store_fenced_spec
      downstream (execute_current) must see the same data this check saw, or
      store_fenced_spec's own encode could see unforced thunks again and
-     silently drop the write. force_hook is idempotent on non-thunk values,
+     silently drop the write. Forcing is idempotent on non-thunk values,
      so re-forcing [forced] later is a no-op. *)
   Session.add_fenced_action (Effect.perform Dynamic_scope.Get_session) (kind, forced)
 

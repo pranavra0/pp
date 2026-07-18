@@ -171,8 +171,6 @@ two orchestration functions.
 
 ## Current risks confirmed on `master`
 
-- `Backend.r` mixes evaluator cycle-breaking functions with host services and
-  relies on mutable initialization order.
 - Reset behavior is distributed among `main.ml`, `evaluator.ml`,
   `macro.ml`, `primitives.ml`, `repl.ml`, `store.ml`, `domains.ml`, and
   `fenced.ml`.
@@ -223,40 +221,6 @@ clears and assignments.
 executable characterization.
 
 **Non-goal:** change those decisions.
-
-### 8. Replace evaluator hooks with constructed evaluator operations
-
-**Purpose:** remove mutable initialization order and the remaining semantic
-portion of `Backend.r`.
-
-**Work:**
-
-- Define the smallest recursive evaluator operations needed by primitives,
-  macros, deep forcing, domains, and node policy: force, eval, apply, and any
-  genuinely inseparable node operation.
-- Build the operations as a complete immutable value at evaluator/session
-  construction, or use locally recursive module/function construction where
-  clearer.
-- Pass narrowed views to consumers. `Macro` should not receive node operations;
-  `Force_deep` should not receive macro operations.
-- Move macro expansion ownership out of the evaluator hook record. Expansion is
-  a frontend operation performed at every source-entry boundary.
-- Remove `Backend.r` and its default implementations once the last consumer is
-  migrated.
-- Add a test that constructs and uses two evaluator/session instances without
-  shared hook mutation.
-
-**Likely files:** `src/backend.*` (eventually deleted), `src/evaluator.*`,
-`src/primitives.ml`, `src/force_deep.*`, `src/macro.*`, `src/domains.ml`,
-`src/node.ml`, `src/main.ml`.
-
-**Verify:** evaluator tests, macro tests, scheduling tests, domains, suite and
-full fuzzer.
-
-**Exit:** no mutable callback installation remains; no operation can be called
-before its implementation is installed; `Backend` is deleted.
-
-**Non-goal:** add another evaluator or duplicate `eval` dispatch.
 
 ### 9. Make both readers reentrant
 
@@ -733,5 +697,4 @@ not only expected stdout.
 
 ## Immediate next action
 
-Execute roadmap item 8 only: replace evaluator hooks with constructed evaluator
-operations.
+Execute roadmap item 9 only: make both readers reentrant.

@@ -109,6 +109,13 @@ Independent sessions share no mutable evaluation state. `dynamic_scope.ml`
 provides bracketed dynamic effect scopes while evaluating a session; it owns no
 mutable resources or registries.
 
+The sole tree walker constructs one immutable evaluator operation graph:
+`force`, `eval`, and `apply`, plus a separate node-policy view for keying,
+rebuilding, and hit resolution. `main.ml` supplies that complete value to each
+new session. Consumers receive only the view they need; macro expansion receives
+frontend services explicitly at each source-entry boundary, and plain deep
+forcing receives only `force`. There are no installable evaluator callbacks.
+
 ## The persistent node cache (`store.ml`)
 
 The persistent content-addressed store lives at `~/.pp/store/objects` and
@@ -202,7 +209,7 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/invocation.ml` | The abstract, immutable, validated command invocation: source roots, initial authority, program arguments/files, reconciliation and GC inputs. |
 | `src/host_services.ml` | The immutable interface for canonicalization, time, home discovery, and secret-file I/O; production operations are composed in `main.ml`, while tests use complete deterministic values. |
 | `src/effects.ml` | The OCaml 5 effect declarations that hold handler, config, and trace state in dynamic extent. |
-| `src/backend.ml` | The evaluator-only record of init-time hook functions that breaks the kernel↔library dependency cycle. It contains no host operations. |
+| `src/evaluator_ops.ml` | Immutable, capability-shaped evaluator operations: semantic force/eval/apply and the narrower node-policy view. Each session receives a complete value at construction. |
 | `src/version.ml` | Single source of truth for the version string. |
 
 ### Application library (`pp`)
@@ -218,8 +225,8 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/loader.ml` | Source loading under bounded interpreter authority, including trace recording. |
 | `src/error_context.ml` | Attaches the innermost source-form location to evaluation errors. |
 | `src/sandbox.ml` | Creates, resolves, and removes node-local scratch directories. |
-| `src/session.ml` | The abstract owner of evaluation/pass state and its `begin_evaluation`, `begin_pass`, and `begin_watch` lifecycle transitions. |
-| `src/evaluator.ml` | The tree-walking evaluator, the project's sole engine, holding `force`, `eval`, effects, the `thunk_store`, and the node rebuilder (`force_node`, `run_node_body`). |
+| `src/session.ml` | The abstract owner of evaluation/pass state, a complete immutable evaluator-operation value, and its `begin_evaluation`, `begin_pass`, and `begin_watch` lifecycle transitions. |
+| `src/evaluator.ml` | The tree-walking evaluator, the project's sole engine, implementing `force`, `eval`, `apply`, and the immutable operation graph. |
 | `src/macro.ml` | `defmacro` expansion: a function from syntax-as-values to syntax, run at the expansion boundary. |
 | `src/primitives.ml` | Built-in functions and the initial environment. |
 | `src/node.ml` | The node-key skeleton and the node rebuilder. |

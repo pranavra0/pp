@@ -838,7 +838,7 @@ let main () =
     | Ok invocation -> invocation
     | Error msg -> failwith ("pp: " ^ msg)
   in
-  let session = Session.create () in
+  let session = Session.create Evaluator.operations in
   (* Loader authority bound: the interpreter may load source from
      the CLI-named programs' directories, the cwd, and ~/.pp — nothing else.
      Also reachable: the resolved stdlib/ dir next to the
@@ -876,7 +876,7 @@ let main () =
      populate the pin before the FIRST observation can happen at all. *)
   (match !remote_node_args with
    | Some (_, pins_file, _, _, _) ->
-       Remote.preseed_pins_from_file ~pins_file
+       Remote.preseed_pins_from_file session ~pins_file
    | None -> ());
   (* `--pin-file <path>` — the SAME preseed logic, standalone,
      no --remote-node ceremony. Also runs before run_files ever executes anything, for the
@@ -885,7 +885,7 @@ let main () =
      supported/needed combination in practice, but neither excludes the
      other). *)
   (match !pin_file with
-   | Some path -> Remote.preseed_pins_from_file ~pins_file:path
+   | Some path -> Remote.preseed_pins_from_file session ~pins_file:path
    | None -> ());
   Session.set_probe_observer session Primitives.probe_observe_for_store;
   Session.set_domain_observer session Primitives.domain_observe_cell_for_store;

@@ -3,8 +3,7 @@
    no unix — so it can live in pp.kernel.
 
    The handlers for these effects live in dynamic_scope.ml.
-   The split means anything that just needs the effect _types_ (e.g. the
-   backend hook record and evaluator) links only the kernel, while the
+   The split means anything that just needs the effect _types_ links only the kernel, while the
    run-time stack wiring stays in the main library. *)
 
 

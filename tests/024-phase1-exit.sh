@@ -42,7 +42,7 @@ TU=$((N + 1))
 #
 # `compile` builds but does NOT force its node — the pairing-trap-safe
 # pattern is `(map compile names)` (map applies compile to each name via the
-# apply hook WITHOUT forcing the result), `force-deep` THAT batch (the
+# evaluator apply operation WITHOUT forcing the result), `force-deep` THAT batch (the
 # scheduler's fork fan-out point sees every sibling node before any of them
 # runs), and only THEN pair names back up with the now-hit results via
 # `zip2`. Do NOT rewrite this as `(map2 (fn (n) (cons n (compile n))) names)`
