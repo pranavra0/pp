@@ -30,7 +30,6 @@ mutable-field|src/core_model.mli|thunk_hash|node
 mutable-field|src/core_model.mli|thunk_persist|node
 mutable-field|src/core_model.mli|thunk_status|node
 signal-handler|src/scheduler.ml|sigint|process-service
-top-ref|src/fenced.ml|epoch_counter|process-service
 top-ref|src/island.ml|update_mode|command
 top-ref|src/island.ml|fetch_enabled|command
 top-ref|src/kernel_props.ml|cap_checks|test-diagnostic
@@ -47,9 +46,11 @@ top-ref|src/repl.ml|history|command
 top-ref|src/sandbox.ml|counter|node
 top-ref|src/environment.ml|env_counter|process-service
 top-table|src/primitives.ml|builtins|process-service
-mutable-field|src/session.ml|fenced_actions|evaluation-session
+mutable-field|src/session.ml|fenced_actions|pass
 mutable-field|src/session.ml|gensym|evaluation-session
 mutable-field|src/session.ml|observations|pass
 mutable-field|src/session.ml|cache_bust|evaluation-session
 mutable-field|src/session.ml|force_depth|evaluation-session
 mutable-field|src/session.ml|fenced_epoch|pass
+mutable-field|src/session.ml|fenced_epoch_nonce|evaluation-session
+mutable-field|src/session.ml|fenced_epoch_recovered|pass

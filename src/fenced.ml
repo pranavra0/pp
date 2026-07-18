@@ -12,16 +12,16 @@
 
 open Core_model
 
+type recovery_decision = Retry | Abort
+
 let force value =
   Session.force (Effect.perform Dynamic_scope.Get_session) value
 
-let epoch_counter = ref 0
-
 let new_epoch () : unit =
-  incr epoch_counter;
-  Session.set_fenced_epoch (Effect.perform Dynamic_scope.Get_session) (Hasher.hash_string
-      (Printf.sprintf "%f-%d-%d" (Unix.gettimeofday ()) (Unix.getpid ())
-         !epoch_counter))
+  let session = Effect.perform Dynamic_scope.Get_session in
+  let nonce = Session.next_fenced_epoch_nonce session in
+  Session.start_fenced_epoch session (Hasher.hash_string
+      (Printf.sprintf "%f-%d-%d" (Unix.gettimeofday ()) (Unix.getpid ()) nonce))
 
 let ensure_epoch () =
   if Session.fenced_epoch (Effect.perform Dynamic_scope.Get_session) = "" then new_epoch ()
@@ -140,7 +140,7 @@ let execute_current ~(kind : string) ~(spec : value) : unit =
   let spec_hash = hash_spec spec in
   let epoch = Session.fenced_epoch (Effect.perform Dynamic_scope.Get_session) in
   let key = action_key ~epoch ~kind ~spec_hash in
-  if Journal.fenced_is_done key then ()
+  if Journal.has_fenced_done key then ()
   else begin
     Object_repository.put_fenced Object_repository.default ~hash:spec_hash spec;
     Journal.append (Journal.FencedIntent {
@@ -152,51 +152,38 @@ let execute_current ~(kind : string) ~(spec : value) : unit =
 (* Execute a single unknown-status fenced action during recovery.  Uses the
    key/epoch/kind/spec-hash stored in the journal; loads the persisted spec by
    hash so the action runs with the same inputs. *)
-let execute_recovery ~(policy : Invocation.fenced_policy) ~(entry : Journal.fenced_entry) : unit =
-  let spec =
-    match Object_repository.get_fenced Object_repository.default ~hash:entry.Journal.fe_spec_hash with
-    | Some v -> v
+let execute_recovery
+    ~(decide : Journal.fenced_entry -> recovery_decision)
+    ~(entry : Journal.fenced_entry) : unit =
+  let result = match Object_repository.get_fenced Object_repository.default
+      ~hash:entry.Journal.fe_spec_hash with
     | None ->
-        (* Spec missing: we cannot safely retry.  Abort regardless of policy. *)
-        VMap [(VString "kind", VString entry.Journal.fe_kind);
-              (VString "spec-hash", VString entry.Journal.fe_spec_hash);
-              (VString "error", VString "spec missing from store")]
-  in
-  let result =
-    match policy with
-    | Invocation.Retry -> run_command spec
-    | Invocation.Abort ->
+        (* A missing spec cannot be retried safely. *)
         VMap [(VString "aborted", VBool true);
-              (VString "policy", VString "abort");
+              (VString "reason", VString "spec missing from store");
               (VString "kind", VString entry.Journal.fe_kind);
               (VString "spec-hash", VString entry.Journal.fe_spec_hash)]
-    | Invocation.Ask ->
-        if not (Unix.isatty Unix.stdin) then
-          failwith ("fenced: unknown-status policy is 'ask' but stdin is not a tty; " ^
-                    "use --fenced-policy retry|abort for non-interactive use");
-        Printf.printf "Fenced action %s (kind=%s) has unknown status.  Retry? [y/N]: %!"
-          entry.Journal.fe_key entry.Journal.fe_kind;
-        let line = try input_line stdin with End_of_file -> "n" in
-        if String.lowercase_ascii line = "y" then run_command spec
-        else VMap [(VString "aborted", VBool true);
-                   (VString "policy", VString "ask");
-                   (VString "kind", VString entry.Journal.fe_kind)]
+    | Some spec ->
+        (match decide entry with
+         | Retry -> run_command spec
+         | Abort ->
+             VMap [(VString "aborted", VBool true);
+                   (VString "kind", VString entry.Journal.fe_kind);
+                   (VString "spec-hash", VString entry.Journal.fe_spec_hash)])
   in
   Journal.append (Journal.FencedDone {
     key = entry.Journal.fe_key; result_hash = result_hash result })
 
-(* Resolve any unknown-status fenced actions from the journal before normal
-   reconciliation proceeds.  The recovered epoch becomes the epoch for the
-   current pass, so a subsequently registered action with the same kind/spec
-   deduplicates against the recovered intent. *)
-let recover_unknown ~(policy : Invocation.fenced_policy) : unit =
-  let unknowns = Journal.find_unknown_fenced () in
-  if unknowns <> [] then
-    Printf.eprintf "[fenced] %d unknown-status action(s) in journal; applying policy=%s\n%!"
-      (List.length unknowns) (Invocation.fenced_policy_name policy);
+(* Resolve unknown-status actions from durable journal state. Recovery policy
+   and prompting live at the command boundary; this module only executes the
+   supplied decision and restores the recovered epoch for pass deduplication. *)
+let recover_unknown
+    ~(decide : Journal.fenced_entry -> recovery_decision) : int =
+  let unknowns = Journal.pending_fenced_actions () in
   List.iter (fun entry ->
-    execute_recovery ~policy ~entry;
-    Session.set_fenced_epoch (Effect.perform Dynamic_scope.Get_session) entry.Journal.fe_epoch) unknowns
+    execute_recovery ~decide ~entry;
+    Session.resume_fenced_epoch (Effect.perform Dynamic_scope.Get_session) entry.Journal.fe_epoch) unknowns;
+  List.length unknowns
 
 (* Drain all fenced actions registered during this evaluation.  Called once
    per reconcile pass, after all convergent fs/proc work.  Uses an existing
@@ -207,4 +194,4 @@ let drain () : unit =
   ensure_epoch ();
   let actions = Session.take_fenced_actions (Effect.perform Dynamic_scope.Get_session) in
   List.iter (fun (kind, spec) -> execute_current ~kind ~spec) actions;
-  Session.set_fenced_epoch (Effect.perform Dynamic_scope.Get_session) ""
+  Session.clear_fenced_epoch (Effect.perform Dynamic_scope.Get_session)

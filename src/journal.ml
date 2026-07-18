@@ -39,7 +39,7 @@ type entry =
       (* every island fetch/re-pin — procurement is auditable *)
   | Epoch of { hash : string }
       (* Recorded once
-         per SUCCESSFUL Domains.run_all pass — [hash] is the desired-state
+         per SUCCESSFUL Domains.run_pass pass — [hash] is the desired-state
          root object's content hash (Identity.hash_value of the fully-forced
          `all_desired` value that pass converged). This is the audit-log
          half of GC's root bookkeeping (frozen line shape, greppable, never
@@ -160,7 +160,7 @@ type fenced_entry = {
 (* Fenced intents without a matching done, in journal order (oldest first).
    Only the most recent unmatched intent for a given key is meaningful, but
    all are returned so recovery can process them in order. *)
-let find_unknown_fenced () : fenced_entry list =
+let pending_fenced_actions () : fenced_entry list =
   let pending : (string, string * string * string) Hashtbl.t = Hashtbl.create 16 in
   fold (fun () e ->
     match e with
@@ -174,7 +174,7 @@ let find_unknown_fenced () : fenced_entry list =
 
 (* Whether a fenced key already has a done entry — used at action time to
    avoid re-executing an action completed in a prior pass. *)
-let fenced_is_done (key : string) : bool =
+let has_fenced_done (key : string) : bool =
   let (pending, seen) =
     fold (fun (pending, seen) e ->
       match e with

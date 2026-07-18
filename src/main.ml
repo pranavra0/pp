@@ -131,9 +131,6 @@ let run_files ?(retain_thunks = false) invocation (files : string list) : Core_m
       match List.rev (Repl.execute_file ~retain_thunks f) with
       | v :: _ -> Some v | [] -> None) None files
 
-let should_run_domains invocation =
-  uses_domains invocation || Domains.any_write_domain_registered ()
-
 (* The by-hash desired-value seam: `--desired-object HASH ROOT` substitutes
    the DERIVATION of the desired-state root entirely — the object was already
    pulled (and its blob: refs with it), so this process never runs a program
@@ -160,7 +157,7 @@ let compute_all_desired invocation (last : Core_model.value option) : Core_model
    explicit `--member-name <n>` flag, never inferred from a value's shape.
    Without it, [all_desired] passes through completely unchanged. With it,
    [all_desired] MUST be a map keyed by host name (string or keyword) and this
-   indexes exactly one entry, handing the UNCHANGED Domains.run_all only that
+   indexes exactly one entry, handing the UNCHANGED Domains.prepare_pass only that
    host's own {domain -> desired} slice. *)
 let select_member_slice invocation (all_desired : Core_model.value) : Core_model.value =
   match Invocation.program_member_name invocation with
@@ -186,11 +183,33 @@ let select_member_slice invocation (all_desired : Core_model.value) : Core_model
               host -> {domain -> desired} to index, got %s"
              name (Presentation.string_of_value other)))
 
-let run_domains_pass invocation (last : Core_model.value option) : unit =
-  if should_run_domains invocation then begin
-    Domains.run_all invocation (select_member_slice invocation (compute_all_desired invocation last));
-    Fenced.drain ()
-  end
+let fenced_recovery_decision invocation (entry : Journal.fenced_entry) :
+    Fenced.recovery_decision =
+  match Invocation.fenced_policy invocation with
+  | Invocation.Retry -> Fenced.Retry
+  | Invocation.Abort -> Fenced.Abort
+  | Invocation.Ask ->
+      if not (Unix.isatty Unix.stdin) then
+        failwith ("fenced: unknown-status policy is 'ask' but stdin is not a tty; " ^
+                  "use --fenced-policy retry|abort for non-interactive use");
+      Printf.printf "Fenced action %s (kind=%s) has unknown status.  Retry? [y/N]: %!"
+        entry.Journal.fe_key entry.Journal.fe_kind;
+      let line = try input_line stdin with End_of_file -> "n" in
+      if String.lowercase_ascii line = "y" then Fenced.Retry else Fenced.Abort
+
+let recover_fenced_actions reconciliation : unit =
+  let invocation = Reconciliation.invocation reconciliation in
+  let count = Reconciliation.recover reconciliation
+      ~decide:(fenced_recovery_decision invocation) in
+  if count > 0 then
+    Printf.eprintf "[fenced] %d unknown-status action(s) in journal; applying policy=%s\n%!"
+      count (Invocation.fenced_policy_name (Invocation.fenced_policy invocation))
+
+let run_domains_pass reconciliation (last : Core_model.value option) : unit =
+  if Reconciliation.should_run reconciliation then
+    let invocation = Reconciliation.invocation reconciliation in
+    Reconciliation.run reconciliation
+      (select_member_slice invocation (compute_all_desired invocation last))
 
 let print_graph ?(verbose = false) () = Store_index.print_graph ~verbose ()
 
@@ -206,7 +225,9 @@ let snapshot_cell_hashes (cell_ids : string list) : (string * string) list =
    persistent store's trace verification naturally skips unchanged nodes
    (hits) and recomputes changed ones (misses), so --watch and --once collapse
    to one store-level path. *)
-let watch_loop session invocation ~files ~interval ~stabilize =
+let watch_loop reconciliation ~files ~interval ~stabilize =
+  let session = Reconciliation.session reconciliation in
+  let invocation = Reconciliation.invocation reconciliation in
   let last_desired = ref None in
   let run_program () =
     (* Clear in-memory state for a fresh evaluation. The persistent store
@@ -217,7 +238,7 @@ let watch_loop session invocation ~files ~interval ~stabilize =
        active, the domain-registration glue — run_files/uses_domains). *)
     let last = run_files invocation files in
     last_desired := last;
-    run_domains_pass invocation last;
+    run_domains_pass reconciliation last;
     (* Collect the cells we need to poll and snapshot their current hashes. *)
     let cell_ids = List.sort_uniq compare (List.map fst (Session.observations session)) in
     snapshot_cell_hashes cell_ids
@@ -229,7 +250,7 @@ let watch_loop session invocation ~files ~interval ~stabilize =
     Session.begin_pass session;
     let last = run_files ~retain_thunks:true invocation files in
     last_desired := last;
-    run_domains_pass invocation last;
+    run_domains_pass reconciliation last;
     let cell_ids = List.sort_uniq compare (List.map fst (Session.observations session)) in
     let new_obs = snapshot_cell_hashes cell_ids in
     let new_set = List.map fst new_obs in
@@ -277,7 +298,7 @@ let watch_loop session invocation ~files ~interval ~stabilize =
          changed: the plan cache (Domains.compute_plan) makes an unchanged
          pass a cache hit, not a re-walk. *)
       (match !last_desired with
-       | Some v -> run_domains_pass invocation (Some v)
+       | Some v -> run_domains_pass reconciliation (Some v)
        | None -> ());
       loop snapshot
     end
@@ -849,6 +870,7 @@ let main () =
       ~remote_dispatch:(Remote.dispatcher host invocation)
   in
   let session = Session.create ~scheduler Evaluator.operations in
+  let reconciliation = Reconciliation.create ~session ~invocation in
   (* Loader authority bound: the interpreter may load source from
      the CLI-named programs' directories, the cwd, and ~/.pp — nothing else.
      Also reachable: the resolved stdlib/ dir next to the
@@ -914,7 +936,7 @@ let main () =
      not merely by convention). *)
   if (!reconcile_root <> None || !supervise) && !gc_mark_out = None then
     Dynamic_scope.with_top_level session invocation
-      ~f:(fun () -> Fenced.recover_unknown ~policy:!fenced_policy) ();
+      ~f:(fun () -> recover_fenced_actions reconciliation) ();
 
 
   (* pp graph: just scan and print, no file needed. *)
@@ -996,7 +1018,7 @@ let main () =
      file(s), the same --grant/--reconcile/--supervise/
      marks its trace/object/blob(s) live (Cache_policy.begin_gc, turned on
      earlier, right after Store_layout.init) — then STOPS: no run_domains_pass (no
-     domain apply), no Fenced.recover_unknown/drain (already skipped
+     domain apply), no recovery or fenced drain (already skipped
      above). This is what makes replay read-only on the world by
      construction: nothing below this branch ever runs. *)
   (match !gc_mark_out with
@@ -1043,10 +1065,10 @@ let main () =
       | _, files ->
           let files = List.rev files in
           if !watch then
-            watch_loop session invocation ~files ~interval:!watch_interval ~stabilize:!stabilize
+            watch_loop reconciliation ~files ~interval:!watch_interval ~stabilize:!stabilize
           else begin
             let last = run_files invocation files in
-            run_domains_pass invocation last;
+            run_domains_pass reconciliation last;
             (match !dump_pins_file with
              | Some path ->
                  let buf = Buffer.create 256 in

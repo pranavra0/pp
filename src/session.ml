@@ -18,12 +18,14 @@ type t = {
   sealed_pins : (string, string) Hashtbl.t;
   mutable observations : (string * string) list;
   mutable fenced_actions : (string * Core_model.value) list;
+  mutable fenced_epoch_nonce : int;
   run_pins : (string, string) Hashtbl.t;
   preseeded_run_pins : (string, string) Hashtbl.t;
   node_thunks : (Identity_types.Node_key.t, Core_model.thunk) Hashtbl.t;
   mutable force_depth : int;
   mutable cache_bust : int;
   mutable fenced_epoch : string;
+  mutable fenced_epoch_recovered : bool;
 }
 
 let create ~scheduler operations = {
@@ -33,10 +35,11 @@ let create ~scheduler operations = {
   domains = Hashtbl.create 16; probes = Hashtbl.create 16;
   preseeded_probes = Hashtbl.create 16;
   sealed_pins = Hashtbl.create 16; observations = [];
-  fenced_actions = [];
+  fenced_actions = []; fenced_epoch_nonce = 0;
   run_pins = Hashtbl.create 64; preseeded_run_pins = Hashtbl.create 64;
   node_thunks = Hashtbl.create 256;
   force_depth = 0; cache_bust = 0; fenced_epoch = "";
+  fenced_epoch_recovered = false;
 }
 let force t = t.operations.core.force
 let core_operations t = t.operations.core
@@ -52,17 +55,23 @@ let call t ~env fn args =
       t.operations.core.apply fn args env
   | Core_model.VBuiltin _ -> t.operations.core.apply fn args env
   | _ -> failwith "domain function value is not a function"
-let begin_pass t =
+let reset_pass_state t =
   Hashtbl.clear t.probes; Hashtbl.clear t.sealed_pins;
   Hashtbl.clear t.run_pins;
   Hashtbl.iter (Hashtbl.replace t.probes) t.preseeded_probes;
   Hashtbl.iter (Hashtbl.replace t.run_pins) t.preseeded_run_pins;
-  t.observations <- []
+  t.observations <- [];
+  t.fenced_actions <- []
+let begin_pass t =
+  reset_pass_state t;
+  if not t.fenced_epoch_recovered then t.fenced_epoch <- ""
 let begin_evaluation ~retain_thunks t =
   if not retain_thunks then begin Hashtbl.clear t.thunks; Hashtbl.clear t.node_thunks end;
   Hashtbl.clear t.macros; t.gensym <- 0; Hashtbl.clear t.domains;
   t.force_depth <- 0; t.cache_bust <- 0;
-  t.fenced_actions <- []; begin_pass t
+  reset_pass_state t;
+  if t.fenced_epoch_recovered then t.fenced_epoch_recovered <- false
+  else t.fenced_epoch <- ""
 let begin_watch t = Hashtbl.clear t.node_thunks
 let find_thunk t = Hashtbl.find_opt t.thunks
 let add_thunk t = Hashtbl.replace t.thunks
@@ -101,4 +110,15 @@ let incr_force_depth t = t.force_depth <- t.force_depth + 1
 let decr_force_depth t = t.force_depth <- t.force_depth - 1
 let next_cache_bust t = t.cache_bust <- t.cache_bust + 1; t.cache_bust
 let fenced_epoch t = t.fenced_epoch
-let set_fenced_epoch t epoch = t.fenced_epoch <- epoch
+let start_fenced_epoch t epoch =
+  t.fenced_epoch <- epoch;
+  t.fenced_epoch_recovered <- false
+let resume_fenced_epoch t epoch =
+  t.fenced_epoch <- epoch;
+  t.fenced_epoch_recovered <- true
+let clear_fenced_epoch t =
+  t.fenced_epoch <- "";
+  t.fenced_epoch_recovered <- false
+let next_fenced_epoch_nonce t =
+  t.fenced_epoch_nonce <- t.fenced_epoch_nonce + 1;
+  t.fenced_epoch_nonce

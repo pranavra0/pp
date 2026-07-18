@@ -186,35 +186,6 @@ two orchestration functions.
 The order matters. Later boundaries assume earlier ownership and tests.
 
 
-### 17. Separate domain policy, reconciliation, and fenced actions
-
-**Purpose:** make long-running orchestration lifecycles understandable without
-runtime-global queues.
-
-**Work:**
-
-- Give domain registration an explicit session-owned registry.
-- Keep domain policy in pp source and trusted mechanics in narrowly scoped OCaml
-  modules.
-- Make observation, diff, apply, verification, and stratification explicit
-  steps with typed inputs.
-- Give fenced-action collection and epochs an explicit command/reconciliation
-  owner; remove global current epoch and action list.
-- Isolate journal persistence from recovery policy and interactive prompting.
-- Ensure watch/reconciliation retries create the intended fresh pass while
-  retaining only specified state.
-
-**Likely files:** `src/domains.ml`, `src/domain_prims.ml`, `src/fenced.ml`,
-`src/journal.ml`, session, app commands, stdlib domain files.
-
-**Verify:** reconciliation, process reconciler, fenced effects/crash behavior,
-domains, host domains, full devops tests, suite.
-
-**Exit:** reconciliation is a readable pipeline over explicit state; no domain
-or fenced queue is process-global.
-
-**Non-goal:** move trusted world mutation into pp source or weaken journaling.
-
 ### 18. Decompose the CLI into command modules
 
 **Purpose:** make application composition obvious and `main.ml` disposable.

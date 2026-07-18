@@ -51,4 +51,7 @@ val incr_force_depth : t -> unit
 val decr_force_depth : t -> unit
 val next_cache_bust : t -> int
 val fenced_epoch : t -> string
-val set_fenced_epoch : t -> string -> unit
+val start_fenced_epoch : t -> string -> unit
+val resume_fenced_epoch : t -> string -> unit
+val clear_fenced_epoch : t -> unit
+val next_fenced_epoch_nonce : t -> int

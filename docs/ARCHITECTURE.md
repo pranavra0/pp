@@ -268,7 +268,7 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/loader.ml` | Source loading under bounded interpreter authority, including trace recording. |
 | `src/error_context.ml` | Attaches the innermost source-form location to evaluation errors. |
 | `src/sandbox.ml` | Creates, resolves, and removes node-local scratch directories. |
-| `src/session.ml` | The abstract owner of evaluation/pass state, its scheduler handle, explicit function invocation, a complete immutable evaluator-operation value, and its `begin_evaluation`, `begin_pass`, and `begin_watch` lifecycle transitions. |
+| `src/session.ml` | The abstract owner of evaluation/pass state, including the session domain registry and fenced pass state, its scheduler handle, explicit function invocation, a complete immutable evaluator-operation value, and its `begin_evaluation`, `begin_pass`, and `begin_watch` lifecycle transitions. |
 | `src/evaluator.ml` | The project's sole tree-walking engine: one exhaustive expression dispatch, tail mechanism, force/trampoline, and operation graph. |
 | `src/evaluator_thunks.ml` | Content-addressed thunk construction, letrec poison thunks, and module export selection. |
 | `src/evaluator_application.ml` | Closure/builtin application, explicit builtin environments, and the shared tail-call continuation mechanism. |
@@ -290,11 +290,12 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/repository_inventory.ml` | Artifact metadata and removal lifecycle used by explicit GC. |
 | `src/store_gc.ml` | Explicit `pp gc`: mark-by-replay over recent epochs and sweep through repository inventory — never automatic. |
 | `src/gcroots.ml` | The GC roots manifest naming the epochs `pp gc` marks from. |
-| `src/journal.ml` | The append-only intent and done audit log: a typed `entry` variant, `to_line` and `of_line`, and the scanners that find fenced-effect entries (SPEC law 31). |
-| `src/fenced.ml` | The fenced-effect executor: registers scripting-tier actions, journals intent and done entries, and resolves unknown-status entries by policy (SPEC law 31). |
+| `src/journal.ml` | The append-only intent and done audit log: a typed `entry` variant, byte-stable line codec, atomic append, and durable fenced-action state queries (SPEC law 31). It does not choose recovery policy. |
+| `src/fenced.ml` | The narrowly scoped fenced-effect mechanics: registers scripting-tier actions, journals intent and done entries, and executes a recovery decision supplied by the command boundary (SPEC law 31). |
 | `src/island.ml` | Islands: parses file, git, and github URIs; runs the content-addressed cache and tamper verification; rewrites pins for `--update`; provides `island-pins`; and fetches over git only when asked. |
 | `src/domain_prims.ml` | The trusted mechanics that back in-language domains: atomic `materialize-file` and `remove-file`, `tree-observe`, `proc-spawn`, `proc-alive?`, `proc-stop`, `proc-reap`, and `domain-state-get`/`put` — owning no policy of its own. |
-| `src/domains.ml` | Generic domain orchestration: the journal bracket, `observed_all` suspension, threading capabilities into observe and apply, plan caching through cache policy with no synthetic node, verify-after-write, and stratification. `stdlib/domain-fs.pp` and `domain-proc.pp` hold the filesystem and process policy as pp source; `main.ml` then drains fenced actions. |
+| `src/domains.ml` | Typed domain pipeline: pass preparation and stratification, observation, diff/plan construction, apply journaling, verification, and epoch recording. `stdlib/domain-fs.pp` and `domain-proc.pp` hold the filesystem and process policy as pp source. |
+| `src/reconciliation.ml` | Explicit command-owned reconciliation lifecycle: it binds an invocation to a session, sequences a prepared domain pass, drains the session-owned fenced pass, and delegates recovery decisions without owning journal persistence. |
 | `src/process.ml` | The `run` process effect: executes an external command under capability. |
 | `src/scheduler.ml` | The explicitly constructed fork-at-dispatch scheduler handle for node misses (`serial`, `parallel:N`, `race:N`, `remote:MEMBER`), including child ownership and signal lifecycle. |
 | `src/remote.ml` | Builds the narrow remote dispatcher that sends data-closed node misses to a named cluster member over the transport. |

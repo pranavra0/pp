@@ -140,13 +140,36 @@ let compute_plan ~(domain_name : string) ~(diff_closure : value)
 let has_prefix ~(prefix : string) (s : string) : bool =
   String.length s >= String.length prefix && String.sub s 0 (String.length prefix) = prefix
 
-let stratification_check session (write_domains : (string * Session.domain_entry) list) : unit =
+type target = {
+  name : string;
+  entry : Session.domain_entry;
+  desired : value;
+}
+
+type observed = {
+  target : target;
+  state : value;
+}
+
+type planned = {
+  observed : observed;
+  plan : value;
+  summary : (string * string) list;
+}
+
+type pass = {
+  invocation : Invocation.t;
+  forced_desired : value;
+  targets : target list;
+}
+
+let stratification_check session (write_domains : target list) : unit =
   List.iter (fun (cell, _) ->
-    List.iter (fun (name, entry) ->
-      if List.exists (fun prefix -> has_prefix ~prefix cell) entry.Session.dm_namespace then
+    List.iter (fun target ->
+      if List.exists (fun prefix -> has_prefix ~prefix cell) target.entry.Session.dm_namespace then
         failwith (Printf.sprintf
           "reconcile: stratification violation (LAW 30): the desired state for \
-           domain '%s' observed its own domain: %s" name cell))
+           domain '%s' observed its own domain: %s" target.name cell))
       write_domains)
     (Session.observations session)
 
@@ -191,49 +214,86 @@ let observe_domain (entry : Session.domain_entry) (name : string) : value =
 
 let verify_failed_msg (name : string) : string =
   "reconcile: verify-after-write failed for domain " ^ name
-let run_domain ~(name : string) ~(entry : Session.domain_entry) ~(desired : value) : unit =
-  let diff_closure = match entry.Session.dm_diff with
+
+let observe_target (target : target) : observed =
+  { target; state = observe_domain target.entry target.name }
+
+let diff_target (observed : observed) : planned =
+  let target = observed.target in
+  let diff_closure = match target.entry.Session.dm_diff with
     | Some d -> d
-    | None -> assert false (* filtered out by run_all before this is called *)
+    | None -> assert false (* filtered out when the pass is prepared *)
   in
-  let apply_closure = match entry.Session.dm_apply with
+  let plan = compute_plan ~domain_name:target.name ~diff_closure
+      ~observed:observed.state ~desired:target.desired in
+  { observed; plan; summary = plan_summary plan }
+
+let apply_target (planned : planned) : unit =
+  let target = planned.observed.target in
+  let apply_closure = match target.entry.Session.dm_apply with
     | Some a -> a
-    | None -> assert false
+    | None -> assert false (* filtered out when the pass is prepared *)
   in
+  let hash = Hasher.hash_concat
+      ["domain-pass"; target.name;
+       Identity.hash_value (Force_deep.force_deep target.desired)] in
+  Journal.append (Journal.DomainIntent { hash; fields = planned.summary });
+  with_domain target.name target.entry.Session.dm_cap
+    (fun () -> ignore (call_uncached apply_closure [planned.plan]));
+  Journal.append (Journal.DomainDone { hash });
+  Printf.eprintf "[reconcile:%s] %s\n%!" target.name
+    (String.concat " " (List.map (fun (k, v) -> k ^ "=" ^ v) planned.summary))
+
+let verify_target (planned : planned) : unit =
+  let target = planned.observed.target in
+  let observed2 = observe_target target in
+  let planned2 = diff_target observed2 in
+  if not (plan_items_empty planned2.plan) then
+    failwith (verify_failed_msg target.name)
+
+let run_target (target : target) : unit =
   (* Load-bearing suspension: a domain's own bookkeeping
      during observe/diff/apply must never trip its own stratification scan. *)
   Dynamic_scope.without_observation_collection (fun () ->
-    let observed = observe_domain entry name in
-    let plan = compute_plan ~domain_name:name ~diff_closure ~observed ~desired in
-    let summary = plan_summary plan in
-    let hash = Hasher.hash_concat
-        ["domain-pass"; name; Identity.hash_value (Force_deep.force_deep desired)] in
-    Journal.append (Journal.DomainIntent { hash; fields = summary });
-    with_domain name entry.Session.dm_cap
-      (fun () -> ignore (call_uncached apply_closure [plan]));
-    Journal.append (Journal.DomainDone { hash });
-    Printf.eprintf "[reconcile:%s] %s\n%!" name
-      (String.concat " " (List.map (fun (k, v) -> k ^ "=" ^ v) summary));
-    (* Verify-after-write: re-observe, re-diff (the SAME cached-diff
-       machinery) against desired; non-empty items = hard error. Whole-
-       domain, deliberately stronger than a per-file inline check. *)
-    let observed2 = observe_domain entry name in
-    let plan2 = compute_plan ~domain_name:name ~diff_closure ~observed:observed2 ~desired in
-    if not (plan_items_empty plan2) then
-      failwith (verify_failed_msg name)
+    let planned = diff_target (observe_target target) in
+    apply_target planned;
+    verify_target planned
   )
 
-(* ---- Driver entry point ----
-   [all_desired] is a map of domain-name -> desired-state value (main.ml
-   builds this for --reconcile/--supervise's auto-wiring; a program calling
-   register-domain itself simply returns this shape directly, N domains,
-   one evaluation). Every name must resolve to a registered WRITE domain
-   (a probe named here is a hard error, not silently skipped). *)
+(* Resolve and stratify the desired state before any domain can mutate the
+   world. The returned pass is the immutable input to the staged driver. *)
+let prepare_pass invocation (all_desired : value) : pass =
+  let session = Effect.perform Dynamic_scope.Get_session in
+  let forced_desired = Force_deep.force_deep all_desired in
+  let entries = match forced_desired with
+    | VMap kvs -> kvs
+    | other ->
+        failwith ("reconcile: the program must return a map of domain-name to " ^
+                  "desired-state, got " ^ Presentation.string_of_value other)
+  in
+  let targets = List.map (fun (k, desired) ->
+    let name = match k with
+      | VString s | VKeyword s -> s
+      | other -> failwith ("reconcile: domain name must be a string or keyword, got "
+                           ^ Presentation.string_of_value other)
+    in
+    match Session.find_domain session name with
+    | None -> failwith ("reconcile: no domain registered under name '" ^ name ^ "'")
+    | Some entry ->
+        (match entry.Session.dm_diff, entry.Session.dm_apply with
+         | Some _, Some _ -> { name; entry; desired }
+         | _ -> failwith ("reconcile: domain '" ^ name
+                          ^ "' has no :diff/:apply (it is a probe, not a write-domain)")))
+    entries
+  in
+  stratification_check session targets;
+  { invocation; forced_desired; targets }
+
 (* Recorded ONCE per
-   SUCCESSFUL pass (after every domain's run_domain has completed without
+   SUCCESSFUL pass (after every domain's run_target has completed without
    raising) — [forced] is the exact fully-forced {domain -> desired} (or,
    under host-qualified distribution, {host -> {domain -> desired}}) value
-   this pass converged, already computed by [run_all] below (reused, not
+   this pass converged, already computed by [prepare_pass] above (reused, not
    re-forced). Stores it as an ordinary content-addressed object (so
    `pp gc`'s replay subprocess, which re-derives the identical value, can
    cross-check its own hash against this one) and appends BOTH the frozen
@@ -255,34 +315,9 @@ let record_epoch invocation (forced : value) : unit =
         gr_desired_object = Invocation.program_desired_object invocation }
   with _ -> ()
 
-let run_all invocation (all_desired : value) : unit =
-  let session = Effect.perform Dynamic_scope.Get_session in
-  let forced = Force_deep.force_deep all_desired in
-  let entries = match forced with
-    | VMap kvs -> kvs
-    | other ->
-        failwith ("reconcile: the program must return a map of domain-name to \
-                   desired-state, got " ^ Presentation.string_of_value other)
-  in
-  let resolved = List.map (fun (k, desired) ->
-    let name = match k with
-      | VString s | VKeyword s -> s
-      | other -> failwith ("reconcile: domain name must be a string or keyword, got "
-                           ^ Presentation.string_of_value other)
-    in
-    match Session.find_domain session name with
-    | None -> failwith ("reconcile: no domain registered under name '" ^ name ^ "'")
-    | Some entry ->
-        (match entry.Session.dm_diff, entry.Session.dm_apply with
-         | Some _, Some _ -> (name, entry, desired)
-         | _ -> failwith ("reconcile: domain '" ^ name
-                          ^ "' has no :diff/:apply (it is a probe, not a write-domain)")))
-    entries
-  in
-  let write_domains = List.map (fun (n, e, _) -> (n, e)) resolved in
-  stratification_check session write_domains;
-  List.iter (fun (name, entry, desired) -> run_domain ~name ~entry ~desired) resolved;
-  record_epoch invocation forced
+let run_pass (pass : pass) : unit =
+  List.iter run_target pass.targets;
+  record_epoch pass.invocation pass.forced_desired
 
 (* Whether at least one registered domain can actually be converged — used
    by main.ml to decide whether a bare register-domain-only program (no
