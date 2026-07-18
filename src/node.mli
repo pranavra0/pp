@@ -1,13 +1,24 @@
-(* node — shared node-boundary checks and the one rebuilder.
-
-   The key skeleton itself lives in the kernel's [Hasher] module, so both
-   backends consume the same construction without making this runtime module
-   part of the keying layer. *)
-val fv_hash : name:string -> Core_model.value -> (Core_model.value -> Core_model.value) -> string
+(* node — the typed identity and rebuilding boundary. *)
 val unbound_fv_hash : name:string -> string
+val resolve_free_variables : expr:Core_model.expr -> env:Core_model.env ->
+  force:(Core_model.value -> Core_model.value) ->
+  (string * Core_model.value option) list
+val authorize_free_variables : (string * Core_model.value option) list -> unit
+val construct_key : expr:Core_model.expr ->
+  free_variables:(string * Core_model.value option) list -> Identity_types.Node_key.t
+val key_of : expr:Core_model.expr -> env:Core_model.env ->
+  force:(Core_model.value -> Core_model.value) -> Identity_types.Node_key.t
 
 val check_type : Core_model.value -> Core_model.expr -> (string * int) option -> unit
 val enforce_type : Core_model.thunk -> Core_model.value -> unit
-val replay_node_reads : Core_model.thunk -> (Core_model.thunk -> string) -> unit
+val replay_node_reads : Core_model.thunk ->
+  (Core_model.thunk -> Identity_types.Node_key.t) -> unit
 val serve_hit : t:Core_model.thunk -> Cache_policy.result -> Core_model.value option
-val run_node_body : key:string -> run:(unit -> Core_model.value) -> Core_model.thunk -> Core_model.value
+val rebuild : key:Identity_types.Node_key.t ->
+  run:(unit -> Core_model.value) -> Core_model.thunk -> Core_model.value
+val lookup_hit : key:Identity_types.Node_key.t ->
+  authorized:(Identity_types.Cell_id.t -> bool) -> Core_model.thunk ->
+  Core_model.value option
+val force : key:Identity_types.Node_key.t ->
+  authorized:(Identity_types.Cell_id.t -> bool) ->
+  run:(unit -> Core_model.value) -> Core_model.thunk -> Core_model.value

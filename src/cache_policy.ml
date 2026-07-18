@@ -30,13 +30,18 @@ let short_key key = if String.length key > 12 then String.sub key 0 12 else key
 let diagnose t fmt =
   if t.why_enabled then Printf.eprintf ("[why] " ^^ fmt ^^ "\n%!")
   else Printf.ifprintf stderr fmt
-let lookup t ~key ~authorized : result =
+let lookup t ~(key : Identity_types.Cache_key.t)
+    ~(authorized : Identity_types.Cell_id.t -> bool) : result =
   if t.no_cache then begin
-    diagnose t "node %s: miss — cache reads disabled (--no-cache)" (short_key key);
+    diagnose t "node %s: miss — cache reads disabled (--no-cache)"
+      (short_key (Identity_types.Cache_key.to_string key));
     Miss
   end else begin
     let traces = Trace_repository.load Trace_repository.default ~key in
-    let describe c = if authorized c then c else "<redacted unauthorized cell>" in
+    let describe c =
+      if authorized c then Identity_types.Cell_id.to_string c
+      else "<redacted unauthorized cell>"
+    in
     (* Why a trace is unusable: the first stale cell, else the first
        unauthorized one; `Usable otherwise. *)
     let classify t =
@@ -49,7 +54,7 @@ let lookup t ~key ~authorized : result =
       with
       | Some (c, _) -> `Stale c
       | None ->
-          (match List.find_opt (fun (c, _) -> not (authorized c)) t.Trace_repository.reads with
+           (match List.find_opt (fun (c, _) -> not (authorized c)) t.Trace_repository.reads with
            | Some (c, _) -> `Unauthorized c
            | None -> `Usable)
     in
@@ -59,10 +64,12 @@ let lookup t ~key ~authorized : result =
         match cls with
         | `Stale c ->
             diagnose t "node %s: trace %d/%d stale — %s changed"
-              (short_key key) i (List.length traces) (describe c)
+              (short_key (Identity_types.Cache_key.to_string key)) i
+              (List.length traces) (describe c)
         | `Unauthorized c ->
             diagnose t "node %s: trace %d/%d unauthorized — caller lacks authority over %s"
-              (short_key key) i (List.length traces) (describe c)
+              (short_key (Identity_types.Cache_key.to_string key)) i
+              (List.length traces) (describe c)
         | `Usable -> ())
         classified;
     let usable_traces =
@@ -77,29 +84,36 @@ let lookup t ~key ~authorized : result =
     match chosen with
     | None ->
         (if traces = [] then
-           diagnose t "node %s: miss — no stored trace (first build)" (short_key key)
+           diagnose t "node %s: miss — no stored trace (first build)"
+             (short_key (Identity_types.Cache_key.to_string key))
          else
-           diagnose t "node %s: miss — no stored trace usable" (short_key key));
+           diagnose t "node %s: miss — no stored trace usable"
+             (short_key (Identity_types.Cache_key.to_string key)));
         Miss
     | Some tr ->
-        (match Object_repository.get Object_repository.default ~key:tr.Trace_repository.result_hash with
+        (match Object_repository.get Object_repository.default
+                 ~key:(Identity_types.Object_hash.to_string
+                         tr.Trace_repository.result_hash) with
          | None ->
-             diagnose t "node %s: miss — result object missing from store" (short_key key);
+             diagnose t "node %s: miss — result object missing from store"
+               (short_key (Identity_types.Cache_key.to_string key));
              Miss  (* object gone → recompute *)
          | Some v ->
              diagnose t "node %s: hit — %s trace verified (%d cells)"
-               (short_key key)
+               (short_key (Identity_types.Cache_key.to_string key))
                (match tr.Trace_repository.outcome with Trace_repository.Ok -> "ok" | Trace_repository.Failed -> "failing")
                (List.length tr.Trace_repository.reads);
              Observation.replay tr.Trace_repository.reads;
              (* GC mark (see [gc_marking]'s header comment above):
                 a verified hit means this trace/object/blob(s) are LIVE for
                 whichever root program is currently being replayed. *)
-             mark t ("trace:" ^ key);
-             mark t ("object:" ^ tr.Trace_repository.result_hash);
+             mark t ("trace:" ^ Identity_types.Cache_key.to_string key);
+             mark t ("object:" ^
+               Identity_types.Object_hash.to_string tr.Trace_repository.result_hash);
              List.iter (fun (c, h) ->
-               match Cell.parse c with
-               | Cell.File _ -> mark t ("blob:" ^ h)
+               match Cell.parse (Identity_types.Cell_id.to_string c) with
+               | Cell.File _ ->
+                   mark t ("blob:" ^ Identity_types.Observed_hash.to_string h)
                | _ -> ())
                tr.Trace_repository.reads;
              List.iter (fun h -> mark t ("blob:" ^ h)) (Blobref.blob_refs_in v);

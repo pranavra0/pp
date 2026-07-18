@@ -3,23 +3,50 @@
 open Core_model
 open Source_error
 
-
-let fv_hash ~(name : string) (v : value) (force : value -> value) : string =
-  match force v with
-  | fv ->
-      if Value_analysis.contains_authority fv then
-        raise (Capability_error
-          (Printf.sprintf
-             "node: free variable '%s' may not be or contain a %s" name
-             (if Value_analysis.contains_sealed fv then "sealed value" else "capability")));
-      Hasher.hash_concat ["fv"; name; Identity.hash_value fv]
-  | exception e ->
-      (match e with
-       | Capability_error _ -> raise e
-       | _ -> Hasher.hash_concat ["fv"; name; Identity.hash_value v])
+module Key = Identity_types.Node_key
+module Object_hash = Identity_types.Object_hash
 
 let unbound_fv_hash ~(name : string) : string =
   Hasher.hash_concat ["fv-unbound"; name]
+
+let resolve_free_variables ~(expr : expr) ~(env : env)
+    ~(force : value -> value) : (string * value option) list =
+  Free_vars.SS.elements (Free_vars.free_vars expr)
+  |> List.map (fun name ->
+       match Environment.lookup env name with
+       | Some value ->
+           (try (name, Some (force value)) with
+            | Capability_error _ as error -> raise error
+            | _ -> (name, Some value))
+       | None -> (name, None))
+
+let authorize_free_variables (free_variables : (string * value option) list) : unit =
+  List.iter (fun (name, value) ->
+    match value with
+    | Some value when Value_analysis.contains_authority value ->
+        raise (Capability_error
+          (Printf.sprintf
+             "node: free variable '%s' may not be or contain a %s" name
+             (if Value_analysis.contains_sealed value then
+                "sealed value" else "capability")))
+    | Some _ | None -> ())
+    free_variables
+
+let construct_key ~(expr : expr) ~(free_variables : (string * value option) list)
+    : Key.t =
+  let fv_hashes = List.map (fun (name, value) ->
+    match value with
+    | None -> unbound_fv_hash ~name
+    | Some value -> Hasher.hash_concat ["fv"; name; Identity.hash_value value])
+    free_variables
+  in
+  Key.make ~code_hash:(Identity.hash_expr expr)
+    ~free_variable_hashes:fv_hashes
+
+let key_of ~(expr : expr) ~(env : env) ~(force : value -> value) : Key.t =
+  let free_variables = resolve_free_variables ~expr ~env ~force in
+  authorize_free_variables free_variables;
+  construct_key ~expr ~free_variables
 
 
 (* ---- Runtime type check (shared by the evaluator) --------------------- *)
@@ -72,9 +99,10 @@ let enforce_type (t : thunk) (result : value) : unit =
 
 (* ---- Trace replay ----------------------------------------------------- *)
 
-let replay_node_reads (t : thunk) (key_of : thunk -> string) : unit =
+let replay_node_reads (t : thunk) (key_of : thunk -> Key.t) : unit =
   if t.thunk_persist && Effect.perform Dynamic_scope.In_node then
-    let traces = Trace_repository.load Trace_repository.default ~key:(key_of t) in
+    let traces = Trace_repository.load Trace_repository.default
+      ~key:(Identity_types.Cache_key.of_node_key (key_of t)) in
     List.iter (fun tr -> Observation.replay tr.Trace_repository.reads) traces
 
 
@@ -91,9 +119,45 @@ let serve_hit ~(t : thunk) (h : Cache_policy.result) : value option =
        | _ -> failwith "node failed (cached)")
   | Cache_policy.Miss -> None
 
-let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
+let validate_result (t : thunk) (result : value) : unit =
+  if Value_analysis.contains_authority result then begin
+    t.thunk_status <- Unevaluated;
+    if Value_analysis.contains_sealed result then
+      raise (Capability_error "a node may not return a sealed value")
+    else
+      raise (Capability_error "a node may not return a capability")
+  end;
+  enforce_type t result
+
+let persist_failure ~(key : Key.t) ~(reads : (string * string) list)
+    (message : string) : unit =
+  let cache_key = Identity_types.Cache_key.of_node_key key in
+  let error_value = VString message in
+  let result_hash = Object_hash.of_digest (Identity.hash_value error_value) in
+  (try Object_repository.put Object_repository.default
+         ~key:(Object_hash.to_string result_hash) ~value:error_value with _ -> ());
+  (try Trace_repository.put Trace_repository.default ~key:cache_key
+         ~outcome:Trace_repository.Failed ~result_hash
+         ~reads:(List.map (fun (cell, hash) ->
+           (Identity_types.Cell_id.of_string cell,
+            Identity_types.Observed_hash.of_digest hash)) reads) with _ -> ())
+
+let persist_success ~(key : Key.t) ~(reads : (string * string) list)
+    (result : value) : Object_hash.t =
+  let cache_key = Identity_types.Cache_key.of_node_key key in
+  let result_hash = Object_hash.of_digest (Identity.hash_value result) in
+  (try Object_repository.put Object_repository.default
+         ~key:(Object_hash.to_string result_hash) ~value:result with _ -> ());
+  (try Trace_repository.put Trace_repository.default ~key:cache_key
+         ~outcome:Trace_repository.Ok ~result_hash
+         ~reads:(List.map (fun (cell, hash) ->
+           (Identity_types.Cell_id.of_string cell,
+            Identity_types.Observed_hash.of_digest hash)) reads) with _ -> ());
+  result_hash
+
+let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
   t.thunk_status <- Evaluating;
-  let frame = ref [] in
+  let frame : (string * string) list ref = ref [] in
   let sandbox_slot = ref None in
   Fun.protect
     ~finally:(fun () -> match !sandbox_slot with Some d -> Sandbox.remove_tree d | None -> ())
@@ -112,30 +176,16 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
            cacheable; a Capability error (raw or Pp_error kind=Capability) is
            NOT (LAW 15) and falls to the generic reset arm below. *)
         | (Failure msg | Pp_error { kind = Eval; msg; _ }) as e ->
-            let errval = VString msg in
-            let err_hash = Identity.hash_value errval in
-            (try Object_repository.put Object_repository.default ~key:err_hash ~value:errval with _ -> ());
-            (try Trace_repository.put Trace_repository.default ~key ~outcome:Trace_repository.Failed ~result_hash:err_hash
-                   ~reads:(List.rev !frame) with _ -> ());
+            persist_failure ~key ~reads:(List.rev !frame) msg;
             t.thunk_status <- Unevaluated;
             raise e
         | e ->
             t.thunk_status <- Unevaluated;
             raise e
       in
-      if Value_analysis.contains_authority result then begin
-        t.thunk_status <- Unevaluated;
-        if Value_analysis.contains_sealed result then
-          raise (Capability_error "a node may not return a sealed value")
-        else
-          raise (Capability_error "a node may not return a capability")
-      end;
-      enforce_type t result;
+      validate_result t result;
       t.thunk_status <- Evaluated result;
-      let result_hash = Identity.hash_value result in
-      (try Object_repository.put Object_repository.default ~key:result_hash ~value:result with _ -> ());
-      (try Trace_repository.put Trace_repository.default ~key ~outcome:Trace_repository.Ok ~result_hash
-             ~reads:(List.rev !frame) with _ -> ());
+      let result_hash = persist_success ~key ~reads:(List.rev !frame) result in
       if Cache_policy.check_enabled Cache_policy.default then begin
         let frame2 = ref [] in
         let r2 =
@@ -149,11 +199,37 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
           | effect Dynamic_scope.Current_sandbox, k -> Effect.Deep.continue k (Some sandbox_slot)
           | e -> raise e
         in
-        if Identity.hash_value r2 <> result_hash then begin
+        if Object_hash.of_digest (Identity.hash_value r2) <> result_hash then begin
           Cache_policy.note_volatile Cache_policy.default;
           Printf.eprintf
             "[check] volatile node %s: an identical run produced a different result hash\n%!"
-            (Cache_policy.short_key key)
+            (Cache_policy.short_key (Key.to_string key))
         end
       end;
       result)
+
+let lookup_hit ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
+    (t : thunk) : value option =
+  let cache_key = Identity_types.Cache_key.of_node_key key in
+  serve_hit ~t (Cache_policy.lookup Cache_policy.default ~key:cache_key ~authorized)
+
+let force ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
+    ~(run : unit -> value) (t : thunk) : value =
+  Stabilize.register_node_key ~key ~thunk:t;
+  match lookup_hit ~key ~authorized t with
+  | Some value -> value
+  | None ->
+      (match Scheduler.state.policy with
+       | Scheduler.Race width when width > 1 ->
+           let job = {
+             Scheduler.j_key = key;
+             j_run = (fun () -> rebuild ~key ~run t);
+             j_width = width;
+             j_thunk = t;
+           } in
+           Scheduler.dispatch_batch [job];
+           (match lookup_hit ~key ~authorized t with
+            | Some value -> value
+            | None -> rebuild ~key ~run t)
+       | Scheduler.Serial | Scheduler.Parallel _ | Scheduler.Race _
+       | Scheduler.Remote _ -> rebuild ~key ~run t)

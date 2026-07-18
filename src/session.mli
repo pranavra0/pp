@@ -40,8 +40,8 @@ val set_run_pin : t -> string -> string -> unit
 val preseed_run_pin : t -> string -> string -> unit
 val remove_run_pin : t -> string -> unit
 val iter_run_pins : t -> (string -> string -> unit) -> unit
-val set_node_thunk : t -> string -> Core_model.thunk -> unit
-val find_node_thunk : t -> string -> Core_model.thunk option
+val set_node_thunk : t -> Identity_types.Node_key.t -> Core_model.thunk -> unit
+val find_node_thunk : t -> Identity_types.Node_key.t -> Core_model.thunk option
 val current_env : t -> Core_model.env
 val set_current_env : t -> Core_model.env -> unit
 val force_depth : t -> int

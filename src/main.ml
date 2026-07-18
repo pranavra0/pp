@@ -196,8 +196,10 @@ let print_graph ?(verbose = false) () = Store_index.print_graph ~verbose ()
 
 let snapshot_cell_hashes (cell_ids : string list) : (string * string) list =
   List.filter_map (fun id ->
-    match Observation.observe_id id with
-    | Some h -> Some (id, h) | None -> None) cell_ids
+    match Observation.observe_id (Identity_types.Cell_id.of_string id) with
+    | Some h ->
+        Some (id, Identity_types.Observed_hash.to_string h)
+    | None -> None) cell_ids
 
 (* --watch polling loop: run the program, snapshot observed cell hashes, poll
    for changes, re-run on change. Uses the pull scheduler in a loop — the
@@ -223,7 +225,7 @@ let watch_loop session invocation ~files ~interval ~stabilize =
   let run_program_stabilize ~prev_snapshot changed_cells =
     let rev = Store_index.reverse () in
     let dirty = Store_index.dirty_keys changed_cells rev in
-    Stabilize.reset_dirty dirty;
+    Stabilize.reset_dirty (List.map Identity_types.Node_key.of_string dirty);
     Session.begin_pass session;
     let last = run_files ~retain_thunks:true invocation files in
     last_desired := last;
@@ -251,8 +253,9 @@ let watch_loop session invocation ~files ~interval ~stabilize =
        this still restarts killed services within one interval. *)
     let changed_cells =
       List.filter_map (fun (cell_id, recorded_hash) ->
-        match Observation.observe_id cell_id with
-        | Some h when h <> recorded_hash -> Some cell_id
+        match Observation.observe_id (Identity_types.Cell_id.of_string cell_id) with
+        | Some h when Identity_types.Observed_hash.to_string h <> recorded_hash ->
+            Some cell_id
         | _ -> None) snapshot
     in
     if changed_cells <> [] then begin

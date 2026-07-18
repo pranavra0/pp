@@ -140,10 +140,18 @@ transitive closure of everything its children read. What a node observed
 governs validity (SPEC law 21) — pp's dynamic answer to Haskell's static
 IO type.
 
-The node key, from `node_key_of`, hashes the code structure plus the
-value hashes of the free variables the node references (`Free_vars.free_vars`),
-forced call-by-value. It leaves out the whole-environment hash and the
-capability set (SPEC law 20).
+`Node.key_of` resolves the free variables from the captured environment,
+forces and authorizes them, and passes only explicit code/free-variable hash
+inputs to the abstract `Node_key` constructor. Node keys, result object hashes,
+observed hashes, and cell ids are distinct types; conversion to store text is
+confined to repository and transport edges. The key leaves out the
+whole-environment hash and the capability set (SPEC law 20).
+
+Persistent execution is assembled by `Node.force`: `lookup_hit` verifies and
+serves a trace, `replay_node_reads` propagates nested reads, `rebuild` runs a
+miss, `validate_result` enforces the node boundary, and the persistence helpers
+write the result and trace. Serial forcing and scheduler workers both invoke
+the same `rebuild` operation.
 
 A node that raises a `Failure` stores a failing trace and re-serves the
 same error until a recorded read changes (SPEC law 28). A raising thunk
@@ -205,6 +213,7 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/core_model.ml` | The minimum recursive declarations for expressions, values, environments, closures, and thunks. |
 | `src/source_error.ml` | Source locations and the language's located error vocabulary. |
 | `src/identity.ml` | Structural hashes for values, expressions, patterns, and capabilities. |
+| `src/identity_types.ml` | Abstract node-key, object-hash, observed-hash, and cell-id types, plus explicit node-key construction. |
 | `src/environment.ml` | Environment lookup/extension and closure/thunk construction. |
 | `src/free_vars.ml` | Free-variable analysis used by node identity. |
 | `src/value_analysis.ml` | Cycle-safe inspection for authority and sealed values. |
@@ -246,7 +255,7 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/evaluator.ml` | The tree-walking evaluator, the project's sole engine, implementing `force`, `eval`, `apply`, and the immutable operation graph. |
 | `src/macro.ml` | `defmacro` expansion: a function from syntax-as-values to syntax, run at the expansion boundary. |
 | `src/primitives.ml` | Built-in functions and the initial environment. |
-| `src/node.ml` | The node-key skeleton and the node rebuilder. |
+| `src/node.ml` | Free-variable resolution, node identity, trace replay, hit policy, result validation, rebuilding, and persistence. |
 | `src/store_layout.ml` | Abstract store layout and version initialization, with the single atomic-replacement and crash-injection boundary. |
 | `src/object_repository.ml` | Immutable encoded values and fenced specifications addressed by hash. |
 | `src/blob_repository.ml` | Immutable byte blobs addressed by hash. |

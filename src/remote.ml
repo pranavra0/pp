@@ -19,7 +19,7 @@
    program (byte-identical source; both sides are ordinary files on the
    CI-loopback's shared disk, or scp'd identically in a real deployment)
    and runs it as an ordinary `pp` invocation, under `--schedule serial` —
-   so it calls Evaluator.run_node_body itself, via its OWN completely
+   so it calls Node.rebuild itself, via its OWN completely
    normal main.ml control flow, no second "evaluate on member" function
    anywhere. Whatever nodes that run forces (our assigned batch keys, plus
    duplicate computation across machines is SOUND by determinism, LAW 37)
@@ -324,7 +324,7 @@ let member_env (member_home : string) : string array =
    token from this process's OWN top-level grant specs (never
    wider than this process's own authority), spawn the member as an
    ordinary second `pp` invocation of the identical program under
-   `--schedule serial` (run_node_body, no second force path),
+   `--schedule serial` (Node.rebuild, no second force path),
    then pull each assigned key back via the serve-hit/
    recv-hit pair through a neutral shared-root scratch dir (the
    PULL direction, re-hash-verified same as every other sync).
@@ -358,7 +358,8 @@ let ship_and_pull host invocation ~(member_home : string) (closed : Scheduler.jo
     Store_layout.atomic_replace token_file token_text;
     let keys_file = Filename.concat scratch "keys" in
     Store_layout.atomic_replace keys_file
-      (String.concat "" (List.map (fun j -> j.Scheduler.j_key ^ "\n") closed));
+      (String.concat "" (List.map (fun j ->
+         Identity_types.Node_key.to_string j.Scheduler.j_key ^ "\n") closed));
     (* Test-only synchronization seam: a real
        dispatcher-to-member gap is a NETWORK delay, which a single-machine
        test cannot otherwise force deterministically between "pins pushed"

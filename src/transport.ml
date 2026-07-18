@@ -106,7 +106,9 @@ let ingest_trace_lines ~(key : string) (raw : string) : unit =
              "trace %s: unparseable line — refusing to accept (corrupt or \
               tampered in transit): %s" key line))
     | Some tr ->
-        Trace_repository.put Trace_repository.default ~key ~outcome:tr.Trace_repository.outcome
+        Trace_repository.put Trace_repository.default
+          ~key:(Identity_types.Cache_key.of_string key)
+          ~outcome:tr.Trace_repository.outcome
           ~result_hash:tr.Trace_repository.result_hash ~reads:tr.Trace_repository.reads)
     lines
 
@@ -210,7 +212,8 @@ module LocalDir = struct
     end
 
   let push_trace (root : t) ~(key : string) : unit =
-    let mine = Trace_repository.load Trace_repository.default ~key in
+    let mine = Trace_repository.load Trace_repository.default
+      ~key:(Identity_types.Cache_key.of_string key) in
     if mine = [] then
       failwith (Printf.sprintf
         "transport: push-trace %s: no local traces for this node key" key)
@@ -304,7 +307,8 @@ let decide host ~(key : string) ~(token_text : string) : decision =
   | Error reason -> DDeny reason
   | Ok caps ->
       let authorized = Observation.authorized_id caps in
-      (match Cache_policy.lookup Cache_policy.default ~key ~authorized with
+      (match Cache_policy.lookup Cache_policy.default
+               ~key:(Identity_types.Cache_key.of_string key) ~authorized with
        | Cache_policy.Miss -> DMiss
        | Cache_policy.HitOk v | Cache_policy.HitFailed v ->
            (match Codec.encode_value v with
@@ -319,7 +323,8 @@ let decide host ~(key : string) ~(token_text : string) : decision =
                    violation — should be unreachable)" key)
             | Some _ ->
                 let result_hash = Identity.hash_value v in
-                let traces = Trace_repository.load Trace_repository.default ~key in
+                let traces = Trace_repository.load Trace_repository.default
+                  ~key:(Identity_types.Cache_key.of_string key) in
                 (* Only the trace(s) whose ENTIRE closure this token's caps
                    cover — never leak a cell name/path the token doesn't
                    authorize, even when a DIFFERENT trace for the same key
@@ -333,8 +338,9 @@ let decide host ~(key : string) ~(token_text : string) : decision =
                   List.sort_uniq compare
                     (List.concat_map (fun tr ->
                        List.filter_map (fun (c, h) ->
-                         match Cell.parse c with
-                         | Cell.File _ -> Some h
+                         match Cell.parse (Identity_types.Cell_id.to_string c) with
+                         | Cell.File _ ->
+                             Some (Identity_types.Observed_hash.to_string h)
                          | _ -> None)
                          tr.Trace_repository.reads)
                        authorized_traces)

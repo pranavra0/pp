@@ -9,14 +9,14 @@ open Core_model
    computation. Used by reset_dirty to mark only the dirty subset
    Unevaluated, leaving clean thunks Evaluated so they skip Cache_policy.lookup Cache_policy.default
    entirely — the push-scheduler optimization. *)
-let register_node_key ~key ~thunk =
+let register_node_key ~(key : Identity_types.Node_key.t) ~thunk =
   Session.set_node_thunk (Effect.perform Dynamic_scope.Get_session) key thunk
 
 (* Mark each dirty node's in-memory thunk Unevaluated so the next force
    goes through Cache_policy.lookup Cache_policy.default → miss → recompute. Nodes not in the side-table
    (not currently in memory) are skipped — they will be fresh thunks on
    re-execute and naturally go through Cache_policy.lookup Cache_policy.default (pull behavior). *)
-let reset_dirty (dirty_keys : string list) : unit =
+let reset_dirty (dirty_keys : Identity_types.Node_key.t list) : unit =
   List.iter (fun k ->
     match Session.find_node_thunk (Effect.perform Dynamic_scope.Get_session) k with
     | Some t -> t.thunk_status <- Unevaluated

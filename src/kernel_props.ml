@@ -644,9 +644,12 @@ let session_property () =
   if evaluate a 1 <> VInt 1 || evaluate b 2 <> VInt 2 then
     fail "evaluator-instance" "constructed evaluator operations crossed sessions";
   Dynamic_scope.with_top_level a invocation ~f:(fun () ->
-    let read = (Cell.serialize (Cell.Env "X"), Observation.env_hash (Some "v")) in
+    let read =
+      (Identity_types.Cell_id.of_string (Cell.serialize (Cell.Env "X")),
+       Identity_types.Observed_hash.of_digest (Observation.env_hash (Some "v"))) in
     Session.clear_observations a;
-    Observation.record (Cell.Env "X") (snd read);
+    Observation.record (Cell.Env "X")
+      (Identity_types.Observed_hash.to_string (snd read));
     let recorded = Session.observations a in
     Session.clear_observations a;
     Observation.replay [read];
@@ -935,8 +938,10 @@ let observation_boundary_property () =
     fail "observation:legacy-proc" "legacy proc cell did not conservatively miss";
   if Observation.env_hash None = Observation.env_hash (Some "absent") then
     fail "observation:env-framing" "absence collided with a present value";
-  let trace = Trace_repository.{ outcome = Failed; result_hash = "r";
-    reads = [("file:/x", "h")] } in
+  let trace = Trace_repository.{ outcome = Failed;
+    result_hash = Identity_types.Object_hash.of_digest "r";
+    reads = [ (Identity_types.Cell_id.of_string "file:/x",
+               Identity_types.Observed_hash.of_digest "h") ] } in
   let line = "(trace failed \"r\" ((\"file:/x\" . \"h\")))" in
   if Trace_repository.to_line trace <> line
      || Trace_repository.of_line line <> Some trace then

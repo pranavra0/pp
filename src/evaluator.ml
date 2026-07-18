@@ -55,63 +55,9 @@ let cell_authorized_for = Observation.authorized_id
    [key_of] is the node-key function (node_key_of). *)
 let replay_node_reads = Node.replay_node_reads
 
-(* Run a persistent node's body and store the result (LAW 21) or the failure
-   (LAW 28) with its verifying trace. Shared by the evaluator's force and
-   trampoline paths — the node caches identically however it is demanded.
-   [run] executes the body. *)
-
-(* Serve a resolved Cache_policy.result the same way in every miss-arm variant
-   below: a verified hit (gated on LAW 23b authority), a re-served memoized
-   failure (LAW 28), or [None] on Miss (caller decides what to do). *)
-
-(* Force a persistent node through the store: serve a verified hit (gated on
-   the caller's authority over the trace's read closure, LAW 23b), re-serve a
-   memoized failure (LAW 28), or run and store on a miss.
-
-   Miss-arm scheduling: under [Race n] with n > 1, a singleton miss is worth
-   forking — n redundant (key, run) forks of the SAME job race each other
-   (sound: LAW 37 nodes are deterministic), the parent never reads a value
-   from any of them, and re-enters Cache_policy.lookup Cache_policy.default afterward exactly as the batch
-   path does — a hit if some child won, a Miss (falling through to the
-   ordinary in-process run below) if every child died. Under [Serial] or
-   [Parallel _], a LONE miss stays in-process (width 1): forking a single job
-   buys nothing (there is no second worker to race or overlap with) — only a
-   force-deep BATCH benefits from forking, and that path (Primitives
-   force-deep) dispatches its own batch before any of its members ever
-   reaches this function as a Miss. *)
-let force_node ~(key : string) ~(run : unit -> value) (t : thunk) : value =
-  Stabilize.register_node_key ~key ~thunk:t;
-  (* LAW 23b: "the caller's capabilities" for the hit gate
-     is THIS thunk's node_caps — captured at this process's creation of this
-     `(node e)` occurrence — not necessarily current_capabilities right now.
-     Absent with-caps the two are always equal (node_caps is populated from
-     current_capabilities at creation and current_capabilities never changes
-     without with-caps), so this collapses to the plain per-process
-     `--grant` set whenever with-caps goes unused. *)
-  let authorized = cell_authorized_for t.node_caps in
-  match Node.serve_hit ~t (Cache_policy.lookup Cache_policy.default ~key ~authorized) with
-  | Some v -> v
-  | None ->
-      (match Scheduler.state.policy with
-       | Scheduler.Race n when n > 1 ->
-           let job = { Scheduler.j_key = key;
-                       j_run = (fun () -> Node.run_node_body ~key ~run t);
-                       j_width = n; j_thunk = t } in
-           Scheduler.dispatch_batch [job];
-           (match Node.serve_hit ~t (Cache_policy.lookup Cache_policy.default ~key ~authorized) with
-            | Some v -> v
-            | None ->
-                (* Every racing worker died: degrade to the ordinary serial
-                   path — never a wrong answer, never a hang. *)
-                Node.run_node_body ~key ~run t)
-       (* A lone miss stays in-process under every OTHER policy too,
-          including [Remote _]: spinning up a cluster-member subprocess for
-          a single node buys nothing (there is no sibling to overlap with,
-          same reasoning as Serial/Parallel above) — only a force-deep BATCH
-          (collect_unevaluated_nodes, primitives.ml) is worth shipping. *)
-       | Scheduler.Serial | Scheduler.Parallel _ | Scheduler.Race _
-       | Scheduler.Remote _ ->
-           Node.run_node_body ~key ~run t)
+let force_node ~(key : Identity_types.Node_key.t) ~(run : unit -> value)
+    (t : thunk) : value =
+  Node.force ~key ~authorized:(cell_authorized_for t.node_caps) ~run t
 
 (* Module exports: the bindings of [bindings] not present in [base]
    (insertion order preserved). With [dedup], each name is exported once —
@@ -223,16 +169,8 @@ and evaluate_and_store_no_key (t : thunk) : value =
    and the ambient config/handler stacks: a config value or handler the node
    actually observed is recorded in its trace as a `config:`/`handler:` cell
    and governs validity, not identity (LAW 33/26). *)
-and node_key_of (t : thunk) : string =
-  let e = t.thunk_expr in
-  let fv_hashes =
-    Free_vars.SS.elements (Free_vars.free_vars e)
-    |> List.map (fun name ->
-      match Environment.lookup t.thunk_env name with
-      | Some v -> Node.fv_hash ~name v force
-      | None -> Node.unbound_fv_hash ~name)
-  in
-  Hasher.node_key_skeleton ~expr_hash:(Identity.hash_expr e) fv_hashes
+and node_key_of (t : thunk) : Identity_types.Node_key.t =
+  Node.key_of ~expr:t.thunk_expr ~env:t.thunk_env ~force
 
 (* Remote placement: a
    node is data-closed iff every free var's FORCED value re-encodes under
@@ -901,16 +839,15 @@ let eval_and_force (e : expr) : value =
 
 (* Initialize the evaluator state *)
 let resolve_if_hit t key =
-  match Cache_policy.lookup Cache_policy.default ~key ~authorized:(cell_authorized_for t.node_caps) with
-  | Cache_policy.HitOk value -> t.thunk_status <- Evaluated value; true
-  | Cache_policy.HitFailed _ -> true
-  | Cache_policy.Miss -> false
+  match Node.lookup_hit ~key ~authorized:(cell_authorized_for t.node_caps) t with
+  | Some _ -> true
+  | None -> false
 
 let operations = {
   Evaluator_ops.core = { force; eval; apply };
   node = {
     key_of = node_key_of;
-    run_body = (fun ~key ~run thunk -> Node.run_node_body ~key ~run thunk);
+    run_body = (fun ~key ~run thunk -> Node.rebuild ~key ~run thunk);
     resolve_hit = resolve_if_hit;
   };
 }

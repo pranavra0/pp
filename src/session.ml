@@ -19,7 +19,7 @@ type t = {
   mutable fenced_actions : (string * Core_model.value) list;
   run_pins : (string, string) Hashtbl.t;
   preseeded_run_pins : (string, string) Hashtbl.t;
-  node_thunks : (string, Core_model.thunk) Hashtbl.t;
+  node_thunks : (Identity_types.Node_key.t, Core_model.thunk) Hashtbl.t;
   mutable current_env : Core_model.env;
   mutable force_depth : int;
   mutable cache_bust : int;

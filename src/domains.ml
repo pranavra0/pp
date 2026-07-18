@@ -112,20 +112,23 @@ let plan_cache_key ~(diff_closure : value) ~(observed : value) ~(desired : value
 
 let compute_plan ~(domain_name : string) ~(diff_closure : value)
     ~(observed : value) ~(desired : value) : value =
-  let key = plan_cache_key ~diff_closure ~observed ~desired in
+  let key = Identity_types.Cache_key.of_digest
+    (plan_cache_key ~diff_closure ~observed ~desired) in
   match Cache_policy.lookup Cache_policy.default ~key ~authorized:(fun _ -> true) with
   | Cache_policy.HitOk v ->
       Cache_policy.diagnose Cache_policy.default "domain %s: plan %s: hit (cached, unchanged observed/desired)"
-        domain_name (Cache_policy.short_key key);
+        domain_name (Cache_policy.short_key (Identity_types.Cache_key.to_string key));
       v
   | Cache_policy.HitFailed _ | Cache_policy.Miss ->
-      Cache_policy.diagnose Cache_policy.default "domain %s: plan %s: miss — running diff" domain_name (Cache_policy.short_key key);
+      Cache_policy.diagnose Cache_policy.default "domain %s: plan %s: miss — running diff"
+        domain_name (Cache_policy.short_key (Identity_types.Cache_key.to_string key));
       let plan =
         try Primitives.call_with_args diff_closure [observed; desired]
         with effect Dynamic_scope.Get_capabilities, k -> Effect.Deep.continue k []
       in
-      let result_hash = Identity.hash_value plan in
-      (try Object_repository.put Object_repository.default ~key:result_hash ~value:plan with _ -> ());
+      let result_hash = Identity_types.Object_hash.of_digest (Identity.hash_value plan) in
+      (try Object_repository.put Object_repository.default
+             ~key:(Identity_types.Object_hash.to_string result_hash) ~value:plan with _ -> ());
       (try Trace_repository.put Trace_repository.default ~key ~outcome:Trace_repository.Ok ~result_hash ~reads:[] with _ -> ());
       plan
 

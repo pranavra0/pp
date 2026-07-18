@@ -19,7 +19,8 @@ val force : Core_model.value -> Core_model.value
 (** Force a thunk to a value; passes through non-thunk values unchanged. *)
 
 val force_node :
-  key:string -> run:(unit -> Core_model.value) -> Core_model.thunk -> Core_model.value
+  key:Identity_types.Node_key.t ->
+  run:(unit -> Core_model.value) -> Core_model.thunk -> Core_model.value
 (** Force a persistent node through the store: serve a verified hit (gated
     on the caller's authority over the trace's read closure, LAW 23b),
     re-serve a memoized failure (LAW 28), or run and store on a miss. *)
@@ -41,7 +42,8 @@ val perform_effect : string -> Core_model.value list -> Core_model.value
 (** Dispatch a named effect with its (already-forced) argument list.
     Shared by the evaluator's effect paths so they cannot drift. *)
 
-val replay_node_reads : Core_model.thunk -> (Core_model.thunk -> string) -> unit
+val replay_node_reads : Core_model.thunk ->
+  (Core_model.thunk -> Identity_types.Node_key.t) -> unit
 (** Trace replay for an already-Evaluated persistent node: replay its
     stored trace reads into the active trace frames so the caller's trace
     transitively captures this node's world-reads. [key_of] is the

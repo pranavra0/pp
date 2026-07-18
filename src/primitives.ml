@@ -58,15 +58,15 @@ let force_args (args : value list) : value list = List.map force_val args
    (its body is opaque until it runs) and at an ephemeral Unevaluated thunk
    (only nodes are ever batched — "What is parallelized: nodes only"). *)
 let collect_unevaluated_nodes (v : value) : Scheduler.job list =
-  let seen_keys : (string, unit) Hashtbl.t = Hashtbl.create 64 in
+  let seen_keys : (Identity_types.Node_key.t, unit) Hashtbl.t = Hashtbl.create 64 in
   let seen_pairs : value list ref = ref [] in
   let jobs = ref [] in
   let race_width () = match Scheduler.state.policy with Scheduler.Race n -> n | _ -> 1 in
   let node = node_operations () in
   let core = core_operations () in
-  let key_of (t : thunk) : string = node.key_of t
+  let key_of (t : thunk) : Identity_types.Node_key.t = node.key_of t
   in
-  let job_run (t : thunk) (key : string) () : value =
+  let job_run (t : thunk) (key : Identity_types.Node_key.t) () : value =
     let run () = core.eval t.thunk_expr t.thunk_env in
     node.run_body ~key ~run t
   in
@@ -108,7 +108,7 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
    step would re-collect the shrinking REMAINING tail — the parent's
    in-memory thunk_status stays Unevaluated until IT forces a thunk, even
    though the store already has that node's result from the first wave's
-   child — and re-dispatch (and thus re-run_node_body, re-executing every
+   child — and re-dispatch (and thus re-run the rebuilder, re-executing every
    external process) an already-computed node all over again, once per
    remaining list position (an O(n^2) blowup, not a correctness issue but a
    catastrophic performance one). *)

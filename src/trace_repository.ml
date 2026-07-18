@@ -2,8 +2,8 @@ type outcome = Ok | Failed
 
 type trace = {
   outcome : outcome;
-  result_hash : string;
-  reads : (string * string) list;  (* (cell-id, observed-hash) *)
+  result_hash : Identity_types.Object_hash.t;
+  reads : (Identity_types.Cell_id.t * Identity_types.Observed_hash.t) list;
 }
 type t = { layout : Store_layout.t }
 let create layout = { layout }
@@ -12,10 +12,14 @@ let default = create Store_layout.default
 let to_line (tr : trace) : string =
   let outcome_s = match tr.outcome with Ok -> "ok" | Failed -> "failed" in
   let read_s (c, h) =
-    Printf.sprintf "(%s . %s)" (Codec.quote_string c) (Codec.quote_string h)
+    Printf.sprintf "(%s . %s)"
+      (Codec.quote_string (Identity_types.Cell_id.to_string c))
+      (Codec.quote_string (Identity_types.Observed_hash.to_string h))
   in
   Printf.sprintf "(trace %s %s (%s))"
-    outcome_s (Codec.quote_string tr.result_hash)
+    outcome_s
+      (Codec.quote_string
+         (Identity_types.Object_hash.to_string tr.result_hash))
     (String.concat " " (List.map read_s tr.reads))
 
 (* Hand-rolled parser matching [to_line] exactly; [None] on anything
@@ -42,7 +46,8 @@ let of_line (line : string) : trace option =
     expect_lit i " . " >>= fun i ->
     Codec.parse_quoted_string line i >>= fun (hash, i) ->
     expect_char i ')' >>= fun i ->
-    Some ((cell, hash), i)
+    Some ((Identity_types.Cell_id.of_string cell,
+           Identity_types.Observed_hash.of_digest hash), i)
   in
   let rec parse_reads i acc =
     if i < len && line.[i] = ')' then Some (List.rev acc, i + 1)
@@ -58,11 +63,15 @@ let of_line (line : string) : trace option =
   expect_char i '(' >>= fun i ->
   parse_reads i [] >>= fun (reads, i) ->
   expect_char i ')' >>= fun i ->
-  if i = len then Some { outcome = outcome; result_hash = result_hash; reads = reads }
+  if i = len then
+    Some { outcome = outcome;
+           result_hash = Identity_types.Object_hash.of_digest result_hash;
+           reads = reads }
   else None
 
-let load t ~key : trace list =
-  let path = Store_layout.path t.layout Store_layout.Traces key in
+let load t ~(key : Identity_types.Cache_key.t) : trace list =
+  let path = Store_layout.path t.layout Store_layout.Traces
+    (Identity_types.Cache_key.to_string key) in
   if Sys.file_exists path then (
     try
       let ic = open_in path in
@@ -96,11 +105,12 @@ let trace_lock_enabled =
 
 
 
-let with_trace_lock t (key : string) (f : unit -> unit) : unit =
+let with_trace_lock t (key : Identity_types.Cache_key.t) (f : unit -> unit) : unit =
   if not (Lazy.force trace_lock_enabled) then f ()
   else begin
     Store_layout.ensure_area t.layout Store_layout.Locks;
-    let lock_path = Store_layout.path t.layout Store_layout.Locks key in
+    let lock_path = Store_layout.path t.layout Store_layout.Locks
+      (Identity_types.Cache_key.to_string key) in
     match (try Some (Unix.openfile lock_path [Unix.O_CREAT; Unix.O_WRONLY] 0o644)
            with _ -> None) with
     | None -> f ()  (* can't lock (e.g. read-only FS) — best-effort, proceed unlocked *)
@@ -119,6 +129,9 @@ let put t ~key ~outcome ~result_hash ~reads =
     if not (List.mem tr existing) then (
       let set = existing @ [tr] in
       let content = String.concat "" (List.map (fun t -> to_line t ^ "\n") set) in
-      Store_layout.atomic_replace (Store_layout.path t.layout Store_layout.Traces key) content
+      Store_layout.atomic_replace
+        (Store_layout.path t.layout Store_layout.Traces
+           (Identity_types.Cache_key.to_string key)) content
     ))
 let keys t = Store_layout.list t.layout Store_layout.Traces
+  |> List.map Identity_types.Cache_key.of_string

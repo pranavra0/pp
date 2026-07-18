@@ -5,10 +5,10 @@
    point inherits ALL ambient state (handler_stack closures, capabilities,
    config, thunk memo) byte-identically via COW — no scope-state refactor and
    no marshaling is needed. A forked worker runs the EXACT function
-   the serial miss arm calls, [Evaluator.run_node_body] (passed in as
+   the serial miss arm calls, [Node.rebuild] (passed in as
    [j_run] by the caller) — there is no second "evaluate node in worker"
    code path. The child exits 0 on success / 1 on error; the failing trace
-   was already persisted by run_node_body itself (LAW 28). The parent NEVER
+   was already persisted by [Node.rebuild] itself (LAW 28). The parent NEVER
    reads a value from a child — it reaps and falls through to the ordinary
    [Cache_policy.lookup Cache_policy.default]: the child's trace+object make it a hit, a dead child makes
    it a miss and the parent recomputes in-process. Worker death therefore
@@ -25,7 +25,7 @@
 type policy = Serial | Parallel of int | Race of int | Remote of string
 
 type job = {
-  j_key : string;
+  j_key : Identity_types.Node_key.t;
   j_run : unit -> Core_model.value;
   (* Redundancy for this job: 1 for an ordinary batch member, N for a
      singleton force_node miss raced under [Race n] (N identical (key,run)
@@ -57,7 +57,7 @@ let state = {
 (* ---- Live-child bookkeeping (for SIGINT and race-loser kills) ---- *)
 
 (* pid -> job key, for every child currently forked and not yet reaped. *)
-let live_children : (int, string) Hashtbl.t = Hashtbl.create 16
+let live_children : (int, Identity_types.Node_key.t) Hashtbl.t = Hashtbl.create 16
 
 let kill_grace_seconds = 0.5
 
@@ -131,9 +131,9 @@ let flush_before_fork () =
   (try flush stdout with _ -> ());
   (try flush stderr with _ -> ())
 
-(* Runs entirely inside the child. [j.j_run] IS [Evaluator.run_node_body]
+(* Runs entirely inside the child. [j.j_run] IS [Node.rebuild]
    partially applied by the caller — the exact function the serial miss arm
-   calls; run_node_body itself persists the result object + trace (success)
+   calls; [Node.rebuild] itself persists the result object + trace (success)
    or the failing trace (LAW 28) before returning/raising, so there is
    nothing left for the child to persist here. The child must flush its OWN
    stdout/stderr (anything the node body printed via `perform log` or
@@ -194,9 +194,9 @@ let run_concurrent (limit : int) (jobs : job list) : unit =
   let limit = max 1 limit in
   let queue = Queue.create () in
   List.iter (fun j -> for _ = 1 to max 1 j.j_width do Queue.push j queue done) jobs;
-  let succeeded_keys : (string, unit) Hashtbl.t = Hashtbl.create 16 in
+  let succeeded_keys : (Identity_types.Node_key.t, unit) Hashtbl.t = Hashtbl.create 16 in
   let live_count = ref 0 in
-  let kill_losers_for (key : string) : unit =
+  let kill_losers_for (key : Identity_types.Node_key.t) : unit =
     let losers =
       Hashtbl.fold (fun p k acc -> if k = key then p :: acc else acc)
         live_children []

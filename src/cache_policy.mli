@@ -18,4 +18,5 @@ val gc_marks : t -> (string, unit) Hashtbl.t
 val mark : t -> string -> unit
 val short_key : string -> string
 val diagnose : t -> ('a, out_channel, unit, unit, unit, unit) format6 -> 'a
-val lookup : t -> key:string -> authorized:(string -> bool) -> result
+val lookup : t -> key:Identity_types.Cache_key.t ->
+  authorized:(Identity_types.Cell_id.t -> bool) -> result

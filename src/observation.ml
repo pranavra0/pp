@@ -104,11 +104,16 @@ let observe cell =
   | Cell.Domain { name; sub } -> (try observe_domain name sub with _ -> None)
   | Cell.Unknown _ -> None
 
-let observe_id id = observe (Cell.parse id)
+let observe_id (id : Identity_types.Cell_id.t) =
+  Option.map Identity_types.Observed_hash.of_digest
+    (observe (Cell.parse (Identity_types.Cell_id.to_string id)))
 let record cell hash = Dynamic_scope.record_read (Cell.serialize cell) hash
 let record_config key = record (Cell.Config key) (Dynamic_scope.observe_config key)
 let record_handler name = record (Cell.Handler name) (Dynamic_scope.observe_handler name)
-let replay reads = List.iter (fun (id, hash) -> record (Cell.parse id) hash) reads
+let replay reads =
+  List.iter (fun (id, hash) ->
+    record (Cell.parse (Identity_types.Cell_id.to_string id))
+      (Identity_types.Observed_hash.to_string hash)) reads
 
 let authorized caps cell =
   let has_fs path =
@@ -128,4 +133,5 @@ let authorized caps cell =
   | Cell.Probe _ -> true
   | Cell.Unknown _ -> false
 
-let authorized_id caps id = authorized caps (Cell.parse id)
+let authorized_id caps (id : Identity_types.Cell_id.t) =
+  authorized caps (Cell.parse (Identity_types.Cell_id.to_string id))

@@ -188,34 +188,6 @@ two orchestration functions.
 The order matters. Later boundaries assume earlier ownership and tests.
 
 
-### 13. Make node identity and rebuilding a first-class subsystem
-
-**Purpose:** put the most correctness-sensitive boundary behind explicit types
-and operations.
-
-**Work:**
-
-- Introduce distinct types or modules for node keys, object hashes, observed
-  hashes, and cell ids so accidental string interchange is harder.
-- Separate free-variable resolution, node-key construction, hit lookup,
-  authorization, trace replay, miss execution, result validation, and trace
-  persistence.
-- Make the dependency inputs to every hash constructor explicit at its API.
-- Keep nested-node trace propagation and cutoff behavior characterized.
-- Ensure scheduling calls the same rebuilder operation as serial evaluation.
-
-**Likely files:** `src/node.*`, evaluator forcing, identity modules, cache
-policy, scheduler, remote.
-
-**Verify:** tests/009 through tests/024, cutoff, parallel stress, remote
-placement, hash properties, suite and full fuzzer.
-
-**Exit:** node execution reads as one linear policy assembled from named
-operations; identity cannot accidentally consume authority or ambient config.
-
-**Non-goal:** implement future inline-nested cutoff changes unless separately
-specified and tested.
-
 ### 14. Decompose the sole evaluator by semantic concern
 
 **Purpose:** make evaluator code navigable without fragmenting semantics.
