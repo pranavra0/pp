@@ -188,34 +188,6 @@ two orchestration functions.
 The order matters. Later boundaries assume earlier ownership and tests.
 
 
-
-### 3. Characterize run, pass, and watch lifecycles
-
-**Purpose:** pin the reset/retention behavior currently encoded by scattered
-clears and assignments.
-
-**Work:**
-
-- Add fast tests that execute two independent evaluations in one process and
-  prove macros, gensyms, domains, probes, handlers, config, diagnostics, and
-  errors do not leak.
-- Add watch/pass tests proving thunk memoization is retained only where intended,
-  while probe values, sealed pins, observations, and source-derived registries
-  reset at the correct boundary.
-- Add REPL tests documenting which state deliberately survives between inputs.
-- Name the lifecycle transitions in test helpers: new command, new evaluation,
-  new watch pass, and REPL input.
-
-**Likely files:** new unit/integration tests, `tests/031-watch-once.sh`,
-`tests/032-stabilize.sh`, `tests/029-repl.sh`.
-
-**Verify:** focused tests and `dune runtest`.
-
-**Exit:** every reset or retention decision needed by later session APIs has an
-executable characterization.
-
-**Non-goal:** change those decisions.
-
 ### 13. Make node identity and rebuilding a first-class subsystem
 
 **Purpose:** put the most correctness-sensitive boundary behind explicit types
