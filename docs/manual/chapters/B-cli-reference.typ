@@ -3,7 +3,7 @@
 = Command-line reference
 
 This appendix lists every flag `pp` accepts, grouped by what you use it for.
-It comes from the argument parser in `src/main.ml`. Where the built-in
+It comes from the argument parser in `src/app/main.ml`. Where the built-in
 `pp --help` and this table disagree, the source wins. A few flags marked
 internal are dispatch machinery that `pp` invokes on itself. They are here for
 completeness; you should not need to type them by hand.
@@ -189,6 +189,6 @@ placement's pin wire).
 )
 
 The pin-file's `(pin …)` / `(pin-probe …)` lines are their own small wire
-format (`src/remote.ml`'s `parse_pin_line`), not pp source — they are not
+format (`src/runtime/remote.ml`'s `parse_pin_line`), not pp source — they are not
 read by either pp reader, so they keep their fixed parenthesized shape
 regardless of the surface a program is written in.

@@ -11,7 +11,7 @@
 # Run from the repo root, outside dune. Isolated HOME.
 set -uo pipefail
 cd "$(dirname "$0")/.."
-PP=${PP:-"$PWD/_build/default/src/main.exe"}
+PP=${PP:-"$PWD/_build/default/src/app/main.exe"}
 command -v cc >/dev/null || { echo "SKIPPED (no cc)"; exit 0; }
 
 CACHE="$PWD/scripts/.cache"

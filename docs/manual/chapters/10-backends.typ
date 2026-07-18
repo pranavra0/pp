@@ -45,7 +45,7 @@ injection.
 
 == Kernel properties
 
-`src/kernel_props.ml` runs QuickCheck-style property sweeps: hash injectivity,
+`src/app/kernel_props.ml` runs QuickCheck-style property sweeps: hash injectivity,
 the quote round-trip, and the print round-trip over random ASTs and values.
 The generators match exhaustively on constructor tags, so a new AST or
 capability kind breaks the build until it is generated and covered.

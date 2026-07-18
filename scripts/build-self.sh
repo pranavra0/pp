@@ -12,7 +12,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 REPO="$PWD"
-PP=${PP:-"$REPO/_build/default/src/main.exe"}
+PP=${PP:-"$REPO/_build/default/src/app/main.exe"}
 
 TMP=$(mktemp -d)
 REAL_HOME="$HOME"      # opam needs ~/.opam; only pp's store is isolated
@@ -27,7 +27,7 @@ cat > "$TMP/build-self.pp" <<EOF
 let (pp-bin = force(node {
   perform log("DUNE-BUILD")
   do {
-    perform run("sh", "-c", "out=\$(pwd); cd $REPO && HOME=$REAL_HOME opam exec -- dune build 2>&1 && cp _build/default/src/main.exe \"\$out/pp.bin\"")
+    perform run("sh", "-c", "out=\$(pwd); cd $REPO && HOME=$REAL_HOME opam exec -- dune build 2>&1 && cp _build/default/src/app/main.exe \"\$out/pp.bin\"")
     blob(slurp("pp.bin"))
   }
 })) { map-insert({}, "pp", string-append(pp-bin, ":x")) }

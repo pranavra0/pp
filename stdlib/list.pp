@@ -1,7 +1,7 @@
 # stdlib/list.pp — basic list operation library
 
 # NOTE: `map` is intentionally NOT defined here. It is a BUILTIN
-# (src/primitives.ml) as of Phase 3, and the builtin is the batching
+# (src/runtime/primitives.ml) as of Phase 3, and the builtin is the batching
 # fan-out point the parallel scheduler collects on: it applies f via the
 # apply hook and conses the results WITHOUT forcing them, so a list of
 # node { ... } elements stays unforced until force-deep dispatches the whole

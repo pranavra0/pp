@@ -142,7 +142,7 @@ Each claim below is an adversarial test. All run end-to-end in
 that differ only in their `$HOME` directory. This stands in for distinct
 machines at the process level, sharing a "world" directory the way the
 continuous-integration loopback local-directory transport does. See the
-module header of `src/transport.ml` for why the tests use this shape
+module header of `src/runtime/transport.ml` for why the tests use this shape
 rather than a true single-process, dual-store setup.
 
 - claim T1: pp re-hashes every synced artifact before use, and refuses any

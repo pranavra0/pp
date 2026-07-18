@@ -219,114 +219,140 @@ is journaled as an `island fetch` entry and governed by
 
 ## File-by-file responsibilities
 
-The source splits into two dune libraries. `pp.kernel` is pure — no Unix,
-no side effects — and holds the types, hashing, and the closed vocabulary
-everything else is checked against. `pp` builds on it and may touch the
-world (files, processes, the network). `main.ml` is the thin entry point;
-`tools/fuzz.ml` is the metamorphic fuzzer.
-### Kernel (`pp.kernel`, pure)
+The source is split into four wrapped Dune libraries with physical directory
+boundaries. The compiled module graph is:
+
+```text
+pp.kernel   -> cryptokit, dune-build-info
+pp.frontend -> pp.kernel
+pp.runtime  -> pp.kernel, pp.frontend, unix
+pp.app      -> pp.kernel, pp.frontend, pp.runtime, unix, cryptokit
+```
+
+`pp.kernel` is Unix-free and owns semantic data and pure operations. `pp.frontend`
+owns readers, printers, and source lowering. `pp.runtime` contains the sole
+evaluator and the cache/world implementations that currently form one practical
+runtime boundary; it is the only lower library linked with Unix. `pp.app`
+constructs host services and dispatches commands. Wrapping makes cross-library
+ownership explicit (`Pp_kernel.*`, `Pp_frontend.*`, and `Pp_runtime.*`).
+`tools/check-dependencies.sh`, exposed as `dune build @architecture`, checks the
+declared graph and the Unix restriction.
+
+The source directories are therefore the library map:
+
+| Directory | Library | Role |
+|---|---|---|
+| `src/kernel/` | `pp.kernel` | semantic types, identity, capabilities, codecs, and pure operations |
+| `src/frontend/` | `pp.frontend` | readers, printers, desugaring, surface tables, and lint |
+| `src/runtime/` | `pp.runtime` | evaluator, dynamic scope, cache/repositories, world implementations, and runtime services |
+| `src/app/` | `pp.app` | invocation parsing, command composition, production construction, and `main.ml` |
+
+The file-by-file table below is exhaustive; its qualified paths are the
+ownership source of truth.
+
+### Library-owned files
 
 | File | Role |
 |---|---|
-| `src/core_model.ml` | The minimum recursive declarations for expressions, values, environments, closures, and thunks. |
-| `src/source_error.ml` | Source locations and the language's located error vocabulary. |
-| `src/identity.ml` | Structural hashes for values, expressions, patterns, and capabilities. |
-| `src/identity_types.ml` | Abstract node-key, object-hash, observed-hash, and cell-id types, plus explicit node-key construction. |
-| `src/environment.ml` | Environment lookup/extension and closure/thunk construction. |
-| `src/free_vars.ml` | Free-variable analysis used by node identity. |
-| `src/value_analysis.ml` | Cycle-safe inspection for authority and sealed values. |
-| `src/quotation.ml` | Total expression/value quotation conversion. |
-| `src/pattern_match.ml` | Pure pattern matching and binding extraction. |
-| `src/presentation.ml` | Runtime value presentation and list/string projections. |
-| `src/hasher.ml` | Low-level SHA-256 and injective length-framed hashing primitives. |
-| `src/blobref.ml` | Detection of `blob:<sha256>` references embedded in an ordinary value, so large bytes stay out of a node's small result. |
-| `src/force_deep.ml` | The deep structural force and its session-scheduler-aware batch collection/dispatch boundary. |
-| `src/codec.ml` | The one canonical, versioned, byte-stable text encoding for store objects and traces. |
-| `src/constant_time.ml` | Constant-time byte comparison, used to verify signed tokens without a timing side channel. |
-| `src/paths.ml` | The one component-boundary path-containment predicate, `Paths.under`, behind capability scopes, loader authority, and domain bounds. |
-| `src/cell.ml` | The closed cell taxonomy and its byte-stable `parse`/`serialize` mapping. |
-| `src/observation.ml` | Typed cell construction, observation hashes, record/replay, re-observation, and hit authorization. |
-| `src/surface_tables.ml` | The closed surface sets (sigils, observation heads, lowering templates) as data, plus the renderer for SPEC's generated block. |
-| `src/desugar.ml` | Reader-level desugars shared by both readers (SPEC Appendix B). |
-| `src/comments.ml` | The side channel `pp fmt` uses to carry comments across a surface transpile. |
-| `src/cap_token.ml` | Signed capability grants — cluster tokens — for cross-machine authority. |
-| `src/invocation.ml` | The abstract, immutable, validated command invocation: source roots, initial authority, program arguments/files, reconciliation and GC inputs. |
-| `src/host_services.ml` | The immutable interface for canonicalization, time, home discovery, and secret-file I/O; production construction lives in `app_context.ml`, while tests use complete deterministic values. |
-| `src/effects.ml` | The OCaml 5 effect declarations that hold handler, config, and trace state in dynamic extent. |
-| `src/evaluator_ops.ml` | Immutable, capability-shaped evaluator operations: semantic force/eval/apply and the narrower node-policy view. Each session receives a complete value at construction. |
-| `src/version.ml` | Single source of truth for the version string. |
+| `src/kernel/core_model.ml` | The minimum recursive declarations for expressions, values, environments, closures, and thunks. |
+| `src/kernel/source_error.ml` | Source locations and the language's located error vocabulary. |
+| `src/kernel/identity.ml` | Structural hashes for values, expressions, patterns, and capabilities. |
+| `src/kernel/identity_types.ml` | Abstract node-key, object-hash, observed-hash, and cell-id types, plus explicit node-key construction. |
+| `src/kernel/environment.ml` | Environment lookup/extension and closure/thunk construction. |
+| `src/kernel/free_vars.ml` | Free-variable analysis used by node identity. |
+| `src/kernel/value_analysis.ml` | Cycle-safe inspection for authority and sealed values. |
+| `src/kernel/quotation.ml` | Total expression/value quotation conversion. |
+| `src/kernel/pattern_match.ml` | Pure pattern matching and binding extraction. |
+| `src/kernel/presentation.ml` | Runtime value presentation and list/string projections. |
+| `src/kernel/hasher.ml` | Low-level SHA-256 and injective length-framed hashing primitives. |
+| `src/kernel/blobref.ml` | Detection of `blob:<sha256>` references embedded in an ordinary value, so large bytes stay out of a node's small result. |
+| `src/runtime/force_deep.ml` | The deep structural force and its session-scheduler-aware batch collection/dispatch boundary. |
+| `src/kernel/codec.ml` | The one canonical, versioned, byte-stable text encoding for store objects and traces. |
+| `src/kernel/constant_time.ml` | Constant-time byte comparison, used to verify signed tokens without a timing side channel. |
+| `src/kernel/paths.ml` | The one component-boundary path-containment predicate, `Paths.under`, behind capability scopes, loader authority, and domain bounds. |
+| `src/kernel/cell.ml` | The closed cell taxonomy and its byte-stable `parse`/`serialize` mapping. |
+| `src/runtime/observation.ml` | Typed cell construction, observation hashes, record/replay, re-observation, and hit authorization. |
+| `src/frontend/surface_tables.ml` | The closed surface sets (sigils, observation heads, lowering templates) as data, plus the renderer for SPEC's generated block. |
+| `src/frontend/desugar.ml` | Reader-level desugars shared by both readers (SPEC Appendix B). |
+| `src/frontend/comments.ml` | The side channel `pp fmt` uses to carry comments across a surface transpile. |
+| `src/kernel/cap_token.ml` | Signed capability grants — cluster tokens — for cross-machine authority. |
+| `src/kernel/invocation.ml` | The abstract, immutable, validated command invocation: source roots, initial authority, program arguments/files, reconciliation and GC inputs. |
+| `src/kernel/host_services.ml` | The immutable interface for canonicalization, time, home discovery, and secret-file I/O; production construction lives in `app_context.ml`, while tests use complete deterministic values. |
+| `src/kernel/effects.ml` | The OCaml 5 effect declarations that hold handler, config, and trace state in dynamic extent. |
+| `src/kernel/evaluator_ops.ml` | Immutable, capability-shaped evaluator operations: semantic force/eval/apply and the narrower node-policy view. Each session receives a complete value at construction. |
+| `src/kernel/version.ml` | Single source of truth for the version string. |
 
-### Application library (`pp`)
+### Remaining library-owned files
 
 | File | Role |
 |---|---|
-| `src/reader.ml` | Reentrant s-expression lexer and parser to the `expr` AST — the `.ppl` macro surface — with source and line tracking owned by an abstract parser state. |
-| `src/reader_braces.ml` | Reentrant brace-surface parser (`.pp`/`.ppb`, SPEC Appendix B) to the same `expr` AST; its abstract state owns deterministic generated names. |
-| `src/printer_braces.ml` | Renders an `expr` back to brace-surface text: the `pp fmt --to-braces` half. |
-| `src/printer_sexpr.ml` | Renders an `expr` back to s-expression text: the `--to-sexpr` half. |
-| `src/dynamic_scope.ml` | Bracketed OCaml effect scopes for capabilities, config, handlers, traces, nodes, domains, and observation collection. |
-| `src/world_path.ml` | Canonical filesystem paths and discovery of the installed standard library. |
-| `src/loader.ml` | Source loading under bounded interpreter authority, including trace recording. |
-| `src/error_context.ml` | Attaches the innermost source-form location to evaluation errors. |
-| `src/sandbox.ml` | Creates, resolves, and removes node-local scratch directories. |
-| `src/session.ml` | The abstract owner of evaluation/pass state, including the session domain registry and fenced pass state, its scheduler handle, explicit function invocation, a complete immutable evaluator-operation value, and its `begin_evaluation`, `begin_pass`, and `begin_watch` lifecycle transitions. |
-| `src/evaluator.ml` | The project's sole tree-walking engine: one exhaustive expression dispatch, tail mechanism, force/trampoline, and operation graph. |
-| `src/evaluator_thunks.ml` | Content-addressed thunk construction, letrec poison thunks, and module export selection. |
-| `src/evaluator_application.ml` | Closure/builtin application, explicit builtin environments, and the shared tail-call continuation mechanism. |
-| `src/evaluator_node.ml` | The evaluator-facing adapter for persistent-node forcing and nested trace replay. |
-| `src/evaluator_effects.ml` | Dynamic handler lookup and the builtin effect fallback. |
-| `src/evaluator_forms.ml` | Sequential blocks, module evaluation, source loading, and top-level form evaluation. |
-| `src/evaluator_scope.ml` | Capability, handler, config, and config-read dynamic-scope forms. |
-| `src/evaluator_match.ml` | Pattern-arm matching, guard evaluation, and arm environment extension. |
-| `src/macro.ml` | `defmacro` expansion: a function from syntax-as-values to syntax, run at the expansion boundary. |
-| `src/primitives.ml` | Declarative builtin descriptors, categorized registration, and initial-environment materialization. |
-| `src/node.ml` | Free-variable resolution, node identity, trace replay, hit policy, result validation, rebuilding, and persistence. |
-| `src/store_layout.ml` | Abstract store layout and version initialization, with the single atomic-replacement and crash-injection boundary. |
-| `src/object_repository.ml` | Immutable encoded values and fenced specifications addressed by hash. |
-| `src/blob_repository.ml` | Immutable byte blobs addressed by hash. |
-| `src/trace_repository.ml` | Locked trace sets with canonical byte-stable encoding. |
-| `src/cache_policy.ml` | Trace selection, verification, authorization, replay, diagnostics, and GC marking over repository handles. |
-| `src/cell_repository.ml` | Snapshot reads and sealed/file pins over observations and the blob repository. |
-| `src/store_index.ml` | Read-only reverse-index and graph queries over traces. |
-| `src/repository_inventory.ml` | Artifact metadata and removal lifecycle used by explicit GC. |
-| `src/store_gc.ml` | Explicit `pp gc`: mark-by-replay over recent epochs and sweep through repository inventory — never automatic. |
-| `src/gcroots.ml` | The GC roots manifest naming the epochs `pp gc` marks from. |
-| `src/journal.ml` | The append-only intent and done audit log: a typed `entry` variant, byte-stable line codec, atomic append, and durable fenced-action state queries (SPEC law 31). It does not choose recovery policy. |
-| `src/fenced.ml` | The narrowly scoped fenced-effect mechanics: registers scripting-tier actions, journals intent and done entries, and executes a recovery decision supplied by the command boundary (SPEC law 31). |
-| `src/island.ml` | Islands: parses file, git, and github URIs; runs the content-addressed cache and tamper verification; rewrites pins for `--update`; provides `island-pins`; and fetches over git only when asked. |
-| `src/domain_prims.ml` | The trusted mechanics that back in-language domains: atomic `materialize-file` and `remove-file`, `tree-observe`, `proc-spawn`, `proc-alive?`, `proc-stop`, `proc-reap`, and `domain-state-get`/`put` — owning no policy of its own. |
-| `src/domains.ml` | Typed domain pipeline: pass preparation and stratification, observation, diff/plan construction, apply journaling, verification, and epoch recording. `stdlib/domain-fs.pp` and `domain-proc.pp` hold the filesystem and process policy as pp source. |
-| `src/reconciliation.ml` | Explicit command-owned reconciliation lifecycle: it binds an invocation to a session, sequences a prepared domain pass, drains the session-owned fenced pass, and delegates recovery decisions without owning journal persistence. |
-| `src/process.ml` | The `run` process effect: executes an external command under capability. |
-| `src/scheduler.ml` | The explicitly constructed fork-at-dispatch scheduler handle for node misses (`serial`, `parallel:N`, `race:N`, `remote:MEMBER`), including child ownership and signal lifecycle. |
-| `src/remote.ml` | Builds the narrow remote dispatcher that sends data-closed node misses to a named cluster member over the transport. |
-| `src/transport.ml` | Cross-machine sync of hash-named store artifacts, plus the capability-gated serve-hit path. |
-| `src/stabilize.ml` | The push scheduler: a side table from `node_key` to `thunk`, plus dirty reset using `Store_index`'s reverse edges. |
-| `src/repl.ml` | REPL and file-execution helpers. |
-| `src/cli.ml` | Raw flag collection, validation, typed invocation options, and canonical help rows; callbacks do not execute commands or mutate runtime policy. |
-| `src/app_context.ml` | Production host services and per-command invocation, store, scheduler, session, evaluator, and reconciliation composition. |
-| `src/command_dispatch.ml` | Command precedence, signal scope, and top-level command dispatch. |
-| `src/command_eval.ml` | Run/eval execution, pin dumps, and schedule transparency checks. |
-| `src/command_frontend.ml` | Format, surface emission, round-trip, comment, and hash comparison commands. |
-| `src/command_developer.ml` | Help, version, property, lint, graph, and island-pins command entry points. |
-| `src/command_run.ml` | Source execution, domain glue, desired-state construction, and host-slice selection. |
-| `src/command_reconcile.ml` | Recovery policy and reconcile/supervise pass execution. |
-| `src/command_watch.ml` | Watch polling and stabilize dirty propagation. |
-| `src/command_island.ml` | Island update command lifecycle. |
-| `src/command_cluster.ml` | Cluster initialization, transport, publish/serve, pin preparation, and remote member lifecycle. |
-| `src/command_gc.ml` | Explicit GC and mark-by-replay command lifecycle. |
-| `src/kernel_props.ml` | Derived generators and the kernel properties (hash injectivity, quote/printer round-trip) the fuzzer checks. |
-| `src/lint.ml` | The convention checker for pp source files. |
-| `src/fswalk.ml` | One shared filesystem tree walk for its several callers. |
+| `src/frontend/reader.ml` | Reentrant s-expression lexer and parser to the `expr` AST — the `.ppl` macro surface — with source and line tracking owned by an abstract parser state. |
+| `src/frontend/reader_braces.ml` | Reentrant brace-surface parser (`.pp`/`.ppb`, SPEC Appendix B) to the same `expr` AST; its abstract state owns deterministic generated names. |
+| `src/frontend/printer_braces.ml` | Renders an `expr` back to brace-surface text: the `pp fmt --to-braces` half. |
+| `src/frontend/printer_sexpr.ml` | Renders an `expr` back to s-expression text: the `--to-sexpr` half. |
+| `src/runtime/dynamic_scope.ml` | Bracketed OCaml effect scopes for capabilities, config, handlers, traces, nodes, domains, and observation collection. |
+| `src/runtime/world_path.ml` | Canonical filesystem paths and discovery of the installed standard library. |
+| `src/runtime/loader.ml` | Source loading under bounded interpreter authority, including trace recording. |
+| `src/runtime/error_context.ml` | Attaches the innermost source-form location to evaluation errors. |
+| `src/runtime/sandbox.ml` | Creates, resolves, and removes node-local scratch directories. |
+| `src/runtime/session.ml` | The abstract owner of evaluation/pass state, including the session domain registry and fenced pass state, its scheduler handle, explicit function invocation, a complete immutable evaluator-operation value, and its `begin_evaluation`, `begin_pass`, and `begin_watch` lifecycle transitions. |
+| `src/runtime/evaluator.ml` | The project's sole tree-walking engine: one exhaustive expression dispatch, tail mechanism, force/trampoline, and operation graph. |
+| `src/runtime/evaluator_thunks.ml` | Content-addressed thunk construction, letrec poison thunks, and module export selection. |
+| `src/runtime/evaluator_application.ml` | Closure/builtin application, explicit builtin environments, and the shared tail-call continuation mechanism. |
+| `src/runtime/evaluator_node.ml` | The evaluator-facing adapter for persistent-node forcing and nested trace replay. |
+| `src/runtime/evaluator_effects.ml` | Dynamic handler lookup and the builtin effect fallback. |
+| `src/runtime/evaluator_forms.ml` | Sequential blocks, module evaluation, source loading, and top-level form evaluation. |
+| `src/runtime/evaluator_scope.ml` | Capability, handler, config, and config-read dynamic-scope forms. |
+| `src/runtime/evaluator_match.ml` | Pattern-arm matching, guard evaluation, and arm environment extension. |
+| `src/runtime/macro.ml` | `defmacro` expansion: a function from syntax-as-values to syntax, run at the expansion boundary. |
+| `src/runtime/primitives.ml` | Declarative builtin descriptors, categorized registration, and initial-environment materialization. |
+| `src/runtime/node.ml` | Free-variable resolution, node identity, trace replay, hit policy, result validation, rebuilding, and persistence. |
+| `src/runtime/store_layout.ml` | Abstract store layout and version initialization, with the single atomic-replacement and crash-injection boundary. |
+| `src/runtime/object_repository.ml` | Immutable encoded values and fenced specifications addressed by hash. |
+| `src/runtime/blob_repository.ml` | Immutable byte blobs addressed by hash. |
+| `src/runtime/trace_repository.ml` | Locked trace sets with canonical byte-stable encoding. |
+| `src/runtime/cache_policy.ml` | Trace selection, verification, authorization, replay, diagnostics, and GC marking over repository handles. |
+| `src/runtime/cell_repository.ml` | Snapshot reads and sealed/file pins over observations and the blob repository. |
+| `src/runtime/store_index.ml` | Read-only reverse-index and graph queries over traces. |
+| `src/runtime/repository_inventory.ml` | Artifact metadata and removal lifecycle used by explicit GC. |
+| `src/runtime/store_gc.ml` | Explicit `pp gc`: mark-by-replay over recent epochs and sweep through repository inventory — never automatic. |
+| `src/runtime/gcroots.ml` | The GC roots manifest naming the epochs `pp gc` marks from. |
+| `src/runtime/journal.ml` | The append-only intent and done audit log: a typed `entry` variant, byte-stable line codec, atomic append, and durable fenced-action state queries (SPEC law 31). It does not choose recovery policy. |
+| `src/runtime/fenced.ml` | The narrowly scoped fenced-effect mechanics: registers scripting-tier actions, journals intent and done entries, and executes a recovery decision supplied by the command boundary (SPEC law 31). |
+| `src/runtime/island.ml` | Islands: parses file, git, and github URIs; runs the content-addressed cache and tamper verification; rewrites pins for `--update`; provides `island-pins`; and fetches over git only when asked. |
+| `src/runtime/domain_prims.ml` | The trusted mechanics that back in-language domains: atomic `materialize-file` and `remove-file`, `tree-observe`, `proc-spawn`, `proc-alive?`, `proc-stop`, `proc-reap`, and `domain-state-get`/`put` — owning no policy of its own. |
+| `src/runtime/domains.ml` | Typed domain pipeline: pass preparation and stratification, observation, diff/plan construction, apply journaling, verification, and epoch recording. `stdlib/domain-fs.pp` and `domain-proc.pp` hold the filesystem and process policy as pp source. |
+| `src/runtime/reconciliation.ml` | Explicit command-owned reconciliation lifecycle: it binds an invocation to a session, sequences a prepared domain pass, drains the session-owned fenced pass, and delegates recovery decisions without owning journal persistence. |
+| `src/runtime/process.ml` | The `run` process effect: executes an external command under capability. |
+| `src/runtime/scheduler.ml` | The explicitly constructed fork-at-dispatch scheduler handle for node misses (`serial`, `parallel:N`, `race:N`, `remote:MEMBER`), including child ownership and signal lifecycle. |
+| `src/runtime/remote.ml` | Builds the narrow remote dispatcher that sends data-closed node misses to a named cluster member over the transport. |
+| `src/runtime/transport.ml` | Cross-machine sync of hash-named store artifacts, plus the capability-gated serve-hit path. |
+| `src/runtime/stabilize.ml` | The push scheduler: a side table from `node_key` to `thunk`, plus dirty reset using `Store_index`'s reverse edges. |
+| `src/runtime/repl.ml` | REPL and file-execution helpers. |
+| `src/app/cli.ml` | Raw flag collection, validation, typed invocation options, and canonical help rows; callbacks do not execute commands or mutate runtime policy. |
+| `src/app/app_context.ml` | Production host services and per-command invocation, store, scheduler, session, evaluator, and reconciliation composition. |
+| `src/app/command_dispatch.ml` | Command precedence, signal scope, and top-level command dispatch. |
+| `src/app/command_eval.ml` | Run/eval execution, pin dumps, and schedule transparency checks. |
+| `src/app/command_frontend.ml` | Format, surface emission, round-trip, comment, and hash comparison commands. |
+| `src/app/command_developer.ml` | Help, version, property, lint, graph, and island-pins command entry points. |
+| `src/app/command_run.ml` | Source execution, domain glue, desired-state construction, and host-slice selection. |
+| `src/app/command_reconcile.ml` | Recovery policy and reconcile/supervise pass execution. |
+| `src/app/command_watch.ml` | Watch polling and stabilize dirty propagation. |
+| `src/app/command_island.ml` | Island update command lifecycle. |
+| `src/app/command_cluster.ml` | Cluster initialization, transport, publish/serve, pin preparation, and remote member lifecycle. |
+| `src/app/command_gc.ml` | Explicit GC and mark-by-replay command lifecycle. |
+| `src/app/kernel_props.ml` | Derived generators and the kernel properties (hash injectivity, quote/printer round-trip) the fuzzer checks. |
+| `src/frontend/lint.ml` | The convention checker for pp source files. |
+| `src/runtime/fswalk.ml` | One shared filesystem tree walk for its several callers. |
 
 ### Entry point and tools
 
 | File | Role |
 |---|---|
-| `src/main.ml` | Startup, CLI parse/validation, production host construction, dispatch, and top-level error-to-exit conversion. |
+| `src/app/main.ml` | Startup, CLI parse/validation, production host construction, dispatch, and top-level error-to-exit conversion. |
 | `tools/fuzz.ml` | The metamorphic fuzzer, described in [TESTING.md](TESTING.md). |
 
-## CLI surface (`src/cli.ml`)
+## CLI surface (`src/app/cli.ml`)
 
 Run `pp --help` for the canonical flag list. This document does not
 duplicate it, since an earlier copy here drifted out of date. A single

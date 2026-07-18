@@ -3,7 +3,7 @@
 # This is the POLICY half of the domain: what counts as
 # create/update/delete, how a `blob:<hash>` reference resolves to bytes,
 # single-writer deletion. The TRUSTED MECHANICS (atomic materialize/remove,
-# whole-tree observation) are OCaml primitives (src/domain_prims.ml),
+# whole-tree observation) are OCaml primitives (src/runtime/domain_prims.ml),
 # reached only via `perform`. main.ml's `--reconcile ROOT` auto-loads this
 # file (after stdlib/list.pp, map.pp, string.pp) and calls
 # `register-fs-domain` with ROOT and a write-cap already narrowed via

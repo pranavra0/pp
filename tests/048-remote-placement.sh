@@ -7,7 +7,7 @@
 # only in $HOME (the default repository layout is process-wide — the same CI
 # loopback shape tests/047 already uses); a "cluster member" (NODEB) is
 # addressed via ~/.pp/cluster/members on the dispatcher (NODEA), never
-# --grant. src/remote.ml is the implementation; internal seams
+# --grant. src/runtime/remote.ml is the implementation; internal seams
 # (--remote-node, PP_REMOTE_TEST_HOOK[_AFTER]) are exercised directly here,
 # the way tests/047 drives --serve-hit/--recv-hit directly.
 #
@@ -226,7 +226,7 @@ fi
 # ===========================================================================
 # Part 2: the member must observe the DISPATCHER's pinned bytes, never
 # its own (possibly-drifted) disk, for a pre-seeded cell. Uses the
-# PP_REMOTE_TEST_HOOK[_AFTER] seam (src/remote.ml) to force a deterministic
+# PP_REMOTE_TEST_HOOK[_AFTER] seam (src/runtime/remote.ml) to force a deterministic
 # window a real dispatcher/member network round-trip would occupy anyway:
 # HOOK runs right after the dispatcher pushes pins (bytes = "V1") but
 # before the member is spawned — mutates the SHARED file to "V2", so if

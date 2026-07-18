@@ -3,7 +3,7 @@
 #
 # The closed surface sets (observation `$KIND` heads, `with{}` clause keywords,
 # `needs` grant-descriptor sugar) are one typed value each in
-# src/surface_tables.ml. Two ratchets keep every derived copy honest:
+# src/frontend/surface_tables.ml. Two ratchets keep every derived copy honest:
 #
 #   (1) SPEC drift — docs/SPEC.md carries a *generated* block between
 #       markers. `pp --dump-surface-tables` regenerates it; this test diffs.
@@ -47,12 +47,12 @@ fi
 
 # (2) Single source: grant descriptors live only in surface_tables.ml.
 for d in "fs.read" "fs.write" "fs.rw"; do
-  hits=$(grep -l -F "$d" src/*.ml 2>/dev/null | sort)
-  if [ "$hits" = "src/surface_tables.ml" ]; then
+  hits=$(grep -l -F "$d" src/frontend/*.ml 2>/dev/null | sort)
+  if [ "$hits" = "src/frontend/surface_tables.ml" ]; then
     ok "single-source:$d"
   else
     bad "single-source:$d" \
-        "expected '$d' only in src/surface_tables.ml, found in:" \
+        "expected '$d' only in src/frontend/surface_tables.ml, found in:" \
         "$(printf '%s\n' "$hits" | sed 's/^/       /')"
   fi
 done

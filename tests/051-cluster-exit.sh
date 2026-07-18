@@ -43,7 +43,7 @@
 #     (gr_desired_object) no other test exercises.
 #
 # Two SIMULATED machines, differing only in $HOME (the default repository
-# layout is process-wide — see src/transport.ml's header).
+# layout is process-wide — see src/runtime/transport.ml's header).
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 NODEA="$TMP/nodeA"; NODEB="$TMP/nodeB"

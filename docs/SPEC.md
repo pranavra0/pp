@@ -1070,7 +1070,7 @@ with reality re-observed rather than trusted from a state file.
 write-discipline law is now enforced generically, for any registered domain,
 not hardwired to the filesystem. A domain is an `observe`/`diff`/`apply`
 triple of ordinary pp functions (`register-domain`, scripting tier), and
-core (`src/domains.ml`) wraps every domain's `apply` in the same journal
+core (`src/runtime/domains.ml`) wraps every domain's `apply` in the same journal
 bracket, `observed_all` suspension, plan cache, and verify-after-write,
 regardless of what the domain converges. The project's earlier
 `src/reconciler.ml` and `src/supervisor.ml` OCaml modules are deleted; the
@@ -1078,7 +1078,7 @@ trusted mechanics they contained — atomic materialize/remove, fork/exec/
 reap, per-domain state persistence — moved into primitives
 (`tree-observe`, `materialize-file`, `remove-file`, `proc-spawn`,
 `proc-alive?`, `proc-stop`, `proc-reap`, `domain-state-get`/`put` in
-`src/domain_prims.ml`), and all the policy — the tree-walk diff, the
+`src/runtime/domain_prims.ml`), and all the policy — the tree-walk diff, the
 start/stop/restart decision — moved into `stdlib/domain-fs.pp` and
 `stdlib/domain-proc.pp` as ordinary pp source.
 
@@ -1275,7 +1275,7 @@ rebuilt the deployment-boundary blunt instrument inside the language.
 **Status: holds** for the negative half: no location surface exists in any
 reader, and this absence is verified. The positive half now lands for local
 process-pool parallelism: `--schedule serial|parallel:N|race:N` selects a
-result-transparent handler (`src/scheduler.ml`) that forks worker processes
+result-transparent handler (`src/runtime/scheduler.ml`) that forks worker processes
 at the dispatch point. A worker runs the exact `run_node_body` the serial
 miss arm calls, with no second force path, and communicates only through the
 store; a dead worker degrades to an ordinary in-process recompute, never a
@@ -1292,7 +1292,7 @@ from `~/.pp/cluster/members`/`$PP_CLUSTER_MEMBERS`, ambient config, never
 this law already draws between location and syntax. A member is an ordinary
 second `pp` invocation of the byte-identical program; a non-data-closed
 node, an unreachable member, or a crashed member all degrade to local
-compute, never a wrong answer (`src/remote.ml`).
+compute, never a wrong answer (`src/runtime/remote.ml`).
 
 A later stage of this same cluster work adds cluster membership's
 write-domain half: host-qualified domain distribution generalises the
@@ -1536,7 +1536,7 @@ migration.
 | LAW 27 | exception/tail-safe dynamic extent | holds | save-stack restore on every exit |
 | LAW 28 | failure traces, error memoization | partial | the engine memoizes `Failure` outcomes as failing traces, re-served until a recorded read changes; the earlier `Evaluating`-leak bug is fixed (`tests/012`, `tests/014`); non-`Failure` exceptions uncached |
 | LAW 29 | source locations in errors | holds | every top-level form's location is appended to unlocated runtime errors ; arity/capability errors name the callee/operation; `pp: error:` single-line reporting; a loaded file's own forms are individually located and decorated with that file's location before the error can unwind past the `load` (`tests/027`, including case (g)) |
-| LAW 30 | desired-state plus single writer | holds | `register-domain` (a probe is the bottom-write-authority case, one registry) plus generic orchestration (`src/domains.ml`) enforce plan/journal/atomic-apply/verify/stratification for any registered domain, not hardwired to the filesystem — the earlier `src/reconciler.ml`/`supervisor.ml` deleted; `stdlib/domain-fs.pp`/`domain-proc.pp` hold the filesystem/process policy as pp source (`tests/018`, `tests/023`, `tests/033` unchanged byte for byte); a from-scratch third-party domain proves genericity (`tests/046`); drives a real 101 translation-unit C build and Lua 5.4.7 end-to-end (`tests/024`); push `stabilize` live (`pp --watch --stabilize`, `tests/032`) |
+| LAW 30 | desired-state plus single writer | holds | `register-domain` (a probe is the bottom-write-authority case, one registry) plus generic orchestration (`src/runtime/domains.ml`) enforce plan/journal/atomic-apply/verify/stratification for any registered domain, not hardwired to the filesystem — the earlier `src/reconciler.ml`/`supervisor.ml` deleted; `stdlib/domain-fs.pp`/`domain-proc.pp` hold the filesystem/process policy as pp source (`tests/018`, `tests/023`, `tests/033` unchanged byte for byte); a from-scratch third-party domain proves genericity (`tests/046`); drives a real 101 translation-unit C build and Lua 5.4.7 end-to-end (`tests/024`); push `stabilize` live (`pp --watch --stabilize`, `tests/032`) |
 | LAW 31 | fenced effects, intent journal | holds | scripting-tier `fenced(KIND, SPEC)`, `--fenced-policy retry|abort|ask`, intent/done journal, recovery without silent retry; `tests/034` |
 | LAW 32 | gradual types, strictest oracle | holds | the engine enforces; tests 004/005 restored; `tests/007-phase0-laws.pp` |
 | LAW 33 | config: computed keys, tail-safe scoping | holds | computed keys and tail-safe scoping ; config reads inside nodes are `config:<key>` trace cells, ambient config out of the node key (`tests/015`) |
@@ -2076,11 +2076,11 @@ recorded here because later stages implement exactly what this annex froze.
     as outside quasiquote (judgment call 2 above): expression-position
     `{…}` is map data, and sequencing must be spelled `do { … }`.
 
-### B.8 Surface tables (generated from `src/surface_tables.ml`)
+### B.8 Surface tables (generated from `src/frontend/surface_tables.ml`)
 
 The closed surface sets — the `$KIND` observation heads, the `with { }`
 clause keywords, and the `needs` grant-descriptor sugar — are one typed
-value each in `src/surface_tables.ml`. Every consumer (both readers, the
+value each in `src/frontend/surface_tables.ml`. Every consumer (both readers, the
 `needs` desugar, `lint`, error messages) derives from those tables; nothing
 hand-copies the list. This block is generated, not authored:
 `tests/067-surface-tables-drift.sh` regenerates it (`pp --dump-surface-tables`)

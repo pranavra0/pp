@@ -2,7 +2,7 @@
 # Versioned portable store format.
 #
 #   ~/.pp/store serializes with a canonical, byte-stable TEXT codec
-#   (src/codec.ml) instead of OCaml Marshal, stamped by store/VERSION
+#   (src/kernel/codec.ml) instead of OCaml Marshal, stamped by store/VERSION
 #   ("pp-store 1"). The bytes must be identical on any OS/arch/compiler.
 #
 #   Covers:

@@ -87,18 +87,22 @@ their narrow interfaces inward. When an upper-layer operation is required, the
 lower operation receives a small immutable function record or callback as an
 argument.
 
-The likely physical layout is shown below. It is a destination, not permission
-to move files before the dependency boundaries exist.
+The physical layout now established by item 19 is:
 
 ```text
 src/
   kernel/       syntax, values, environments, identity, capability algebra
-  frontend/     readers, printers, desugaring, macro expansion
-  eval/         sole evaluator, dynamic scopes, node forcing adapter
-  cache/        CAS objects, traces, observations, indexes, GC
-  world/        filesystem, process, islands, transport, host services
+  frontend/     readers, printers, desugaring, and surface tables
+  runtime/      sole evaluator, dynamic scopes, cache, and world implementations
   app/          commands, runtime construction, watch and reconciliation
 ```
+
+The actual module graph is intentionally smaller than this conceptual
+ownership list: evaluator, cache, and world implementations share the wrapped
+`pp.runtime` boundary because their existing module dependencies are acyclic
+but interleaved. The checked graph is `pp.kernel -> pp.frontend -> pp.runtime
+-> pp.app`, with `pp.runtime` also depending on `pp.kernel` and
+`pp.frontend`; `dune build @architecture` enforces the declared edges.
 
 Use fewer libraries if OCaml's recursive type relationships make a smaller
 graph clearer. A directory earns its existence only when Dune and `.mli`
@@ -183,37 +187,6 @@ two orchestration functions.
 
 The order matters. Later boundaries assume earlier ownership and tests.
 
-
-### 19. Introduce physical libraries and directory boundaries
-
-**Purpose:** make the intended dependency graph visible and mechanically
-enforced for humans and agents.
-
-**Work:**
-
-- Generate the actual OCaml module dependency graph after prior cycle removals.
-- Choose the smallest set of internal wrapped libraries that produces an
-  acyclic, explainable graph. Start with kernel/frontend/cache/world/app only if
-  the graph supports them; do not force the sketch.
-- Move one library at a time, update Dune, and use wrapping/qualified module
-  names to make ownership visible.
-- Add a dependency-direction test using Dune/OCaml dependency output or a small
-  checked manifest.
-- Prevent lower libraries from linking Unix unless world-facing behavior
-  requires it. Re-evaluate the claim that the entire current kernel is pure;
-  effects and mutable hooks must no longer be used to preserve a misleading
-  grouping.
-- Remove transitional forwarding modules after callers migrate.
-
-**Likely files:** `src/dune`, source layout, module names, architecture test.
-
-**Verify:** clean `dune build`, dependency gate, suite, full fuzzer when moves
-touch evaluator/types/store compilation units.
-
-**Exit:** directory and library layout matches the documented dependency graph;
-forbidden upward dependencies fail mechanically.
-
-**Non-goal:** create a library per file or maximize abstraction count.
 
 ### 20. Decide durable-format evolution separately
 

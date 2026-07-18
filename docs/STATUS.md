@@ -125,7 +125,7 @@ and without replaying its `log`/stdout output (LAW 17).
 
 The store format is portable: objects, traces, fenced-action specs and
 process state serialise through a canonical, byte-stable s-expression
-codec (`src/codec.ml`), with no Marshal anywhere under `~/.pp/store`. A
+codec (`src/kernel/codec.ml`), with no Marshal anywhere under `~/.pp/store`. A
 `~/.pp/store/VERSION` stamp invalidates an old or foreign store by wiping
 `objects/`, `traces/`, `fenced-specs/` and `procs/` (never `blobs/` or
 `journal/`) and re-stamping, rather than crashing. The store holds data
@@ -401,7 +401,7 @@ pins, remains future design work (see DESIGN.md).
 
 ### Running work in parallel
 
-`--schedule serial|parallel:N|race:N|remote:MEMBER` (`src/scheduler.ml`) forks worker
+`--schedule serial|parallel:N|race:N|remote:MEMBER` (`src/runtime/scheduler.ml`) forks worker
 processes at the point where a batch of persistent nodes misses the
 cache. The `map` builtin, which does not force its arguments, builds a
 batch of unforced node thunks; `force-deep` collects every reachable
@@ -493,7 +493,7 @@ absent.
 
 ### Two readers, one language
 
-pp has a second reader (`src/reader_braces.ml`) for a brace-and-infix
+pp has a second reader (`src/frontend/reader_braces.ml`) for a brace-and-infix
 surface, parsing to the exact same `Core_model.expr` the original s-expression
 reader always produced. Since LAW 20 keys computations on expanded code,
 surface syntax was never part of a program's identity, so this needed no
@@ -566,7 +566,7 @@ Verifying a token checks its signature, then cluster id, then expiry, then
 capabilities, in that order, so a forged token never reaches the
 capability parser.
 
-`src/transport.ml` defines a transport interface for pushing and pulling
+`src/runtime/transport.ml` defines a transport interface for pushing and pulling
 hash-named objects, blobs and traces, plus a control channel, with a
 local-directory implementation (used by CI) and an ssh implementation that
 is currently a stub. The receiving side always re-hashes an incoming

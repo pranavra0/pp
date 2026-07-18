@@ -116,7 +116,7 @@ brace-to-s-expression mapping.
   `{service-name → spec}`, consumed by `pp --supervise` (`tests/033`).
 - reconciler: retired as a proper noun; there is no `reconciler.ml` any
   more. A domain is now an `observe`/`diff`/`apply` triple of pp functions
-  running under core-enforced discipline (`src/domains.ml`), not a
+  running under core-enforced discipline (`src/runtime/domains.ml`), not a
   privileged OCaml module. The filesystem domain (`stdlib/domain-fs.pp`,
   `pp --reconcile ROOT`) and the process domain (`stdlib/domain-proc.pp`,
   `pp --supervise`) are both live, converging by content hash and

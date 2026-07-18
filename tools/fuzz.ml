@@ -1,10 +1,15 @@
+open Pp_app
+open Pp_kernel
+open Pp_frontend
+open Pp_runtime
+
 (* pp fuzzer — generates random pp programs and checks them via a
    single-engine metamorphic + roundtrip oracle.
 
    Every generated program is pushed through `pp f` (the tree-walker),
    AND through `pp --roundtrip-braces f`, which (in one process)
    reads the sexpr AST, prints it as location-preserving brace text
-   (src/printer_braces.ml), re-reads that with the brace reader
+   (src/frontend/printer_braces.ml), re-reads that with the brace reader
    MISMATCH (`roundtrip:*` signature), shrunk like any other.
 
    Metamorphic oracle: every generated program P is ALSO transformed into a
@@ -18,7 +23,7 @@
    Random.full_init [| seed; i |], so any program can be regenerated with
    --seed S --start i --count 1 (or inspected with --dump i).
 
-   Grammar notes (verified against src/primitives.ml, stdlib/list.pp, reader.ml):
+   Grammar notes (verified against src/runtime/primitives.ml, stdlib/list.pp, reader.ml):
    - builtins used: + - * / mod < > <= >= = not list cons car cdr nil? print
      string-append string-length string-trim string-sub string-index
      number->string string->number vector vector-get hash-map hash-map-get

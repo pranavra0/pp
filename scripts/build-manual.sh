@@ -10,7 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PP=${PP:-"$PWD/bin/pp"}
-[ -x "$PP" ] || PP="$PWD/_build/default/src/main.exe"
+[ -x "$PP" ] || PP="$PWD/_build/default/src/app/main.exe"
 command -v typst >/dev/null || { echo "SKIPPED (no typst on PATH)"; exit 0; }
 
 MANUAL="$PWD/docs/manual"

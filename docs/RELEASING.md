@@ -6,7 +6,7 @@ builds for a stranger on a clean opam switch.
 ## Version wiring (how it works)
 
 `pp --version` and the REPL banner both read `Version.string` in
-`src/version.ml`. This calls `Build_info.V1.version ()` from the
+`src/kernel/version.ml`. This calls `Build_info.V1.version ()` from the
 `dune-build-info` library. Dune embeds the version at build time from the
 top-level `(version ...)` field in `dune-project`, because `src/dune` ties
 the `main` executable to the `pp` package through `(public_name pp)`.
@@ -18,7 +18,7 @@ This works the same way in two cases:
 - from an unpacked release tarball with no `.git` present, verified by the
   smoke test below
 
-The `fallback` value in `src/version.ml` only fires if someone builds the
+The `fallback` value in `src/kernel/version.ml` only fires if someone builds the
 executable outside dune's package machinery, for example by removing
 `public_name`. It should track the same string as `(version ...)` in
 `dune-project`, but it is not the source of truth.
@@ -79,7 +79,7 @@ eval "$(opam env)"
 opam install dune cryptokit dune-build-info -y
 dune build
 dune runtest --force
-./_build/default/src/main.exe --version   # must print the real version, not 0.1.0/None
+./_build/default/src/app/main.exe --version   # must print the real version, not 0.1.0/None
 ```
 
 If `--version` prints the correct `vX.Y.Z` with no `.git` directory

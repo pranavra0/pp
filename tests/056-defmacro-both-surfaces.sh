@@ -5,7 +5,7 @@
 # same macros, same call sites, same expected values — one transliterated
 # from the other. This script verifies both files agree with EACH OTHER,
 # proving the brace surface's quasiquote{} lowers to the exact same AST
-# shapes the sexpr reader's quasiquote has always built (src/macro.ml,
+# shapes the sexpr reader's quasiquote has always built (src/runtime/macro.ml,
 # the expander, and hash_expr never changed).
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"

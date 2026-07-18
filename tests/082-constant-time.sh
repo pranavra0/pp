@@ -9,7 +9,7 @@ set -uo pipefail
 
 # We can't easily link against the built binary from shell, so we test
 # the algorithm directly via ocaml. The production code lives in
-# src/constant_time.ml and is tested end-to-end via token verification
+# src/kernel/constant_time.ml and is tested end-to-end via token verification
 # (tests/047 cluster sync T2).
 # 
 # This test re-implements the same logic to verify the core algorithm

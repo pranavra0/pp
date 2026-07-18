@@ -3,7 +3,7 @@
 # widened or invented, and can never leak across a node boundary.
 # pins: LAW-22b LAW-23 LAW-39
 #
-# src/kernel_props.ml carries a generator over capability VALUES, exhaustive
+# src/app/kernel_props.ml carries a generator over capability VALUES, exhaustive
 # over the capability kind variant (the same compiler ratchet as the AST
 # generators — a new CapKind breaks cap_kind's match, then gen_cap_of_tag), and
 # four algebra properties run over its whole output via --check-kernel-props:

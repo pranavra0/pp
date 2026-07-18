@@ -79,7 +79,7 @@ obligation to the build, so a change cannot ship unexamined.
 - tests/067-surface-tables-drift.sh — surface tables drift. The
   generated block in docs/SPEC.md must match `pp --dump-surface-tables`,
   and the grant descriptors must appear in exactly one `.ml` file
-  (src/surface_tables.ml). A table edit not mirrored into SPEC, or a
+  (src/frontend/surface_tables.ml). A table edit not mirrored into SPEC, or a
   hand-copied table, is a red build. The same gate checks that
   `pp --dump-builtins` renders the declarative builtin catalog.
 - tests/074-adversarial-worlds.sh — adversarial worlds coverage. Every
@@ -89,7 +89,7 @@ obligation to the build, so a change cannot ship unexamined.
   entry in DESIGN.md. The head set comes from the surface table, so a
   new head fails the build until it gets a fixture or an edge entry.
 - tests/071-kernel-props.sh and tests/075-cap-props.sh — kernel property
-  sweeps. QuickCheck-style generators in src/kernel_props.ml prove hash
+  sweeps. QuickCheck-style generators in src/app/kernel_props.ml prove hash
   injectivity, the quote round-trip and the print round-trip over random
   ASTs and values (071), and the capability algebra — restriction only
   narrows, composition is exactly union, the subset gate is sound, and

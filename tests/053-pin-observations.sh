@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/053-pin-observations.sh — the observation-pinning seam: a
 # standalone --pin-file/--dump-pins pair that generalizes the existing
-# --remote-node pin machinery (src/remote.ml's preseed_pins_from_file /
+# --remote-node pin machinery (src/runtime/remote.ml's preseed_pins_from_file /
 # parse_pin_line) used for forked workers, plus a new `(pin-probe "NAME"
 # <codec-value>)` line kind that pins a register-probe's OWN value
 # directly into the session's probe cache, short-circuiting its observe-fn

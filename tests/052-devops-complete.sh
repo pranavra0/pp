@@ -46,7 +46,7 @@
 #
 # A REAL BUG found building this test, documented rather than fixed here
 # (fixing it would need a src/*.ml change, which this test file avoids):
-# Blobref.blob_refs_in (src/blobref.ml) recognizes only bare
+# Blobref.blob_refs_in (src/kernel/blobref.ml) recognizes only bare
 # "blob:<64-hex>" strings (its is_hex64 check runs on the WHOLE tail
 # after "blob:") — stdlib/domain-fs.pp's OWN documented executable-blob
 # convention, "blob:<hash>:x" (fs-blob-ref-executable?), fails that check

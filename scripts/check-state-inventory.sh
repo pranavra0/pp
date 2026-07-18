@@ -20,6 +20,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 cd "$root"
+shopt -s nullglob globstar
 tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
 
@@ -31,7 +32,7 @@ relpath() {
   esac
 }
 
-for file in "$src_dir"/*.ml "$src_dir"/*.mli; do
+for file in "$src_dir"/**/*.ml "$src_dir"/**/*.mli; do
   [ -f "$file" ] || continue
   rel=$(relpath "$file")
 

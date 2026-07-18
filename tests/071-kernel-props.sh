@@ -2,7 +2,7 @@
 # tests/071 — property tests over randomly generated ASTs and values, proving
 # three things always hold.
 #
-# src/kernel_props.ml holds one QuickCheck-style generator each for
+# src/app/kernel_props.ml holds one QuickCheck-style generator each for
 # Core_model.value / pattern / expr, written so that adding an AST constructor
 # cascades compile errors (expr_kind -> gen_of_tag -> expr_surface) until the
 # new form is generated and classified — coverage is derived, never

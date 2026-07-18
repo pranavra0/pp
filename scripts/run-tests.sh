@@ -61,7 +61,7 @@ if [ "${1:-}" = "--worker" ]; then
   exit 0
 fi
 
-PP="${1:-_build/default/src/main.exe}"
+PP="${1:-_build/default/src/app/main.exe}"
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
 export PP
 export FUZZ="${FUZZ:-tools/fuzz.exe}"

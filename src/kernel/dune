@@ -1,0 +1,6 @@
+(library
+ (name pp_kernel)
+ (public_name pp.kernel)
+ (wrapped true)
+ (modules source_error core_model hasher identity_types identity environment value_analysis free_vars presentation quotation pattern_match invocation effects evaluator_ops host_services blobref codec constant_time paths cell capability cap_token nfc version)
+ (libraries cryptokit dune-build-info))

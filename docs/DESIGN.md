@@ -651,7 +651,7 @@ Plan caching: the key is `H("domain-plan", hash(diff-closure),
 hash(observed), hash(desired))`. Since `diff` is pure over exactly
 `(observed, desired)`, this key captures the whole identity of the call,
 so a store entry with an empty read set is sound — a hit means exactly
-"same key, same plan". `src/domains.ml` calls cache policy and the object and
+"same key, same plan". `src/runtime/domains.ml` calls cache policy and the object and
 trace repositories directly rather than wiring a synthetic `node` AST,
 giving the same key and store slot for free; `pp why` reports `domain
 <name>: plan <key>: hit|miss`, exactly like a node.
@@ -729,7 +729,7 @@ read-write access, because a write-only grant must still let
 the domain observe its own managed tree in order to converge it — there
 is no other reader, so this is not a distinct authority concern.
 `src/reconciler.ml` and `src/supervisor.ml` are deleted;
-`src/domains.ml` and `src/domain_prims.ml` hold the orchestration and
+`src/runtime/domains.ml` and `src/runtime/domain_prims.ml` hold the orchestration and
 trusted mechanics that remain in OCaml (see `ARCHITECTURE.md`).
 `stdlib/domain-fs.pp` and `domain-proc.pp` hold all the policy — the
 tree-walk diff, the start/stop/restart decision — as ordinary pp source.

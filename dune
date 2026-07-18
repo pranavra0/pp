@@ -27,17 +27,17 @@
   scripts/run-tests.sh
   scripts/check-state-inventory.sh
   scripts/state-inventory.allow
-  src/main.exe
+  src/app/main.exe
   ; tests/054 drives the fuzzer's reader-roundtrip gate
   tools/fuzz.exe)
  (action
-  (run bash scripts/run-tests.sh src/main.exe)))
+ (run bash scripts/run-tests.sh src/app/main.exe)))
 
 ; Fork-defeat regression: World_path.stdlib_root resolves
 ; --reconcile/--supervise's auto-loaded
 ; domain-fs.pp/domain-proc.pp (and their list.pp/map.pp/string.pp deps) to
-; _build/default/stdlib — the sibling directory of main.exe, i.e. THIS
-; mirror, not the repo's own stdlib/ — but until this rule existed, that
+; _build/default/stdlib — the build-root mirror discovered above src/app/main.exe,
+; not the repo's own stdlib/ — but until this rule existed, that
 ; mirror was only ever refreshed as a side effect of the `runtest` alias's
 ; `(source_tree stdlib)` dependency above. A bare `dune build` (which is
 ; all `bin/pp` needs, per AGENTS.md) rebuilt main.exe without touching this
@@ -51,7 +51,7 @@
 ; `bin/pp` actually reads stdlib from at runtime stayed stale.
 ;
 ; This rule (not just `(deps (source_tree stdlib))`) also re-lists
-; src/main.exe and tools/fuzz.exe explicitly: dune's default per-directory
+; src/app/main.exe and tools/fuzz.exe explicitly: dune's default per-directory
 ; alias, unless overridden, implicitly aggregates every subdirectory's own
 ; default target (which is how a bare `dune build` built both executables
 ; before this rule existed) — but defining ANY explicit `(alias default)`
@@ -62,5 +62,11 @@
 ; guarantees hold from one ordinary build with no extra step.
 (rule
  (alias default)
- (deps (source_tree stdlib) src/main.exe tools/fuzz.exe)
+ (deps (source_tree stdlib) src/app/main.exe tools/fuzz.exe tools/check-dependencies.sh)
  (action (progn)))
+
+(rule
+ (alias architecture)
+ (deps tools/check-dependencies.sh tools/dependency-manifest
+   src/kernel/dune src/frontend/dune src/runtime/dune src/app/dune)
+ (action (run bash tools/check-dependencies.sh)))
