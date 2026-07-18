@@ -48,10 +48,8 @@ let has_process_cap () =
 
 (* Fully force a value (map values / vector-set elements are lazy by
    construction, primitives.ml) so Codec.encode_value and Identity.hash_value
-   see actual leaves, not unevaluated thunks — the same shape as
-   Fenced.force_deep / Primitives.force_deep, duplicated here for the same
-   reason those two are already duplicated rather than shared (small, and
-   each caller supplying its evaluator's force operation). *)
+   see actual leaves, not unevaluated thunks — the same plain structural walk
+   used by the other trusted callers, with this caller's force operation. *)
 
 (* ---- tree-observe: {relpath -> content-hash}, fs-read-gated ----
    Moved from Reconciler.observed_files; returns a pp VMap instead of an

@@ -4,7 +4,6 @@ type continuation = value -> value
 
 type evaluator = {
   eval_tail : expr -> env -> continuation -> value;
-  set_current_env : env -> unit;
 }
 
 let apply_tail evaluator (fn : value) (args : value list) (env : env)
@@ -21,8 +20,7 @@ let apply_tail evaluator (fn : value) (args : value list) (env : env)
       ) !closure_env params args in
       evaluator.eval_tail body env' k
   | VBuiltin (_, implementation) ->
-      evaluator.set_current_env env;
-      k (implementation args)
+      k (implementation args env)
   | _ ->
       failwith (Printf.sprintf "not a function: %s" (Presentation.string_of_value fn))
 

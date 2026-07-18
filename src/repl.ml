@@ -28,7 +28,7 @@ let init ?(retain_thunks = false) session =
 let macro_services () =
   let core = Session.core_operations (Effect.perform Dynamic_scope.Get_session) in
   { Macro.eval = core.eval;
-    force_deep = Primitives.force_deep;
+    force_deep = Force_deep.force_deep;
     initial_env = Primitives.initial_env }
 
 (* LAW 29: a runtime error escaping a top-level form reports that
@@ -315,7 +315,7 @@ let repl_loop () =
                  (Reader_braces.read_string ~source:"<repl>" input) in
              List.iter (fun e ->
                let v = eval_one e in
-               Printf.printf "%s\n%!" (Presentation.string_of_value (Primitives.force_deep v))
+               Printf.printf "%s\n%!" (Presentation.string_of_value (Force_deep.force_deep v))
              ) exprs
            with
            | Source_error.Pp_exit n -> exit n

@@ -1,10 +1,6 @@
-(* Deep recursive force over a pp VALUE — the plain structural walk.
-
-   Extracted because this exact recursive walk was written three times
-   (primitives, domain_prims, fenced) with identical bodies but the same
-   evaluator force operation supplied by its caller. The scheduler-aware batch
-   dispatch lives in Primitives.force_deep; this is the plain walk it (and
-   others) delegate to. *)
+(* Deep forcing owns both the structural walk and scheduler fan-out. The
+   builtin catalog only registers the language operation that calls this
+   module; application orchestration does not leak into builtin definitions. *)
 
 open Core_model
 
@@ -22,3 +18,52 @@ let find_kv ~force (kvs : (value * value) list) (key : string) : value option =
     | Some k' when k' = key -> Some (force v)
     | _ -> None)
     kvs
+
+let collect_unevaluated_nodes (v : value) : Scheduler.job list =
+  let seen_keys : (Identity_types.Node_key.t, unit) Hashtbl.t = Hashtbl.create 64 in
+  let seen_pairs : value list ref = ref [] in
+  let jobs = ref [] in
+  let session = Effect.perform Dynamic_scope.Get_session in
+  let node = Session.node_operations session in
+  let core = Session.core_operations session in
+  let race_width () =
+    match Scheduler.state.policy with Scheduler.Race n -> n | _ -> 1
+  in
+  let job_run (t : thunk) (key : Identity_types.Node_key.t) () : value =
+    node.run_body ~key ~run:(fun () -> core.eval t.thunk_expr t.thunk_env) t
+  in
+  let rec walk = function
+    | VThunk t ->
+        (match t.thunk_status with
+         | Evaluated result -> walk result
+         | Evaluating -> ()
+         | Unevaluated when t.thunk_persist ->
+             let key = node.key_of t in
+             if not (Hashtbl.mem seen_keys key) then begin
+               Hashtbl.add seen_keys key ();
+               if not (node.resolve_hit t key) then
+                 jobs := { Scheduler.j_key = key; j_run = job_run t key;
+                           j_width = race_width (); j_thunk = t } :: !jobs
+             end
+         | Unevaluated -> ())
+    | VPair _ as pair ->
+        if not (List.memq pair !seen_pairs) then begin
+          seen_pairs := pair :: !seen_pairs;
+          match pair with VPair (car, cdr) -> walk car; walk cdr | _ -> ()
+        end
+    | VVector values -> Array.iter walk values
+    | VMap bindings -> List.iter (fun (key, value) -> walk key; walk value) bindings
+    | VSet values -> List.iter walk values
+    | _ -> ()
+  in
+  walk v;
+  List.rev !jobs
+
+let force_deep (v : value) : value =
+  (match Scheduler.state.policy with
+   | Scheduler.Serial -> ()
+   | Scheduler.Parallel _ | Scheduler.Race _ | Scheduler.Remote _ ->
+       (match collect_unevaluated_nodes v with
+        | [] -> ()
+        | jobs -> Scheduler.dispatch_batch jobs));
+  force_deep_plain ~force:(Session.force (Effect.perform Dynamic_scope.Get_session)) v

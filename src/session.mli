@@ -12,6 +12,7 @@ val create : Evaluator_ops.t -> t
 val force : t -> Core_model.value -> Core_model.value
 val core_operations : t -> Evaluator_ops.core
 val node_operations : t -> Evaluator_ops.node
+val call : t -> env:Core_model.env -> Core_model.value -> Core_model.value list -> Core_model.value
 val begin_evaluation : retain_thunks:bool -> t -> unit
 val begin_pass : t -> unit
 val begin_watch : t -> unit
@@ -22,7 +23,8 @@ val find_macro : t -> string -> (string list * Core_model.expr) option
 val set_macro : t -> string -> string list * Core_model.expr -> unit
 val next_gensym : t -> int
 val find_domain : t -> string -> domain_entry option
-val set_domain : t -> string -> domain_entry -> unit
+val register_domain : t -> string -> domain_entry -> unit
+val register_probe : t -> string -> domain_entry -> unit
 val fold_domains : t -> (string -> domain_entry -> 'a -> 'a) -> 'a -> 'a
 val find_probe : t -> string -> Core_model.value option
 val set_probe : t -> string -> Core_model.value -> unit
@@ -42,8 +44,6 @@ val remove_run_pin : t -> string -> unit
 val iter_run_pins : t -> (string -> string -> unit) -> unit
 val set_node_thunk : t -> Identity_types.Node_key.t -> Core_model.thunk -> unit
 val find_node_thunk : t -> Identity_types.Node_key.t -> Core_model.thunk option
-val current_env : t -> Core_model.env
-val set_current_env : t -> Core_model.env -> unit
 val force_depth : t -> int
 val set_force_depth : t -> int -> unit
 val incr_force_depth : t -> unit

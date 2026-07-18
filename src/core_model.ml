@@ -62,7 +62,7 @@ and value =
   | VMap of (value * value) list  (* association list for simplicity *)
   | VSet of value list
   | VClosure of closure
-  | VBuiltin of string * (value list -> value)  (* name + ocaml function *)
+  | VBuiltin of string * (value list -> env -> value)  (* name + implementation *)
   | VCapability of Capability.t
   | VThunk of thunk
   | VEnvMap of (string * value) list  (* module export: list of (name, thunk) pairs *)

@@ -5,7 +5,6 @@ open Source_error
 
 let session () = Effect.perform Dynamic_scope.Get_session
 let core_operations () = Session.core_operations (session ())
-let node_operations () = Session.node_operations (session ())
 
 (* Force helpers for builtins *)
 let force_val (v : value) : value = (core_operations ()).force v
@@ -29,143 +28,36 @@ let force_args (args : value list) : value list = List.map force_val args
    string literal: no user-written symbol can ever equal a gensym'd name,
    so gensym is unforgeable by construction, not merely unlikely to
    collide. *)
-(* ---- Scheduler-aware force-deep ----
 
-   EApply forces every argument, so a compound value built by
-   ordinary code forces its elements one at a time, inline — a batch of
-   sibling node thunks can only exist if something built the compound value
-   WITHOUT forcing its elements (the `map` primitive, below). force-deep is
-   the other half: given such a batch, it is the one place that can see many
-   sibling thunks before any of them are forced, so it is where the fork
-   fan-out point lives.
+type shape = Any | Exact of int | Range of int * int option
+type category =
+  | Arithmetic | Collections | Strings | Capabilities | Observations
+  | Process | Domains | Diagnostics | Metaprogramming | Compiler | Other
 
-   Two-phase protocol: (1) a non-forcing COLLECT walk over [v]'s structural
-   spine gathers every reachable Unevaluated, thunk_persist thunk together
-   with its LAW-20 key (tree-walker node_key_of), deduplicated by key; (2)
-   those are handed to Scheduler.dispatch_batch, which forks them (up to the
-   policy's concurrency) and reaps; (3) only THEN does the ordinary recursive walk
-   run — every node it reaches is now a cache hit (or, for a dead worker,
-   falls through to an ordinary in-process compute — worker death degrades
-   to serial, never a wrong answer). Under [Serial] policy, collection is
-   skipped entirely and force-deep is exactly the original one-pass walk. *)
+type descriptor = {
+  name : string;
+  shape : shape;
+  category : category;
+  implementation : value list -> env -> value;
+}
 
-(* Non-forcing: only pattern-matches on values already in hand, so it can
-   never trigger the very one-at-a-time serialization it exists to avoid.
-   [seen_pairs] is a physical-equality cycle/sharing guard (structural
-   sharing from a `let`-bound sublist walked twice must not be re-collected
-   or infinite-loop on a cycle); [seen_keys] is the LAW-20 dedup the
-   contract requires. Stops at the boundary of a not-yet-run persistent node
-   (its body is opaque until it runs) and at an ephemeral Unevaluated thunk
-   (only nodes are ever batched — "What is parallelized: nodes only"). *)
-let collect_unevaluated_nodes (v : value) : Scheduler.job list =
-  let seen_keys : (Identity_types.Node_key.t, unit) Hashtbl.t = Hashtbl.create 64 in
-  let seen_pairs : value list ref = ref [] in
-  let jobs = ref [] in
-  let race_width () = match Scheduler.state.policy with Scheduler.Race n -> n | _ -> 1 in
-  let node = node_operations () in
-  let core = core_operations () in
-  let key_of (t : thunk) : Identity_types.Node_key.t = node.key_of t
-  in
-  let job_run (t : thunk) (key : Identity_types.Node_key.t) () : value =
-    let run () = core.eval t.thunk_expr t.thunk_env in
-    node.run_body ~key ~run t
-  in
-  let rec walk (v : value) : unit =
-    match v with
-    | VThunk t ->
-        (match t.thunk_status with
-         | Evaluated result -> walk result
-         | Evaluating -> ()
-         | Unevaluated when t.thunk_persist ->
-             let k = key_of t in
-             if not (Hashtbl.mem seen_keys k) then begin
-               Hashtbl.add seen_keys k ();
-               if not (node.resolve_hit t k) then
-                 jobs := { Scheduler.j_key = k; j_run = job_run t k;
-                           j_width = race_width (); j_thunk = t }
-                         :: !jobs
-             end
-         | Unevaluated -> () (* ephemeral: stays in-process by design *))
-    | VPair (_, _) ->
-        if not (List.memq v !seen_pairs) then begin
-          seen_pairs := v :: !seen_pairs;
-          (match v with VPair (car, cdr) -> walk car; walk cdr | _ -> ())
-        end
-    | VVector vs -> Array.iter walk vs
-    | VMap kvs -> List.iter (fun (k, v) -> walk k; walk v) kvs
-    | VSet vs -> List.iter walk vs
-    | _ -> ()
-  in
-  walk v;
-  List.rev !jobs
+let declarations : descriptor list ref = ref []
+let catalog_entries : descriptor list ref = ref []
 
-(* The single-pass definition — recurses into ITSELF only, never
-   back into the collect/dispatch step. This is what actually walks the structure
-   after (or in [Serial]'s case, instead of) a batch dispatch. Critically,
-   collection must happen exactly ONCE per top-level force-deep call: were
-   this walk to re-run collect_unevaluated_nodes at every level (recursing
-   into [force_deep] instead of [force_deep_plain] below), each recursive
-   step would re-collect the shrinking REMAINING tail — the parent's
-   in-memory thunk_status stays Unevaluated until IT forces a thunk, even
-   though the store already has that node's result from the first wave's
-   child — and re-dispatch (and thus re-run the rebuilder, re-executing every
-   external process) an already-computed node all over again, once per
-   remaining list position (an O(n^2) blowup, not a correctness issue but a
-   catastrophic performance one). *)
+let register ?(shape = Any) ?(category = Other) name implementation =
+  declarations := { name; shape; category; implementation } :: !declarations
 
-(* Deep force: recursively force all thunks in a data structure. Under a
-   non-serial schedule policy, collects and dispatches every reachable
-   unevaluated node in ONE batch BEFORE the recursive walk (see the
-   two-phase protocol above), then defers entirely to the plain recursive
-   walk in Force_deep — every node it reaches from here on is now a store
-   hit (or, for a dead worker, an ordinary in-process compute). Under
-   [Serial], collection is skipped and this is exactly the original
-   single-pass definition. *)
-let force_deep (v : value) : value =
-  (match Scheduler.state.policy with
-   | Scheduler.Serial -> ()
-   | Scheduler.Parallel _ | Scheduler.Race _ | Scheduler.Remote _ ->
-       (match collect_unevaluated_nodes v with
-        | [] -> ()
-        | jobs -> Scheduler.dispatch_batch jobs));
-  Force_deep.force_deep_plain ~force:(core_operations ()).force v
-
-(* Probe evaluation and pinning live in Observation; the primitive below uses
-   that same path as trace verification. *)
-
-(* Invoke a function value on already-evaluated args. *)
-let invoke (fn : value) (args : value list) : value =
-  (core_operations ()).apply fn args
-    (Session.current_env (Effect.perform Dynamic_scope.Get_session))
-
- (* Call a function value with a fixed argument list — register-domain needs
-   1-arg (apply) and 2-arg (diff) calls into user-registered closures from
-   OCaml orchestration (Domains.ml). *)
-let call_with_args (fn : value) (args : value list) : value =
-  match fn with
-  | VClosure c ->
-      if List.length c.params <> List.length args then
-        failwith (Printf.sprintf
-          "domain function expects %d argument(s), got %d"
-          (List.length c.params) (List.length args));
-      invoke fn args
-  | VBuiltin _ -> invoke fn args
-  | _ -> failwith "domain function value is not a function"
-
- (* A table of built-in functions: name -> value *)
 let builtins : (string, value) Hashtbl.t = Hashtbl.create 64
-
-let register (name : string) (f : value list -> value) : unit =
-  Hashtbl.add builtins name (VBuiltin (name, f))
+let aliases : (string * string) list ref = ref []
 
 let lookup (name : string) : value option =
   Hashtbl.find_opt builtins name
 
 (* Variadic + and *: fold from the first arg with an identity for zero args;
    int/float mixing promotes to float. A single argument is returned as-is. *)
-let arith_fold (name : string) (identity : int)
+let arith_fold ~declare (name : string) (identity : int)
     (int_op : int -> int -> int) (float_op : float -> float -> float) : unit =
-  register name (fun args ->
+  declare ~shape:(Range (0, None)) name (fun args _env ->
     let args = force_args args in
     match args with
     | [] -> VInt identity
@@ -182,9 +74,9 @@ let arith_fold (name : string) (identity : int)
 
 (* Variadic chained numeric comparison (< > <= >=): true iff every adjacent
    pair satisfies the operator; int/float mixing compares as float. *)
-let chained_cmp (name : string)
+let chained_cmp ~declare (name : string)
     (int_cmp : int -> int -> bool) (float_cmp : float -> float -> bool) : unit =
-  register name (fun args ->
+  declare ~shape:(Range (0, None)) name (fun args _env ->
     let args = force_args args in
     match args with
     | [] | [_] -> VBool true
@@ -200,8 +92,8 @@ let chained_cmp (name : string)
         VBool (chained args))
 
 (* One-argument type predicate: forces the argument and tests its shape. *)
-let predicate (name : string) (test : value -> bool) : unit =
-  register name (fun args ->
+let predicate ~declare (name : string) (test : value -> bool) : unit =
+  declare ~shape:(Exact 1) name (fun args _env ->
     match args with
     | [arg] -> VBool (test (force_val arg))
     | _ -> failwith (name ^ " expects one arg"))
@@ -214,53 +106,56 @@ let initial_env () : env =
 
 
 let register_arith () =
+  let register = register ~category:Arithmetic in
+  let declare ~shape name implementation = register ~shape name implementation in
   (* Arithmetic — strict: force all args, variadic + and * with identity *)
-  arith_fold "+" 0 ( + ) ( +. );
+  arith_fold ~declare "+" 0 ( + ) ( +. );
 
-  register "-" (fun args ->
+  register "-" (fun args _env ->
     let args = force_args args in
     match args with
     | [VInt a; VInt b] -> VInt (a - b)
     | [VFloat a; VFloat b] -> VFloat (a -. b)
     | _ -> failwith "- expects two numbers");
 
-  arith_fold "*" 1 ( * ) ( *. );
+  arith_fold ~declare "*" 1 ( * ) ( *. );
 
-  register "/" (fun args ->
+  register "/" (fun args _env ->
     let args = force_args args in
     match args with
     | [VInt a; VInt b] when b <> 0 -> VInt (a / b)
     | [VFloat a; VFloat b] when b <> 0.0 -> VFloat (a /. b)
     | _ -> failwith "/ expects two numbers (divisor not zero)");
 
-  register "mod" (fun args ->
+  register "mod" (fun args _env ->
     let args = force_args args in
     match args with
     | [VInt a; VInt b] when b <> 0 -> VInt (a mod b)
     | _ -> failwith "mod expects two integers");
 
   (* Comparison — strict, variadic chaining *)
-  register "=" (fun args ->
+  register "=" (fun args _env ->
     let args = force_args args in
     match args with
     | [] | [_] -> VBool true
     | a :: rest ->
         VBool (List.for_all (fun b -> try a = b with Invalid_argument _ -> a == b) rest));
 
-  chained_cmp "<"  ( < )  ( < );
-  chained_cmp ">"  ( > )  ( > );
-  chained_cmp "<=" ( <= ) ( <= );
-  chained_cmp ">=" ( >= ) ( >= );
+  chained_cmp ~declare "<"  ( < )  ( < );
+  chained_cmp ~declare ">"  ( > )  ( > );
+  chained_cmp ~declare "<=" ( <= ) ( <= );
+  chained_cmp ~declare ">=" ( >= ) ( >= );
   ()
 
 let register_lists () =
+  let register = register ~category:Collections in
   (* List operations — car/cdr force the pair, cons/list are lazy *)
-  register "cons" (fun args ->
+  register "cons" (fun args _env ->
     match args with
     | [a; b] -> VPair (a, b)  (* lazy: stores thunks *)
     | _ -> failwith "cons expects two arguments");
 
-  register "car" (fun args ->
+  register "car" (fun args _env ->
     match args with
     | [arg] ->
         (match force_val arg with
@@ -269,7 +164,7 @@ let register_lists () =
          | _ -> failwith "car expects a pair")
     | _ -> failwith "car expects one argument");
 
-  register "cdr" (fun args ->
+  register "cdr" (fun args _env ->
     match args with
     | [arg] ->
         (match force_val arg with
@@ -278,7 +173,7 @@ let register_lists () =
          | _ -> failwith "cdr expects a pair")
     | _ -> failwith "cdr expects one argument");
 
-  register "list" (fun args ->
+  register "list" (fun args _env ->
     List.fold_right (fun a acc -> VPair (a, acc)) args VNil);  (* lazy *)
 
   (* (apply f seg1 seg2 … segN) — the reader's call-spread lowering target. Each seg is a proper
@@ -288,8 +183,9 @@ let register_lists () =
      list becomes one apply. Only the list SPINES are forced (to splice them);
      elements pass through unforced, exactly as `cons`/`list` do, so a spread of
      unforced node thunks stays unforced — same discipline as `map`. Dispatch to
-     the callee (closure or builtin) reuses [call_with_args]. *)
-  register "apply" (fun args ->
+     the callee (closure or builtin) reuses the session's explicit call
+     operation. *)
+  register ~shape:(Range (2, None)) "apply" (fun args env ->
     match args with
     | f :: segs ->
         let fn = force_val f in
@@ -299,7 +195,7 @@ let register_lists () =
           | other -> failwith ("apply expects proper lists as its argument \
                                 segments, got " ^ Presentation.string_of_value other)
         in
-        call_with_args fn (List.concat_map splice segs)
+        Session.call (session ()) ~env fn (List.concat_map splice segs)
     | [] -> failwith "apply expects a function and at least one argument segment");
 
   (* (map f lst) — the missing batch fan-out point: unlike EApply, which
@@ -324,15 +220,16 @@ let register_lists () =
      with the (now-hit, already-forced) results afterward. Zero placement
      semantics of its own (LAW 34 untouched) — `map` behaves identically
      under every schedule policy, including serial. *)
-  register "map" (fun args ->
+  register ~shape:(Exact 2) "map" (fun args env ->
     match args with
     | [f; lst] ->
         let fn = force_val f in
         (* Apply [fn] to one (possibly unforced — e.g. a node thunk) arg
            without forcing the RESULT. All closures go through
-           the evaluator apply operation via invoke. *)
+           the evaluator apply operation via the session's explicit call
+           operation. *)
         let apply1 (arg : value) : value =
-          invoke fn [arg]
+          Session.call (session ()) ~env fn [arg]
         in
         let rec go l =
           match force_val l with
@@ -343,18 +240,20 @@ let register_lists () =
         go lst
     | _ -> failwith "map expects a function and a list");
 
-  register "nil?" (fun args ->
+  register "nil?" (fun args _env ->
     match args with
     | [arg] -> VBool (match force_val arg with VNil -> true | _ -> false)
     | _ -> failwith "nil? expects one argument");
   ()
 
 let register_collections () =
+  let register = register ~category:Collections in
+  let declare ~shape name implementation = register ~shape name implementation in
   (* Vector operations — lazy *)
-  register "vector" (fun args ->
+  register "vector" (fun args _env ->
     VVector (Array.of_list args));
 
-  register "vector-get" (fun args ->
+  register "vector-get" (fun args _env ->
     let args = force_args args in
     match args with
     | [VVector vs; VInt i] ->
@@ -363,7 +262,7 @@ let register_collections () =
     | _ -> failwith "vector-get expects a vector and an integer");
 
   (* Map operations *)
-  register "hash-map" (fun args ->
+  register "hash-map" (fun args _env ->
     let rec make_pairs = function
       | [] -> []
       | k :: v :: rest -> (force_val k, v) :: make_pairs rest
@@ -371,7 +270,7 @@ let register_collections () =
     in
     VMap (make_pairs args));  (* keys forced, values lazy *)
 
-  register "hash-map-get" (fun args ->
+  register "hash-map-get" (fun args _env ->
     let args = force_args args in
     match args with
     | [VMap kvs; key] ->
@@ -381,51 +280,52 @@ let register_collections () =
     | _ -> failwith "hash-map-get expects a map and a key");
 
   (* Set operations *)
-  register "hash-set" (fun args ->
+  register "hash-set" (fun args _env ->
     VSet args);  (* lazy *)
 
   (* Type predicates — force to check *)
-  predicate "int?"     (function VInt _ -> true | _ -> false);
-  predicate "float?"   (function VFloat _ -> true | _ -> false);
-  predicate "string?"  (function VString _ -> true | _ -> false);
-  predicate "bool?"    (function VBool _ -> true | _ -> false);
-  predicate "keyword?" (function VKeyword _ -> true | _ -> false);
-  predicate "symbol?"  (function VSymbol _ -> true | _ -> false);
-  predicate "pair?"    (function VPair _ | VNil -> true | _ -> false);
-  predicate "vector?"  (function VVector _ -> true | _ -> false);
-  predicate "map?"     (function VMap _ -> true | _ -> false);
-  predicate "set?"     (function VSet _ -> true | _ -> false);
-  predicate "fn?"      (function VClosure _ | VBuiltin _ -> true | _ -> false);
-  register "thunk?" (fun args ->  (* unforced by design: tests thunk-ness *)
+  predicate ~declare "int?"     (function VInt _ -> true | _ -> false);
+  predicate ~declare "float?"   (function VFloat _ -> true | _ -> false);
+  predicate ~declare "string?"  (function VString _ -> true | _ -> false);
+  predicate ~declare "bool?"    (function VBool _ -> true | _ -> false);
+  predicate ~declare "keyword?" (function VKeyword _ -> true | _ -> false);
+  predicate ~declare "symbol?"  (function VSymbol _ -> true | _ -> false);
+  predicate ~declare "pair?"    (function VPair _ | VNil -> true | _ -> false);
+  predicate ~declare "vector?"  (function VVector _ -> true | _ -> false);
+  predicate ~declare "map?"     (function VMap _ -> true | _ -> false);
+  predicate ~declare "set?"     (function VSet _ -> true | _ -> false);
+  predicate ~declare "fn?"      (function VClosure _ | VBuiltin _ -> true | _ -> false);
+  register "thunk?" (fun args _env ->  (* unforced by design: tests thunk-ness *)
     match args with [arg] -> VBool (match arg with VThunk _ -> true | _ -> false) | _ -> failwith "thunk? expects one arg");
   ()
 
 let register_scalars () =
+  let register = register ~category:Strings in
   (* I/O — strict, deep-forces for display *)
-  register "print" (fun args ->
-    let args = List.map force_deep args in
+  register "print" (fun args _env ->
+    let args = List.map Force_deep.force_deep args in
     List.iter (fun v -> print_string (Presentation.string_of_value v)) args;
     print_newline ();
     VNil);
 
-  register "string-append" (fun args ->
+  register "string-append" (fun args _env ->
     let args = force_args args in
     VString (String.concat "" (List.map (fun v ->
       match v with VString s -> s | _ -> Presentation.string_of_value v
     ) args)));
 
-  register "string-length" (fun args ->
+  register "string-length" (fun args _env ->
     let args = force_args args in
     match args with
     | [VString s] -> VInt (String.length s)
     | _ -> failwith "string-length expects a string");
 
-  register "not" (fun args ->
+  register "not" (fun args _env ->
     match args with
     | [arg] -> VBool (match force_val arg with VBool b -> not b | VNil -> true | _ -> false)
     | _ -> failwith "not expects one argument");
 
-  register "error" (fun args ->
+  register "error" (fun args _env ->
     let args = force_args args in
     match args with
     | [VString msg] -> failwith msg
@@ -433,7 +333,8 @@ let register_scalars () =
   ()
 
 let register_caps () =
-  register "cap-compose" (fun args ->
+  let register = register ~category:Capabilities in
+  register "cap-compose" (fun args _env ->
     let caps = List.map (fun v -> match force_val v with VCapability c -> c | _ -> failwith "cap-compose expects capabilities") args in
     VCapability (Capability.compose caps));
 
@@ -441,12 +342,12 @@ let register_caps () =
      VCapability. Never a mint: it observes the ceiling the code already
      exercises on every perform (SPEC LAW 22). Callable anywhere, ambient-
      gated like every other perform path — no explicit-cap argument. *)
-  register "current-capabilities" (fun args ->
+  register "current-capabilities" (fun args _env ->
     match args with
     | [] -> VCapability (Capability.compose (Effect.perform Dynamic_scope.Get_capabilities))
     | _ -> failwith "current-capabilities takes no arguments");
 
-  register "cap-restrict" (fun args ->
+  register "cap-restrict" (fun args _env ->
     let args = force_args args in
     match args with
     | [VCapability _ as cap; VString scope] ->
@@ -475,17 +376,18 @@ let register_caps () =
         VCapability (Capability.restrict ~mode cap scope)
     | _ -> failwith "cap-restrict expects a capability, a scope string, and an optional mode keyword (:ro/:rw/:wo)");
 
-  register "cap-none" (fun args ->
+  register "cap-none" (fun args _env ->
     match args with [] -> VCapability Capability.none | _ -> failwith "cap-none takes no arguments");
 
-  register "capability?" (fun args ->
+  register "capability?" (fun args _env ->
     match args with [arg] -> VBool (match force_val arg with VCapability _ -> true | _ -> false) | _ -> failwith "capability? expects one arg");
   ()
 
 let register_metaeval () =
+  let register = register ~category:Metaprogramming in
   (* ---- eval-pp and apply-pp ---- *)
 
-  register "eval-pp" (fun args ->
+  register ~shape:(Exact 1) "eval-pp" (fun args env ->
     let args = force_args args in
     match args with
     | [VString code] ->
@@ -503,13 +405,11 @@ let register_metaeval () =
         let core = core_operations () in
         let macro_services = {
           Macro.eval = core.eval;
-          force_deep;
+          force_deep = Force_deep.force_deep;
           initial_env;
         } in
         let exprs = Macro.expand_toplevel_list macro_services (Reader.read_string code) in
-        (* Capture the calling env into a local ref — avoid clobbering
-           current_env_ref during inner evaluations. *)
-        let local_env = ref (Session.current_env (Effect.perform Dynamic_scope.Get_session)) in
+        let local_env = ref env in
         let new_defs = ref [] in
         let rec go = function
           | [] ->
@@ -547,7 +447,7 @@ let register_metaeval () =
     | _ -> failwith "eval-pp expects a string"
   );
 
-  register "apply-pp" (fun args ->
+  register ~shape:(Exact 2) "apply-pp" (fun args env ->
     let args = force_args args in
     match args with
     | [fn; args_list] ->
@@ -557,24 +457,25 @@ let register_metaeval () =
           | _ -> failwith "apply-pp expects a proper list for args"
         in
         let arg_values = list_to_ocaml args_list in
-        invoke fn arg_values
+        Session.call (session ()) ~env fn arg_values
     | _ -> failwith "apply-pp expects fn and list of args"
   );
 
   (* ---- force-deep ---- *)
 
-  register "force-deep" (fun args ->
+  register ~shape:(Exact 1) "force-deep" (fun args _env ->
     let args = force_args args in
     match args with
-    | [v] -> force_deep v
+    | [v] -> Force_deep.force_deep v
     | _ -> failwith "force-deep expects one argument"
   );
   ()
 
 let register_io () =
+  let register = register ~category:Observations in
   (* ---- slurp: read file to string ---- *)
 
-  register "slurp" (fun args ->
+  register "slurp" (fun args _env ->
     let args = force_args args in
     match args with
     | [VString path] ->
@@ -594,7 +495,7 @@ let register_io () =
      bytes; the reconciler diffs them by hash and materializes from the
      store — which is what lets `rm -rf build/` restore with zero tool
      re-runs. *)
-  register "blob" (fun args ->
+  register "blob" (fun args _env ->
     let args = force_args args in
     match args with
     | [VString s] -> VString ("blob:" ^ Blob_repository.put Blob_repository.default s)
@@ -603,7 +504,7 @@ let register_io () =
   (* (blob-get REF) — the inverse: "blob:<sha256>" → the stored bytes.
      Content-addressed, so no cell is recorded: the ref in a node's key or
      free vars already pins exactly these bytes. *)
-  register "blob-get" (fun args ->
+  register "blob-get" (fun args _env ->
     let args = force_args args in
     match args with
     | [VString r] ->
@@ -619,6 +520,7 @@ let register_io () =
   ()
 
 let register_stdlib () =
+  let register = register ~category:Other in
   (* ---- stdlib primitives ---- *)
 
   (* (hash-value V) — a canonical, structural content hash of ANY value
@@ -631,9 +533,9 @@ let register_stdlib () =
      the in-memory original via `=` even with identical bindings, purely
      because of key order — domain-proc.pp's diff needs a comparison that
      is not fooled by that. *)
-  register "hash-value" (fun args ->
+  register "hash-value" (fun args _env ->
     match args with
-    | [v] -> VString (Identity.hash_value (force_deep (force_val v)))
+    | [v] -> VString (Identity.hash_value (Force_deep.force_deep (force_val v)))
     | _ -> failwith "hash-value expects one argument");
 
   (* (hash-string S) — SHA-256 hex digest of S's raw bytes, the SAME
@@ -641,12 +543,12 @@ let register_stdlib () =
      Hasher.hash_string) — needed so a domain's `diff` (domain-fs.pp) can compute a content hash from a string PURELY (no
      capability, no store I/O — unlike `blob`, this never touches
      ~/.pp/store) and compare it against what `tree-observe` observed. *)
-  register "hash-string" (fun args ->
+  register "hash-string" (fun args _env ->
     match force_args args with
     | [VString s] -> VString (Hasher.hash_string s)
     | _ -> failwith "hash-string expects a string");
 
-  register "number->string" (fun args ->
+  register "number->string" (fun args _env ->
     match force_args args with
     | [VInt n] -> VString (string_of_int n)
     | [VFloat f] -> VString (string_of_float f)
@@ -657,15 +559,15 @@ let register_stdlib () =
      whole point of interpolation); every other value renders via
      Presentation.string_of_value (numbers plain, sealed values redacted to #<sealed>, lists
      as `(a b …)`). Deep-forces so nested thunks render, like `print`. *)
-  register "->string" (fun args ->
+  register "->string" (fun args _env ->
     match args with
     | [a] ->
-        (match force_deep a with
+        (match Force_deep.force_deep a with
          | VString s -> VString s
          | v -> VString (Presentation.string_of_value v))
     | _ -> failwith "->string expects exactly one argument");
 
-  register "string->number" (fun args ->
+  register "string->number" (fun args _env ->
     match force_args args with
     | [VString s] ->
         (match int_of_string_opt s with
@@ -677,7 +579,7 @@ let register_stdlib () =
     | _ -> failwith "string->number expects a string");
 
   (* (string-index S SUB) — index of the first occurrence of SUB, or nil. *)
-  register "string-index" (fun args ->
+  register "string-index" (fun args _env ->
     match force_args args with
     | [VString s; VString sub] ->
         let n = String.length s and m = String.length sub in
@@ -688,13 +590,13 @@ let register_stdlib () =
         in go 0
     | _ -> failwith "string-index expects two strings");
 
-  register "string-trim" (fun args ->
+  register "string-trim" (fun args _env ->
     match force_args args with
     | [VString s] -> VString (String.trim s)
     | _ -> failwith "string-trim expects a string");
 
   (* (string-sub S START LEN) *)
-  register "string-sub" (fun args ->
+  register "string-sub" (fun args _env ->
     match force_args args with
     | [VString s; VInt start; VInt len] ->
         if start < 0 || len < 0 || start + len > String.length s then
@@ -704,17 +606,17 @@ let register_stdlib () =
     | _ -> failwith "string-sub expects a string, a start index, and a length");
 
   (* Map utilities — keys were forced at construction; values stay lazy. *)
-  register "map-keys" (fun args ->
+  register "map-keys" (fun args _env ->
     match force_args args with
     | [VMap kvs] -> List.fold_right (fun (k, _) acc -> VPair (k, acc)) kvs VNil
     | _ -> failwith "map-keys expects a map");
 
-  register "map-vals" (fun args ->
+  register "map-vals" (fun args _env ->
     match force_args args with
     | [VMap kvs] -> List.fold_right (fun (_, v) acc -> VPair (v, acc)) kvs VNil
     | _ -> failwith "map-vals expects a map");
 
-  register "map-remove" (fun args ->
+  register "map-remove" (fun args _env ->
     match args with
     | [m; k] ->
         (match force_val m with
@@ -729,7 +631,7 @@ let register_stdlib () =
      existence recomputes exactly when the path appears/disappears/changes
      kind. *)
   let stat_primitive name want_dir =
-    register name (fun args ->
+    register name (fun args _env ->
       match force_args args with
       | [VString path] ->
           if not (List.exists (fun cap -> Capability.check_fs_read cap (World_path.canonical path))
@@ -745,7 +647,7 @@ let register_stdlib () =
   stat_primitive "dir?" true;
 
   (* (argv) — program arguments after `--`, an `argv:` observation. *)
-  register "argv" (fun args ->
+  register "argv" (fun args _env ->
     match args with
     | [] ->
         let av = Invocation.program_argv (Effect.perform Dynamic_scope.Get_invocation) in
@@ -754,7 +656,7 @@ let register_stdlib () =
     | _ -> failwith "argv takes no arguments");
 
   (* (env-get NAME) — environment variable or nil, an `env:` observation. *)
-  register "env-get" (fun args ->
+  register "env-get" (fun args _env ->
     match force_args args with
     | [VString name] ->
         let v = Sys.getenv_opt name in
@@ -763,7 +665,7 @@ let register_stdlib () =
     | _ -> failwith "env-get expects a variable name string");
 
   (* (exit [N]) — terminate the run with status N (default 0). *)
-  register "exit" (fun args ->
+  register "exit" (fun args _env ->
     match force_args args with
     | [] -> raise (Source_error.Pp_exit 0)
     | [VInt n] -> raise (Source_error.Pp_exit n)
@@ -771,7 +673,7 @@ let register_stdlib () =
 
   (* (string-split S SEP) — split on the single-char separator, dropping
      empty fields (manifest-file friendly: trailing newlines vanish). *)
-  register "string-split" (fun args ->
+  register "string-split" (fun args _env ->
     let args = force_args args in
     match args with
     | [VString s; VString sep] when String.length sep = 1 ->
@@ -784,7 +686,7 @@ let register_stdlib () =
   (* (map-insert M K V) — a new map with K bound to V (K forced; an existing
      binding for K is replaced). The dynamic counterpart of the {..} literal,
      for building desired-state maps by folding. *)
-  register "map-insert" (fun args ->
+  register "map-insert" (fun args _env ->
     match args with
     | [m; k; v] ->
         (match force_val m with
@@ -797,7 +699,7 @@ let register_stdlib () =
   (* map-merge(a, b) — a with every binding of b inserted; b wins on collision.
      The lowering target for map spread `{ ...a, ...b }`. Keys in a VMap
      are already forced values, so structural comparison is exact. *)
-  register "map-merge" (fun args ->
+  register "map-merge" (fun args _env ->
     match args with
     | [a; b] ->
         (match force_val a, force_val b with
@@ -809,7 +711,7 @@ let register_stdlib () =
 
   (* ---- read-string: parse string to value (for pp compiler) ---- *)
 
-  register "read-string" (fun args ->
+  register "read-string" (fun args _env ->
     let args = force_args args in
     match args with
     | [VString source] ->
@@ -823,11 +725,12 @@ let register_stdlib () =
   ()
 
 let register_domains () =
+  let register = register ~category:Domains in
   (* ---- fenced: register a non-convergent action for reconciler sequencing
      (LAW 31).  May not appear inside a node body.  The action is not
      executed during evaluation; the active reconciler drains it after
      convergent state is applied. *)
-  register "fenced" (fun args ->
+  register "fenced" (fun args _env ->
     let args = force_args args in
     match args with
     | [VString kind; spec] ->
@@ -857,7 +760,7 @@ let register_domains () =
                          ^ Presentation.string_of_value v)
   in
   let find_kv = Force_deep.find_kv ~force:force_val in
-  register "register-domain" (fun args ->
+  register "register-domain" (fun args _env ->
     if Effect.perform Dynamic_scope.In_node then
       failwith "register-domain: may not be called inside a node body (script-tier only, like fenced)";
     let args = force_args args in
@@ -897,7 +800,7 @@ let register_domains () =
                                             ^ Presentation.string_of_value other))
           | None -> failwith "register-domain: missing :write-cap"
         in
-        Session.set_domain (Effect.perform Dynamic_scope.Get_session) name
+        Session.register_domain (Effect.perform Dynamic_scope.Get_session) name
           { Session.dm_namespace = namespace; dm_observe = observe;
             dm_diff = diff; dm_apply = apply; dm_cap = write_cap;
             dm_observe_cell = observe_cell };
@@ -908,7 +811,7 @@ let register_domains () =
      for the ⊥-write-authority case: dm_namespace = [] (nothing to
      stratify, core never converges it), dm_diff/dm_apply = None. Same
      surface and error text as a standalone probe registry. *)
-  register "register-probe" (fun args ->
+  register "register-probe" (fun args _env ->
     if Effect.perform Dynamic_scope.In_node then
       failwith "register-probe: may not be called inside a node body (script-tier only, like fenced)";
     let args = force_args args in
@@ -926,7 +829,7 @@ let register_domains () =
           dm_cap = read_cap;
           dm_observe_cell = None;
         } in
-        Session.set_domain (Effect.perform Dynamic_scope.Get_session) name entry;
+        Session.register_probe (Effect.perform Dynamic_scope.Get_session) name entry;
         let (_ : string) = name in (* suppress unused warning *)
         VNil
     | _ -> failwith "register-probe expects a name, an observe-fn, and a read capability");
@@ -940,7 +843,7 @@ let register_domains () =
      at THIS call site, because the read-cap's authority was already spent
      evaluating the probe, not reading its pinned result. An unregistered
      name is a hard error naming it, on every read (never silently nil). *)
-  register "probe" (fun args ->
+  register "probe" (fun args _env ->
     let args = force_args args in
     match args with
     | [VString name] | [VKeyword name] ->
@@ -953,6 +856,7 @@ let register_domains () =
   ()
 
 let register_collect_and_sealed () =
+  let register = register ~category:Diagnostics in
   (* ---- collect: applicative/validation error-accumulation partition ---- *)
 
   (* `collect(items)` — partition a list of `[:ok, v]` / `[:err, e]` results.
@@ -960,7 +864,7 @@ let register_collect_and_sealed () =
      A plain function used in pipelines (`srcs |> map(f) |> collect`); the
      validation counterpart to `try`'s short-circuit monad. Was the
      `collect-results` primitive behind the removed `collect { }` reader sugar. *)
-  register "collect" (fun args ->
+  register "collect" (fun args _env ->
     let rec force_list l =
       match force_val l with
       | VNil -> []
@@ -995,7 +899,7 @@ let register_collect_and_sealed () =
      explicit, greppable Vault/SOPS-style boundary; derived data is ordinary
      data afterward — no dataflow tainting, by design). Anything else is a
      hard error naming the mistake. *)
-  register "unseal" (fun args ->
+  register "unseal" (fun args _env ->
     match args with
     | [arg] ->
         (match force_val arg with
@@ -1005,28 +909,30 @@ let register_collect_and_sealed () =
   ()
 
 let register_ppc () =
-  register "ppc-emit-opcode" (fun _args ->
+  let register = register ~category:Compiler in
+  register "ppc-emit-opcode" (fun _args _env ->
     failwith "ppc-emit-opcode: not yet implemented for self-hosting"
   );
 
-  register "ppc-emit-constant" (fun _args ->
+  register "ppc-emit-constant" (fun _args _env ->
     failwith "ppc-emit-constant: not yet implemented for self-hosting"
   );
 
-  register "ppc-resolve-local" (fun args ->
+  register "ppc-resolve-local" (fun args _env ->
     failwith "ppc-resolve-local: not yet implemented for self-hosting"
   );
 
-  register "ppc-push-cenv-frame" (fun args ->
+  register "ppc-push-cenv-frame" (fun args _env ->
     failwith "ppc-push-cenv-frame: not yet implemented for self-hosting"
   );
 
-  register "ppc-pop-cenv-frame" (fun args ->
+  register "ppc-pop-cenv-frame" (fun args _env ->
     failwith "ppc-pop-cenv-frame: not yet implemented for self-hosting"
   );
   ()
 
 let register_macros () =
+  let register = register ~category:Metaprogramming in
   let rec quasiquote_walk v =
     match v with
     | VPair (VSymbol "unquote", VPair (arg, VNil)) -> arg
@@ -1046,18 +952,18 @@ let register_macros () =
     | _ -> failwith "unquote-splicing expects a list"
   in
 
-  register "quasiquote" (fun args ->
+  register "quasiquote" (fun args _env ->
     let args = force_args args in
     match args with
     | [v] -> quasiquote_walk v
     | _ -> failwith "quasiquote expects one argument"
   );
 
-  register "unquote" (fun _ ->
+  register "unquote" (fun _ _env ->
     failwith "unquote not allowed outside quasiquote"
   );
 
-  register "unquote-splicing" (fun _ ->
+  register "unquote-splicing" (fun _ _env ->
     failwith "unquote-splicing not allowed outside quasiquote"
   );
 
@@ -1069,7 +975,7 @@ let register_macros () =
      can capture (or be captured by) the call site's bindings — pp macros
      are deliberately unhygienic: full hygiene is not
      required for a Lisp-1 with explicit quasiquote. *)
-  register "gensym" (fun args ->
+  register "gensym" (fun args _env ->
     let prefix = match force_args args with
       | [] -> "g"
       | [VString p] -> p
@@ -1090,11 +996,8 @@ let register_match_aliases () =
      references the "\000"-prefixed name instead of the plain
      one, so it always reaches the true primitive regardless of
      shadowing. *)
-  List.iter (fun n ->
-    match lookup n with
-    | Some v -> Hashtbl.replace builtins ("\000" ^ n) v
-    | None -> failwith ("A5: expected primitive " ^ n ^ " to already be registered")
-  ) ["car"; "cdr"; "="; "nil?"; "not"; "error"; "pair?"]
+  List.iter (fun n -> aliases := ("\000" ^ n, n) :: !aliases)
+    ["car"; "cdr"; "="; "nil?"; "not"; "error"; "pair?"]
 
   ;
   ()
@@ -1115,4 +1018,40 @@ let () =
   register_collect_and_sealed ();
   register_ppc ();
   register_macros ();
-  register_match_aliases ()
+  register_match_aliases ();
+  catalog_entries := List.rev !declarations;
+  List.iter (fun d ->
+    Hashtbl.replace builtins d.name (VBuiltin (d.name, d.implementation))) !catalog_entries;
+  List.iter (fun (alias, target) ->
+    match Hashtbl.find_opt builtins target with
+    | Some value -> Hashtbl.replace builtins alias value
+    | None -> failwith ("A5: expected primitive " ^ target ^ " to already be registered"))
+    !aliases
+
+let catalog () = !catalog_entries
+
+let shape_string = function
+  | Any -> "any"
+  | Exact n -> string_of_int n
+  | Range (min, None) -> Printf.sprintf "%d+" min
+  | Range (min, Some max) -> Printf.sprintf "%d..%d" min max
+
+let category_string = function
+  | Arithmetic -> "arithmetic"
+  | Collections -> "collections"
+  | Strings -> "strings"
+  | Capabilities -> "capabilities"
+  | Observations -> "observations"
+  | Process -> "process"
+  | Domains -> "domains"
+  | Diagnostics -> "diagnostics"
+  | Metaprogramming -> "metaprogramming"
+  | Compiler -> "compiler"
+  | Other -> "other"
+
+let render_catalog () =
+  let row d = Printf.sprintf "| `%s` | %s | %s |"
+      d.name (shape_string d.shape) (category_string d.category)
+  in
+  String.concat "\n" ("| builtin | arity | category |" ::
+    "|---|---|---|" :: List.map row !catalog_entries) ^ "\n"

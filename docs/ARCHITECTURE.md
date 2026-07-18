@@ -230,7 +230,7 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/presentation.ml` | Runtime value presentation and list/string projections. |
 | `src/hasher.ml` | Low-level SHA-256 and injective length-framed hashing primitives. |
 | `src/blobref.ml` | Detection of `blob:<sha256>` references embedded in an ordinary value, so large bytes stay out of a node's small result. |
-| `src/force_deep.ml` | The one deep recursive force over a value — the plain structural walk that drives every reachable thunk. |
+| `src/force_deep.ml` | The deep structural force and its scheduler-aware batch collection/dispatch boundary. |
 | `src/codec.ml` | The one canonical, versioned, byte-stable text encoding for store objects and traces. |
 | `src/constant_time.ml` | Constant-time byte comparison, used to verify signed tokens without a timing side channel. |
 | `src/paths.ml` | The one component-boundary path-containment predicate, `Paths.under`, behind capability scopes, loader authority, and domain bounds. |
@@ -259,17 +259,17 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/loader.ml` | Source loading under bounded interpreter authority, including trace recording. |
 | `src/error_context.ml` | Attaches the innermost source-form location to evaluation errors. |
 | `src/sandbox.ml` | Creates, resolves, and removes node-local scratch directories. |
-| `src/session.ml` | The abstract owner of evaluation/pass state, a complete immutable evaluator-operation value, and its `begin_evaluation`, `begin_pass`, and `begin_watch` lifecycle transitions. |
+| `src/session.ml` | The abstract owner of evaluation/pass state and explicit function invocation, a complete immutable evaluator-operation value, and its `begin_evaluation`, `begin_pass`, and `begin_watch` lifecycle transitions. |
 | `src/evaluator.ml` | The project's sole tree-walking engine: one exhaustive expression dispatch, tail mechanism, force/trampoline, and operation graph. |
 | `src/evaluator_thunks.ml` | Content-addressed thunk construction, letrec poison thunks, and module export selection. |
-| `src/evaluator_application.ml` | Closure/builtin application and the shared tail-call continuation mechanism. |
+| `src/evaluator_application.ml` | Closure/builtin application, explicit builtin environments, and the shared tail-call continuation mechanism. |
 | `src/evaluator_node.ml` | The evaluator-facing adapter for persistent-node forcing and nested trace replay. |
 | `src/evaluator_effects.ml` | Dynamic handler lookup and the builtin effect fallback. |
 | `src/evaluator_forms.ml` | Sequential blocks, module evaluation, source loading, and top-level form evaluation. |
 | `src/evaluator_scope.ml` | Capability, handler, config, and config-read dynamic-scope forms. |
 | `src/evaluator_match.ml` | Pattern-arm matching, guard evaluation, and arm environment extension. |
 | `src/macro.ml` | `defmacro` expansion: a function from syntax-as-values to syntax, run at the expansion boundary. |
-| `src/primitives.ml` | Built-in functions and the initial environment. |
+| `src/primitives.ml` | Declarative builtin descriptors, categorized registration, and initial-environment materialization. |
 | `src/node.ml` | Free-variable resolution, node identity, trace replay, hit policy, result validation, rebuilding, and persistence. |
 | `src/store_layout.ml` | Abstract store layout and version initialization, with the single atomic-replacement and crash-injection boundary. |
 | `src/object_repository.ml` | Immutable encoded values and fenced specifications addressed by hash. |

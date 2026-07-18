@@ -174,8 +174,6 @@ two orchestration functions.
 
 - `evaluator.ml` still mixes language semantics, loading, capability gates, and
   lifecycle wiring.
-- `primitives.ml` combines the builtin catalog with scheduler batching, probes,
-  domains, and macro evaluation.
 - `main.ml` owns option parsing, wiring, commands, watch loops, reconciliation,
   and cluster behavior.
 - REPL, lint, scheduler, fenced-action, and several counter states
@@ -187,36 +185,6 @@ two orchestration functions.
 
 The order matters. Later boundaries assume earlier ownership and tests.
 
-
-### 15. Turn primitives into a declarative builtin layer
-
-**Purpose:** separate language builtins from application orchestration.
-
-**Work:**
-
-- Define a builtin descriptor containing name, arity/shape where expressible,
-  implementation, and relevant category metadata.
-- Keep builtin implementations near their owning concern or register them from
-  small modules: collections, strings, capabilities, observations, process,
-  domains, and diagnostics.
-- Move scheduler-aware deep forcing out of the builtin catalog.
-- Move probe/domain registries and invocation helpers into session/domain
-  modules.
-- Remove `current_env_ref`; pass the environment/evaluator operation required by
-  higher-order builtins explicitly.
-- Generate or check user-facing builtin tables from the catalog where that
-  removes duplicated facts.
-
-**Likely files:** `src/primitives.ml`, force-deep, scheduler, domains, frontend
-surface tables, documentation gates.
-
-**Verify:** primitive and stdlib tests, surface drift gate, domains, scheduler,
-suite.
-
-**Exit:** the primitive catalog is easy to scan; adding a builtin has one clear
-registration path; it does not mutate evaluator-global environment state.
-
-**Non-goal:** expand the standard library or rename language operations.
 
 ### 16. Construct scheduler and distribution state explicitly
 

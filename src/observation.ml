@@ -52,7 +52,7 @@ let call session fn args =
   | VClosure c when List.length c.params <> List.length args ->
       failwith "observer function arity mismatch"
   | VClosure _ | VBuiltin _ ->
-      (Session.core_operations session).apply fn args (Session.current_env session)
+      Session.call session ~env:Environment.empty fn args
   | _ -> failwith "observer is not a function"
 
 let without_nested_observations cap f =

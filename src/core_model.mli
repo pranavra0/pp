@@ -54,7 +54,7 @@ and value =
   | VMap of (value * value) list
   | VSet of value list
   | VClosure of closure
-  | VBuiltin of string * (value list -> value)
+  | VBuiltin of string * (value list -> env -> value)
   | VCapability of Capability.t
   | VThunk of thunk
   | VEnvMap of (string * value) list

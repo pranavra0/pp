@@ -9,7 +9,7 @@ type operations = {
 let expand_toplevel operations exprs =
   Macro.expand_toplevel_list
     { Macro.eval = operations.eval;
-      force_deep = Primitives.force_deep;
+      force_deep = Force_deep.force_deep;
       initial_env = Primitives.initial_env }
     exprs
 

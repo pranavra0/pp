@@ -106,12 +106,13 @@ let plan_summary (plan : value) : (string * string) list =
    the direct route is documented here as the deliberate, simpler choice. *)
 let plan_cache_key ~(diff_closure : value) ~(observed : value) ~(desired : value) : string =
   let diff_hash = Identity.hash_value diff_closure in
-  let observed_hash = Identity.hash_value (Primitives.force_deep observed) in
-  let desired_hash = Identity.hash_value (Primitives.force_deep desired) in
+  let observed_hash = Identity.hash_value (Force_deep.force_deep observed) in
+  let desired_hash = Identity.hash_value (Force_deep.force_deep desired) in
   Hasher.hash_concat ["domain-plan"; diff_hash; observed_hash; desired_hash]
 
 let compute_plan ~(domain_name : string) ~(diff_closure : value)
     ~(observed : value) ~(desired : value) : value =
+  let session = Effect.perform Dynamic_scope.Get_session in
   let key = Identity_types.Cache_key.of_digest
     (plan_cache_key ~diff_closure ~observed ~desired) in
   match Cache_policy.lookup Cache_policy.default ~key ~authorized:(fun _ -> true) with
@@ -123,7 +124,7 @@ let compute_plan ~(domain_name : string) ~(diff_closure : value)
       Cache_policy.diagnose Cache_policy.default "domain %s: plan %s: miss — running diff"
         domain_name (Cache_policy.short_key (Identity_types.Cache_key.to_string key));
       let plan =
-        try Primitives.call_with_args diff_closure [observed; desired]
+        try Session.call session ~env:Environment.empty diff_closure [observed; desired]
         with effect Dynamic_scope.Get_capabilities, k -> Effect.Deep.continue k []
       in
       let result_hash = Identity_types.Object_hash.of_digest (Identity.hash_value plan) in
@@ -181,7 +182,8 @@ let fresh_nonce_config () : value =
   VMap [(VString "__pp_q13_cache_bust", VInt n)]
 let call_uncached (fn : value) (args : value list) : value =
   Dynamic_scope.with_config (fresh_nonce_config ()) (fun () ->
-    Primitives.call_with_args fn args)
+    Session.call (Effect.perform Dynamic_scope.Get_session)
+      ~env:Environment.empty fn args)
 
 let observe_domain (entry : Session.domain_entry) (name : string) : value =
   with_domain name entry.Session.dm_cap
@@ -205,7 +207,7 @@ let run_domain ~(name : string) ~(entry : Session.domain_entry) ~(desired : valu
     let plan = compute_plan ~domain_name:name ~diff_closure ~observed ~desired in
     let summary = plan_summary plan in
     let hash = Hasher.hash_concat
-        ["domain-pass"; name; Identity.hash_value (Primitives.force_deep desired)] in
+        ["domain-pass"; name; Identity.hash_value (Force_deep.force_deep desired)] in
     Journal.append (Journal.DomainIntent { hash; fields = summary });
     with_domain name entry.Session.dm_cap
       (fun () -> ignore (call_uncached apply_closure [plan]));
@@ -255,7 +257,7 @@ let record_epoch invocation (forced : value) : unit =
 
 let run_all invocation (all_desired : value) : unit =
   let session = Effect.perform Dynamic_scope.Get_session in
-  let forced = Primitives.force_deep all_desired in
+  let forced = Force_deep.force_deep all_desired in
   let entries = match forced with
     | VMap kvs -> kvs
     | other ->

@@ -142,7 +142,6 @@ and is_data_closed (t : thunk) : bool =
 (* ---- Main Evaluator (non-tail) ---- *)
 
 and eval (e : expr) (env : env) : value =
-  Session.set_current_env (session ()) env;
   eval_tail e env (fun v -> v)
 
 (* ---- Tail-position evaluator ---- *)
@@ -151,7 +150,6 @@ and eval (e : expr) (env : env) : value =
    OCaml stack — this is how TCO works. *)
 
 and eval_tail (e : expr) (env : env) (k : value -> value) : value =
-  Session.set_current_env (session ()) env;
   match e with
   | ELiteral v -> k v
 
@@ -197,8 +195,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       let fn_val = force (eval fn_expr env) in
       let arg_vals = List.map (fun arg_expr -> force (eval arg_expr env)) arg_exprs in
       Evaluator_application.apply_tail
-        { eval_tail;
-          set_current_env = Session.set_current_env (session ()) }
+        { eval_tail }
         fn_val arg_vals env k
 
   | EQuote e ->
@@ -304,8 +301,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
 
 and apply (fn : value) (args : value list) (env : env) : value =
   Evaluator_application.apply
-    { eval_tail;
-      set_current_env = Session.set_current_env (session ()) }
+    { eval_tail }
     fn args env
 
 

@@ -57,4 +57,16 @@ for d in "fs.read" "fs.write" "fs.rw"; do
   fi
 done
 
+# (3) Builtin inventory: the user-facing inventory is rendered from the
+# descriptor catalog, so a registration cannot silently disappear from the
+# generated table or appear twice.
+builtins=$($PP --dump-builtins)
+if grep -q '^| builtin | arity | category |$' <<<"$builtins" \
+    && [ "$(grep -c '^| `map` |' <<<"$builtins")" = 1 ] \
+    && grep -q '^| `map` | 2 | collections |$' <<<"$builtins"; then
+  ok "builtin-catalog-renders"
+else
+  bad "builtin-catalog-renders" "--dump-builtins did not match the descriptor catalog"
+fi
+
 exit $fail

@@ -1,6 +1,6 @@
-(* Deep recursive force over a pp VALUE — the plain structural walk.
-   The scheduler-aware batch dispatch lives in Primitives.force_deep;
-   this is the plain walk it (and others) delegate to. *)
+(* Deep recursive force over a pp value, with scheduler batching where enabled. *)
+
+val force_deep : Core_model.value -> Core_model.value
 
 val force_deep_plain :
   force:(Core_model.value -> Core_model.value) -> Core_model.value -> Core_model.value

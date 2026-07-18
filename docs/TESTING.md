@@ -80,7 +80,8 @@ obligation to the build, so a change cannot ship unexamined.
   generated block in docs/SPEC.md must match `pp --dump-surface-tables`,
   and the grant descriptors must appear in exactly one `.ml` file
   (src/surface_tables.ml). A table edit not mirrored into SPEC, or a
-  hand-copied table, is a red build.
+  hand-copied table, is a red build. The same gate checks that
+  `pp --dump-builtins` renders the declarative builtin catalog.
 - tests/074-adversarial-worlds.sh — adversarial worlds coverage. Every
   user-observable read head (`$env`, `$file`, `$probe` and the rest)
   must have either an adversarial fixture in

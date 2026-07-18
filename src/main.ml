@@ -166,7 +166,7 @@ let select_member_slice invocation (all_desired : Core_model.value) : Core_model
   match Invocation.program_member_name invocation with
   | None -> all_desired
   | Some name ->
-      (match Primitives.force_deep all_desired with
+      (match Force_deep.force_deep all_desired with
        | Core_model.VMap kvs ->
            (match List.find_opt (fun (k, _) ->
               match k with
@@ -632,6 +632,8 @@ let main () =
        to docs/SPEC.md is generated from here and must match it. Internal seam. *)
     flag "--dump-surface-tables"
       (fun () -> print_string (Surface_tables.render_spec_tables ()); exit 0);
+    flag "--dump-builtins"
+      (fun () -> print_string (Primitives.render_catalog ()); exit 0);
     { name = "--check-kernel-props"; arity = -1; doc = ""; internal = true;
       handler = check_kernel_props_handler };
     doc_of "  pp --help                Print this help\n"
@@ -969,7 +971,7 @@ let main () =
          match run_files invocation (List.rev !files) with
          | None -> failwith "pp: --publish-object: the program produced no value"
          | Some v ->
-             let forced = Primitives.force_deep v in
+             let forced = Force_deep.force_deep v in
              let hash = Identity.hash_value forced in
              (match Codec.encode_value forced with
               | None ->
@@ -998,7 +1000,7 @@ let main () =
            ~f:(fun () -> run_files invocation (List.rev !files)) () in
        (try
           let all = select_member_slice invocation (compute_all_desired invocation last) in
-          let forced = Primitives.force_deep all in
+          let forced = Force_deep.force_deep all in
           Cache_policy.mark Cache_policy.default ("object:" ^ Identity.hash_value forced);
           List.iter (fun h -> Cache_policy.mark Cache_policy.default ("blob:" ^ h)) (Blobref.blob_refs_in forced)
         with _ ->

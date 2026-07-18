@@ -20,7 +20,6 @@ type t = {
   run_pins : (string, string) Hashtbl.t;
   preseeded_run_pins : (string, string) Hashtbl.t;
   node_thunks : (Identity_types.Node_key.t, Core_model.thunk) Hashtbl.t;
-  mutable current_env : Core_model.env;
   mutable force_depth : int;
   mutable cache_bust : int;
   mutable fenced_epoch : string;
@@ -35,11 +34,21 @@ let create operations = {
   fenced_actions = [];
   run_pins = Hashtbl.create 64; preseeded_run_pins = Hashtbl.create 64;
   node_thunks = Hashtbl.create 256;
-  current_env = Environment.empty; force_depth = 0; cache_bust = 0; fenced_epoch = "";
+  force_depth = 0; cache_bust = 0; fenced_epoch = "";
 }
 let force t = t.operations.core.force
 let core_operations t = t.operations.core
 let node_operations t = t.operations.node
+let call t ~env fn args =
+  match fn with
+  | Core_model.VClosure c ->
+      if List.length c.params <> List.length args then
+        failwith (Printf.sprintf
+          "domain function expects %d argument(s), got %d"
+          (List.length c.params) (List.length args));
+      t.operations.core.apply fn args env
+  | Core_model.VBuiltin _ -> t.operations.core.apply fn args env
+  | _ -> failwith "domain function value is not a function"
 let begin_pass t =
   Hashtbl.clear t.probes; Hashtbl.clear t.sealed_pins;
   Hashtbl.clear t.run_pins;
@@ -49,7 +58,7 @@ let begin_pass t =
 let begin_evaluation ~retain_thunks t =
   if not retain_thunks then begin Hashtbl.clear t.thunks; Hashtbl.clear t.node_thunks end;
   Hashtbl.clear t.macros; t.gensym <- 0; Hashtbl.clear t.domains;
-  t.current_env <- Environment.empty; t.force_depth <- 0; t.cache_bust <- 0;
+  t.force_depth <- 0; t.cache_bust <- 0;
   t.fenced_actions <- []; begin_pass t
 let begin_watch t = Hashtbl.clear t.node_thunks
 let find_thunk t = Hashtbl.find_opt t.thunks
@@ -58,7 +67,8 @@ let find_macro t = Hashtbl.find_opt t.macros
 let set_macro t = Hashtbl.replace t.macros
 let next_gensym t = t.gensym <- t.gensym + 1; t.gensym
 let find_domain t = Hashtbl.find_opt t.domains
-let set_domain t = Hashtbl.replace t.domains
+let register_domain t name entry = Hashtbl.replace t.domains name entry
+let register_probe t name entry = Hashtbl.replace t.domains name entry
 let fold_domains t f init = Hashtbl.fold f t.domains init
 let find_probe t = Hashtbl.find_opt t.probes
 let set_probe t = Hashtbl.replace t.probes
@@ -82,8 +92,6 @@ let remove_run_pin t = Hashtbl.remove t.run_pins
 let iter_run_pins t f = Hashtbl.iter f t.run_pins
 let set_node_thunk t = Hashtbl.replace t.node_thunks
 let find_node_thunk t = Hashtbl.find_opt t.node_thunks
-let current_env t = t.current_env
-let set_current_env t env = t.current_env <- env
 let force_depth t = t.force_depth
 let set_force_depth t n = t.force_depth <- n
 let incr_force_depth t = t.force_depth <- t.force_depth + 1

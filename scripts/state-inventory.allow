@@ -39,6 +39,9 @@ top-ref|src/kernel_props.ml|fresh_counter|test-diagnostic
 top-ref|src/kernel_props.ml|print_checks|test-diagnostic
 top-ref|src/kernel_props.ml|print_skips|test-diagnostic
 top-ref|src/lint.ml|warnings|test-diagnostic
+top-ref|src/primitives.ml|aliases|builtin-catalog
+top-ref|src/primitives.ml|catalog_entries|builtin-catalog
+top-ref|src/primitives.ml|declarations|builtin-catalog
 top-ref|src/repl.ml|global_env|command
 top-ref|src/repl.ml|history|command
 top-ref|src/sandbox.ml|counter|node
@@ -51,6 +54,5 @@ mutable-field|src/session.ml|fenced_actions|evaluation-session
 mutable-field|src/session.ml|gensym|evaluation-session
 mutable-field|src/session.ml|observations|pass
 mutable-field|src/session.ml|cache_bust|evaluation-session
-mutable-field|src/session.ml|current_env|evaluation-session
 mutable-field|src/session.ml|force_depth|evaluation-session
 mutable-field|src/session.ml|fenced_epoch|pass
