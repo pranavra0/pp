@@ -23,6 +23,10 @@
 
 open Types
 
+type state = { source : string; mutable try_counter : int }
+
+let create ?(source = "<?>") () = { source; try_counter = 0 }
+
 (* ---- Tokens ---- *)
 
 (* An f-string is lexed into ordered segments: literal text and interpolation
@@ -324,6 +328,7 @@ type ps = {
   toks : tok array;
   mutable pos : int;
   file : string;
+  state : state;
 }
 
 let eof_tok = { t = TEOF; tline = 1; glued = false }
@@ -466,13 +471,9 @@ let peek_infix ps ~nl (ops : string list) : string option =
 
 (* Map-literal entry: a spread `...m` or a `k -> v` pair *)
 type map_entry = MSpread of expr | MPair of expr * expr
-(* Counter for fresh temp variables in try-block lowering. The counter stays
-   here (reset per top-level form in read_string); Desugar.lower_try takes it as
-   ~fresh_var. The `try_stmt` vocabulary lives in Desugar alongside lower_try. *)
-let try_counter = ref 0
-let fresh_try_var () =
-  incr try_counter;
-  "__try_" ^ string_of_int !try_counter
+let fresh_try_var ps =
+  ps.state.try_counter <- ps.state.try_counter + 1;
+  "__try_" ^ string_of_int ps.state.try_counter
 
 (* A parsed handler name: the `with-handler(name = fn, …)` name slot
    accepts a symbol or a keyword, in BOTH the normal and quasiquote readers.
@@ -857,9 +858,10 @@ and parse_args ps : expr list = parse_arglist ps ~elem:(fun ps -> parse_expr ps 
    the context's own [parse] (parse_expr for normal, parse_qq inside a
    quasiquote — so a hole may itself contain `unquote(...)`). Must consume the
    whole hole. *)
-and fstring_hole_expr ~(file : string) (src : string) ~(parse : ps -> expr) : expr =
+and fstring_hole_expr ~(state : state) ~(file : string) (src : string)
+    ~(parse : ps -> expr) : expr =
   let toks = lex ~file src in
-  let hps = { toks = Array.of_list toks; pos = 0; file } in
+  let hps = { toks = Array.of_list toks; pos = 0; file; state } in
   let e = parse hps in
   skip_nl hps;
   (match (cur hps).t with
@@ -966,7 +968,7 @@ and parse_primary ps c : expr =
       lower_fstring segs
         ~lit:(fun s -> ELiteral (VString s))
         ~hole:(fun src -> EApply (ESymbol "->string",
-                 [fstring_hole_expr ~file:ps.file src
+                 [fstring_hole_expr ~state:ps.state ~file:ps.file src
                     ~parse:(fun hps -> parse_expr hps free_ctx)]))
         ~append:(fun parts -> EApply (ESymbol "string-append", parts))
   | TKeyword kw -> advance ps; ELiteral (VKeyword kw)
@@ -1372,7 +1374,8 @@ and normal_head_builder : head_builder = {
   mk_try = (fun ps ->
     advance ps; skip_nl ps;
     let stmts = parse_try_stmts ps in
-    Desugar.lower_try ~fresh_var:fresh_try_var Desugar.normal_try_builder stmts);
+    Desugar.lower_try ~fresh_var:(fun () -> fresh_try_var ps)
+      Desugar.normal_try_builder stmts);
   mk_match = (fun ps ->
     advance ps;
     let scrutinee = parse_expr ps { nl = false; cond = true } in
@@ -1479,7 +1482,8 @@ and qq_head_builder : head_builder = {
     advance ps; skip_nl ps;
     let stmts =
       parse_try_stmts_ctx ps ~parse_stmt:parse_qq ~what:" in quasiquote" in
-    Desugar.lower_try ~fresh_var:fresh_try_var qq_try_builder stmts);
+    Desugar.lower_try ~fresh_var:(fun () -> fresh_try_var ps)
+      qq_try_builder stmts);
   mk_match = (fun ps ->
     advance ps;
     let scrutinee = parse_qq ps in
@@ -2103,7 +2107,7 @@ and parse_qq_primary ps : expr =
       lower_fstring segs
         ~lit:(fun s -> EQuote (ELiteral (VString s)))
         ~hole:(fun src -> qq_chain [qq_sym "->string";
-                 fstring_hole_expr ~file:ps.file src ~parse:parse_qq])
+                 fstring_hole_expr ~state:ps.state ~file:ps.file src ~parse:parse_qq])
         ~append:(fun parts -> qq_chain (qq_sym "string-append" :: parts))
   | TKeyword kw -> advance ps; EQuote (ELiteral (VKeyword kw))
   | TLParen ->
@@ -2289,9 +2293,11 @@ and parse_qq_match_arms ps : expr =
 
 (* Read brace-surface source text into top-level forms, each ELocated at the
    line of its first token — exactly Reader.read_string's wrapping. *)
-let read_string ?(source : string = "<?>") (input : string) : expr list =
-  let toks = lex ~file:source input in
-  let ps = { toks = Array.of_list toks; pos = 0; file = source } in
+let read state (input : string) : expr list =
+  let toks = lex ~file:state.source input in
+  let ps = {
+    toks = Array.of_list toks; pos = 0; file = state.source; state
+  } in
   let result = ref [] in
   let rec skip_seps () =
     match (cur ps).t with
@@ -2306,7 +2312,7 @@ let read_string ?(source : string = "<?>") (input : string) : expr list =
         (* Fresh temp-var numbering per top-level form, so a form's
            LAW-20 hash depends only on the form (and its location), never on
            how many `try` blocks were parsed earlier in the process/file. *)
-        try_counter := 0;
+        state.try_counter <- 0;
         let line = (cur ps).tline in
         let e = parse_expr ps { nl = false; cond = false } in
         (match (cur ps).t with
@@ -2315,11 +2321,14 @@ let read_string ?(source : string = "<?>") (input : string) : expr list =
              parse_error ps
                ("expected newline or ';' between statements, got "
                 ^ string_of_btok t));
-        result := ELocated ((source, line), e) :: !result;
+        result := ELocated ((state.source, line), e) :: !result;
         loop ()
   in
   loop ();
   List.rev !result
+
+let read_string ?(source : string = "<?>") input =
+  read (create ~source ()) input
 
 let read_one ?(source : string = "<?>") (input : string) : expr =
   match read_string ~source input with

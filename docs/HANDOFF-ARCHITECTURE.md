@@ -177,15 +177,15 @@ two orchestration functions.
 - `types.ml` is a dependency root that also implements hashing, free-variable
   analysis, quotation, printing, type checks, and pattern matching.
 - `evaluator.ml` mixes language semantics, node identity, store policy, loading,
-  macro callbacks, capability gates, and lifecycle wiring.
+  capability gates, and lifecycle wiring.
 - `store.ml` mixes durable repositories, cell observation, hit policy,
   diagnostics, graph queries, GC marking, and CLI mode refs.
 - `primitives.ml` combines the builtin catalog with scheduler batching, probes,
-  domains, macro evaluation, and evaluator callbacks.
+  domains, and macro evaluation.
 - `main.ml` owns option parsing, wiring, commands, watch loops, reconciliation,
   and cluster behavior.
-- Reader, macro, REPL, lint, scheduler, fenced-action, store-mode, and several
-  counter states remain process-global.
+- REPL, lint, scheduler, fenced-action, store-mode, and several counter states
+  remain process-global.
 - Current documentation contains duplicated entries, incomplete prose, and
   implementation claims that have drifted.
 
@@ -221,33 +221,6 @@ clears and assignments.
 executable characterization.
 
 **Non-goal:** change those decisions.
-
-### 9. Make both readers reentrant
-
-**Purpose:** remove frontend process globals and make parsing safe to compose and
-test independently.
-
-**Work:**
-
-- Move s-expression lexer filename/line refs into an explicit parser state,
-  matching the brace reader's stateful shape.
-- Move brace-reader counters such as generated try names into parser or lowering
-  state with deterministic construction.
-- Ensure nested loads and two parsers in one process cannot affect locations or
-  generated names in one another.
-- Centralize shared reader-level lowering in `Desugar`; retain surface-specific
-  parsing only where syntax truly differs.
-- Add interleaved parser tests, location parity tests, and existing round-trip
-  property coverage.
-
-**Likely files:** `src/reader.*`, `src/reader_braces.*`, `src/desugar.*`, reader
-tests and kernel properties.
-
-**Verify:** reader/fmt/parity tests, kernel properties, suite.
-
-**Exit:** readers have no process-global parse state and can run independently.
-
-**Non-goal:** change either language surface.
 
 ### 10. Decompose core types without breaking recursive invariants
 
@@ -697,4 +670,5 @@ not only expected stdout.
 
 ## Immediate next action
 
-Execute roadmap item 9 only: make both readers reentrant.
+Execute roadmap item 10 only: decompose core types without breaking recursive
+invariants.

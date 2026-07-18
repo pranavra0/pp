@@ -31,9 +31,6 @@ top-ref|src/kernel_props.ml|fresh_counter|test-diagnostic
 top-ref|src/kernel_props.ml|print_checks|test-diagnostic
 top-ref|src/kernel_props.ml|print_skips|test-diagnostic
 top-ref|src/lint.ml|warnings|test-diagnostic
-top-ref|src/reader.ml|current_file|pass
-top-ref|src/reader.ml|lex_line|pass
-top-ref|src/reader_braces.ml|try_counter|pass
 top-ref|src/repl.ml|global_env|command
 top-ref|src/repl.ml|history|command
 top-ref|src/sandbox.ml|counter|node

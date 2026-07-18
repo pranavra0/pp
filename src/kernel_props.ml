@@ -653,6 +653,28 @@ let session_property () =
      || Session.find_probe b "probe" <> Some (VInt 2) then
     fail "session-isolation" "independent sessions or pass retention leaked"
 
+let reader_state_property () =
+  let sexpr_a = Reader.create ~source:"a.ppl" ()
+  and sexpr_b = Reader.create ~source:"b.ppl" () in
+  let a_first = Reader.read sexpr_a "(print 1)\n(print 2)" in
+  ignore (Reader.read sexpr_b "\n(print 9)");
+  let a_second = Reader.read sexpr_a "(print 1)\n(print 2)" in
+  if a_first <> a_second then
+    fail "reader-state" "interleaved s-expression parsers changed locations";
+  let brace_a = Reader_braces.create ~source:"same.pp" ()
+  and brace_b = Reader_braces.create ~source:"other.pp" () in
+  let source = "try { x <- ok(1); [:ok, x] }" in
+  let first = Reader_braces.read brace_a source in
+  ignore (Reader_braces.read brace_b
+    "try { x <- ok(2); y <- ok(x); [:ok, y] }");
+  let second = Reader_braces.read brace_a source in
+  if first <> second then
+    fail "reader-state" "interleaved brace parsers changed generated names";
+  match Reader.read_string ~source:"parity" "(print 1)",
+        Reader_braces.read_string ~source:"parity" "print(1)" with
+  | [sexpr], [brace] when sexpr = brace -> ()
+  | _ -> fail "reader-state" "surface-equivalent forms lost location parity"
+
 let cap_properties (st : rng) ~(count : int) : unit =
   let depth () = 1 + ri st 3 in
   let canon = Paths.canonicalize ~realpath:(fun x -> x) in
@@ -918,6 +940,7 @@ let run ~(seed : int) ~(count : int) : bool =
   cap_properties st ~count;
   host_services_property ();
   session_property ();
+  reader_state_property ();
 
   (* report *)
   let fs = List.rev !failures in

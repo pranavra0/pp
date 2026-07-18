@@ -20,6 +20,11 @@ type btok =
 
 type tok = { t : btok; tline : int; glued : bool }
 
+type state
+
+val create : ?source:string -> unit -> state
+val read : state -> string -> Types.expr list
+
 val is_name_char : char -> bool
 
 val lex : file:string -> string -> tok list
