@@ -30,7 +30,7 @@ Cluster forcing must protect these assets:
 
 - store integrity: the content address is the integrity check. pp names a
   result, a blob or a trace only by a hash of its own bytes (for a value
-  object, the hash of the decoded value — see the header of `store.ml`).
+  object, the hash of the decoded value — see `object_repository.ml`).
   Distribution must never let a hash-named artifact's bytes fail to match
   that name
 - capability authority: pp mints capabilities once, only at the root, and
@@ -148,8 +148,8 @@ rather than a true single-process, dual-store setup.
 - claim T1: pp re-hashes every synced artifact before use, and refuses any
   mismatch rather than silently accepting it. `Transport.ingest_object` and
   `ingest_blob` decode and hash the received bytes, then compare the result
-  against the claimed name, before ever calling `Store.store_object` or
-  `store_blob`. No other function in `transport.ml` writes a remote
+  against the claimed name, before ever calling the object or blob
+  repository. No other function in `transport.ml` writes a remote
   artifact into the local store. Traces have no self-describing content
   hash — their name is a node key, not a hash of their own bytes — so
   `ingest_trace_lines` instead rejects any line that fails to parse under
@@ -161,7 +161,7 @@ rather than a true single-process, dual-store setup.
   serving anything. `Token.verify` checks the MAC first, then the cluster
   id, then the expiry, and only then parses the capabilities, so a forged
   token never reaches the capability parser. `Transport.decide` calls
-  `Token.token_to_caps` before it ever touches `Store.hit`, so a rejected
+  `Token.token_to_caps` before it ever touches cache policy, so a rejected
   token never moves a single byte: `serve_hit`'s push logic sits only
   inside the branch for a granted hit, and is structurally unreachable
   from the denial branch. Tested: a flipped byte in the MAC and a token
@@ -171,7 +171,7 @@ rather than a true single-process, dual-store setup.
   transitive read closure isn't fully covered by the requesting token's
   capabilities, even when the bytes already sit on local disk.
   `Transport.decide` computes the authorized set from `token_to_caps` and
-  passes it to the unchanged `Store.hit` function, the same gate a local
+  passes it to `Cache_policy.lookup`, the same gate a local
   caller with narrow capabilities hits. A token covering an unrelated
   directory gets a miss for a key whose trace reads a cell outside that
   directory, while a broader token gets a hit for the identical key. This
@@ -179,7 +179,7 @@ rather than a true single-process, dual-store setup.
   the bytes happen to be present
 - claim T4: `pp why`, run over a synced trace, redacts according to the
   requester's own token or grant, matching what a purely local run redacts
-  (LAW 23c). Redaction is enforced entirely by `Store.hit`'s authorized
+  (LAW 23c). Redaction is enforced entirely by cache policy's authorized
   predicate at read time, independent of how the trace arrived. So a trace
   synced from a build with a broad token, once on a member's disk, redacts
   identically to a trace built locally there, provided that member's own
@@ -194,7 +194,7 @@ rather than a true single-process, dual-store setup.
   construction, not just by testing: a node that touches a sealed value
   already fails at the existing node boundary — a node may not return a
   sealed value, and `Codec.encode_value` returns nothing for one — so
-  there is nothing for `Store.hit` to find for such a key, and `serve_hit`
+  there is nothing for cache policy to find for such a key, and `serve_hit`
   can only ever answer with a miss. As defence in depth, `Transport.decide`
   and `LocalDir.push_object` both re-check `Codec.encode_value` before
   shipping anything, and hard-fail, naming the violation, rather than
@@ -217,7 +217,7 @@ rather than a true single-process, dual-store setup.
   byte-identical to the builder's own copy
 - claim T7: garbage collection of the store, running concurrently with a
   parallel build, causes no crash and no wrong result, and a subsequent
-  rebuild is byte-identical. Store garbage collection is a later part of
+  rebuild is byte-identical. Explicit store garbage collection is a later part of
   this feature, not implemented by what this document covers. This claim
   is listed here because the threat-model gate requires it, and it stays a
   live claim this document continues to bind once garbage collection

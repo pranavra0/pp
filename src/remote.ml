@@ -12,7 +12,7 @@
    Primitives.*_ref.
 
    THE CORE MOVE: a cluster member is a SEPARATE `pp` process with its own
-   $HOME (Store.store_root is a process-wide singleton — see transport.ml's
+   $HOME (Store_layout.root Store_layout.default is a process-wide singleton — see transport.ml's
    header). Rather than inventing a "force only key K" wire protocol
    (which would need a derivation/eval split the scheduler's process-pool
    design deliberately avoids elsewhere too), the member is simply handed the SAME top-level
@@ -47,7 +47,7 @@ let load_members () : (string * string) list =
   let path = members_path () in
   if not (Sys.file_exists path) then []
   else
-    String.split_on_char '\n' (Store.read_raw path)
+    String.split_on_char '\n' (Cell_repository.read_raw path)
     |> List.filter_map (fun line ->
          let line = String.trim line in
          if line = "" || line.[0] = '#' then None
@@ -61,7 +61,7 @@ let find_member_root (name : string) : string option =
 
 (* A member's $HOME is needed to spawn its `pp` subprocess (a distinct
    process environment, not merely a distinct transport target); derived by
-   stripping store.ml's own, exact, well-known suffix rather than guessed —
+   stripping Trace_repository's own, exact, well-known suffix rather than guessed —
    a members-file entry that doesn't follow the convention fails loudly
    (degrading that dispatch to local, per the caller) instead of spawning
    a subprocess against the wrong tree. *)
@@ -125,7 +125,7 @@ let parse_pin_probe_line (line : string) : (string * string) option =
 (* ---- Member side: pre-seed observation pins from the wire BEFORE anything
    runs — the soundness crux of remote placement ----
 
-   [read_file_cell]/[observe_cell] (store.ml) both consult [run_pins]
+   [read_file_cell]/[observe_cell] (Trace_repository) both consult [run_pins]
    FIRST, unconditionally, before ever touching disk for a `file:` cell —
    that check already exists and is untouched by this module. Populating
    [run_pins] here, before [run_files] ever executes a single expression,
@@ -165,7 +165,7 @@ let parse_pin_probe_line (line : string) : (string * string) option =
    this function's own signature). *)
 let preseed_pins_from_file session ~(pins_file : string) : unit =
   if Sys.file_exists pins_file then
-    String.split_on_char '\n' (Store.read_raw pins_file)
+    String.split_on_char '\n' (Cell_repository.read_raw pins_file)
     |> List.iter (fun line ->
          let line = String.trim line in
          if line <> "" then
@@ -182,7 +182,7 @@ let preseed_pins_from_file session ~(pins_file : string) : unit =
              match parse_pin_line line with
              | None -> failwith ("pp: --pin-file: unparseable pin line: " ^ line)
              | Some (cell, hash) ->
-                 (match Store.load_blob hash with
+                 (match Blob_repository.get Blob_repository.default hash with
                   | None ->
                       failwith (Printf.sprintf
                         "pp: --pin-file: pinned blob %s not found in this \
@@ -216,7 +216,7 @@ let preseed_pins_from_file session ~(pins_file : string) : unit =
    spine — never forces anything already-forced-by-Codec.decode_value) for
    "blob:" + exactly 64 lowercase-hex chars, the same shape blob-get's own
    prefix check already assumes. *)
-(* Factored out to src/blobref.ml (src/store.ml's GC mark-by-
+(* Factored out to src/blobref.ml (Cache_policy's GC mark-by-
    replay needs the identical scan and is compiled before this module) —
    [blob_refs_in] here is just a re-export so every existing call site in
    this file keeps working unchanged. *)
@@ -237,21 +237,21 @@ let blob_refs_in = Blobref.blob_refs_in
 let serve_assigned_keys host ~(token_text : string) ~(keys_file : string)
     ~(shared_root : string) ~(reply_file : string) : unit =
   let keys =
-    String.split_on_char '\n' (Store.read_raw keys_file)
+    String.split_on_char '\n' (Cell_repository.read_raw keys_file)
     |> List.filter (fun l -> String.trim l <> "")
   in
   let replies = List.map (fun key -> Transport.serve_hit host ~key ~token_text ~shared_root) keys in
   List.iter (fun reply ->
     match Transport.parse_reply_text reply with
     | Some (Transport.RHit { result_hash; _ }) ->
-        (match Store.load_object ~key:result_hash with
+        (match Object_repository.get Object_repository.default ~key:result_hash with
          | None -> ()
          | Some v ->
              List.iter (fun h -> try Transport.LocalDir.push_blob shared_root ~hash:h with _ -> ())
                (blob_refs_in v))
     | _ -> ())
     replies;
-  Store.atomic_write reply_file (String.concat "" replies)
+  Store_layout.atomic_replace reply_file (String.concat "" replies)
 
 (* ---- Dispatcher side ---- *)
 
@@ -269,7 +269,7 @@ let walk_files (path : string) (acc : (string * string) list ref) : unit =
   Fswalk.walk ~root:path ~cb:(fun ~rel:_ ~path visit ->
     match visit with
     | Fswalk.Entry { Unix.st_kind = Unix.S_REG; _ } ->
-        (try acc := (Cell.serialize (Observation.file path), Store.read_raw path) :: !acc
+        (try acc := (Cell.serialize (Observation.file path), Cell_repository.read_raw path) :: !acc
          with _ -> ())
     | _ -> ())
 
@@ -343,11 +343,11 @@ let ship_and_pull host invocation ~(member_home : string) (closed : Scheduler.jo
     let member_store_root = Filename.concat member_home store_suffix in
     let pins = pre_observe_granted_scope invocation in
     List.iter (fun (_, hash, content) ->
-      ignore (Store.store_blob content);
+      ignore (Blob_repository.put Blob_repository.default content);
       Transport.LocalDir.push_blob member_store_root ~hash)
       pins;
     let pins_file = Filename.concat scratch "pins" in
-    Store.atomic_write pins_file
+    Store_layout.atomic_replace pins_file
       (String.concat "" (List.map (fun (c, h, _) -> pin_line c h) pins));
     let secret = Cap_token.load_secret host and cluster_id = Cap_token.load_cluster_id host in
     let token_text =
@@ -355,9 +355,9 @@ let ship_and_pull host invocation ~(member_home : string) (closed : Scheduler.jo
         ~ttl_seconds:remote_ttl_seconds
     in
     let token_file = Filename.concat scratch "token" in
-    Store.atomic_write token_file token_text;
+    Store_layout.atomic_replace token_file token_text;
     let keys_file = Filename.concat scratch "keys" in
-    Store.atomic_write keys_file
+    Store_layout.atomic_replace keys_file
       (String.concat "" (List.map (fun j -> j.Scheduler.j_key ^ "\n") closed));
     (* Test-only synchronization seam: a real
        dispatcher-to-member gap is a NETWORK delay, which a single-machine
@@ -381,16 +381,16 @@ let ship_and_pull host invocation ~(member_home : string) (closed : Scheduler.jo
     let code = spawn_member ~exe ~argv ~env:(member_env member_home) ~log_file in
     (* Test-only, paired with PP_REMOTE_TEST_HOOK above: runs once the
        member has exited, before the dispatcher pulls back and re-checks
-       its OWN Store.hit against the CURRENT world. *)
+       its OWN Cache_policy.lookup Cache_policy.default against the CURRENT world. *)
     (match Sys.getenv_opt "PP_REMOTE_TEST_HOOK_AFTER" with
      | Some cmd when cmd <> "" -> ignore (Sys.command cmd)
      | _ -> ());
     if code <> 0 then
-      Store.why "remote: member subprocess for %s exited %d (see %s) — \
+      Cache_policy.diagnose Cache_policy.default "remote: member subprocess for %s exited %d (see %s) — \
                  degrading this batch to local compute"
         member_home code log_file
     else if Sys.file_exists reply_file then
-      String.split_on_char '\n' (Store.read_raw reply_file)
+      String.split_on_char '\n' (Cell_repository.read_raw reply_file)
       |> List.iter (fun line ->
            let line = String.trim line in
            if line <> "" then
@@ -402,7 +402,7 @@ let ship_and_pull host invocation ~(member_home : string) (closed : Scheduler.jo
                       result value names bytes serve_assigned_keys already
                       pushed to shared_root above — pull those too, same
                       re-hash-on-receive choke point as everything else. *)
-                   (match Store.load_object ~key:result_hash with
+                   (match Object_repository.get Object_repository.default ~key:result_hash with
                     | None -> ()
                     | Some v ->
                         List.iter (fun h ->
@@ -411,7 +411,7 @@ let ship_and_pull host invocation ~(member_home : string) (closed : Scheduler.jo
                           (blob_refs_in v))
                | Transport.RMiss _ | Transport.RDeny _ -> ()
              with e ->
-               Store.why "remote: recv-hit failed (%s) — that key stays a \
+               Cache_policy.diagnose Cache_policy.default "remote: recv-hit failed (%s) — that key stays a \
                           local miss and recomputes in-process"
                  (Printexc.to_string e)))
 
@@ -428,16 +428,16 @@ let dispatch_remote host invocation ~(member : string) (jobs : Scheduler.job lis
   try
     match find_member_root member with
     | None ->
-        Store.why "remote: unknown cluster member %s (see %s) — batch stays local"
+        Cache_policy.diagnose Cache_policy.default "remote: unknown cluster member %s (see %s) — batch stays local"
           member (members_path ())
     | Some root ->
         (match member_home_of_root root with
-         | Error msg -> Store.why "remote: %s — batch stays local" msg
+         | Error msg -> Cache_policy.diagnose Cache_policy.default "remote: %s — batch stays local" msg
          | Ok member_home ->
              let closed = List.filter (fun j -> Evaluator.is_data_closed j.Scheduler.j_thunk) jobs in
              if closed <> [] then ship_and_pull host invocation ~member_home closed)
   with e ->
-    Store.why "remote: dispatch to %s failed (%s) — batch stays local"
+    Cache_policy.diagnose Cache_policy.default "remote: dispatch to %s failed (%s) — batch stays local"
       member (Printexc.to_string e)
 
 let init host invocation : unit =

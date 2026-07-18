@@ -364,7 +364,7 @@ across `PUB`'s trace and, recursively, every child's. A hit is granted only
 if the caller's capabilities permit every cell in that closure.
 
 The tree-walker realises this: reads propagate to enclosing nodes,
-so the recorded reads are the transitive closure, and `Store.hit
+so the recorded reads are the transitive closure, and `Cache_policy.lookup
 ~authorized` refuses to serve a trace the caller cannot fully read (see
 `SPEC.md`, law 23b). A capability denial raises a distinct
 `Capability_error` and is not memoised (law 15). Three aspects are refined
@@ -496,7 +496,7 @@ two-store version, without an SSH-backed variant.
 Second, `pp gc`. Garbage collection is explicit, never automatic. Because
 traces do not record child keys — there is no on-disk node graph to walk
 — it marks live objects by replay: each recorded root re-runs as a
-`--gc-mark` subprocess, driving the same `Store.hit` path a live pass
+`--gc-mark` subprocess, driving the same cache-policy lookup path a live pass
 would, but skipping domain apply and fenced actions, which makes the
 replay read-only on the world by construction. Concurrency safety comes
 from a creation-time grace period plus a re-check of the roots manifest
@@ -535,7 +535,7 @@ boundary.
 
 Torn reads. The first observation of a cell ingests its bytes into the
 content-addressed store and pins the pair `(cell, store hash)`; nodes read
-only that pinned copy. `Store.read_file_cell` realises this one step
+only that pinned copy. `Cell_repository.read_file` realises this one step
 stronger than originally specified: the pin serves
 every tier, not just nodes, so one run is one world snapshot. This was
 needed because the in-memory content-addressed deduplication already
@@ -651,8 +651,8 @@ Plan caching: the key is `H("domain-plan", hash(diff-closure),
 hash(observed), hash(desired))`. Since `diff` is pure over exactly
 `(observed, desired)`, this key captures the whole identity of the call,
 so a store entry with an empty read set is sound — a hit means exactly
-"same key, same plan". `src/domains.ml` calls `Store.hit`, `store_object`
-and `store_trace` directly rather than wiring a synthetic `node` AST,
+"same key, same plan". `src/domains.ml` calls cache policy and the object and
+trace repositories directly rather than wiring a synthetic `node` AST,
 giving the same key and store slot for free; `pp why` reports `domain
 <name>: plan <key>: hit|miss`, exactly like a node.
 

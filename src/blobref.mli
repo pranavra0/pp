@@ -1,5 +1,5 @@
 (* pp blob refs — "blob:<sha256>" reference detection inside a pp VALUE.
-   Shared by remote.ml (dispatcher-side pull) and store.ml (GC live-set
+   Shared by remote.ml (dispatcher-side pull) and Trace_repository (GC live-set
    mark-by-replay). *)
 
 (* Scan a value's structure for "blob:<sha256>" string references. *)

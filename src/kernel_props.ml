@@ -934,7 +934,17 @@ let observation_boundary_property () =
   if Cell.parse "proc:legacy" <> Cell.Unknown "proc:legacy" then
     fail "observation:legacy-proc" "legacy proc cell did not conservatively miss";
   if Observation.env_hash None = Observation.env_hash (Some "absent") then
-    fail "observation:env-framing" "absence collided with a present value"
+    fail "observation:env-framing" "absence collided with a present value";
+  let trace = Trace_repository.{ outcome = Failed; result_hash = "r";
+    reads = [("file:/x", "h")] } in
+  let line = "(trace failed \"r\" ((\"file:/x\" . \"h\")))" in
+  if Trace_repository.to_line trace <> line
+     || Trace_repository.of_line line <> Some trace then
+    fail "repository:trace-bytes" "canonical trace bytes changed";
+  let a = Cache_policy.create () and b = Cache_policy.create () in
+  Cache_policy.enable_why a;
+  if not (Cache_policy.why_enabled a) || Cache_policy.why_enabled b then
+    fail "cache-policy:isolation" "diagnostic options leaked across handles"
 
 (* ============================================================= RUNNER ===== *)
 

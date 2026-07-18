@@ -4,7 +4,7 @@
 # tests/047-cluster-sync.sh.
 #
 # Two SIMULATED cluster members are two `pp` process invocations differing
-# only in $HOME (Store.store_root is a process-wide singleton — same CI
+# only in $HOME (the default repository layout is process-wide — the same CI
 # loopback shape tests/047 already uses); a "cluster member" (NODEB) is
 # addressed via ~/.pp/cluster/members on the dispatcher (NODEA), never
 # --grant. src/remote.ml is the implementation; internal seams
@@ -232,7 +232,7 @@ fi
 # before the member is spawned — mutates the SHARED file to "V2", so if
 # the member observed its own disk instead of the pin it would read "V2".
 # HOOK_AFTER runs once the member has exited (reverting to "V1") so the
-# dispatcher's OWN post-pull Store.hit re-validation (against the CURRENT
+# dispatcher's own post-pull cache re-validation (against the current
 # world, same as any local hit) also agrees, proving a full clean hit on
 # the DISPATCHER's original bytes, not a fluke of timing.
 # ===========================================================================

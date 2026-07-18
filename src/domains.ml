@@ -95,13 +95,13 @@ let plan_summary (plan : value) : (string * string) list =
    diff runs under EMPTY caps (purity), so every world-read it could
    possibly make is already accounted for by observed/desired — the key
    captures the WHOLE identity, so a TRACE-LESS store entry (reads = [])
-   is sound: Store.hit's classify treats an empty reads list as vacuously
+   is sound: cache policy treats an empty reads list as vacuously
    `Usable forever, so a hit here means exactly "same key ⇒ same plan",
    which is exactly what a pure function's cache should mean. Wiring a
    synthetic `(node ...)` AST here (the alternative of routing this through
    the ordinary node-caching machinery)
    would need a fabricated thunk/env solely to get a key and a store slot
-   this direct Store.hit/store_object/store_trace path already gives for
+   direct cache-policy and repository calls already provide
    free, with no AST to keep in sync with a node body that doesn't exist —
    the direct route is documented here as the deliberate, simpler choice. *)
 let plan_cache_key ~(diff_closure : value) ~(observed : value) ~(desired : value) : string =
@@ -113,20 +113,20 @@ let plan_cache_key ~(diff_closure : value) ~(observed : value) ~(desired : value
 let compute_plan ~(domain_name : string) ~(diff_closure : value)
     ~(observed : value) ~(desired : value) : value =
   let key = plan_cache_key ~diff_closure ~observed ~desired in
-  match Store.hit ~key ~authorized:(fun _ -> true) with
-  | Store.HitOk v ->
-      Store.why "domain %s: plan %s: hit (cached, unchanged observed/desired)"
-        domain_name (Store.short_key key);
+  match Cache_policy.lookup Cache_policy.default ~key ~authorized:(fun _ -> true) with
+  | Cache_policy.HitOk v ->
+      Cache_policy.diagnose Cache_policy.default "domain %s: plan %s: hit (cached, unchanged observed/desired)"
+        domain_name (Cache_policy.short_key key);
       v
-  | Store.HitFailed _ | Store.Miss ->
-      Store.why "domain %s: plan %s: miss — running diff" domain_name (Store.short_key key);
+  | Cache_policy.HitFailed _ | Cache_policy.Miss ->
+      Cache_policy.diagnose Cache_policy.default "domain %s: plan %s: miss — running diff" domain_name (Cache_policy.short_key key);
       let plan =
         try Primitives.call_with_args diff_closure [observed; desired]
         with effect Dynamic_scope.Get_capabilities, k -> Effect.Deep.continue k []
       in
       let result_hash = Identity.hash_value plan in
-      (try Store.store_object ~key:result_hash ~value:plan with _ -> ());
-      (try Store.store_trace ~key ~outcome:Store.Ok ~result_hash ~reads:[] with _ -> ());
+      (try Object_repository.put Object_repository.default ~key:result_hash ~value:plan with _ -> ());
+      (try Trace_repository.put Trace_repository.default ~key ~outcome:Trace_repository.Ok ~result_hash ~reads:[] with _ -> ());
       plan
 
 (* ---- Stratification (LAW 30 full form) ----
@@ -238,7 +238,7 @@ let run_domain ~(name : string) ~(entry : Session.domain_entry) ~(desired : valu
 let record_epoch invocation (forced : value) : unit =
   try
     let hash = Identity.hash_value forced in
-    (try Store.store_object ~key:hash ~value:forced with _ -> ());
+    (try Object_repository.put Object_repository.default ~key:hash ~value:forced with _ -> ());
     Journal.append (Journal.Epoch { hash });
     Gcroots.record ~keep:(Invocation.gc_keep_epochs invocation)
       { Gcroots.gr_hash = hash;

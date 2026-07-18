@@ -42,8 +42,8 @@
 #     epoch) replays and sweeps correctly — the one Gcroots field
 #     (gr_desired_object) no other test exercises.
 #
-# Two SIMULATED machines, differing only in $HOME (Store.store_root is a
-# process-wide singleton — see src/transport.ml's header).
+# Two SIMULATED machines, differing only in $HOME (the default repository
+# layout is process-wide — see src/transport.ml's header).
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 NODEA="$TMP/nodeA"; NODEB="$TMP/nodeB"

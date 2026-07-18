@@ -721,7 +721,7 @@ through free variables, so the compile re-runs but the link hits
 (`tests/016`). Not implemented: cutoff for a node inline-nested in its
 dependent's body, where the parent's trace subsumes the child's reads, so the
 parent re-runs regardless. The reverse-edge dirty-propagation graph now
-exists and is used by push-mode `stabilize` (`Store.build_reverse_index`,
+exists and is used by push-mode `stabilize` (`Store_index.reverse`,
 `Stabilize.reset_dirty`; `pp --watch --stabilize`; `tests/032`); pull-mode
 re-verification still walks from the root when `--stabilize` is not used.
 Glob and toolchain-closure cells are not yet recorded.
@@ -841,7 +841,7 @@ rest lexically, so a write-target's cell id is stable before and after the
 file is created (`tests/036`). Unicode normalisation (NFC) is not
 implemented — a documented residual gap that needs a new dependency and is
 orthogonal to the realpath fix. The transitive-closure requirement holds : a hit is served only if the caller's capabilities cover every
-cell in the stored trace's read closure (`Store.hit ~authorized`), and
+cell in the stored trace's read closure (`Cache_policy.lookup ~authorized`), and
 because reads propagate to enclosing nodes the closure is transitive — a
 narrow caller cannot launder a broad read through a cached aggregator
 (`tests/013` tree-walker, `tests/014`). A capability denial raises the
@@ -1102,7 +1102,7 @@ changed, since the plan cache turns a no-op pass into a cache hit.
 
 Push stabilize: `pp --watch --stabilize prog.pp` uses the reverse-edge index
 from stored traces to reset only dirty thunks, so clean nodes skip
-`Store.hit` entirely; the test `tests/032` confirms the same
+repository lookup entirely; the test `tests/032` confirms the same
 re-evaluation patterns to pull mode on the engine.
 
 The process domain: `pp --supervise prog.pp` auto-loads
@@ -1302,7 +1302,7 @@ same kind of ambient identifier this law already uses for
 `--grant`, so the negative half of this law stays intact. It hands the
 unchanged `Domains.run_all` (LAW 30) only that host's slice; a member is
 simply `pp --watch [--supervise] --member-name <n>` on its own slice, the
-local supervisor's existing per-machine story, verbatim. Store garbage
+local supervisor's existing per-machine story, verbatim. Explicit store garbage
 collection (`pp gc`, explicit, never automatic) is orthogonal to placement:
 it never runs during a scheduled force, only via its own command, and is
 documented alongside LAW 30.
@@ -1345,7 +1345,7 @@ redundancy only — LAW 37 nodes are deterministic, so racing identical
 `(key, run)` jobs is sound, while heterogeneous racing of different
 computations stays out of scope until the declared-nondeterminism cells of
 LAW 37/38 exist. The first success wins, losers are killed
-(`SIGTERM` then `SIGKILL`), and the parent re-enters `Store.hit` exactly as
+(`SIGTERM` then `SIGKILL`), and the parent re-enters `Cache_policy.lookup` exactly as
 the batch path does. Cluster and distributed racing is a later milestone,
 gated on a threat model.
 

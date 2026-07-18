@@ -2,7 +2,7 @@
 
    A cell is one observable unit of the world a node can read; a trace records
    (cell, observed-hash) pairs and a hit re-observes them (SPEC LAW 21). Cells
-   are persisted as quoted strings inside trace lines (store.ml's canonical
+   are persisted as quoted strings inside trace lines (Trace_repository's canonical
    text format), so [serialize]/[parse] round-trip EXACTLY — the
    on-disk format is frozen; this module only replaces scattered
    "file:" ^ path concatenations and prefix-sniffing cascades with one

@@ -185,7 +185,7 @@ let record_depfile_cells (deps : string list) : unit =
     if Sys.file_exists dep then begin
       if List.exists (fun cap -> Capability.check_fs_read cap (World_path.canonical dep))
            (Effect.perform Dynamic_scope.Get_capabilities)
-      then ignore (Store.read_file_cell dep)
+      then ignore (Cell_repository.read_file dep)
       else
         match Observation.hash_file dep with
         | Some h -> Observation.record (Observation.tool dep) h
@@ -252,7 +252,7 @@ let write_file_effect ~(has_cap : string -> bool) (path : string)
            (* pp's own write supersedes this run's CAS-ingest pin of the
               cell — later node reads must see the new content, not the
               pre-write pin. *)
-           Store.unpin_file path;
+           Cell_repository.unpin_file path;
            VNil
          with Sys_error msg -> failwith ("write-file: " ^ msg))
       end
@@ -284,7 +284,7 @@ let sandbox_read (path : string) : string option =
        resolves to plain fs behavior: the deployment that also handed out an
        fs grant over the same path is saying "not secret HERE".
      - covered by CapSecret and NOT by CapFilesystem → VSealed, read via
-       Store.read_sealed_cell (bytes pinned in the session,
+       Cell_repository.read_sealed (bytes pinned in the session,
        in-memory only — store_blob/the CAS is never called for this path).
      `read-file` each keep their own message text via [cap_err]). *)
 let read_dispatch ~(tag : string) ~(cap_err : string -> string) (path : string) : value =
@@ -296,7 +296,7 @@ let read_dispatch ~(tag : string) ~(cap_err : string -> string) (path : string) 
           (Effect.perform Dynamic_scope.Get_capabilities)
       in
       if fs_ok then
-        (try VString (Store.read_file_cell path)
+        (try VString (Cell_repository.read_file path)
          with Sys_error msg -> failwith (tag ^ ": " ^ msg))
       else
         let secret_ok =
@@ -304,7 +304,7 @@ let read_dispatch ~(tag : string) ~(cap_err : string -> string) (path : string) 
             (Effect.perform Dynamic_scope.Get_capabilities)
         in
         if secret_ok then
-          (try VSealed (Store.read_sealed_cell path)
+          (try VSealed (Cell_repository.read_sealed path)
            with Sys_error msg -> failwith (tag ^ ": " ^ msg))
         else
           raise (Capability_error (cap_err path))

@@ -9,12 +9,12 @@
 
 (* Quote a string for the codec grammar: backslash, the quote char, and
    bytes < 0x20 / 0x7f escape as xHH. Also reused by cap_token.ml and
-   store.ml's trace-line codec. *)
+   Trace_repository's line codec. *)
 val quote_string : string -> string
 
 (* Parse a quoted string starting at [s.[start]] = '"'. Returns the
    decoded content and the index just past the closing quote, or [None]
-   on malformed input. Also reused by store.ml's trace-line codec. *)
+   on malformed input. Also reused by Trace_repository's line codec. *)
 val parse_quoted_string : string -> int -> (string * int) option
 
 (* Bit-exact float encoding via %h, with nan/inf/-inf as fixed tokens. *)

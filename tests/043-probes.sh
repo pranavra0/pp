@@ -17,8 +17,7 @@
 # observe-fn fresh, and the node's stored trace is re-verified against
 # whatever the counter says NOW. Section (6) below additionally proves the
 # SAME mechanism live under one long-running `pp --watch` process: probe
-# reads are ordinary cell observations (session observations/Store.
-# observe_cell), so the existing generic watch-loop polling picks up a
+# reads are ordinary session observations, so generic watch-loop polling picks up a
 # changed probe cell with NO special-cased wiring.
 set -uo pipefail
 PP=${PP:-bin/pp}

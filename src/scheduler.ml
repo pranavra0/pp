@@ -10,7 +10,7 @@
    code path. The child exits 0 on success / 1 on error; the failing trace
    was already persisted by run_node_body itself (LAW 28). The parent NEVER
    reads a value from a child — it reaps and falls through to the ordinary
-   [Store.hit]: the child's trace+object make it a hit, a dead child makes
+   [Cache_policy.lookup Cache_policy.default]: the child's trace+object make it a hit, a dead child makes
    it a miss and the parent recomputes in-process. Worker death therefore
    degrades to "computed serially," never a wrong answer, never a hang.
 

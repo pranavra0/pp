@@ -99,9 +99,10 @@ let materialize_file (path : string) (content : string) (executable : bool) : un
   (try output_string oc content
    with exn -> close_out oc; (try Sys.remove tmp with _ -> ()); raise exn);
   close_out oc;
+  (* Atomic replacement of requested world state, not repository persistence. *)
   Unix.rename tmp path;
   if executable then (try Unix.chmod path 0o755 with _ -> ());
-  Store.unpin_file path
+  Cell_repository.unpin_file path
 
 
 let rec prune_empty_dirs (dir : string) : unit =
@@ -118,7 +119,7 @@ let remove_file (path : string) : unit =
   if not (has_fs_write path) then
     raise (Capability_error ("remove-file: capability error: no write access for " ^ path));
   (try Sys.remove path with _ -> ());
-  Store.unpin_file path;
+  Cell_repository.unpin_file path;
   prune_empty_dirs (Filename.dirname path)
 
 
@@ -146,7 +147,7 @@ let require_domain_context (who : string) : Session.domain_entry * string =
                     (who ^ ": capability error: no authority for domain " ^ name)))
 
 let domain_state_root (domain_name : string) : string =
-  Filename.concat Store.store_root (Filename.concat "domain-state" domain_name)
+  Filename.concat (Store_layout.root Store_layout.default) (Filename.concat "domain-state" domain_name)
 
 let state_key_file (domain_name : string) (key : string) : string =
   Filename.concat (domain_state_root domain_name) (Hasher.hash_string key)
@@ -172,10 +173,10 @@ let domain_state_put (key : string) (v : value) : unit =
   match v with
   | VNil -> if Sys.file_exists path then (try Sys.remove path with _ -> ())
   | _ ->
-      Store.ensure_dir dir;
+      Store_layout.ensure_dir dir;
       let forced = Force_deep.force_deep_plain ~force v in
       (match Codec.encode_value forced with
-       | Some content -> Store.atomic_write path content
+       | Some content -> Store_layout.atomic_replace path content
        | None -> failwith "domain-state-put: value is not serializable data")
 
 (* ---- proc-spawn / proc-alive? / proc-stop / proc-reap ----
@@ -235,7 +236,7 @@ let env_array spec_env =
 
 let domain_io_dir () : string =
   let name = match Effect.perform Dynamic_scope.Get_domain with Some n -> n | None -> "unknown" in
-  Filename.concat Store.store_root (Filename.concat "domain-state" (name ^ "-io"))
+  Filename.concat (Store_layout.root Store_layout.default) (Filename.concat "domain-state" (name ^ "-io"))
 
 let out_file name = Filename.concat (domain_io_dir ()) ("svc-" ^ Hasher.hash_string name ^ ".out")
 let err_file name = Filename.concat (domain_io_dir ()) ("svc-" ^ Hasher.hash_string name ^ ".err")
@@ -259,7 +260,7 @@ let proc_spawn (spec : value) : value =
   in
   let spec_hash = Identity.hash_value (Force_deep.force_deep_plain ~force spec) in
   Journal.append (Journal.ProcStartIntent { name; spec_hash });
-  Store.ensure_dir (domain_io_dir ());
+  Store_layout.ensure_dir (domain_io_dir ());
   let argv = resolved :: args in
   let envp = env_array env in
   let out_f = out_file name in

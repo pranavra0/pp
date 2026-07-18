@@ -9,5 +9,5 @@ val unbound_fv_hash : name:string -> string
 val check_type : Core_model.value -> Core_model.expr -> (string * int) option -> unit
 val enforce_type : Core_model.thunk -> Core_model.value -> unit
 val replay_node_reads : Core_model.thunk -> (Core_model.thunk -> string) -> unit
-val serve_hit : t:Core_model.thunk -> Store.hit_result -> Core_model.value option
+val serve_hit : t:Core_model.thunk -> Cache_policy.result -> Core_model.value option
 val run_node_body : key:string -> run:(unit -> Core_model.value) -> Core_model.thunk -> Core_model.value

@@ -14,13 +14,13 @@
 
    One line per root, a plain Codec-encoded (Core_model.value) VMap — reusing
    the store's own canonical text codec rather than inventing a third
-   bespoke line grammar (store.ml's trace lines and token.ml's token line
+   bespoke line grammar (Trace_repository's trace lines and token.ml's token line
    already are two; this is data all the way down, so Codec fits directly,
    no hand-rolled parser needed). *)
 
 open Core_model
 
-let roots_path () : string = Filename.concat Store.store_root "gc-roots"
+let roots_path () : string = Filename.concat (Store_layout.root Store_layout.default) "gc-roots"
 
 type root = {
   gr_hash : string;
@@ -88,7 +88,7 @@ let read_all () : root list =
   let path = roots_path () in
   if not (Sys.file_exists path) then []
   else
-    String.split_on_char '\n' (Store.read_raw path)
+    String.split_on_char '\n' (Cell_repository.read_raw path)
     |> List.filter (fun l -> l <> "")
     |> List.filter_map (fun line ->
          match Codec.decode_value line with
@@ -99,11 +99,11 @@ let read_all () : root list =
    first, so the tail is the most recent) — GC's own retention policy, NOT
    an audit trail (unlike journal.ml's Epoch, which never rotates). *)
 let record ~(keep : int) (r : root) : unit =
-  Store.ensure_dir Store.store_root;
+  Store_layout.ensure_dir (Store_layout.root Store_layout.default);
   let existing =
     let path = roots_path () in
     if Sys.file_exists path then
-      String.split_on_char '\n' (Store.read_raw path) |> List.filter (fun l -> l <> "")
+      String.split_on_char '\n' (Cell_repository.read_raw path) |> List.filter (fun l -> l <> "")
     else []
   in
   match Codec.encode_value (root_to_value r) with
@@ -115,4 +115,4 @@ let record ~(keep : int) (r : root) : unit =
           List.filteri (fun i _ -> i >= n - keep) updated
         else updated
       in
-      Store.atomic_write (roots_path ()) (String.concat "\n" kept ^ "\n")
+      Store_layout.atomic_replace (roots_path ()) (String.concat "\n" kept ^ "\n")

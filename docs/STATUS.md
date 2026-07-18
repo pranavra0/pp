@@ -379,8 +379,8 @@ backends. Pinned by `tests/036-canonical-cells.sh`.
 
 Cell naming, observation, record/replay, and hit authorization now meet at the
 exhaustive `Observation` boundary. Probe and domain registries are owned by the
-session and are consulted directly; Store no longer calls observers installed
-from `main.ml`. The unused `Proc` cell constructor and observer hook are gone;
+session and are consulted directly. The unused `Proc` cell constructor and
+observer hook are gone;
 legacy `proc:` trace ids remain parseable as unknown cells and force a safe
 miss.
 

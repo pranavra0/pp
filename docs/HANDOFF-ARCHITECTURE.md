@@ -48,7 +48,8 @@ Every item below is a small migration, not a theme. Before deleting an item:
 3. Run the item's focused tests and `dune build`.
 4. Run `dune runtest` for changes crossing evaluator, runtime, store, process,
    scheduler, or command boundaries.
-5. After touching `evaluator.ml`, `types.ml`, or `store.ml`, also run:
+5. After touching `evaluator.ml`, `core_model.ml`, or durable repository code,
+   also run:
 
    ```sh
    dune exec ./tools/fuzz.exe -- --grammar full --count 2000
@@ -171,20 +172,13 @@ two orchestration functions.
 
 ## Current risks confirmed on `master`
 
-- Reset behavior is distributed among `main.ml`, `evaluator.ml`,
-  `macro.ml`, `primitives.ml`, `repl.ml`, `store.ml`, `domains.ml`, and
-  `fenced.ml`.
-- `types.ml` is a dependency root that also implements hashing, free-variable
-  analysis, quotation, printing, type checks, and pattern matching.
-- `evaluator.ml` mixes language semantics, node identity, store policy, loading,
-  capability gates, and lifecycle wiring.
-- `store.ml` mixes durable repositories, cell observation, hit policy,
-  diagnostics, graph queries, GC marking, and CLI mode refs.
+- `evaluator.ml` still mixes language semantics, loading, capability gates, and
+  lifecycle wiring.
 - `primitives.ml` combines the builtin catalog with scheduler batching, probes,
   domains, and macro evaluation.
 - `main.ml` owns option parsing, wiring, commands, watch loops, reconciliation,
   and cluster behavior.
-- REPL, lint, scheduler, fenced-action, store-mode, and several counter states
+- REPL, lint, scheduler, fenced-action, and several counter states
   remain process-global.
 - Current documentation contains duplicated entries, incomplete prose, and
   implementation claims that have drifted.
@@ -221,35 +215,6 @@ clears and assignments.
 executable characterization.
 
 **Non-goal:** change those decisions.
-
-### 12. Split durable storage from cache policy
-
-**Purpose:** turn `store.ml` into small repositories with one auditable durable
-write layer.
-
-**Work:**
-
-- Extract store layout/version initialization and atomic file replacement.
-- Extract immutable object/blob repositories.
-- Extract the trace repository, including locking and canonical encoding.
-- Move hit selection, trace verification, authorization gating, replay, and
-  diagnostics into cache policy above the repositories.
-- Move reverse-index/graph queries and GC traversal into read-only consumers of
-  repository interfaces.
-- Replace public directory strings, mode refs, and mutable GC tables with
-  explicit handles/options.
-- Preserve the single atomic-write choke point and crash-injection enumeration.
-
-**Likely files:** `src/store.*`, `src/store_gc.ml`, `src/gcroots.ml`,
-`src/stabilize.ml`, `src/transport.ml`, `src/node.ml`, new cache modules.
-
-**Verify:** portable-store golden fixtures, crash injection, CAS ingest, trace,
-why/check/no-cache, stabilize, transport, GC, suite and full fuzzer.
-
-**Exit:** repositories know durability but not evaluation; cache policy knows
-traces but not path layout; diagnostics do not alter repository globals.
-
-**Non-goal:** change the on-disk format during this extraction.
 
 ### 13. Make node identity and rebuilding a first-class subsystem
 
@@ -610,4 +575,5 @@ not only expected stdout.
 
 ## Immediate next action
 
-Execute roadmap item 12 only: split durable storage from cache policy.
+Execute roadmap item 13 only: make node identity and rebuilding a first-class
+subsystem.

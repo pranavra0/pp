@@ -597,7 +597,7 @@ let register_io () =
   register "blob" (fun args ->
     let args = force_args args in
     match args with
-    | [VString s] -> VString ("blob:" ^ Store.store_blob s)
+    | [VString s] -> VString ("blob:" ^ Blob_repository.put Blob_repository.default s)
     | _ -> failwith "blob expects a string");
 
   (* (blob-get REF) — the inverse: "blob:<sha256>" → the stored bytes.
@@ -611,7 +611,7 @@ let register_io () =
         let plen = String.length prefix in
         if String.length r > plen && String.sub r 0 plen = prefix then
           let h = String.sub r plen (String.length r - plen) in
-          (match Store.load_blob h with
+          (match Blob_repository.get Blob_repository.default h with
            | Some bytes -> VString bytes
            | None -> failwith ("blob-get: blob missing from store: " ^ h))
         else failwith ("blob-get expects a blob:<hash> reference, got " ^ r)

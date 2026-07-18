@@ -74,22 +74,22 @@ let enforce_type (t : thunk) (result : value) : unit =
 
 let replay_node_reads (t : thunk) (key_of : thunk -> string) : unit =
   if t.thunk_persist && Effect.perform Dynamic_scope.In_node then
-    let traces = Store.load_traces ~key:(key_of t) in
-    List.iter (fun tr -> Observation.replay tr.Store.tr_reads) traces
+    let traces = Trace_repository.load Trace_repository.default ~key:(key_of t) in
+    List.iter (fun tr -> Observation.replay tr.Trace_repository.reads) traces
 
 
 (* ---- Serve hit / run node body (the rebuilder) ------------------------ *)
 
-let serve_hit ~(t : thunk) (h : Store.hit_result) : value option =
+let serve_hit ~(t : thunk) (h : Cache_policy.result) : value option =
   match h with
-  | Store.HitOk cached ->
+  | Cache_policy.HitOk cached ->
       t.thunk_status <- Evaluated cached;
       Some cached
-  | Store.HitFailed errval ->
+  | Cache_policy.HitFailed errval ->
       (match errval with
        | VString msg -> failwith msg
        | _ -> failwith "node failed (cached)")
-  | Store.Miss -> None
+  | Cache_policy.Miss -> None
 
 let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
   t.thunk_status <- Evaluating;
@@ -114,8 +114,8 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
         | (Failure msg | Pp_error { kind = Eval; msg; _ }) as e ->
             let errval = VString msg in
             let err_hash = Identity.hash_value errval in
-            (try Store.store_object ~key:err_hash ~value:errval with _ -> ());
-            (try Store.store_trace ~key ~outcome:Store.Failed ~result_hash:err_hash
+            (try Object_repository.put Object_repository.default ~key:err_hash ~value:errval with _ -> ());
+            (try Trace_repository.put Trace_repository.default ~key ~outcome:Trace_repository.Failed ~result_hash:err_hash
                    ~reads:(List.rev !frame) with _ -> ());
             t.thunk_status <- Unevaluated;
             raise e
@@ -133,10 +133,10 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
       enforce_type t result;
       t.thunk_status <- Evaluated result;
       let result_hash = Identity.hash_value result in
-      (try Store.store_object ~key:result_hash ~value:result with _ -> ());
-      (try Store.store_trace ~key ~outcome:Store.Ok ~result_hash
+      (try Object_repository.put Object_repository.default ~key:result_hash ~value:result with _ -> ());
+      (try Trace_repository.put Trace_repository.default ~key ~outcome:Trace_repository.Ok ~result_hash
              ~reads:(List.rev !frame) with _ -> ());
-      if !Store.check_mode then begin
+      if Cache_policy.check_enabled Cache_policy.default then begin
         let frame2 = ref [] in
         let r2 =
           try run ()
@@ -150,10 +150,10 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
           | e -> raise e
         in
         if Identity.hash_value r2 <> result_hash then begin
-          incr Store.volatile_count;
+          Cache_policy.note_volatile Cache_policy.default;
           Printf.eprintf
             "[check] volatile node %s: an identical run produced a different result hash\n%!"
-            (Store.short_key key)
+            (Cache_policy.short_key key)
         end
       end;
       result)

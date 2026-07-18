@@ -109,7 +109,7 @@ let of_line (line : string) : entry option =
 
 (* ---- The log file ---- *)
 
-let journal_dir = Filename.concat Store.store_root "journal"
+let journal_dir = Filename.concat (Store_layout.root Store_layout.default) "journal"
 let log_path () = Filename.concat journal_dir "log"
 
 (* Concurrent-writer safety: one line is one Unix.write_substring on an O_APPEND fd.
@@ -123,7 +123,7 @@ let log_path () = Filename.concat journal_dir "log"
    "seek to end + write" is one atomic kernel operation), keeps every journal
    line whole regardless of length or how many processes are appending. *)
 let append (e : entry) : unit =
-  Store.ensure_dir journal_dir;
+  Store_layout.ensure_dir journal_dir;
   let line = to_line e ^ "\n" in
   let fd = Unix.openfile (log_path ())
              [Unix.O_WRONLY; Unix.O_APPEND; Unix.O_CREAT] 0o644 in

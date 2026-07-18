@@ -65,7 +65,7 @@ brace-to-s-expression mapping.
   (`tests/016`). Cutoff for
   inline-nested nodes, and push-mode dirty-propagation over the
   reverse-edge graph, are still planned.
-  (`objects/`, `traces/`), `store.ml`, used by the engine for `node { e }`
+  (`objects/`, `traces/`), accessed through repositories and cache policy, used by the engine for `node { e }`
   thunks.
 
 ### The outside world

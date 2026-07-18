@@ -10,8 +10,8 @@
    flags — Gcroots' whole reason for existing) as a `--gc-mark` subprocess,
    which runs the program (deriving its desired-state value exactly as a
    live pass would) but SKIPS domain apply/fenced-drain entirely (main.ml's
-   --gc-mark branch) — every `Store.hit` verified along the way marks its
-   trace/object/blob(s) live (store.ml's [gc_marking]/[mark_live]), so the
+   --gc-mark branch) — every `Cache_policy.lookup Cache_policy.default` verified along the way marks its
+   trace/object/blob(s) live (Cache_policy.s GC lifecycle), so the
    replay only ever touches the store's read path, never performs a real
    write, subprocess exec, or fenced action UNLESS the world has genuinely
    drifted since that epoch (a documented residual: a drifted root replays
@@ -72,7 +72,7 @@ let run_replay (exe : string) (r : Gcroots.root) : string list option =
   let ok = match status with Unix.WEXITED 0 -> true | _ -> false in
   if ok && Sys.file_exists mark_out then begin
     let lines =
-      String.split_on_char '\n' (Store.read_raw mark_out)
+      String.split_on_char '\n' (Cell_repository.read_raw mark_out)
       |> List.filter (fun l -> l <> "")
     in
     (try Sys.remove mark_out with _ -> ());
@@ -89,24 +89,17 @@ let run_replay (exe : string) (r : Gcroots.root) : string list option =
 
 let manifest_snapshot () : string option =
   let path = Gcroots.roots_path () in
-  if Sys.file_exists path then Some (Store.read_raw path) else None
+  if Sys.file_exists path then Some (Cell_repository.read_raw path) else None
 
-let sweep_dir (dir : string) (prefix : string) (live : (string, unit) Hashtbl.t)
+let sweep kind (prefix : string) (live : (string, unit) Hashtbl.t)
     (grace_seconds : float) (snapshot : string option) (aborted : bool ref)
     : int * int =
-  if not (Sys.file_exists dir) then (0, 0)
-  else
-    let names = Array.to_list (Sys.readdir dir) in
-    let now = Unix.gettimeofday () in
-    List.fold_left (fun (kept, deleted) name ->
-      let path = Filename.concat dir name in
-      if Hashtbl.mem live (prefix ^ name) then (kept + 1, deleted)
+  let now = Unix.gettimeofday () in
+  List.fold_left (fun (kept, deleted) entry ->
+      if Hashtbl.mem live (prefix ^ entry.Repository_inventory.id) then (kept + 1, deleted)
       else begin
-        let young =
-          match Unix.stat path with
-          | st -> now -. st.Unix.st_mtime < grace_seconds
-          | exception _ -> true  (* vanished mid-scan — treat as "don't touch" *)
-        in
+        let young = match entry.Repository_inventory.modified with
+          | Some modified -> now -. modified < grace_seconds | None -> true in
         if young then (kept + 1, deleted)
         else if !aborted then (kept + 1, deleted)
         else if manifest_snapshot () <> snapshot then begin
@@ -117,11 +110,11 @@ let sweep_dir (dir : string) (prefix : string) (live : (string, unit) Hashtbl.t)
              re-run `pp gc` to continue\n%!";
           (kept + 1, deleted)
         end else begin
-          (try Sys.remove path with _ -> ());
+          Repository_inventory.remove kind entry.Repository_inventory.id;
           (kept, deleted + 1)
         end
       end)
-      (0, 0) names
+      (0, 0) (Repository_inventory.entries kind)
 
 let run ~(grace_seconds : float) : unit =
   let roots = Gcroots.read_all () in
@@ -147,9 +140,9 @@ let run ~(grace_seconds : float) : unit =
     end;
     let snapshot = manifest_snapshot () in
     let aborted = ref false in
-    let (ko, do_) = sweep_dir Store.objects_dir "object:" live grace_seconds snapshot aborted in
-    let (kt, dt) = sweep_dir Store.traces_dir "trace:" live grace_seconds snapshot aborted in
-    let (kb, db) = sweep_dir Store.blobs_dir "blob:" live grace_seconds snapshot aborted in
+    let (ko, do_) = sweep Repository_inventory.Object "object:" live grace_seconds snapshot aborted in
+    let (kt, dt) = sweep Repository_inventory.Trace "trace:" live grace_seconds snapshot aborted in
+    let (kb, db) = sweep Repository_inventory.Blob "blob:" live grace_seconds snapshot aborted in
     Printf.printf
       "pp gc: objects kept=%d deleted=%d, traces kept=%d deleted=%d, blobs kept=%d deleted=%d\n"
       ko do_ kt dt kb db

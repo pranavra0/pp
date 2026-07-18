@@ -104,7 +104,7 @@ let verify_pin ~(dir : string) ~(pin : string) : (unit, string) result =
    Never consulted to decide a pin: the source text is the only authority. *)
 let log_resolution ~(uri : string) ~(pin : string) : unit =
   try
-    Store.ensure_dir (islands_root ());
+    Store_layout.ensure_dir (islands_root ());
     let oc = open_out_gen [Open_append; Open_creat] 0o644
                (Filename.concat (islands_root ()) "index") in
     Printf.fprintf oc "%s\t%s\t%.0f\n" uri pin (Unix.time ());
@@ -126,7 +126,7 @@ let rm_rf (path : string) : unit =
 let rec copy_tree (src : string) (dst : string) : unit =
   match (Unix.lstat src).Unix.st_kind with
   | Unix.S_DIR ->
-      Store.ensure_dir dst;
+      Store_layout.ensure_dir dst;
       let names = Sys.readdir src in
       Array.sort compare names;
       Array.iter (fun n ->
@@ -157,7 +157,7 @@ let materialize ~(uri : string) ~(src_dir : string) : string =
   let pin = canonical_tree_hash src_dir in
   let dst = cached_tree pin in
   if not (Sys.file_exists dst) then begin
-    Store.ensure_dir (cache_src_root ());
+    Store_layout.ensure_dir (cache_src_root ());
     let tmp = dst ^ ".tmp." ^ string_of_int (Unix.getpid ()) in
     rm_rf tmp;
     (try copy_tree src_dir tmp with e -> rm_rf tmp; raise e);
@@ -168,6 +168,7 @@ let materialize ~(uri : string) ~(src_dir : string) : string =
          failwith (Printf.sprintf
            "island: source for %s changed while copying (%s vs %s)"
            uri (short pin) (short h)));
+    (* Publish a verified staged island tree; this cache is outside the store. *)
     (try Unix.rename tmp dst
      with _ -> rm_rf tmp (* lost a benign race: same content already there *))
   end;
@@ -248,12 +249,12 @@ let resolve ~(uri : string) ~(pin : string option) : string =
                u.raw (short p) (short h)));
         (* Drift visibility (`pp why`): the pin still governs, but tell the
            user when the local source has moved past it. *)
-        (if !Store.why_mode && u.scheme = SFile
+        (if Cache_policy.why_enabled Cache_policy.default && u.scheme = SFile
             && Sys.file_exists u.locator && Sys.is_directory u.locator then
            match verify_pin ~dir:u.locator ~pin:p with
            | Ok () -> ()
            | Error h ->
-               Store.why "island %s: source dir now hashes %s but the pin is %s — run pp --update"
+               Cache_policy.diagnose Cache_policy.default "island %s: source dir now hashes %s but the pin is %s — run pp --update"
                  u.raw (short h) (short p));
         dir
       end
@@ -429,7 +430,7 @@ let update_file (path : string) : int * int =
     let oc = open_out_bin tmp in
     output_string oc !text;
     close_out oc;
-    Unix.rename tmp path
+    Unix.rename tmp path (* Rewrite user source after staging the complete edit. *)
   end;
   (!updated, !skipped)
 

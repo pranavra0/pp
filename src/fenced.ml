@@ -126,9 +126,9 @@ let register (kind : string) (spec : value) : unit =
                  "' is not serializable data (contains a closure, thunk, or " ^
                  "other code/handle value) — a fenced action's spec must be " ^
                  "plain data to be recoverable after a crash"));
-  (* Store the already-forced spec: hash_spec/run_command/store_fenced_spec
+  (* Persist the already-forced spec: hashing, execution, and persistence
      downstream (execute_current) must see the same data this check saw, or
-     store_fenced_spec's own encode could see unforced thunks again and
+     must see the same value, or the repository encoder could see thunks and
      silently drop the write. Forcing is idempotent on non-thunk values,
      so re-forcing [forced] later is a no-op. *)
   Session.add_fenced_action (Effect.perform Dynamic_scope.Get_session) (kind, forced)
@@ -142,7 +142,7 @@ let execute_current ~(kind : string) ~(spec : value) : unit =
   let key = action_key ~epoch ~kind ~spec_hash in
   if Journal.fenced_is_done key then ()
   else begin
-    Store.store_fenced_spec ~hash:spec_hash spec;
+    Object_repository.put_fenced Object_repository.default ~hash:spec_hash spec;
     Journal.append (Journal.FencedIntent {
       key; epoch; kind; spec_hash });
     let result = run_command spec in
@@ -154,7 +154,7 @@ let execute_current ~(kind : string) ~(spec : value) : unit =
    hash so the action runs with the same inputs. *)
 let execute_recovery ~(policy : Invocation.fenced_policy) ~(entry : Journal.fenced_entry) : unit =
   let spec =
-    match Store.load_fenced_spec entry.Journal.fe_spec_hash with
+    match Object_repository.get_fenced Object_repository.default ~hash:entry.Journal.fe_spec_hash with
     | Some v -> v
     | None ->
         (* Spec missing: we cannot safely retry.  Abort regardless of policy. *)

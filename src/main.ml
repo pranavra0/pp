@@ -144,7 +144,7 @@ let should_run_domains invocation =
 let compute_all_desired invocation (last : Core_model.value option) : Core_model.value =
   match Invocation.program_desired_object invocation with
   | Some (hash, _) ->
-      (match Store.load_object ~key:hash with
+      (match Object_repository.get Object_repository.default ~key:hash with
        | Some v -> v
        | None ->
            failwith (Printf.sprintf
@@ -192,7 +192,7 @@ let run_domains_pass invocation (last : Core_model.value option) : unit =
     Fenced.drain ()
   end
 
-let print_graph ?(verbose = false) () = Store.print_graph ~verbose ()
+let print_graph ?(verbose = false) () = Store_index.print_graph ~verbose ()
 
 let snapshot_cell_hashes (cell_ids : string list) : (string * string) list =
   List.filter_map (fun id ->
@@ -221,8 +221,8 @@ let watch_loop session invocation ~files ~interval ~stabilize =
     snapshot_cell_hashes cell_ids
   in
   let run_program_stabilize ~prev_snapshot changed_cells =
-    let rev = Store.build_reverse_index () in
-    let dirty = Store.dirty_keys_for changed_cells rev in
+    let rev = Store_index.reverse () in
+    let dirty = Store_index.dirty_keys changed_cells rev in
     Stabilize.reset_dirty dirty;
     Session.begin_pass session;
     let last = run_files ~retain_thunks:true invocation files in
@@ -289,7 +289,7 @@ let watch_loop session invocation ~files ~interval ~stabilize =
 let run_mint_token host ~(out : string) ~(ttl : int) ~(specs : string list) : unit =
   let secret = Cap_token.load_secret host in
   let cluster_id = Cap_token.load_cluster_id host in
-  Store.atomic_write out (Cap_token.mint host ~secret ~cluster_id ~specs ~ttl_seconds:ttl)
+  Store_layout.atomic_replace out (Cap_token.mint host ~secret ~cluster_id ~specs ~ttl_seconds:ttl)
 
 let run_transport_push (kind, id, root) : unit =
   match kind with
@@ -307,7 +307,7 @@ let run_transport_pull (kind, id, root) : unit =
 
 let run_serve_hit host session invocation (key, token_file, shared_root, reply_file) : unit =
   let token_text = read_file_content token_file in
-  (* Store.hit re-observes the trace's read cells, which performs the
+  (* Cache_policy.lookup Cache_policy.default re-observes the trace's read cells, which performs the
      Lookup_handler/Record_read effects (observe_handler, file observation).
      serve-hit runs no program, so it must supply the same top-level
      observation context a plain run does: without it a node that read a
@@ -320,7 +320,7 @@ let run_serve_hit host session invocation (key, token_file, shared_root, reply_f
     Dynamic_scope.with_top_level session invocation
       ~f:(fun () -> Transport.serve_hit host ~key ~token_text ~shared_root) ()
   in
-  Store.atomic_write reply_file reply
+  Store_layout.atomic_replace reply_file reply
 
 let run_recv_hit (reply_file, shared_root) : unit =
   let reply_text = read_file_content reply_file in
@@ -613,12 +613,12 @@ let main () =
          | _ -> failwith ("invalid --fenced-policy: " ^ policy)));
 
     doc_of "  pp why <file.pp>         Explain node cache hits/misses (capability-filtered)\n"
-      (flag "why" (fun () -> Store.why_mode := true));
-    { (flag "--why" (fun () -> Store.why_mode := true)) with internal = true };
+      (flag "why" (fun () -> Cache_policy.enable_why Cache_policy.default));
+    { (flag "--why" (fun () -> Cache_policy.enable_why Cache_policy.default)) with internal = true };
     doc_of "  pp --no-cache <file.pp>  Skip cache reads (recompute); results still stored\n"
-      (flag "--no-cache" (fun () -> Store.no_cache := true));
+      (flag "--no-cache" (fun () -> Cache_policy.enable_no_cache Cache_policy.default));
     doc_of "  pp --check <file.pp>     Determinism audit: run each node twice, flag volatile\n"
-      (flag "--check" (fun () -> Store.check_mode := true));
+      (flag "--check" (fun () -> Cache_policy.enable_check Cache_policy.default));
     doc_of "  pp -e '<expr>'           Evaluate an expression (brace syntax, like the REPL)\n"
       (opt1 "-e" (fun e -> eval_str := Some e));
 
@@ -821,7 +821,7 @@ let main () =
   let initial_caps =
     match !remote_node_args with
     | Some (token_file, _, _, _, _) ->
-        let token_text = Store.read_raw token_file in
+        let token_text = Cell_repository.read_raw token_file in
         (match Cap_token.token_to_caps host token_text with
          | Ok caps -> caps
          | Error reason -> failwith ("pp: --remote-node: token rejected: " ^ reason))
@@ -844,12 +844,12 @@ let main () =
      Also reachable: the resolved stdlib/ dir next to the
      running executable, so `--reconcile`/`--supervise`'s auto-loaded
      stdlib/domain-fs.pp / domain-proc.pp work from ANY cwd. *)
-  Store.init ();
+  Store_layout.init Store_layout.default;
   Remote.init host invocation;
   (* `--gc-mark` (internal — only `pp gc`'s own replay
-     subprocess, src/store_gc.ml, sets this) turns on Store.hit's
+     subprocess, src/store_gc.ml, sets this) turns on cache policy's
      mark-by-replay side channel for the whole remainder of this process. *)
-  (match !gc_mark_out with Some _ -> Store.gc_marking := true | None -> ());
+  (match !gc_mark_out with Some _ -> Cache_policy.begin_gc Cache_policy.default | None -> ());
   (* The by-hash desired-value pull seam — given a hash
      already published (via `--publish-object`) into a shared local-dir
      root, pull the object AND every "blob:" ref it names (Blobref.blob_refs_in,
@@ -863,7 +863,7 @@ let main () =
   (match !desired_object_args with
    | Some (hash, root) ->
        Transport.LocalDir.pull_object root ~hash;
-       (match Store.load_object ~key:hash with
+       (match Object_repository.get Object_repository.default ~key:hash with
         | Some v ->
             List.iter (fun h -> try Transport.LocalDir.pull_blob root ~hash:h with _ -> ())
               (Blobref.blob_refs_in v)
@@ -903,7 +903,8 @@ let main () =
      same reason (mark-by-replay is read-only on the world by construction,
      not merely by convention). *)
   if (!reconcile_root <> None || !supervise) && !gc_mark_out = None then
-    Fenced.recover_unknown ~policy:!fenced_policy;
+    Dynamic_scope.with_top_level session invocation
+      ~f:(fun () -> Fenced.recover_unknown ~policy:!fenced_policy) ();
 
 
   (* pp graph: just scan and print, no file needed. *)
@@ -914,7 +915,7 @@ let main () =
      as Failure/Transport.Transport_integrity_error to the top-level handler
      below, printed uniformly as "pp: error: ...". *)
   if !cluster_init_mode then begin
-    Store.ensure_dir (Cap_token.cluster_dir host);
+    Store_layout.ensure_dir (Cap_token.cluster_dir host);
     if Sys.file_exists (Cap_token.secret_path host) then
       failwith (Printf.sprintf
         "pp cluster-init: a cluster secret already exists at %s — refusing \
@@ -925,7 +926,7 @@ let main () =
     Cap_token.write_secret_file host (Cap_token.secret_path host) (secret_hex ^ "\n");
     let cluster_id = Hasher.hex_encode (Cryptokit.Random.string Cryptokit.Random.secure_rng 16) in
     if not (Sys.file_exists (Cap_token.id_path host)) then
-      Store.atomic_write (Cap_token.id_path host) (cluster_id ^ "\n");
+      Store_layout.atomic_replace (Cap_token.id_path host) (cluster_id ^ "\n");
     Printf.printf
       "pp cluster-init: minted %s (mode 0600) and cluster id %s\n\
        pp cluster-init: distribute BOTH files to other cluster members out \
@@ -961,31 +962,30 @@ let main () =
      actions or journals (nothing here ever touches either). *)
   (match !publish_object_root with
    | Some shared_root ->
-       let last = Dynamic_scope.with_top_level session invocation
-           ~f:(fun () -> run_files invocation (List.rev !files)) () in
-       (match last with
-        | None -> failwith "pp: --publish-object: the program produced no value"
-        | Some v ->
-            let forced = Primitives.force_deep v in
-            let hash = Identity.hash_value forced in
-            (match Codec.encode_value forced with
-             | None ->
-                 failwith "pp: --publish-object: the program's value contains \
-                           code (a closure/thunk/handle) and cannot be \
-                           published as data"
-             | Some _ -> Store.store_object ~key:hash ~value:forced);
-            List.iter (fun h -> try Transport.LocalDir.push_blob shared_root ~hash:h with _ -> ())
-              (Blobref.blob_refs_in forced);
-            Transport.LocalDir.push_object shared_root ~hash;
-            Printf.printf "publish-object: %s\n" hash);
+       Dynamic_scope.with_top_level session invocation ~f:(fun () ->
+         match run_files invocation (List.rev !files) with
+         | None -> failwith "pp: --publish-object: the program produced no value"
+         | Some v ->
+             let forced = Primitives.force_deep v in
+             let hash = Identity.hash_value forced in
+             (match Codec.encode_value forced with
+              | None ->
+                  failwith "pp: --publish-object: the program's value contains \
+                            code (a closure/thunk/handle) and cannot be \
+                            published as data"
+              | Some _ -> Object_repository.put Object_repository.default ~key:hash ~value:forced);
+             List.iter (fun h -> try Transport.LocalDir.push_blob shared_root ~hash:h with _ -> ())
+               (Blobref.blob_refs_in forced);
+             Transport.LocalDir.push_object shared_root ~hash;
+             Printf.printf "publish-object: %s\n" hash) ();
        exit 0
    | None -> ());
   (* ---- `--gc-mark <outfile>` — internal, only `pp gc`'s own
      replay subprocess (src/store_gc.ml) sets this. Runs the recorded root
      program EXACTLY as a live pass would (registration glue, the user's
      file(s), the same --grant/--reconcile/--supervise/
-     marks its trace/object/blob(s) live (Store.gc_marking, turned on
-     earlier, right after Store.init) — then STOPS: no run_domains_pass (no
+     marks its trace/object/blob(s) live (Cache_policy.begin_gc, turned on
+     earlier, right after Store_layout.init) — then STOPS: no run_domains_pass (no
      domain apply), no Fenced.recover_unknown/drain (already skipped
      above). This is what makes replay read-only on the world by
      construction: nothing below this branch ever runs. *)
@@ -996,16 +996,17 @@ let main () =
        (try
           let all = select_member_slice invocation (compute_all_desired invocation last) in
           let forced = Primitives.force_deep all in
-          Store.mark_live ("object:" ^ Identity.hash_value forced);
-          List.iter (fun h -> Store.mark_live ("blob:" ^ h)) (Blobref.blob_refs_in forced)
+          Cache_policy.mark Cache_policy.default ("object:" ^ Identity.hash_value forced);
+          List.iter (fun h -> Cache_policy.mark Cache_policy.default ("blob:" ^ h)) (Blobref.blob_refs_in forced)
         with _ ->
           (* A root whose desired-state can no longer be derived at all
              (e.g. should_run_domains () is false for this replay) still
-             marks whatever Store.hit calls run_files itself made above —
+             marks whatever Cache_policy.lookup Cache_policy.default calls run_files itself made above —
              conservative, not a hard failure of the whole replay. *)
           ());
-       let marks = Hashtbl.fold (fun k () acc -> k :: acc) Store.gc_live [] in
-       Store.atomic_write out (String.concat "\n" marks ^ (if marks = [] then "" else "\n"));
+       let marks = Hashtbl.fold (fun k () acc -> k :: acc)
+           (Cache_policy.gc_marks Cache_policy.default) [] in
+       Store_layout.atomic_replace out (String.concat "\n" marks ^ (if marks = [] then "" else "\n"));
        exit 0
    | None -> ());
   (* pp island-pins <file>: list island forms with pin + cache status. *)
@@ -1048,9 +1049,9 @@ let main () =
                        Printf.eprintf
                          "[dump-pins] skipping non-data probe value for %s (code/handle/sealed)\n%!"
                          name);
-                 Store.atomic_write path (Buffer.contents buf)
+                 Store_layout.atomic_replace path (Buffer.contents buf)
              | None -> ());
-            if !Store.check_mode && Scheduler.state.policy <> Scheduler.Serial then
+            if Cache_policy.check_enabled Cache_policy.default && Scheduler.state.policy <> Scheduler.Serial then
               (match last with
                | None -> ()
                | Some v ->
@@ -1070,7 +1071,7 @@ let main () =
                     | None -> ()
                     | Some v2 ->
                         if Identity.hash_value v2 <> h_scheduled then begin
-                          incr Store.volatile_count;
+                          Cache_policy.note_volatile Cache_policy.default;
                           Printf.eprintf
                             "[check] schedule non-transparent: %s and serial re-runs produced different desired-state hashes\n%!"
                             (policy_name saved_policy)
@@ -1086,8 +1087,8 @@ let main () =
      against THIS process's own now-populated store. *)
   (match !remote_node_args with
    | Some (token_file, _, shared_root, keys_file, reply_file) ->
-       let token_text = Store.read_raw token_file in
-       (* Store.hit replays a verified trace's reads via Observation.replay,
+       let token_text = Cell_repository.read_raw token_file in
+       (* Cache_policy.lookup Cache_policy.default replays a verified trace's reads via Observation.replay,
           which performs Record_read/Get_observe_all — so this after-run serve
           must hold the same top-level observation context the run itself held
           (line 1050), or a clean hit crashes on an unhandled effect. *)
@@ -1098,9 +1099,9 @@ let main () =
    | None -> ());
 
   (* --check verdict: any volatile node fails the audit (LAW 38). *)
-  if !Store.check_mode && !Store.volatile_count > 0 then begin
+  if Cache_policy.check_enabled Cache_policy.default && Cache_policy.volatile_count Cache_policy.default > 0 then begin
     Printf.eprintf "[check] FAIL: %d volatile node(s) flagged\n%!"
-      !Store.volatile_count;
+      (Cache_policy.volatile_count Cache_policy.default);
     exit 1
   end
 

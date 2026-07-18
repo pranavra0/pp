@@ -77,11 +77,11 @@ let load_cluster_id host : string =
      (cluster-token (SPEC ...) "CLUSTER-ID" ISSUED EXPIRES "MAC")
 
    SPEC ... are the --grant spec strings verbatim ("fs:/x:rw", "process",
-   ...), each quoted (Codec.quote_string — the same escaping store.ml's
+   ...), each quoted (Codec.quote_string — the same escaping Trace_repository's
    trace-line codec reuses; a granted path can contain spaces). ISSUED/
    EXPIRES are decimal Unix seconds. MAC is hex HMAC-SHA256 of the payload
    WITHOUT the MAC field (below), under the cluster secret. A hand-rolled
-   parser mirrors store.ml's trace-line codec: this is a bespoke line
+   parser mirrors Trace_repository's line codec: this is a bespoke line
    format, not a Core_model.value, so it goes through Codec's string-quoting
    helper only, not its value grammar. *)
 
@@ -107,7 +107,7 @@ let mint host ~(secret : string) ~(cluster_id : string) ~(specs : string list)
 (* ---- Parser ----
    Hand-rolled, matching [mint]'s output exactly; [None] on anything else
    (a corrupted or foreign-format token) — never half-trusted. Same
-   Option-bind style as store.ml's line_to_trace. *)
+   Option-bind style as Trace_repository's line_to_trace. *)
 
 
 (* Reads digits (with an optional leading '-') up to the next ' ' or ')'. *)

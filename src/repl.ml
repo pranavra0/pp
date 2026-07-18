@@ -302,11 +302,11 @@ let repl_loop () =
           if tty then Printf.printf "bye.\n%!"
         end
         else if t = ":help" then (print_string help_text; loop ())
-        else if t = ":why on" then (Store.why_mode := true;
+        else if t = ":why on" then (Cache_policy.set_why Cache_policy.default true;
                                     Printf.printf "why: on\n%!"; loop ())
-        else if t = ":why off" then (Store.why_mode := false;
+        else if t = ":why off" then (Cache_policy.set_why Cache_policy.default false;
                                      Printf.printf "why: off\n%!"; loop ())
-        else if t = ":graph" then (Store.print_graph (); loop ())
+        else if t = ":graph" then (Store_index.print_graph (); loop ())
         else begin
           if tty then append_history input;
           (try

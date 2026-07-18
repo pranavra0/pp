@@ -3,13 +3,9 @@
 # the store or produce a wrong result on restart.
 # pins: LAW-21 LAW-28 LAW-30
 #
-# Every durable write in pp funnels through Store.atomic_write (temp file +
-# atomic rename). store.mli hides the path plumbing, so there is no OTHER way to
-# mutate the on-disk store — which is exactly why a single crash counter in that
-# one function suffices: sweeping the counter over a real build kills at EVERY
-# write boundary the build performs, with no per-site list to maintain. A new
-# durable write path is covered automatically the moment it routes through the
-# choke point (the .mli forces it to).
+# Every durable repository write funnels through `Store_layout.atomic_replace`.
+# Its single crash counter lets this test sweep every write boundary without a
+# per-site list.
 #
 # The oracle: PP_CRASH_AT="<boundary>:<n>" sends the process an uncatchable
 # SIGKILL at the n-th atomic_write, at one of four boundaries:
@@ -31,7 +27,7 @@ unset PP_CRASH_AT || true
 
 # A build that writes several store objects+traces: two persistent nodes, the
 # second depending on the first. Pure (no capability needed) — enough to drive
-# object + trace + version writes, all through the atomic_write choke point.
+# object + trace + version writes through the atomic-replacement choke point.
 cat > "$TMP/build.pp" <<EOF
 let a = force(node { 6 * 7 })
 let b = force(node { a + 100 })

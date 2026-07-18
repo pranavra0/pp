@@ -51,7 +51,7 @@ let cell_authorized_for = Observation.authorized_id
 
 (* Trace replay for an already-Evaluated persistent node: replay its stored
    trace reads into the active trace frames so the caller's trace transitively
-   captures this node's world-reads (same mechanism as Store.hit's hit-replay).
+   captures this node's world-reads (the same mechanism as cache hit replay).
    [key_of] is the node-key function (node_key_of). *)
 let replay_node_reads = Node.replay_node_reads
 
@@ -60,7 +60,7 @@ let replay_node_reads = Node.replay_node_reads
    trampoline paths — the node caches identically however it is demanded.
    [run] executes the body. *)
 
-(* Serve a resolved Store.hit_result the same way in every miss-arm variant
+(* Serve a resolved Cache_policy.result the same way in every miss-arm variant
    below: a verified hit (gated on LAW 23b authority), a re-served memoized
    failure (LAW 28), or [None] on Miss (caller decides what to do). *)
 
@@ -71,7 +71,7 @@ let replay_node_reads = Node.replay_node_reads
    Miss-arm scheduling: under [Race n] with n > 1, a singleton miss is worth
    forking — n redundant (key, run) forks of the SAME job race each other
    (sound: LAW 37 nodes are deterministic), the parent never reads a value
-   from any of them, and re-enters Store.hit afterward exactly as the batch
+   from any of them, and re-enters Cache_policy.lookup Cache_policy.default afterward exactly as the batch
    path does — a hit if some child won, a Miss (falling through to the
    ordinary in-process run below) if every child died. Under [Serial] or
    [Parallel _], a LONE miss stays in-process (width 1): forking a single job
@@ -89,7 +89,7 @@ let force_node ~(key : string) ~(run : unit -> value) (t : thunk) : value =
      without with-caps), so this collapses to the plain per-process
      `--grant` set whenever with-caps goes unused. *)
   let authorized = cell_authorized_for t.node_caps in
-  match Node.serve_hit ~t (Store.hit ~key ~authorized) with
+  match Node.serve_hit ~t (Cache_policy.lookup Cache_policy.default ~key ~authorized) with
   | Some v -> v
   | None ->
       (match Scheduler.state.policy with
@@ -98,7 +98,7 @@ let force_node ~(key : string) ~(run : unit -> value) (t : thunk) : value =
                        j_run = (fun () -> Node.run_node_body ~key ~run t);
                        j_width = n; j_thunk = t } in
            Scheduler.dispatch_batch [job];
-           (match Node.serve_hit ~t (Store.hit ~key ~authorized) with
+           (match Node.serve_hit ~t (Cache_policy.lookup Cache_policy.default ~key ~authorized) with
             | Some v -> v
             | None ->
                 (* Every racing worker died: degrade to the ordinary serial
@@ -901,10 +901,10 @@ let eval_and_force (e : expr) : value =
 
 (* Initialize the evaluator state *)
 let resolve_if_hit t key =
-  match Store.hit ~key ~authorized:(cell_authorized_for t.node_caps) with
-  | Store.HitOk value -> t.thunk_status <- Evaluated value; true
-  | Store.HitFailed _ -> true
-  | Store.Miss -> false
+  match Cache_policy.lookup Cache_policy.default ~key ~authorized:(cell_authorized_for t.node_caps) with
+  | Cache_policy.HitOk value -> t.thunk_status <- Evaluated value; true
+  | Cache_policy.HitFailed _ -> true
+  | Cache_policy.Miss -> false
 
 let operations = {
   Evaluator_ops.core = { force; eval; apply };

@@ -8,7 +8,7 @@
    captured environment, a handle (VClosure, VThunk, VBuiltin, VCapability,
    VEnvMap), or a sealed secret (VSealed) makes the WHOLE
    containing value non-data: encoding returns [None]. The persistent store holds data; code values are
-   process-local (see store.ml's store_object).
+   process-local (see Object_repository.put).
 
    Grammar (one value = one line; exactly one space between tokens, no
    trailing whitespace, no newline dependence):
@@ -61,7 +61,7 @@ let quote_string (s : string) : string =
 (* Parses a quoted string starting at [s.[start]] = '"'. Returns the decoded
    content and the index just past the closing quote, or [None] if [start]
    is not a quote or the string is unterminated/malformed. Exposed so
-   store.ml's trace codec (a distinct, bespoke line format — cell-ids and
+   Trace_repository's codec (a distinct, bespoke line format — cell-ids and
    hashes, not a Core_model.value) can reuse the same escaping rules. *)
 let parse_quoted_string (s : string) (start : int) : (string * int) option =
   let len = String.length s in

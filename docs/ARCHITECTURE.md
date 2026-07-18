@@ -119,19 +119,21 @@ new session. Consumers receive only the view they need; macro expansion receives
 frontend services explicitly at each source-entry boundary, and plain deep
 forcing receives only `force`. There are no installable evaluator callbacks.
 
-## The persistent node cache (`store.ml`)
+## The persistent node cache
 
-The persistent content-addressed store lives at `~/.pp/store/objects` and
-`traces`. It is wired into the tree-walker's `force` for `node { e }`
-thunks.
+`Store_layout` owns the on-disk layout, version initialization, and the single
+atomic-replacement implementation. Immutable object and blob repositories and
+the locked trace repository sit above it. `Cache_policy` consumes repository
+handles and observations, but knows no paths. It is wired into the
+tree-walker's `force` for `node { e }` thunks.
 
 On a cache miss, `force` pushes a trace frame and runs the node. Because
-`slurp` and `read-file` call `Store.record_file_read`, this collects every
+`slurp` and `read-file` record observations, collecting every
 `(file-cell, content-hash)` pair the node read. `force` then stores the
 result blob, keyed by its hash, and appends a trace to the node key's set
 of traces.
 
-On the next force, `Store.hit` re-observes each recorded cell and serves
+On the next force, `Cache_policy.lookup` re-observes each recorded cell and serves
 the stored result only if some trace still verifies against the world.
 Reads propagate to every enclosing node frame, so a parent node gets the
 transitive closure of everything its children read. What a node observed
@@ -147,21 +149,21 @@ A node that raises a `Failure` stores a failing trace and re-serves the
 same error until a recorded read changes (SPEC law 28). A raising thunk
 resets away from `Evaluating` rather than getting stuck there. A hit is
 served only if the caller is authorized to read the whole closure of cells
-the trace depends on, checked by `Store.hit ~authorized` and
+the trace depends on, checked by `Cache_policy.lookup ~authorized` and
 `Observation.authorized` (SPEC law 23b). A capability denial, `Capability_error`,
 is never memoized.
 
 
 With `pp --watch --stabilize`, the reverse-edge index built by
-`Store.build_reverse_index` maps changed cells to dirty node keys.
+`Store_index.reverse` maps changed cells to dirty node keys.
 `Stabilize.reset_dirty` marks only those in-memory thunks `Unevaluated`.
 The session lifecycle keeps the thunk memo alive across watch
-iterations, so clean nodes skip `Store.hit` entirely.
+iterations, so clean nodes skip repository lookup entirely.
 
 `Observation` is the exhaustive boundary for constructing, parsing, recording,
 replaying, re-observing, and authorizing every cell kind. File, stat, env, argv,
 config, handler, probe, sealed, domain, tool, and tree reads all pass through
-it. Session owns the probe and domain registries it consults; Store has no
+it. Session owns the probe and domain registries it consults; cache policy has no
 upward observer callback. The retired, never-produced `proc:` spelling parses
 as unknown so an old trace conservatively misses while its bytes remain
 readable. Inline-nested cutoff remains absent.
@@ -245,19 +247,26 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/macro.ml` | `defmacro` expansion: a function from syntax-as-values to syntax, run at the expansion boundary. |
 | `src/primitives.ml` | Built-in functions and the initial environment. |
 | `src/node.ml` | The node-key skeleton and the node rebuilder. |
-| `src/store.ml` | The persistent content-addressed store and its verifying traces, wired into `force` for `node { e }`. |
-| `src/store_gc.ml` | Explicit `pp gc`: mark-by-replay over the recent epochs, sweep the rest — never automatic. |
+| `src/store_layout.ml` | Abstract store layout and version initialization, with the single atomic-replacement and crash-injection boundary. |
+| `src/object_repository.ml` | Immutable encoded values and fenced specifications addressed by hash. |
+| `src/blob_repository.ml` | Immutable byte blobs addressed by hash. |
+| `src/trace_repository.ml` | Locked trace sets with canonical byte-stable encoding. |
+| `src/cache_policy.ml` | Trace selection, verification, authorization, replay, diagnostics, and GC marking over repository handles. |
+| `src/cell_repository.ml` | Snapshot reads and sealed/file pins over observations and the blob repository. |
+| `src/store_index.ml` | Read-only reverse-index and graph queries over traces. |
+| `src/repository_inventory.ml` | Artifact metadata and removal lifecycle used by explicit GC. |
+| `src/store_gc.ml` | Explicit `pp gc`: mark-by-replay over recent epochs and sweep through repository inventory — never automatic. |
 | `src/gcroots.ml` | The GC roots manifest naming the epochs `pp gc` marks from. |
 | `src/journal.ml` | The append-only intent and done audit log: a typed `entry` variant, `to_line` and `of_line`, and the scanners that find fenced-effect entries (SPEC law 31). |
 | `src/fenced.ml` | The fenced-effect executor: registers scripting-tier actions, journals intent and done entries, and resolves unknown-status entries by policy (SPEC law 31). |
 | `src/island.ml` | Islands: parses file, git, and github URIs; runs the content-addressed cache and tamper verification; rewrites pins for `--update`; provides `island-pins`; and fetches over git only when asked. |
 | `src/domain_prims.ml` | The trusted mechanics that back in-language domains: atomic `materialize-file` and `remove-file`, `tree-observe`, `proc-spawn`, `proc-alive?`, `proc-stop`, `proc-reap`, and `domain-state-get`/`put` — owning no policy of its own. |
-| `src/domains.ml` | Generic domain orchestration: the journal bracket, `observed_all` suspension, threading capabilities into observe and apply, plan caching through direct `Store` calls with no synthetic node, verify-after-write, and stratification. `stdlib/domain-fs.pp` and `domain-proc.pp` hold the filesystem and process policy as pp source; `main.ml` then drains fenced actions. |
+| `src/domains.ml` | Generic domain orchestration: the journal bracket, `observed_all` suspension, threading capabilities into observe and apply, plan caching through cache policy with no synthetic node, verify-after-write, and stratification. `stdlib/domain-fs.pp` and `domain-proc.pp` hold the filesystem and process policy as pp source; `main.ml` then drains fenced actions. |
 | `src/process.ml` | The `run` process effect: executes an external command under capability. |
 | `src/scheduler.ml` | The fork-at-dispatch process-pool scheduler for node misses (`serial`, `parallel:N`, `race:N`, `remote:MEMBER`). |
 | `src/remote.ml` | Remote placement: dispatches a batch of node misses to a named cluster member over the transport. |
 | `src/transport.ml` | Cross-machine sync of hash-named store artifacts, plus the capability-gated serve-hit path. |
-| `src/stabilize.ml` | The push scheduler: a side table from `node_key` to `thunk`, plus dirty reset. The reverse-edge index itself lives in `store.ml`. |
+| `src/stabilize.ml` | The push scheduler: a side table from `node_key` to `thunk`, plus dirty reset using `Store_index`'s reverse edges. |
 | `src/repl.ml` | REPL and file-execution helpers. |
 | `src/kernel_props.ml` | Derived generators and the kernel properties (hash injectivity, quote/printer round-trip) the fuzzer checks. |
 | `src/lint.ml` | The convention checker for pp source files. |

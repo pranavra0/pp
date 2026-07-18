@@ -4,8 +4,8 @@
 # docs/THREAT-MODEL-cluster.md for the threat model this guards against.
 #
 # Two SIMULATED cluster members are two `pp` process invocations differing
-# only in $HOME (Store.store_root is a process-wide singleton fixed at
-# startup, so "two stores" means "two processes" — see transport.ml's
+# only in $HOME (the default repository layout is fixed at startup, so
+# "two stores" means "two processes" — see transport.ml's
 # module header); they share a WORK dir (the underlying "world" both
 # members can observe identically, like tests/019) and a cluster
 # secret/id distributed out of band via a plain file copy (simulating
@@ -15,7 +15,7 @@
 #     receiving --transport-pull reject it via re-hash-on-receive (case T1
 #     below).
 #   A tampered-MAC token, and an expired token, are both denied by
-#     --serve-hit before Store.hit ever runs (case T2 below).
+#     --serve-hit before cache lookup (case T2 below).
 #   A token whose capabilities don't cover the trace's read closure gets a
 #     MISS from --serve-hit, even though the bytes are on local disk — a
 #     broader token gets a hit for the SAME key (authority is re-checked

@@ -1,6 +1,6 @@
 (* pp blob: refs — "blob:<sha256>" reference detection inside an ordinary
    pp VALUE, shared by src/remote.ml (remote placement's dispatcher-side
-   pull) and src/store.ml (GC's live-set mark-by-replay).
+   pull) and Cache_policy (GC's live-set mark-by-replay).
 
    `blob`/`blob-get` (primitives.ml) are deliberately NOT a traced cell — a
    node's small metadata result carries a "blob:<sha256>" string reference
@@ -12,7 +12,7 @@
    bytes a `(blob (slurp ...))`-pattern node's result names.
 
    Originally two copies of this exact logic lived in remote.ml alone;
-   store.ml (compiled before remote.ml) needs the identical scan, so this is
+   Cache_policy needs the identical scan, so this is
    factored out to the one place both can reach (core-model-only, no other
    dependency) rather than duplicated a second time. *)
 
