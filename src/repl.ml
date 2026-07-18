@@ -27,16 +27,16 @@ let init ?(retain_thunks = false) session =
 (* LAW 29: a runtime error escaping a top-level form reports that
    form's source location — unless its message already carries one (a
    " at …:<line>" suffix), so located errors are never double-located.
-   Runtime.with_form_location is the ONE implementation, shared by the
+   Error_context.with_form_location is the ONE implementation, shared by the
    top-level driver here AND by `load` (evaluator.ml eval_expressions) — so
    an error inside a `load`ed file
    is decorated with THAT file's line, not the loading form's. *)
-let with_toplevel_location = Runtime.with_form_location
+let with_toplevel_location = Error_context.with_form_location
 
 (* Tree-walker: process a single expression *)
 let process_expr (e : expr) : value =
-  Runtime.with_top_level (Effect.perform Runtime.Get_session)
-    (Effect.perform Runtime.Get_invocation) ~f:(fun () ->
+  Dynamic_scope.with_top_level (Effect.perform Dynamic_scope.Get_session)
+    (Effect.perform Dynamic_scope.Get_invocation) ~f:(fun () ->
     with_toplevel_location e (fun () ->
       match eval_expressions [e] global_env with
       | VEnvMap _ as v -> v
@@ -49,7 +49,7 @@ let process_expr (e : expr) : value =
    SAME string, even though process_expr below evaluates one form at a
    time. *)
 let execute_string ?(retain_thunks = false) ?(source : string = "<?>") (input : string) : value list =
-  init ~retain_thunks (Effect.perform Runtime.Get_session);
+  init ~retain_thunks (Effect.perform Dynamic_scope.Get_session);
   (* `.ppb` sources read with the brace reader (Reader_braces
      dispatches on the extension; every other source uses the
      sexpr reader). *)
@@ -71,7 +71,7 @@ let execute_file ?(retain_thunks = false) (path : string) : value list =
 
    `execute_string` calls `init()`
    unconditionally — correct for a single top-level run, but `init()`
-   resets Runtime.domain_registry (Evaluator.init, alongside thunk_store/
+   resets the session's domain registry (Evaluator.init, alongside thunk memo/
    handler_stack/macro table), so two SEPARATE calls would make the second
    wipe out a `register-domain` a first call just performed. main.ml's
    --reconcile/--supervise auto-wiring needs exactly that: a small glue
@@ -82,7 +82,7 @@ let execute_file ?(retain_thunks = false) (path : string) : value list =
    without the redundant re-inits) — byte-identical to today's single-file
    behavior when given a one-element list. *)
 let execute_sources ?(retain_thunks = false) (sources : (string * string) list) : value list =
-  init ~retain_thunks (Effect.perform Runtime.Get_session);
+  init ~retain_thunks (Effect.perform Dynamic_scope.Get_session);
   List.concat_map (fun (source, input) ->
     let exprs =
       Macro.expand_toplevel_list
@@ -263,7 +263,7 @@ let help_text =
    A form left open continues on the next line; results print deep-forced.\n"
 
 let repl_loop () =
-  init (Effect.perform Runtime.Get_session);
+  init (Effect.perform Dynamic_scope.Get_session);
   let tty = (try Unix.isatty Unix.stdin with _ -> false) in
   if tty then begin
     Printf.printf "pp v%s — lazy, pure-by-default, content-addressed Lisp\n"

@@ -32,7 +32,7 @@ let () = Printexc.register_printer (function
   | _ -> None)
 
 (* A runtime or parse error carrying its source location as structured data
-   rather than baked into the message string. [Runtime.with_form_location]
+   rather than baked into the message string. [Error_context.with_form_location]
    attaches [pos] once, at the innermost enclosing form, and an outer form
    leaves an already-located error alone by testing [pos <> None] — this
    replaced a fragile heuristic that re-scanned the message text for a trailing

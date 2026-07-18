@@ -4,24 +4,22 @@
 
 open Types
 open Hasher
-open Runtime
+open Dynamic_scope
 
 (* ---- Evaluation State ---- *)
-
-(* Content-addressed thunk store is now in Runtime. *)
 
 (* Create or retrieve a content-addressed thunk.
    Two thunks with the same (expr, env, capabilities) are the SAME thunk.
    Uses env.env_hash for O(1) environment identity — no recursive traversal. *)
 let make_thunk_ca (expr : expr) (env : env) : value =
-  let caps = Effect.perform Runtime.Get_capabilities in
-  let cfg = Effect.perform Runtime.Get_config in
-  let handlers = Effect.perform Runtime.Get_handlers in
+  let caps = Effect.perform Dynamic_scope.Get_capabilities in
+  let cfg = Effect.perform Dynamic_scope.Get_config in
+  let handlers = Effect.perform Dynamic_scope.Get_handlers in
   let caps_hash = hash_concat ("caps" :: List.map Capability.hash caps) in
   let cfg_hash = hash_concat ("cfg" :: List.map hash_value cfg) in
   let hh = hash_concat ("handlers" :: List.concat_map (fun (n,h)->[n;h]) handlers) in
   let h = hash_concat ["thunk"; Types.hash_expr expr; env.env_hash; caps_hash; cfg_hash; hh] in
-  let session = Effect.perform Runtime.Get_session in
+  let session = Effect.perform Dynamic_scope.Get_session in
   match Session.find_thunk session h with
   | Some existing -> VThunk existing
   | None ->
@@ -30,14 +28,14 @@ let make_thunk_ca (expr : expr) (env : env) : value =
       VThunk t
 
 let make_thunk_ca_typed (expr : expr) (ty : expr) (loc : (string * int) option) (env : env) : value =
-  let caps = Effect.perform Runtime.Get_capabilities in
-  let cfg = Effect.perform Runtime.Get_config in
-  let handlers = Effect.perform Runtime.Get_handlers in
+  let caps = Effect.perform Dynamic_scope.Get_capabilities in
+  let cfg = Effect.perform Dynamic_scope.Get_config in
+  let handlers = Effect.perform Dynamic_scope.Get_handlers in
   let caps_hash = hash_concat ("caps" :: List.map Capability.hash caps) in
   let cfg_hash = hash_concat ("cfg" :: List.map hash_value cfg) in
   let hh = hash_concat ("handlers" :: List.concat_map (fun (n,h)->[n;h]) handlers) in
   let h = hash_concat ["thunk-typed"; Types.hash_expr expr; Types.hash_expr ty; env.env_hash; caps_hash; cfg_hash; hh] in
-  let session = Effect.perform Runtime.Get_session in
+  let session = Effect.perform Dynamic_scope.Get_session in
   match Session.find_thunk session h with
   | Some existing -> VThunk existing
   | None ->
@@ -111,8 +109,8 @@ let cell_authorized_for (caps : Capability.t list) (cell_id : string) : bool =
      uses. An unregistered (in THIS process) domain name never verifies —
      the sound, conservative default, like Cell.Unknown. *)
   | Cell.Domain { name; sub = _ } ->
-      (match Session.find_domain (Effect.perform Runtime.Get_session) name with
-       | Some entry -> Capability.subseteq entry.Runtime.dm_cap caps
+      (match Session.find_domain (Effect.perform Dynamic_scope.Get_session) name with
+       | Some entry -> Capability.subseteq entry.Session.dm_cap caps
        | None -> false)
 
 (* Trace replay for an already-Evaluated persistent node: replay its stored
@@ -215,7 +213,7 @@ let poison_thunk (name : string) (env : env) : value =
    ample headroom while keeping the trampoline nesting shallow
    even for 10^6-deep recursion (~500 trampoline entries). *)
 let max_force_depth = 2000
-let session () = Effect.perform Runtime.Get_session
+let session () = Effect.perform Dynamic_scope.Get_session
 let force_depth () = Session.force_depth (session ())
 let set_force_depth n = Session.set_force_depth (session ()) n
 let incr_force_depth () = Session.incr_force_depth (session ())
@@ -416,7 +414,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       (match thunk_val with
        | VThunk t ->
            t.thunk_persist <- true;
-           t.node_caps <- Effect.perform Runtime.Get_capabilities
+           t.node_caps <- Effect.perform Dynamic_scope.Get_capabilities
        | _ -> ());
       k thunk_val
 
@@ -475,7 +473,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
                `load`ed file's macros are visible to the rest of THIS
                file's forms and vice versa (load is sequential evaluation,
                one shared macro table — Macro.ml's documented decision). *)
-            let contents = Runtime.loader_read path in
+            let contents = Loader.read path in
             let exprs = Backend.r.expand_toplevel
                           (Reader_braces.read_dispatch ~source:path ~path contents) in
             ignore (eval_expressions exprs env_ref);
@@ -509,12 +507,9 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
         | VCapability c -> c
         | _ -> failwith "with-caps expects a capability value"
       in
-      if not (Capability.subseteq requested (Effect.perform Runtime.Get_capabilities)) then
+      if not (Capability.subseteq requested (Dynamic_scope.capabilities ())) then
         raise (Capability_error Capability.err_with_caps_widen);
-      begin
-        try eval_tail body env k
-        with effect Runtime.Get_capabilities, kont -> Effect.Deep.continue kont [requested]
-      end
+      Dynamic_scope.with_capabilities [requested] (fun () -> eval_tail body env k)
 
   | EPerform (name, arg_exprs) ->
       let args = List.map (fun e -> make_thunk_ca e env) arg_exprs in
@@ -528,17 +523,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
          (fun args -> apply handler_val args env),
          hash_value handler_val)   (* handler identity in the key *)
       ) handlers in
-      let snew = List.map (fun (n,_,h)->(n,h)) new_handlers in
-      begin
-        try eval_tail body env k
-        with
-        | effect (Runtime.Lookup_handler name), kont ->
-            (match List.find_opt (fun (n,_,_) -> n = name) new_handlers with
-             | Some (_, fn, h) -> Effect.Deep.continue kont (Some (fn, h))
-             | None -> Effect.Deep.continue kont (Effect.perform (Runtime.Lookup_handler name)))
-        | effect Runtime.Get_handlers, kont ->
-            Effect.Deep.continue kont (snew @ Effect.perform Runtime.Get_handlers)
-      end
+      Dynamic_scope.with_handlers new_handlers (fun () -> eval_tail body env k)
   | EDefValue (_, rhs) ->
       (* Bare expression position: evaluate the RHS and return it; binding is
          the job of the enclosing block / top level (mirrors EDef, which
@@ -601,7 +586,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
   | ELoad path ->
       (* Same shared-expansion-hook treatment as EDo's ELoad
          arm above. *)
-      let contents = Runtime.loader_read path in
+      let contents = Loader.read path in
       let exprs = Backend.r.expand_toplevel
                     (Reader_braces.read_dispatch ~source:path ~path contents) in
       let env_ref = ref env in
@@ -628,9 +613,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
   | EWithConfig (map_expr, body) ->
       let cfg = force (eval map_expr env) in
       let eval_body () =
-        try eval_tail body env k
-        with effect Runtime.Get_config, kont ->
-          Effect.Deep.continue kont (cfg :: Effect.perform Runtime.Get_config)
+        Dynamic_scope.with_config cfg (fun () -> eval_tail body env k)
       in
       (match cfg with
        | VMap _ -> eval_body ()
@@ -642,8 +625,8 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
         | _ -> failwith "config key must be a string, keyword, or symbol" in
       (* LAW 33: reading config inside a node is an observation — recorded as a
          `config:<key>` trace cell (absence included), never part of the key. *)
-      Runtime.record_config_read key_name;
-      (match Runtime.config_lookup key_name with
+      Dynamic_scope.record_config_read key_name;
+      (match Dynamic_scope.config_lookup key_name with
        | Some v -> k v
        | None ->
            (match default_opt with
@@ -762,9 +745,9 @@ and perform_effect (name : string) (args : value list) : value =
      builtin) is an observation of ambient state; inside a node it is recorded
      as a `handler:<effect>` trace cell so a hit under a different handler
      (mock vs real) re-computes instead of cross-contaminating. *)
-  Runtime.record_handler_observation name;
+  Dynamic_scope.record_handler_observation name;
   (* Check for handler via effect perform *)
-  match Effect.perform (Runtime.Lookup_handler name) with
+  match Effect.perform (Dynamic_scope.Lookup_handler name) with
   | Some (handler, _) -> handler args
   | None -> perform_builtin_effect name args
 
@@ -879,17 +862,17 @@ and perform_builtin_effect (name : string) (args : value list) : value =
 (* ---- Helpers ---- *)
 
 and has_fs_read (path : string) : bool =
-  List.exists (fun cap -> Capability.check_fs_read cap (Runtime.canonical_path path)) (Effect.perform Runtime.Get_capabilities)
+  List.exists (fun cap -> Capability.check_fs_read cap (World_path.canonical path)) (Effect.perform Dynamic_scope.Get_capabilities)
 
 and has_fs_write (path : string) : bool =
-  List.exists (fun cap -> Capability.check_fs_write cap (Runtime.canonical_path path)) (Effect.perform Runtime.Get_capabilities)
+  List.exists (fun cap -> Capability.check_fs_write cap (World_path.canonical path)) (Effect.perform Dynamic_scope.Get_capabilities)
 
 
 (* (load-module "file.pp"): evaluate the file against a fresh initial env and
    package the bindings it added as a module value. Shared by the tail
    evaluator and EDo. *)
 and eval_module_file (path : string) : value =
-  let source = Runtime.loader_read path in
+  let source = Loader.read path in
   (* Dispatch on [path]'s extension; the location label stays the
      reader's "<?>" default. *)
   let exprs = Backend.r.expand_toplevel
@@ -909,7 +892,7 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
      this form's file:line before it can unwind past a `load` that brought
      it in — never doubled if a deeper form already located it. *)
   let step (e : expr) : value =
-    Runtime.with_form_location e (fun () ->
+    Error_context.with_form_location e (fun () ->
       match unwrap e with
       | EDef (name, params, body) ->
           let closure = make_closure ~name:(Some name) params body env in
@@ -938,7 +921,7 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
              "<?>" default), so ITS forms are in turn correctly located.
              Routed through the shared macro-expansion hook, same as every
              other Reader.read_string call site. *)
-          let contents = Runtime.loader_read path in
+          let contents = Loader.read path in
           let sub_exprs = Backend.r.expand_toplevel
                             (Reader_braces.read_dispatch ~source:path ~path contents) in
           eval_expressions sub_exprs env
@@ -961,16 +944,16 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
 
 (* Evaluate an expression in the initial environment *)
 let eval_program (e : expr) : value =
-  Runtime.with_top_level (Effect.perform Runtime.Get_session)
-    (Effect.perform Runtime.Get_invocation) ~f:(fun () ->
+  Dynamic_scope.with_top_level (Effect.perform Dynamic_scope.Get_session)
+    (Effect.perform Dynamic_scope.Get_invocation) ~f:(fun () ->
     let env = Primitives.initial_env () in
     eval e env
   ) ()
 
 (* Evaluate and force (for top-level expressions) *)
 let eval_and_force (e : expr) : value =
-  Runtime.with_top_level (Effect.perform Runtime.Get_session)
-    (Effect.perform Runtime.Get_invocation) ~f:(fun () ->
+  Dynamic_scope.with_top_level (Effect.perform Dynamic_scope.Get_session)
+    (Effect.perform Dynamic_scope.Get_invocation) ~f:(fun () ->
     force (eval_program e)
   ) ()
 
@@ -989,7 +972,7 @@ let init session ~retain_thunks =
      gensym'd name can be baked into an expanded node's code, so re-running
      the SAME source must reproduce the SAME counter sequence, or the same
      program could hash differently run to run. Unconditional (not gated
-     on Runtime.keep_thunks like thunk_store): both are derived fresh from
+     on session thunk retention): both are derived fresh from
      source text each run, never persistent cache state. *)
   Backend.r.force <- force;
   Backend.r.eval <- eval;

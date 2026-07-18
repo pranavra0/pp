@@ -72,10 +72,10 @@ let enforce_type (t : thunk) (result : value) : unit =
 (* ---- Trace replay ----------------------------------------------------- *)
 
 let replay_node_reads (t : thunk) (key_of : thunk -> string) : unit =
-  if t.thunk_persist && Effect.perform Runtime.In_node then
+  if t.thunk_persist && Effect.perform Dynamic_scope.In_node then
     let traces = Store.load_traces ~key:(key_of t) in
     List.iter (fun tr ->
-      List.iter (fun (c, h) -> Runtime.record_read c h) tr.Store.tr_reads
+      List.iter (fun (c, h) -> Dynamic_scope.record_read c h) tr.Store.tr_reads
     ) traces
 
 
@@ -97,17 +97,17 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
   let frame = ref [] in
   let sandbox_slot = ref None in
   Fun.protect
-    ~finally:(fun () -> match !sandbox_slot with Some d -> Runtime.remove_tree d | None -> ())
+    ~finally:(fun () -> match !sandbox_slot with Some d -> Sandbox.remove_tree d | None -> ())
     (fun () ->
       let result =
         try run ()
         with
-        | effect Runtime.Get_capabilities, k -> Effect.Deep.continue k t.node_caps
-        | effect (Runtime.Record_read (c, h)), k ->
+        | effect Dynamic_scope.Get_capabilities, k -> Effect.Deep.continue k t.node_caps
+        | effect (Dynamic_scope.Record_read (c, h)), k ->
             if not (List.mem (c, h) !frame) then frame := (c, h) :: !frame;
-            Effect.Deep.continue k (Effect.perform (Runtime.Record_read (c, h)))
-        | effect Runtime.In_node, k -> Effect.Deep.continue k true
-        | effect Runtime.Current_sandbox, k -> Effect.Deep.continue k (Some sandbox_slot)
+            Effect.Deep.continue k (Effect.perform (Dynamic_scope.Record_read (c, h)))
+        | effect Dynamic_scope.In_node, k -> Effect.Deep.continue k true
+        | effect Dynamic_scope.Current_sandbox, k -> Effect.Deep.continue k (Some sandbox_slot)
         (* Memoize a genuine failure (LAW 28). A plain Failure, or an Eval-kind
            Pp_error a nested `load`'s form boundary already wrapped, is
            cacheable; a Capability error (raw or Pp_error kind=Capability) is
@@ -142,12 +142,12 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
         let r2 =
           try run ()
           with
-          | effect (Runtime.Record_read (c, h)), k ->
+          | effect (Dynamic_scope.Record_read (c, h)), k ->
               if not (List.mem (c, h) !frame2) then frame2 := (c, h) :: !frame2;
-              Effect.Deep.continue k (Effect.perform (Runtime.Record_read (c, h)))
-          | effect Runtime.In_node, k -> Effect.Deep.continue k true
-          | effect Runtime.Get_capabilities, k -> Effect.Deep.continue k t.node_caps
-          | effect Runtime.Current_sandbox, k -> Effect.Deep.continue k (Some sandbox_slot)
+              Effect.Deep.continue k (Effect.perform (Dynamic_scope.Record_read (c, h)))
+          | effect Dynamic_scope.In_node, k -> Effect.Deep.continue k true
+          | effect Dynamic_scope.Get_capabilities, k -> Effect.Deep.continue k t.node_caps
+          | effect Dynamic_scope.Current_sandbox, k -> Effect.Deep.continue k (Some sandbox_slot)
           | e -> raise e
         in
         if hash_value r2 <> result_hash then begin

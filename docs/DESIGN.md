@@ -108,7 +108,7 @@ read-tracking decision below), or `proc:web`. Cells are mutable only
 because reality is mutable; the observer — a prober or a watcher — is the
 only writer of a cell's value. A cell id is canonicalised before hashing
 — absolute real path with symlinks resolved, NFC Unicode, no trailing
-slash — once, in `Runtime`, so a path-prefix bug cannot reappear at the
+slash — once, through `World_path.canonical`, so a path-prefix bug cannot reappear at the
 cell layer, and two syntactically different paths naming the same inode
 are one cell.
 
@@ -279,7 +279,7 @@ are safe to re-apply; these are what nodes may do inside a sandbox, and
 what the reconciler applies. Fenced effects — sending an email, charging
 a card — are not convergent, so the `fenced(KIND, SPEC-MAP)` primitive
 raises an error if called inside a node body. The scripting tier
-registers fenced actions in `Runtime.fenced_actions`, drained once per
+registers fenced actions in the session's fenced-action registry, drained once per
 pass, after all convergent work, by the reconciler or supervisor.
 
 An action runs at most once per pass. The write-ahead log records `intent fenced KEY EPOCH KIND
@@ -466,8 +466,8 @@ inherits all of it byte-identically through copy-on-write, for free,
 where a persistent pool or a fresh pp process would instead need to
 marshal that state across a channel, which is impossible for handler
 closures and buys nothing over a cheap `fork()` anyway. Because of this,
-a refactor of `Runtime`'s global mutable state is not needed for parallel
-dispatch — though a remote transport, needing named
+a refactor of evaluation state is not needed for parallel dispatch — though a
+remote transport, needing named
 or registrable handlers in place of closures, would need it.
 
 Remote placement across a cluster works without forking or marshalling.
@@ -514,7 +514,7 @@ The differential signal was low: two evaluators by the same author, in the
 same language, with the same shared store and key construction, correlated
 heavily. The VM found real bugs in the tree-walker early on (slot reuse,
 global-scope holes, effect scoping), but those were one-time finds in the
-project's early phase. After the shared runtime consolidation (`runtime.ml`),
+project's early phase. After consolidating shared evaluation machinery,
 the risky machinery — store, keys, traces, capabilities — was already
 single-copy, so the second engine audited the less risky layer.
 
@@ -619,7 +619,7 @@ are no longer OCaml.
 
 Registration: `register-domain({:name :namespace :observe :diff :apply
 :write-cap [:observe-cell]})` is an ordinary primitive, available only at
-the script tier; `:write-cap` is consumed into `Runtime.domain_registry`
+the script tier; `:write-cap` is consumed into the session's domain registry
 and never re-exposed as a pp value. A probe is simply a domain with no
 write authority — `register-probe` is sugar over the same call, with `:diff`
 and `:apply` set to none — so there is one registry and one mechanism
@@ -680,7 +680,7 @@ Stratification: `:namespace` is a list of cell-id string prefixes the
 domain owns — `["file:" ^ root; "tree:" ^ root; "stat:" ^ root]` for the
 filesystem domain, `["proc:"]` for the process domain, empty for a
 probe, since it has nothing to stratify. After root evaluation, core
-scans `Runtime.observed_all` for each registered write-domain and
+scans the session's observations for each registered write-domain and
 rejects on a prefix match, generalised from being hardwired to one
 domain to being declared per domain. One change was load-bearing here:
 collection into `observed_all` is suspended, for exception safety, for
@@ -788,7 +788,7 @@ Each of these is a real limitation, with a mitigation rather than a fix.
   watching all need libraries. The chosen posture is to use dune and opam,
   accept first-party-quality opam dependencies, but keep the interpreter
   core itself dependency-light so the oracle stays auditable, and isolate
-  dependencies behind `Runtime`.
+  dependencies behind narrow world-service modules.
 
 - the cache can act as an authority or existence oracle. Mitigation: the
   transitive hit-time capability check (see the capability model above),

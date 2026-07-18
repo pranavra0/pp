@@ -829,10 +829,10 @@ DESIGN.md derives the transitive requirement and its precomputed
 
 **Status: holds** (with one residual gap) — path checks are component-aware
 and full-path (`/tmp` does not grant `/tmpevil`), and the full path is now
-uniformly canonicalised first: `Runtime.canonical_path` — absolute realpath,
+uniformly canonicalised first: `World_path.canonical` — absolute realpath,
 symlinks resolved, no trailing slash — runs at every `file:`/`tree:`/`stat:`/
 `tool:`/`runtime:file:` construction site, at `--grant` parse time, and at
-the loader bound (`Runtime.loader_authorized`). `Capabilities.path_grants`
+the loader bound (`Loader.authorized`). `Capabilities.path_grants`
 re-applies it to both sides of every scope check, so a grant spelled one way
 authorises a cell observed another way — a symlinked source tree, macOS
 `/var` versus `/private/var`, a trailing slash (`tests/036`). A path that
@@ -879,7 +879,7 @@ whose closure touches the standard library. The runtime/user split is
 load-bearing, not cosmetic.
 
 **Status: holds** — every loader read  goes through
-`Runtime.loader_read`: bounded to the directories of the programs named on
+`Loader.read`: bounded to the directories of the programs named on
 the command line, the working directory, and `~/.pp`. Loading anything else
 errors, with or without a grant. Each read is recorded as a
 `runtime:file:<path>` trace cell that participates in cache validity —
@@ -1033,7 +1033,7 @@ back silently to the reader's `"<?>"` placeholder), and each of its
 top-level forms is evaluated (the tree-walker's `eval_expressions`) or
 evaluated one at a time, under the same
 never-doubled location decoration as the outer top-level driver
-(`Runtime.with_form_location`/`message_has_location` — one implementation,
+(`Error_context.with_form_location`/`message_has_location` — one implementation,
 shared across runs and both nesting levels). An error inside the loaded
 file is decorated with its own `file:line` before it can unwind past the
 `load`, so the `load(…)` call site's own decorator, seeing a message that

@@ -33,8 +33,8 @@
  (action
   (run bash scripts/run-tests.sh src/main.exe)))
 
-; Fork-defeat regression, root cause: Runtime.stdlib_root()
-; (src/runtime.ml) resolves --reconcile/--supervise's auto-loaded
+; Fork-defeat regression: World_path.stdlib_root resolves
+; --reconcile/--supervise's auto-loaded
 ; domain-fs.pp/domain-proc.pp (and their list.pp/map.pp/string.pp deps) to
 ; _build/default/stdlib — the sibling directory of main.exe, i.e. THIS
 ; mirror, not the repo's own stdlib/ — but until this rule existed, that

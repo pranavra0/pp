@@ -2,8 +2,8 @@
    mechanisms (capabilities, config, handlers, trace, sandbox). Pure —
    lists no unix — so it can live in pp.kernel.
 
-   The handlers for these effects live in runtime.ml (impure, Unix-dependent).
-   Included by Runtime so consumers access them through Runtime.<name>. *)
+   The handlers for these effects live in dynamic_scope.ml.
+   Included by Dynamic_scope so consumers use the semantic scope module. *)
 
 type _ Effect.t +=
   | Get_invocation : Invocation.t Effect.t

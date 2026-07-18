@@ -27,7 +27,7 @@ TMP=$(mktemp -d)
 # Resolve any symlinks in TMP itself (macOS: /var -> /private/var) up front —
 # this test builds a domain's :namespace prefix from the RAW shell path
 # (a third-party domain author's job to canonicalize, mirroring what
-# main.ml's own glue does for domain-fs.pp via Runtime.canonical_path); a
+# main.ml's own glue does for domain-fs.pp via World_path.canonical); a
 # cell id is always recorded canonical, so an uncanonicalized namespace
 # prefix would silently never match and the stratification check below
 # would be vacuous.

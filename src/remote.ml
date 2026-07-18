@@ -177,7 +177,7 @@ let preseed_pins_from_file ~(pins_file : string) : unit =
                   | None ->
                       failwith ("pp: --pin-file: pin-probe " ^ name
                                 ^ ": undecodable value: " ^ value_text)
-                  | Some v -> Session.set_probe (Effect.perform Runtime.Get_session) name v)
+                  | Some v -> Session.set_probe (Effect.perform Dynamic_scope.Get_session) name v)
            else
              match parse_pin_line line with
              | None -> failwith ("pp: --pin-file: unparseable pin line: " ^ line)
@@ -195,7 +195,7 @@ let preseed_pins_from_file ~(pins_file : string) : unit =
                         failwith (Printf.sprintf
                           "pp: --pin-file: blob %s failed to re-verify \
                            (corrupt) — refusing to pin" hash)
-                      else Session.set_run_pin (Effect.perform Runtime.Get_session) cell hash))
+                      else Session.set_run_pin (Effect.perform Dynamic_scope.Get_session) cell hash))
 
 (* ---- "blob:<hash>" refs embedded in a node's RESULT value ----
 
@@ -339,7 +339,7 @@ let ship_and_pull host invocation ~(member_home : string) (closed : Scheduler.jo
   let scratch = Filename.temp_file "pp-remote" "" in
   Sys.remove scratch;
   Unix.mkdir scratch 0o755;
-  Fun.protect ~finally:(fun () -> try Runtime.remove_tree scratch with _ -> ()) (fun () ->
+  Fun.protect ~finally:(fun () -> try Sandbox.remove_tree scratch with _ -> ()) (fun () ->
     let member_store_root = Filename.concat member_home store_suffix in
     let pins = pre_observe_granted_scope invocation in
     List.iter (fun (_, hash, content) ->

@@ -10,7 +10,7 @@ open Types
    Unevaluated, leaving clean thunks Evaluated so they skip Store.hit
    entirely — the push-scheduler optimization. *)
 let register_node_key ~key ~thunk =
-  Session.set_node_thunk (Effect.perform Runtime.Get_session) key thunk
+  Session.set_node_thunk (Effect.perform Dynamic_scope.Get_session) key thunk
 
 (* Mark each dirty node's in-memory thunk Unevaluated so the next force
    goes through Store.hit → miss → recompute. Nodes not in the side-table
@@ -18,6 +18,6 @@ let register_node_key ~key ~thunk =
    re-execute and naturally go through Store.hit (pull behavior). *)
 let reset_dirty (dirty_keys : string list) : unit =
   List.iter (fun k ->
-    match Session.find_node_thunk (Effect.perform Runtime.Get_session) k with
+    match Session.find_node_thunk (Effect.perform Dynamic_scope.Get_session) k with
     | Some t -> t.thunk_status <- Unevaluated
     | None -> ()) dirty_keys

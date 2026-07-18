@@ -239,7 +239,7 @@ let rec expand_expr session expansion_count (loc : (string * int) option) (e : e
    top-level driver relies on (REPL/execute_string's `List.map`) is
    unaffected. *)
 let expand_toplevel_list (exprs : expr list) : expr list =
-  let session = Effect.perform Runtime.Get_session in
+  let session = Effect.perform Dynamic_scope.Get_session in
   let expansion_count = ref 0 in
   List.map (fun e ->
     let loc, inner = match e with ELocated (l, i) -> (Some l, i) | _ -> (None, e) in

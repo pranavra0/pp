@@ -12,7 +12,7 @@ flowchart TD
     src([source text])
     reader[reader]
     walker["tree-walker evaluator (evaluator.ml)"]
-    runtime["dynamic evaluation scope (runtime.ml)<br/>plus owned session state (session.ml)"]
+    runtime["dynamic evaluation scope (dynamic_scope.ml)<br/>plus owned session state (session.ml)"]
 
     src --> reader
     reader -- "expr (AST)" --> walker
@@ -105,8 +105,9 @@ continuations.
 macros and gensyms, domains and probes, observations, sealed and file pins,
 fenced actions, and stabilization's node index. Its named lifecycle operations
 reset or retain those families at evaluation, pass, and watch boundaries.
-Independent sessions share no mutable evaluation state. `runtime.ml` provides
-the dynamic effect scope used while evaluating a session.
+Independent sessions share no mutable evaluation state. `dynamic_scope.ml`
+provides bracketed dynamic effect scopes while evaluating a session; it owns no
+mutable resources or registries.
 
 ## The persistent node cache (`store.ml`)
 
@@ -144,7 +145,7 @@ is never memoized.
 With `pp --watch --stabilize`, the reverse-edge index built by
 `Store.build_reverse_index` maps changed cells to dirty node keys.
 `Stabilize.reset_dirty` marks only those in-memory thunks `Unevaluated`.
-`Runtime.keep_thunks` keeps the `thunk_store` alive across watch
+The session lifecycle keeps the thunk memo alive across watch
 iterations, so clean nodes skip `Store.hit` entirely.
 
 This is still narrow. It covers file cells only, folds config and handlers
@@ -204,7 +205,7 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/backend.ml` | The evaluator-only record of init-time hook functions that breaks the kernel↔library dependency cycle. It contains no host operations. |
 | `src/version.ml` | Single source of truth for the version string. |
 
-### Runtime library (`pp`)
+### Application library (`pp`)
 
 | File | Role |
 |---|---|
@@ -212,7 +213,11 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/reader_braces.ml` | The brace-surface parser (`.pp`/`.ppb`, SPEC Appendix B) to the same `expr` AST. |
 | `src/printer_braces.ml` | Renders an `expr` back to brace-surface text: the `pp fmt --to-braces` half. |
 | `src/printer_sexpr.ml` | Renders an `expr` back to s-expression text: the `--to-sexpr` half. |
-| `src/runtime.ml` | The mutable runtime state used by the engine. The immutable invocation is supplied explicitly at the top-level dynamic-scope boundary. |
+| `src/dynamic_scope.ml` | Bracketed OCaml effect scopes for capabilities, config, handlers, traces, nodes, domains, and observation collection. |
+| `src/world_path.ml` | Canonical filesystem paths and discovery of the installed standard library. |
+| `src/loader.ml` | Source loading under bounded interpreter authority, including trace recording. |
+| `src/error_context.ml` | Attaches the innermost source-form location to evaluation errors. |
+| `src/sandbox.ml` | Creates, resolves, and removes node-local scratch directories. |
 | `src/session.ml` | The abstract owner of evaluation/pass state and its `begin_evaluation`, `begin_pass`, and `begin_watch` lifecycle transitions. |
 | `src/evaluator.ml` | The tree-walking evaluator, the project's sole engine, holding `force`, `eval`, effects, the `thunk_store`, and the node rebuilder (`force_node`, `run_node_body`). |
 | `src/macro.ml` | `defmacro` expansion: a function from syntax-as-values to syntax, run at the expansion boundary. |

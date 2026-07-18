@@ -119,7 +119,7 @@ let compute_plan ~(domain_name : string) ~(diff_closure : value)
       Store.why "domain %s: plan %s: miss — running diff" domain_name (Store.short_key key);
       let plan =
         try Primitives.call_with_args diff_closure [observed; desired]
-        with effect Runtime.Get_capabilities, k -> Effect.Deep.continue k []
+        with effect Dynamic_scope.Get_capabilities, k -> Effect.Deep.continue k []
       in
       let result_hash = Types.hash_value plan in
       (try Store.store_object ~key:result_hash ~value:plan with _ -> ());
@@ -133,10 +133,10 @@ let compute_plan ~(domain_name : string) ~(diff_closure : value)
 let has_prefix ~(prefix : string) (s : string) : bool =
   String.length s >= String.length prefix && String.sub s 0 (String.length prefix) = prefix
 
-let stratification_check session (write_domains : (string * Runtime.domain_entry) list) : unit =
+let stratification_check session (write_domains : (string * Session.domain_entry) list) : unit =
   List.iter (fun (cell, _) ->
     List.iter (fun (name, entry) ->
-      if List.exists (fun prefix -> has_prefix ~prefix cell) entry.Runtime.dm_namespace then
+      if List.exists (fun prefix -> has_prefix ~prefix cell) entry.Session.dm_namespace then
         failwith (Printf.sprintf
           "reconcile: stratification violation (LAW 30): the desired state for \
            domain '%s' observed its own domain: %s" name cell))
@@ -149,10 +149,8 @@ let stratification_check session (write_domains : (string * Runtime.domain_entry
    own scope — no separate read-cap threading needed); journal a generic
    intent/done bracket; verify-after-write by re-observing and re-diffing. *)
 let with_domain (name : string) (cap : Capability.t) (f : unit -> 'a) : 'a =
-  try f ()
-  with
-  | effect Runtime.Get_domain, k -> Effect.Deep.continue k (Some name)
-  | effect Runtime.Get_capabilities, k -> Effect.Deep.continue k [cap]
+  Dynamic_scope.with_domain name (fun () ->
+    Dynamic_scope.with_capabilities [cap] f)
 
 (* A load-bearing wall (found the hard way): observe (and, to be
    safe across --watch --stabilize's keep_thunks, apply) is a call to a
@@ -173,38 +171,37 @@ let with_domain (name : string) (cap : Capability.t) (f : unit -> 'a) : 'a =
    make_thunk_ca's cfg_hash, so every call gets a distinct key and can
    never hit an in-memory thunk from a sibling call. *)
 let fresh_nonce_config () : value =
-  let n = Session.next_cache_bust (Effect.perform Runtime.Get_session) in
+  let n = Session.next_cache_bust (Effect.perform Dynamic_scope.Get_session) in
   VMap [(VString "__pp_q13_cache_bust", VInt n)]
 let call_uncached (fn : value) (args : value list) : value =
-  try Primitives.call_with_args fn args
-  with effect Runtime.Get_config, k ->
-    Effect.Deep.continue k (fresh_nonce_config () :: Effect.perform Runtime.Get_config)
+  Dynamic_scope.with_config (fresh_nonce_config ()) (fun () ->
+    Primitives.call_with_args fn args)
 
-let observe_domain (entry : Runtime.domain_entry) (name : string) : value =
-  with_domain name entry.Runtime.dm_cap
-    (fun () -> call_uncached entry.Runtime.dm_observe [])
+let observe_domain (entry : Session.domain_entry) (name : string) : value =
+  with_domain name entry.Session.dm_cap
+    (fun () -> call_uncached entry.Session.dm_observe [])
 
 let verify_failed_msg (name : string) : string =
   "reconcile: verify-after-write failed for domain " ^ name
-let run_domain ~(name : string) ~(entry : Runtime.domain_entry) ~(desired : value) : unit =
-  let diff_closure = match entry.Runtime.dm_diff with
+let run_domain ~(name : string) ~(entry : Session.domain_entry) ~(desired : value) : unit =
+  let diff_closure = match entry.Session.dm_diff with
     | Some d -> d
     | None -> assert false (* filtered out by run_all before this is called *)
   in
-  let apply_closure = match entry.Runtime.dm_apply with
+  let apply_closure = match entry.Session.dm_apply with
     | Some a -> a
     | None -> assert false
   in
   (* Load-bearing suspension: a domain's own bookkeeping
      during observe/diff/apply must never trip its own stratification scan. *)
-  (try
+  Dynamic_scope.without_observation_collection (fun () ->
     let observed = observe_domain entry name in
     let plan = compute_plan ~domain_name:name ~diff_closure ~observed ~desired in
     let summary = plan_summary plan in
     let hash = Hasher.hash_concat
         ["domain-pass"; name; Types.hash_value (Primitives.force_deep desired)] in
     Journal.append (Journal.DomainIntent { hash; fields = summary });
-    with_domain name entry.Runtime.dm_cap
+    with_domain name entry.Session.dm_cap
       (fun () -> ignore (call_uncached apply_closure [plan]));
     Journal.append (Journal.DomainDone { hash });
     Printf.eprintf "[reconcile:%s] %s\n%!" name
@@ -216,7 +213,7 @@ let run_domain ~(name : string) ~(entry : Runtime.domain_entry) ~(desired : valu
     let plan2 = compute_plan ~domain_name:name ~diff_closure ~observed:observed2 ~desired in
     if not (plan_items_empty plan2) then
       failwith (verify_failed_msg name)
-  with effect Runtime.Get_observe_all, k -> Effect.Deep.continue k false)
+  )
 
 (* ---- Driver entry point ----
    [all_desired] is a map of domain-name -> desired-state value (main.ml
@@ -251,7 +248,7 @@ let record_epoch invocation (forced : value) : unit =
   with _ -> ()
 
 let run_all invocation (all_desired : value) : unit =
-  let session = Effect.perform Runtime.Get_session in
+  let session = Effect.perform Dynamic_scope.Get_session in
   let forced = Primitives.force_deep all_desired in
   let entries = match forced with
     | VMap kvs -> kvs
@@ -268,7 +265,7 @@ let run_all invocation (all_desired : value) : unit =
     match Session.find_domain session name with
     | None -> failwith ("reconcile: no domain registered under name '" ^ name ^ "'")
     | Some entry ->
-        (match entry.Runtime.dm_diff, entry.Runtime.dm_apply with
+        (match entry.Session.dm_diff, entry.Session.dm_apply with
          | Some _, Some _ -> (name, entry, desired)
          | _ -> failwith ("reconcile: domain '" ^ name
                           ^ "' has no :diff/:apply (it is a probe, not a write-domain)")))
@@ -283,6 +280,6 @@ let run_all invocation (all_desired : value) : unit =
    by main.ml to decide whether a bare register-domain-only program (no
    --reconcile/--supervise flag) should still run the generic pass. *)
 let any_write_domain_registered () : bool =
-  Session.fold_domains (Effect.perform Runtime.Get_session) (fun _ entry acc ->
-    acc || (entry.Runtime.dm_diff <> None && entry.Runtime.dm_apply <> None))
+  Session.fold_domains (Effect.perform Dynamic_scope.Get_session) (fun _ entry acc ->
+    acc || (entry.Session.dm_diff <> None && entry.Session.dm_apply <> None))
     false

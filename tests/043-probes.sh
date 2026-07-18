@@ -17,7 +17,7 @@
 # observe-fn fresh, and the node's stored trace is re-verified against
 # whatever the counter says NOW. Section (6) below additionally proves the
 # SAME mechanism live under one long-running `pp --watch` process: probe
-# reads are ordinary cell observations (Runtime.observed_all/Store.
+# reads are ordinary cell observations (session observations/Store.
 # observe_cell), so the existing generic watch-loop polling picks up a
 # changed probe cell with NO special-cased wiring.
 set -uo pipefail
@@ -162,7 +162,7 @@ assert "register-probe-in-node-errors" "node bod" present
 # (6) --watch: the SAME probe cell change, detected live by one
 #     long-running `pp --watch` process on a timer, with no special-cased
 #     wiring — a probe read is an ordinary cell observation, so the
-#     existing generic watch-loop polling (Runtime.observed_all ->
+#     existing generic watch-loop polling (session observations ->
 #     Store.observe_cell) already covers `probe:` cells for free.
 # =====================================================================
 rm -rf "$TMP/.pp"

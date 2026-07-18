@@ -16,7 +16,7 @@
  (name pp)
  (public_name pp)
  (wrapped false)
- (modules fswalk session runtime store journal gcroots node kernel_props
+ (modules fswalk session dynamic_scope world_path sandbox loader error_context store journal gcroots node kernel_props
    reader reader_braces printer_braces printer_sexpr
    process scheduler domain_prims fenced island primitives domains
    evaluator macro stabilize repl

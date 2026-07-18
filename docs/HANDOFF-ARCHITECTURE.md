@@ -171,11 +171,9 @@ two orchestration functions.
 
 ## Current risks confirmed on `master`
 
-- `runtime.ml` combines invocation data, per-pass flags, memoization, registries,
-  observers, trace operations, path handling, sandbox management, and errors.
 - `Backend.r` mixes evaluator cycle-breaking functions with host services and
   relies on mutable initialization order.
-- Reset behavior is distributed among `main.ml`, `evaluator.ml`, `runtime.ml`,
+- Reset behavior is distributed among `main.ml`, `evaluator.ml`,
   `macro.ml`, `primitives.ml`, `repl.ml`, `store.ml`, `domains.ml`, and
   `fenced.ml`.
 - `types.ml` is a dependency root that also implements hashing, free-variable
@@ -225,37 +223,6 @@ clears and assignments.
 executable characterization.
 
 **Non-goal:** change those decisions.
-
-### 7. Narrow `Runtime` to dynamic scope
-
-**Purpose:** make OCaml effects a clear strength rather than part of an umbrella
-module.
-
-**Work:**
-
-- Move effect declarations and their small handler helpers into a
-  `Dynamic_scope` module.
-- Keep capabilities, config, handler lookup, trace recording, node/sandbox,
-  domain, and observation-collection extent as effects where dynamic scope is
-  the semantic model.
-- Move paths, loader I/O, error decoration, sandbox filesystem operations, and
-  registries to their owning modules.
-- Provide bracket-style functions for installing scopes so normal return,
-  exception, effect continuation, and tail-call behavior stay visibly safe.
-- Avoid exposing raw effect constructors when a semantic operation such as
-  `current_capabilities` or `record_observation` is clearer and testable.
-
-**Likely files:** `src/effects.*`, `src/runtime.*`, evaluator, node, domains,
-process, fenced, and store callers.
-
-**Verify:** handler/config/capability exception and tail-call tests, trace tests,
-sandbox/process tests, suite and full fuzzer.
-
-**Exit:** `Runtime` is deleted or reduced to a deliberately named composition
-type; dynamic-scope code owns no process-global registries.
-
-**Non-goal:** replace effects with explicit capability/config arguments through
-the evaluator.
 
 ### 8. Replace evaluator hooks with constructed evaluator operations
 
@@ -766,4 +733,5 @@ not only expected stdout.
 
 ## Immediate next action
 
-Execute roadmap item 7 only: narrow `Runtime` to dynamic scope.
+Execute roadmap item 8 only: replace evaluator hooks with constructed evaluator
+operations.

@@ -13,7 +13,7 @@
    the naming.
 
    File-cell paths are canonicalized before they ever reach [to_string]
-   (Runtime.canonical_path — SPEC LAW 23: absolute realpath,
+   (World_path.canonical — SPEC LAW 23: absolute realpath,
    no trailing slash), so a canonical path always starts with '/'. That
    invariant RESERVES the grammar for a future host-qualified form,
    "file:<host>:<canonical-path>": the character right after

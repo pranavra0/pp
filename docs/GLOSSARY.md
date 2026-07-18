@@ -129,7 +129,7 @@ brace-to-s-expression mapping.
   `tests/046`). It is registered with
   `register-domain({:name :namespace :observe :diff :apply :write-cap})`.
   A probe (see above) is a domain with no write authority: one registry,
-  `Runtime.domain_registry`, serving both roles.
+  owned by `Session`, serving both roles.
 
 ### Scheduling
 

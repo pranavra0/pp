@@ -127,9 +127,9 @@ A design review of the first abstract-machine pass found correctness gaps that m
 - Symbol lookup, `if` conditions, and function arguments must be **forced** before use, matching the current strict call-by-value evaluator.
 - `ELet` mutual bindings must **backpatch** each thunk's `thunk_env` to the mutual environment so each RHS can see the others.
 - `ELet*` must bind **content-addressed thunks**, not evaluated values, preserving the existing laziness and hashing contract.
-- `EPerform` must record the handler observation and use `Runtime.Lookup_handler`, not a symbol lookup.
+- `EPerform` must record the handler observation and use `Dynamic_scope.Lookup_handler`, not a symbol lookup.
 - `EWithHandler` must evaluate each handler expression to a closure and build a real handler table.
-- `EConfig` must carry the forced key through the continuation frame and call `Runtime.config_lookup` correctly.
+- `EConfig` must carry the forced key through the continuation frame and call `Dynamic_scope.config_lookup` correctly.
 
 These are all fixable, but they show that the abstract-machine design must be written form-by-form against the current `eval_tail` semantics rather than sketched at a high level. The risk of silently changing behavior is too high to include in this branch.
 

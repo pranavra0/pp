@@ -64,11 +64,11 @@ let uses_domains invocation =
    (source-tag, content) pairs to run BEFORE the user's file(s), under the
    SAME init so the domain registrations they
    perform survive into the user program's evaluation — two SEPARATE
-   calls would each re-init and wipe Runtime.domain_registry
+   calls would each reinitialize and wipe the session's domain registry
    (Evaluator.init resets it every fresh run). *)
 let stdlib_glue_sources invocation : (string * string) list =
   if not (uses_domains invocation) then []
-  else match Runtime.stdlib_root () with
+  else match World_path.stdlib_root () with
     | None ->
         failwith "pp: could not locate the stdlib/ directory next to the running \
                   executable (needed for --reconcile/--supervise's domain-fs.pp/\
@@ -82,7 +82,7 @@ let stdlib_glue_sources invocation : (string * string) list =
         let fs_glue = match Invocation.program_reconcile_root invocation with
           | None -> []
           | Some r ->
-              let canon = Runtime.canonical_path r in
+              let canon = World_path.canonical r in
               (* :wo, not :rw — write-only is the minimum sufficient grant
                  here: a write-only grant must still support a full
                  build+restore cycle, because the single writer reading its
@@ -317,7 +317,7 @@ let run_serve_hit host session invocation (key, token_file, shared_root, reply_f
      builtin default the build itself recorded and makes Record_read a
      no-op, so a synced node verifies exactly as it does locally. *)
   let reply =
-    Runtime.with_top_level session invocation
+    Dynamic_scope.with_top_level session invocation
       ~f:(fun () -> Transport.serve_hit host ~key ~token_text ~shared_root) ()
   in
   Store.atomic_write reply_file reply
@@ -348,7 +348,7 @@ let main () =
     if n > 0 && s.[n - 1] = '\n' then String.sub s 0 (n - 1) else s
   in
   let host = Host_services.make
-      ~canonical_realpath:Runtime.canonical_path_impl ~unix_time:Unix.time
+      ~canonical_realpath:World_path.canonical_impl ~unix_time:Unix.time
       ~home_dir:(fun () -> Sys.getenv "HOME") ~read_secret ~write_secret
   in
   let eval_str = ref None in
@@ -496,9 +496,9 @@ let main () =
 
     doc_of "  pp --update <file.pp>     Re-resolve islands and rewrite inline pins (implies --fetch-islands)\n"
       (flag "--update" (fun () ->
-         Island.update_mode := true; Runtime.state.island_fetch_enabled <- true));
+         Island.update_mode := true; Island.fetch_enabled := true));
     doc_of "  pp --fetch-islands        Allow git fetch for uncached island pins (default: off)\n"
-      (flag "--fetch-islands" (fun () -> Runtime.state.island_fetch_enabled <- true));
+      (flag "--fetch-islands" (fun () -> Island.fetch_enabled := true));
 
     doc_of "  pp --schedule serial|parallel:N|race:N|remote:MEMBER  Node-miss dispatch policy (default: serial); remote:<member> places misses on a cluster member (members: ~/.pp/cluster/members or $PP_CLUSTER_MEMBERS)\n"
       { name = "--schedule"; arity = 1; doc = ""; internal = false;
@@ -804,9 +804,9 @@ let main () =
     let raw_roots =
       Sys.getcwd ()
       :: List.map (fun f -> Filename.dirname f) !files
-      @ (match Runtime.stdlib_root () with Some d -> [d] | None -> [])
+      @ (match World_path.stdlib_root () with Some d -> [d] | None -> [])
     in
-    List.map Runtime.canonical_path raw_roots
+    List.map World_path.canonical raw_roots
   in
 
 
@@ -949,7 +949,7 @@ let main () =
    | Some a -> run_recv_hit a; exit 0 | None -> ());
   (* ---- `pp gc` (explicit, never automatic) ---- *)
   if !gc_mode then
-    (Runtime.with_top_level session invocation
+    (Dynamic_scope.with_top_level session invocation
        ~f:(fun () -> Store_gc.run ~grace_seconds:!gc_grace_seconds) ();
      exit 0);
   (* ---- `--publish-object <shared-root>` — the by-hash
@@ -964,7 +964,7 @@ let main () =
      actions or journals (nothing here ever touches either). *)
   (match !publish_object_root with
    | Some shared_root ->
-       let last = Runtime.with_top_level session invocation
+       let last = Dynamic_scope.with_top_level session invocation
            ~f:(fun () -> run_files invocation (List.rev !files)) () in
        (match last with
         | None -> failwith "pp: --publish-object: the program produced no value"
@@ -994,7 +994,7 @@ let main () =
      construction: nothing below this branch ever runs. *)
   (match !gc_mark_out with
    | Some out ->
-       let last = Runtime.with_top_level session invocation
+       let last = Dynamic_scope.with_top_level session invocation
            ~f:(fun () -> run_files invocation (List.rev !files)) () in
        (try
           let all = select_member_slice invocation (compute_all_desired invocation last) in
@@ -1024,7 +1024,7 @@ let main () =
           f updated skipped)
       (List.rev !files);
   begin
-    let _ = Runtime.with_top_level session invocation ~f:(fun () ->
+    let _ = Dynamic_scope.with_top_level session invocation ~f:(fun () ->
       (match !eval_str, !files with
       | Some e, [] ->
           let results = Repl.execute_string e in
@@ -1090,11 +1090,11 @@ let main () =
   (match !remote_node_args with
    | Some (token_file, _, shared_root, keys_file, reply_file) ->
        let token_text = Store.read_raw token_file in
-       (* Store.hit replays a verified trace's reads via Runtime.record_read,
+       (* Store.hit replays a verified trace's reads via Dynamic_scope.record_read,
           which performs Record_read/Get_observe_all — so this after-run serve
           must hold the same top-level observation context the run itself held
           (line 1050), or a clean hit crashes on an unhandled effect. *)
-       Runtime.with_top_level session invocation
+       Dynamic_scope.with_top_level session invocation
          ~f:(fun () ->
            Remote.serve_assigned_keys host ~token_text ~keys_file ~shared_root
              ~reply_file) ()

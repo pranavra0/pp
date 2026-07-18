@@ -292,20 +292,20 @@ let store_trace ~key ~outcome ~result_hash ~reads =
    never matches a recorded hash (so it forces a miss). *)
 
 (* A file cell-id is "file:<canonical-path>" (SPEC LAW 23 / DESIGN §2.1):
-   the path is canonicalized once, here, via Runtime.canonical_path, so the
+   the path is canonicalized once, here, via World_path.canonical, so the
    hit-time authority check (which canonicalizes independently in
    Capabilities.path_grants) and the staleness check agree regardless of
    which spelling (symlink, /var vs /private/var, trailing slash) the
    program used. *)
 let file_cell_id (path : string) : string =
-  Cell.(to_string (File ((Runtime.canonical_path path) :> string)))
+  Cell.(to_string (File ((World_path.canonical path) :> string)))
 
 (* A stat cell — "stat:<canonical-path>" — records what a file *predicate*
    observed: presence and kind, never contents. Precise for file-exists?/
    dir?: creating or deleting the path invalidates, content edits do not; a
    trace that observed absence re-verifies while the path stays absent. *)
 let stat_cell_id (path : string) : string =
-  Cell.(to_string (Stat ((Runtime.canonical_path path) :> string)))
+  Cell.(to_string (Stat ((World_path.canonical path) :> string)))
 
 let stat_kind (path : string) : string =
   match Unix.lstat path with
@@ -393,7 +393,7 @@ let load_blob (h : string) : string option =
 
 (* Per-run pin table: cell-id → content hash of the run's snapshot. *)
 let unpin_file (path : string) : unit =
-  Session.remove_run_pin (Effect.perform Runtime.Get_session) (file_cell_id path)
+  Session.remove_run_pin (Effect.perform Dynamic_scope.Get_session) (file_cell_id path)
 
 (* Re-observe a cell's current world state (one arm per Cell kind). *)
 let observe_cell (cell_id : string) : string option =
@@ -401,7 +401,7 @@ let observe_cell (cell_id : string) : string option =
   | Cell.File path ->
       (* A pinned cell re-observes its run snapshot, keeping validity
          decisions consistent with what this run's nodes actually read. *)
-      (match Session.find_run_pin (Effect.perform Runtime.Get_session) cell_id with
+      (match Session.find_run_pin (Effect.perform Dynamic_scope.Get_session) cell_id with
        | Some h -> Some h
        | None -> hash_file_opt path)
   | Cell.RuntimeFile path ->
@@ -418,35 +418,35 @@ let observe_cell (cell_id : string) : string option =
   | Cell.Env name -> Some (env_observed_hash (Sys.getenv_opt name))
   | Cell.Argv ->
       Some (argv_observed_hash
-              (Invocation.program_argv (Effect.perform Runtime.Get_invocation)))
+              (Invocation.program_argv (Effect.perform Dynamic_scope.Get_invocation)))
   (* Config and handler cells re-observe the CALLER's ambient stacks
      (LAW 33/26) through the same helpers that recorded them. *)
-  | Cell.Config key -> (try Some (Runtime.observe_config key) with _ -> None)
-  | Cell.Handler name -> (try Some (Runtime.observe_handler name) with _ -> None)
-  | Cell.Proc name -> (try Runtime.observe_proc name with _ -> None)
+  | Cell.Config key -> (try Some (Dynamic_scope.observe_config key) with _ -> None)
+  | Cell.Handler name -> (try Some (Dynamic_scope.observe_handler name) with _ -> None)
+  | Cell.Proc name -> (try Dynamic_scope.observe_proc name with _ -> None)
   (* Probes: re-observing evaluates the probe (once per pass, pinned in
      the same session cache `(probe name)` reads) via the
-     Runtime.probe_observer hook (Primitives.probe_observe_for_store, wired
+     session probe observer (wired
      in main.ml — Store cannot depend on Primitives directly). A probe this
      process never registered returns None: cannot re-observe, never
      verifies, forces a miss (the sound, conservative answer). *)
-  | Cell.Probe name -> (try Runtime.observe_probe name with _ -> None)
+  | Cell.Probe name -> (try Dynamic_scope.observe_probe name with _ -> None)
   (* Sealed cells: re-hash the CURRENT bytes without ingesting — mirrors
      the read-path logic (read_sealed_cell below) but never writes a pin or
      touches the CAS; a pin from THIS run is preferred
      over a fresh disk read so a re-observation inside the same pass never
      contradicts what was actually read. *)
   | Cell.Sealed path ->
-      (match Session.find_sealed_pin (Effect.perform Runtime.Get_session) cell_id with
+      (match Session.find_sealed_pin (Effect.perform Dynamic_scope.Get_session) cell_id with
        | Some bytes -> Some (hash_string bytes)
        | None -> hash_file_opt path)
   (* A third-party domain's own sub-cell, via the domain's own
-     :observe-cell closure (Runtime.domain_cell_observer, wired in main.ml —
+     :observe-cell closure (wired through the session in main.ml —
      the proc_observer/probe_observer indirection, generalized: Store
      cannot depend on Primitives directly). A domain with no :observe-cell,
      or one this process never registered, returns None — cannot
      re-observe, never verifies, forces a miss (the sound default). *)
-  | Cell.Domain { name; sub } -> (try Runtime.observe_domain_cell name sub with _ -> None)
+  | Cell.Domain { name; sub } -> (try Dynamic_scope.observe_domain_cell name sub with _ -> None)
   | Cell.Unknown _ -> None  (* cannot re-observe ⇒ never verifies *)
 
 let trace_verifies (tr : trace) : bool =
@@ -459,7 +459,7 @@ let trace_verifies (tr : trace) : bool =
 (* Record a world-read made by the currently-forcing node(s). Called from the
    read primitives (slurp, read-file). *)
 let record_file_read (path : string) (content : string) : unit =
-  Runtime.record_read (file_cell_id path) (hash_string content)
+  Dynamic_scope.record_read (file_cell_id path) (hash_string content)
 
 (* ---- Snapshot-as-CAS-ingest — torn reads are dead ----
 
@@ -485,10 +485,10 @@ let read_raw (path : string) : string =
 let read_file_cell (path : string) : string =
   let cell = file_cell_id path in
   let serve content h =
-    Runtime.record_read cell h;
+    Dynamic_scope.record_read cell h;
     content
   in
-  let session = Effect.perform Runtime.Get_session in
+  let session = Effect.perform Dynamic_scope.Get_session in
   match Session.find_run_pin session cell with
   | Some h ->
       (match load_blob h with
@@ -516,24 +516,24 @@ let read_file_cell (path : string) : string =
    cell id exactly like [run_pins] keys a "file:<path>" cell id — same
    per-run consistency (first read of a run pins; later reads of the SAME
    cell in the SAME run serve the pin), different storage (never the CAS).
-   The cell records via ordinary [Runtime.record_read] with hash_string of
+   The cell records via ordinary [Dynamic_scope.record_read] with hash_string of
    the bytes (never the bytes themselves — that hash is what LAW 39's
    rotation-invalidation and the trace mechanism need). Returns the raw
    bytes; the caller wraps them as VSealed. *)
 let sealed_cell_id (path : string) : string =
-  Cell.(to_string (Sealed ((Runtime.canonical_path path) :> string)))
+  Cell.(to_string (Sealed ((World_path.canonical path) :> string)))
 
 let read_sealed_cell (path : string) : string =
   let cell = sealed_cell_id path in
-  let session = Effect.perform Runtime.Get_session in
+  let session = Effect.perform Dynamic_scope.Get_session in
   match Session.find_sealed_pin session cell with
   | Some bytes ->
-      Runtime.record_read cell (hash_string bytes);
+      Dynamic_scope.record_read cell (hash_string bytes);
       bytes
   | None ->
       let bytes = read_raw path in
       Session.set_sealed_pin session cell bytes;
-      Runtime.record_read cell (hash_string bytes);
+      Dynamic_scope.record_read cell (hash_string bytes);
       bytes
 
 (* Result of a cache lookup: a verified success, a verified (memoized) failure
@@ -656,7 +656,7 @@ let hit ~key ~authorized : hit_result =
                (short_key key)
                (match tr.tr_outcome with Ok -> "ok" | Failed -> "failing")
                (List.length tr.tr_reads);
-             List.iter (fun (c, h) -> Runtime.record_read c h) tr.tr_reads;
+             List.iter (fun (c, h) -> Dynamic_scope.record_read c h) tr.tr_reads;
              (* GC mark (see [gc_marking]'s header comment above):
                 a verified hit means this trace/object/blob(s) are LIVE for
                 whichever root program is currently being replayed. *)

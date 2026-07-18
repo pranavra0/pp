@@ -2,7 +2,7 @@
    compile-order cycles.
 
    Replaces the scattered forward-reference cells in primitives.ml, the
-   force hook in runtime.ml, and the per-backend node/j_run hooks with a
+   force hook in dynamic_scope.ml, and the per-backend node/j_run hooks with a
    single mutable record: every backend engine hook (force/eval/apply/
    node-key/run-node/expand) is a field here, installed by the init that
    owns it and read by the module that needs it — instead of fourteen

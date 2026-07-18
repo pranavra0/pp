@@ -27,7 +27,7 @@
 open Types
 
 let has_process_cap () =
-  List.exists Capability.check_process (Effect.perform Runtime.Get_capabilities)
+  List.exists Capability.check_process (Effect.perform Dynamic_scope.Get_capabilities)
 
 (* Resolve a command to the binary that will execute: as-is when it contains
    a slash, else the first match on $PATH. The resolved path is what the
@@ -47,7 +47,7 @@ let resolve_cmd (cmd : string) : string option =
 
 let record_tool_cell (resolved : string) : unit =
   match Store.hash_file_opt resolved with
-  | Some h -> Runtime.record_read (Cell.(to_string (Tool ((Runtime.canonical_path resolved) :> string)))) h
+  | Some h -> Dynamic_scope.record_read (Cell.(to_string (Tool ((World_path.canonical resolved) :> string)))) h
   | None -> ()
 
 (* The coarse-cell soundness floor: one whole-tree hash per fs-read
@@ -58,10 +58,10 @@ let record_tree_cells () : unit =
     List.iter (fun ((path : Paths.canonical), mode) ->
       match mode with
       | Capability.Read | Capability.ReadWrite ->
-          Runtime.record_read (Cell.(to_string (Tree (path :> string)))) (Store.tree_hash (path :> string))
+          Dynamic_scope.record_read (Cell.(to_string (Tree (path :> string)))) (Store.tree_hash (path :> string))
       | Capability.Write -> ())
     (Capability.list_fs_paths cap))
-    (Effect.perform Runtime.Get_capabilities)
+    (Effect.perform Dynamic_scope.Get_capabilities)
 
 let record_run_observations (resolved : string) : unit =
   record_tool_cell resolved;
@@ -101,7 +101,7 @@ let exec (argv : string list) : int * string * string =
           Unix.close fd_in; Unix.close fd_out; Unix.close fd_err)
         (fun () ->
            let saved_cwd = Unix.getcwd () in
-           (match Runtime.current_sandbox ~create:true with
+           (match Sandbox.current ~create:true with
             | Some d -> (try Unix.chdir d with _ -> ())
             | None -> ());
            Fun.protect
@@ -182,12 +182,12 @@ let parse_depfile (content : string) : string list =
 let record_depfile_cells (deps : string list) : unit =
   List.iter (fun dep ->
     if Sys.file_exists dep then begin
-      if List.exists (fun cap -> Capability.check_fs_read cap (Runtime.canonical_path dep))
-           (Effect.perform Runtime.Get_capabilities)
+      if List.exists (fun cap -> Capability.check_fs_read cap (World_path.canonical dep))
+           (Effect.perform Dynamic_scope.Get_capabilities)
       then ignore (Store.read_file_cell dep)
       else
         match Store.hash_file_opt dep with
-        | Some h -> Runtime.record_read (Cell.(to_string (Tool ((Runtime.canonical_path dep) :> string)))) h
+        | Some h -> Dynamic_scope.record_read (Cell.(to_string (Tool ((World_path.canonical dep) :> string)))) h
         | None -> ()
     end)
     deps
@@ -211,7 +211,7 @@ let run_dep_effect (args : value list) : value =
       let (code, out, err) = exec argv in
       (* The depfile is a sandbox output, not an observation: read it raw. *)
       let dep_path =
-        match Runtime.sandbox_resolve ~create:false depfile with
+        match Sandbox.resolve ~create:false depfile with
         | Some p -> p
         | None -> depfile
       in
@@ -231,7 +231,7 @@ let run_dep_effect (args : value list) : value =
    checked, writes anywhere granted. *)
 let write_file_effect ~(has_cap : string -> bool) (path : string)
     (content : string) : value =
-  match Runtime.sandbox_resolve ~create:true path with
+  match Sandbox.resolve ~create:true path with
   | Some scratch ->
       (try
          let ch = open_out scratch in
@@ -240,7 +240,7 @@ let write_file_effect ~(has_cap : string -> bool) (path : string)
          VNil
        with Sys_error msg -> failwith ("write-file: " ^ msg))
   | None ->
-      if Effect.perform Runtime.In_node then
+      if Effect.perform Dynamic_scope.In_node then
         failwith ("write-file: node writes are sandbox-scratch only (LAW 18): "
                   ^ path)
       else begin
@@ -261,7 +261,7 @@ let write_file_effect ~(has_cap : string -> bool) (path : string)
    scratch (relative path, sandbox exists); such reads are node-local and
    deliberately unrecorded. *)
 let sandbox_read (path : string) : string option =
-  match Runtime.sandbox_resolve ~create:false path with
+  match Sandbox.resolve ~create:false path with
   | Some scratch ->
       (try
          let ic = open_in scratch in
@@ -291,16 +291,16 @@ let read_dispatch ~(tag : string) ~(cap_err : string -> string) (path : string) 
   | Some content -> VString content
   | None ->
       let fs_ok =
-        List.exists (fun cap -> Capability.check_fs_read cap (Runtime.canonical_path path))
-          (Effect.perform Runtime.Get_capabilities)
+        List.exists (fun cap -> Capability.check_fs_read cap (World_path.canonical path))
+          (Effect.perform Dynamic_scope.Get_capabilities)
       in
       if fs_ok then
         (try VString (Store.read_file_cell path)
          with Sys_error msg -> failwith (tag ^ ": " ^ msg))
       else
         let secret_ok =
-          List.exists (fun cap -> Capability.check_secret cap (Runtime.canonical_path path))
-            (Effect.perform Runtime.Get_capabilities)
+          List.exists (fun cap -> Capability.check_secret cap (World_path.canonical path))
+            (Effect.perform Dynamic_scope.Get_capabilities)
         in
         if secret_ok then
           (try VSealed (Store.read_sealed_cell path)
@@ -321,7 +321,7 @@ let read_dispatch ~(tag : string) ~(cap_err : string -> string) (path : string) 
    Primitives.probe_value_for), domain observe/apply, and the script tier. *)
 let has_network_cap ~(host : string) ~(port : int option) : bool =
   List.exists (fun cap -> Capability.check_network cap ~host ~port)
-    (Effect.perform Runtime.Get_capabilities)
+    (Effect.perform Dynamic_scope.Get_capabilities)
 
 (* Parse an http(s) URL into (scheme, host, port); port defaults to the
    scheme's standard port when the URL omits one, so a `--grant
@@ -376,7 +376,7 @@ let curl_bin () : string =
    couldn't connect, timeout) is a pp-level error; an HTTP-level error
    status (404, 500, …) is not — it comes back as an ordinary result, same *)
 let http_request ~(method_ : string) ~(url : string) ~(body : string option) : value =
-  if Effect.perform Runtime.In_node then
+  if Effect.perform Dynamic_scope.In_node then
     failwith (Printf.sprintf
       "perform http-%s: network effects may not appear inside node bodies (LAW 37/38)"
       (String.lowercase_ascii method_));

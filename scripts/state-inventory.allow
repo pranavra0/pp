@@ -25,8 +25,6 @@ mutable-field|src/printer_braces.ml|line|pass
 mutable-field|src/printer_sexpr.ml|line|pass
 mutable-field|src/reader.ml|pos|pass
 mutable-field|src/reader_braces.ml|pos|pass
-mutable-field|src/runtime.ml|island_fetch_enabled|command
-mutable-field|src/runtime.mli|island_fetch_enabled|command
 mutable-field|src/scheduler.ml|policy|command
 mutable-field|src/scheduler.ml|remote_dispatch|process-service
 mutable-field|src/types.ml|node_caps|node
@@ -42,6 +40,7 @@ mutable-field|src/types.mli|thunk_status|node
 signal-handler|src/scheduler.ml|sigint|process-service
 top-ref|src/fenced.ml|epoch_counter|process-service
 top-ref|src/island.ml|update_mode|command
+top-ref|src/island.ml|fetch_enabled|command
 top-ref|src/kernel_props.ml|cap_checks|test-diagnostic
 top-ref|src/kernel_props.ml|failures|test-diagnostic
 top-ref|src/kernel_props.ml|fresh_counter|test-diagnostic
@@ -53,7 +52,7 @@ top-ref|src/reader.ml|lex_line|pass
 top-ref|src/reader_braces.ml|try_counter|pass
 top-ref|src/repl.ml|global_env|command
 top-ref|src/repl.ml|history|command
-top-ref|src/runtime.ml|sandbox_counter|node
+top-ref|src/sandbox.ml|counter|node
 top-ref|src/scheduler.ml|fork_count|test-diagnostic
 top-ref|src/scheduler.ml|sigint_installed|process-service
 top-ref|src/store.ml|atomic_write_count|durable-store

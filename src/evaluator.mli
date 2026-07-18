@@ -27,7 +27,7 @@ val force_node :
 
 val init : Session.t -> retain_thunks:bool -> unit
 (** Reset the evaluator state, clear the thunk store (unless
-    [Runtime.keep_thunks] is set), reset the macro table and gensym
+    thunk retention is requested), reset the macro table and gensym
     counter, and wire the backend hooks for [force]/[eval]/[apply]. *)
 
 val is_data_closed : Types.thunk -> bool

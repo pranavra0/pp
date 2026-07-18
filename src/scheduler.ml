@@ -3,7 +3,7 @@
 
    Worker model: fork() at the dispatch
    point inherits ALL ambient state (handler_stack closures, capabilities,
-   config, thunk_store) byte-identically via COW — no Runtime.t refactor and
+   config, thunk memo) byte-identically via COW — no scope-state refactor and
    no marshaling is needed. A forked worker runs the EXACT function
    the serial miss arm calls, [Evaluator.run_node_body] (passed in as
    [j_run] by the caller) — there is no second "evaluate node in worker"
@@ -83,7 +83,7 @@ let terminate_pid (pid : int) : unit =
 
 (* Best-effort cleanup of a dead/killed child's sandbox scratch dirs. A
    node's sandbox is named "pp-sandbox-<pid>-<n>" under the system temp dir
-   (Runtime.current_sandbox) and is normally removed by the child itself
+   (Sandbox.current) and is normally removed by the child itself
    when its trace frame pops — this is a belt-and-suspenders sweep for the
    case where the child was killed (race loser) or died before its own
    cleanup ran. The parent doesn't know which counters a child used, so it
@@ -97,7 +97,7 @@ let cleanup_child_sandboxes (pid : int) : unit =
     let plen = String.length prefix in
     Array.iter (fun name ->
       if String.length name >= plen && String.sub name 0 plen = prefix then
-        Runtime.remove_tree (Filename.concat tmp name))
+        Sandbox.remove_tree (Filename.concat tmp name))
       (Sys.readdir tmp)
   with _ -> ()
 

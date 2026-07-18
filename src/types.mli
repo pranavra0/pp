@@ -8,7 +8,7 @@ exception Capability_error of string
 exception Pp_exit of int
 exception Reader_incomplete of string
 (* A runtime or parse error carrying its source location as structured data;
-   [pos = None] means not yet located ([Runtime.with_form_location] attaches it
+   [pos = None] means not yet located ([Error_context.with_form_location] attaches it
    at the innermost form). [kind] records whether it may be memoized as a
    failing node trace: [Eval] may (LAW 28), [Capability] may not (LAW 15). *)
 type err_kind = Eval | Capability

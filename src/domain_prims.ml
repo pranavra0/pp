@@ -10,7 +10,7 @@
    stdlib/domain-proc.pp as real pp source, calling these primitives via
    `perform`. Every primitive that writes is trace_stack-guarded out of node
    bodies (the LAW 31 fenced/write-file pattern) and capability-gated against
-   the ambient `!Runtime.current_capabilities` — during a domain's own
+   the ambient dynamic capability scope — during a domain's own
    observe/apply, that ambient is exactly the domain's registered write-cap
    (Domains.with_domain / the with_ref current_capabilities [write_cap]
    threading), so these checks are the SAME mechanism `write-file`/`run`
@@ -19,16 +19,16 @@
 open Types
 
 let require_no_node_body (who : string) : unit =
-  if Effect.perform Runtime.In_node then
+  if Effect.perform Dynamic_scope.In_node then
     failwith (who ^ ": may not be called inside a node body (writes are domain-apply-only)")
 
 let has_fs_read path =
-  List.exists (fun cap -> Capability.check_fs_read cap (Runtime.canonical_path path))
-    (Effect.perform Runtime.Get_capabilities)
+  List.exists (fun cap -> Capability.check_fs_read cap (World_path.canonical path))
+    (Effect.perform Dynamic_scope.Get_capabilities)
 
 let has_fs_write path =
-  List.exists (fun cap -> Capability.check_fs_write cap (Runtime.canonical_path path))
-    (Effect.perform Runtime.Get_capabilities)
+  List.exists (fun cap -> Capability.check_fs_write cap (World_path.canonical path))
+    (Effect.perform Dynamic_scope.Get_capabilities)
 (* Capabilities.check_process recurses through CapCompose (and so, via
    check_process's own CapCompose arm, through however many levels a
    domain's registered cap is typically exactly that round-trip (main.ml's
@@ -40,7 +40,7 @@ let has_fs_write path =
    has_process_cap did before it needed to recurse through CapCompose)
    would miss it. *)
 let has_process_cap () =
-  List.exists Capability.check_process (Effect.perform Runtime.Get_capabilities)
+  List.exists Capability.check_process (Effect.perform Dynamic_scope.Get_capabilities)
 
 (* Fully force a value (map values / vector-set elements are lazy by
    construction, primitives.ml) so Codec.encode_value and Hasher.hash_value
@@ -54,7 +54,7 @@ let has_process_cap () =
    assoc list (the diff runs in pp, over pp values) and canonicalizes root
    the same way every other fs boundary does (LAW 23 / DESIGN §2.1). *)
 let tree_observe (root : string) : value =
-  let root_canon = Runtime.canonical_path root in
+  let root_canon = World_path.canonical root in
   let root = (root_canon :> string) in
   (* A write-only domain grant (`fs:ROOT:wo`) must still be able
      to observe its OWN managed tree — the single writer reading its own
@@ -85,7 +85,7 @@ let rec mkdir_p dir =
 
 let materialize_file (path : string) (content : string) (executable : bool) : unit =
   require_no_node_body "materialize-file";
-  let path_canon = Runtime.canonical_path path in
+  let path_canon = World_path.canonical path in
   let path = (path_canon :> string) in
   if not (has_fs_write path) then
     raise (Capability_error ("materialize-file: capability error: no write access for " ^ path));
@@ -109,7 +109,7 @@ let rec prune_empty_dirs (dir : string) : unit =
 
 let remove_file (path : string) : unit =
   require_no_node_body "remove-file";
-  let path_canon = Runtime.canonical_path path in
+  let path_canon = World_path.canonical path in
   let path = (path_canon :> string) in
   if not (has_fs_write path) then
     raise (Capability_error ("remove-file: capability error: no write access for " ^ path));
@@ -120,7 +120,7 @@ let remove_file (path : string) : unit =
 
 (* ---- domain-state-get/put: per-domain persistent KV, replacing procs/'s
    role ----
-   Scoped implicitly to Runtime.current_domain ("core knows which domain is
+   Scoped implicitly to the current domain ("core knows which domain is
    running" — set by Domains.with_domain for the extent of observe/diff/
    apply). Gated on cap_subseteq of the CURRENT domain's own registered cap
    against the ambient: during diff (which runs under a threaded EMPTY
@@ -129,14 +129,14 @@ let remove_file (path : string) : unit =
    calling domain-state-get/put
    is a Capability_error automatically — closing that side-channel with the
    SAME mechanism diff's purity already uses, not a new checker. *)
-let require_domain_context (who : string) : Runtime.domain_entry * string =
-  match Effect.perform Runtime.Get_domain with
+let require_domain_context (who : string) : Session.domain_entry * string =
+  match Effect.perform Dynamic_scope.Get_domain with
   | None -> failwith (who ^ ": not running inside a domain's observe/diff/apply")
   | Some name ->
-      (match Session.find_domain (Effect.perform Runtime.Get_session) name with
+      (match Session.find_domain (Effect.perform Dynamic_scope.Get_session) name with
        | None -> failwith (who ^ ": unknown current domain " ^ name)
        | Some entry ->
-           if Capability.subseteq entry.Runtime.dm_cap (Effect.perform Runtime.Get_capabilities)
+           if Capability.subseteq entry.Session.dm_cap (Effect.perform Dynamic_scope.Get_capabilities)
            then (entry, name)
            else raise (Capability_error
                     (who ^ ": capability error: no authority for domain " ^ name)))
@@ -230,7 +230,7 @@ let env_array spec_env =
   Array.of_list (overrides @ base)
 
 let domain_io_dir () : string =
-  let name = match Effect.perform Runtime.Get_domain with Some n -> n | None -> "unknown" in
+  let name = match Effect.perform Dynamic_scope.Get_domain with Some n -> n | None -> "unknown" in
   Filename.concat Store.store_root (Filename.concat "domain-state" (name ^ "-io"))
 
 let out_file name = Filename.concat (domain_io_dir ()) ("svc-" ^ Hasher.hash_string name ^ ".out")

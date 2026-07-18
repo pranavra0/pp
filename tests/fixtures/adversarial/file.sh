@@ -5,7 +5,7 @@
 #   - a symlink inside the sandbox pointing out of it,
 #   - a `..` traversal,
 #   - a self-referential symlink loop.
-# Each must be DEFEATED: canonicalization (Runtime.canonical_path — resolves
+# Each must be DEFEATED: canonicalization (World_path.canonical — resolves
 # symlinks and collapses `..`) runs BEFORE the containment check
 # (Capabilities.path_grants → Paths.under), so the resolved path is judged, not
 # its spelling. A loop cannot resolve, so it fails closed at the OS read. In no

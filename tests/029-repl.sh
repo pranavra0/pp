@@ -115,6 +115,28 @@ else
   bad "error-does-not-poison-next-repl-input" "out: $(printf '%q' "$out")"
 fi
 
+out=$(repl_input \
+  'with-config({:mode -> "scoped"}) { error("boom") }' \
+  'print(config(:mode, "default"))')
+if printf '%s\n' "$out" | grep -q '^Error: boom' \
+   && printf '%s\n' "$out" | grep -q '^"default"$'; then
+  ok "config-unwinds-after-error"
+else
+  bad "config-unwinds-after-error" "out: $(printf '%q' "$out")"
+fi
+
+out=$(repl_input \
+  'with-handler(log = fn(x) { print("handled", x) }) { error("boom") }' \
+  'perform log("after")' 2>"$TMP/handler-error-err")
+if printf '%s\n' "$out" | grep -q '^Error: boom' \
+   && ! grep -q 'handled.*after' "$TMP/handler-error-err" \
+   && grep -q '^\[info\] after$' "$TMP/handler-error-err"; then
+  ok "handler-unwinds-after-error"
+else
+  bad "handler-unwinds-after-error" \
+    "out: $(printf '%q' "$out")" "err: $(cat "$TMP/handler-error-err")"
+fi
+
 # ---- (c) no prompts/banner when piped ----
 got=$(printf '1 + 2\n' | repl)
 if [ "$got" = "3" ]; then ok "no-prompt-when-piped"

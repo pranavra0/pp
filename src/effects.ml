@@ -2,7 +2,7 @@
    mechanisms (capabilities, config, handlers, trace, sandbox). Pure — lists
    no unix — so it can live in pp.kernel.
 
-   The handlers for these effects live in runtime.ml (impure, Unix-dependent).
+   The handlers for these effects live in dynamic_scope.ml.
    The split means anything that just needs the effect _types_ (e.g. the
    backend hook record and evaluator) links only the kernel, while the
    run-time stack wiring stays in the main library. *)

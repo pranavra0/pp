@@ -132,15 +132,15 @@ let force_deep (v : value) : value =
 
    One implementation, used both by the `probe` primitive (registered below)
    and by the Store-facing re-observation hook wired in main.ml
-   (Runtime.probe_observer) — so a live program's `(probe name)` read and a
+   (Dynamic_scope.probe_observer) — so a live program's `(probe name)` read and a
    later trace-verification pass compute the identical value the identical
-   way and can never disagree (mirrors Runtime.proc_observer/observe_proc's
+   way and can never disagree (mirrors Dynamic_scope.proc_observer/observe_proc's
    existing shape, same reason). *)
 
 (* Invoke a function value on already-evaluated args, without going through
    EApply: all closures go through Backend.r.apply. *)
 let invoke (fn : value) (args : value list) : value =
-  Backend.r.apply fn args (Session.current_env (Effect.perform Runtime.Get_session))
+  Backend.r.apply fn args (Session.current_env (Effect.perform Dynamic_scope.Get_session))
 
 (* Call a zero-argument function value. *)
 let call_zero_arg (fn : value) : value =
@@ -176,7 +176,7 @@ let call_with_args (fn : value) (args : value list) : value =
    `(probe name)`; an unverifiable trace cell for Store's re-observation, so
    a trace naming a probe this process never registered simply misses). *)
 let probe_value_for (name : string) : value option =
-  let session = Effect.perform Runtime.Get_session in
+  let session = Effect.perform Dynamic_scope.Get_session in
   match Session.find_probe session name with
   | Some v -> Some v
   | None ->
@@ -184,16 +184,16 @@ let probe_value_for (name : string) : value option =
        | None -> None
        | Some entry ->
            let result =
-             try call_zero_arg entry.Runtime.dm_observe
+             try call_zero_arg entry.Session.dm_observe
              with
-             | effect (Runtime.Record_read _), k -> Effect.Deep.continue k ()
-             | effect Runtime.In_node, k -> Effect.Deep.continue k false
-             | effect Runtime.Get_capabilities, k -> Effect.Deep.continue k [entry.Runtime.dm_cap]
+             | effect (Dynamic_scope.Record_read _), k -> Effect.Deep.continue k ()
+             | effect Dynamic_scope.In_node, k -> Effect.Deep.continue k false
+             | effect Dynamic_scope.Get_capabilities, k -> Effect.Deep.continue k [entry.Session.dm_cap]
            in
            Session.set_probe session name result;
            Some result)
 
-(* Store.observe_cell's "probe:" arm, via the Runtime.probe_observer hook
+(* Store.observe_cell's "probe:" arm, via the Dynamic_scope.probe_observer hook
    (wired in main.ml). Re-observing a probe cell at hit time evaluates the
    probe (once per pass, pinned — [probe_value_for] is the SAME cache
    `(probe name)` reads below, so a node forced earlier in this pass and one
@@ -213,16 +213,16 @@ let probe_observe_for_store (name : string) : string option =
    such domain, or it declared no :observe-cell — cannot re-observe, the
    caller (Store.observe_cell) treats that as a forced miss. *)
 let domain_observe_cell_for_store (name : string) (sub : string) : string option =
-  match Session.find_domain (Effect.perform Runtime.Get_session) name with
+  match Session.find_domain (Effect.perform Dynamic_scope.Get_session) name with
   | None -> None
-  | Some { Runtime.dm_observe_cell = None; _ } -> None
-  | Some { Runtime.dm_observe_cell = Some fn; dm_cap; _ } ->
+  | Some { Session.dm_observe_cell = None; _ } -> None
+  | Some { Session.dm_observe_cell = Some fn; dm_cap; _ } ->
       (match
          (try call_with_args fn [VString sub]
           with
-          | effect (Runtime.Record_read _), k -> Effect.Deep.continue k ()
-          | effect Runtime.In_node, k -> Effect.Deep.continue k false
-          | effect Runtime.Get_capabilities, k -> Effect.Deep.continue k [dm_cap])
+          | effect (Dynamic_scope.Record_read _), k -> Effect.Deep.continue k ()
+          | effect Dynamic_scope.In_node, k -> Effect.Deep.continue k false
+          | effect Dynamic_scope.Get_capabilities, k -> Effect.Deep.continue k [dm_cap])
        with
        | VNil -> None
        | VString h -> Some h
@@ -519,7 +519,7 @@ let register_caps () =
      gated like every other perform path — no explicit-cap argument. *)
   register "current-capabilities" (fun args ->
     match args with
-    | [] -> VCapability (Capability.compose (Effect.perform Runtime.Get_capabilities))
+    | [] -> VCapability (Capability.compose (Effect.perform Dynamic_scope.Get_capabilities))
     | _ -> failwith "current-capabilities takes no arguments");
 
   register "cap-restrict" (fun args ->
@@ -527,7 +527,7 @@ let register_caps () =
     match args with
     | [VCapability _ as cap; VString scope] ->
         let cap = match cap with VCapability c -> c | _ -> failwith "impossible" in
-        let scope = Runtime.canonical_path scope in
+        let scope = World_path.canonical scope in
         VCapability (Capability.restrict cap scope)
     | [VCapability _ as cap; VString scope; VKeyword m] ->
         let cap = match cap with VCapability c -> c | _ -> failwith "impossible" in
@@ -535,7 +535,7 @@ let register_caps () =
           | "ro" -> Capability.Read | "rw" -> Capability.ReadWrite | "wo" -> Capability.Write
           | _ -> failwith ("cap-restrict: invalid mode :" ^ m ^ " (expected :ro, :rw, or :wo)")
         in
-        let scope = Runtime.canonical_path scope in
+        let scope = World_path.canonical scope in
         let read_ok = Capability.check_fs_read cap scope in
         let write_ok = Capability.check_fs_write cap scope in
         let ok = match mode with
@@ -579,7 +579,7 @@ let register_metaeval () =
         let exprs = Backend.r.expand_toplevel (Reader.read_string code) in
         (* Capture the calling env into a local ref — avoid clobbering
            current_env_ref during inner evaluations. *)
-        let local_env = ref (Session.current_env (Effect.perform Runtime.Get_session)) in
+        let local_env = ref (Session.current_env (Effect.perform Dynamic_scope.Get_session)) in
         let new_defs = ref [] in
         let rec go = function
           | [] ->
@@ -802,12 +802,12 @@ let register_stdlib () =
     register name (fun args ->
       match force_args args with
       | [VString path] ->
-          if not (List.exists (fun cap -> Capability.check_fs_read cap (Runtime.canonical_path path))
-                    (Effect.perform Runtime.Get_capabilities)) then
+          if not (List.exists (fun cap -> Capability.check_fs_read cap (World_path.canonical path))
+                    (Effect.perform Dynamic_scope.Get_capabilities)) then
             raise (Types.Capability_error
                      (name ^ ": capability error: no read access for " ^ path));
           let kind = Store.stat_kind path in
-          Runtime.record_read (Store.stat_cell_id path) (Store.stat_kind_hash kind);
+          Dynamic_scope.record_read (Store.stat_cell_id path) (Store.stat_kind_hash kind);
           VBool (if want_dir then kind = "dir" else kind <> "absent")
       | _ -> failwith (name ^ " expects a path string"))
   in
@@ -818,8 +818,8 @@ let register_stdlib () =
   register "argv" (fun args ->
     match args with
     | [] ->
-        let av = Invocation.program_argv (Effect.perform Runtime.Get_invocation) in
-        Runtime.record_read Store.argv_cell_id (Store.argv_observed_hash av);
+        let av = Invocation.program_argv (Effect.perform Dynamic_scope.Get_invocation) in
+        Dynamic_scope.record_read Store.argv_cell_id (Store.argv_observed_hash av);
         List.fold_right (fun s acc -> VPair (VString s, acc)) av VNil
     | _ -> failwith "argv takes no arguments");
 
@@ -828,7 +828,7 @@ let register_stdlib () =
     match force_args args with
     | [VString name] ->
         let v = Sys.getenv_opt name in
-        Runtime.record_read (Store.env_cell_id name) (Store.env_observed_hash v);
+        Dynamic_scope.record_read (Store.env_cell_id name) (Store.env_observed_hash v);
         (match v with Some s -> VString s | None -> VNil)
     | _ -> failwith "env-get expects a variable name string");
 
@@ -913,7 +913,7 @@ let register_domains () =
      `(register-domain {:name :namespace :observe :diff :apply :write-cap
      [:observe-cell]})` — script-tier only (trace_stack guard, the same
      LAW-31 pattern Fenced.register uses): ordinary primitive, root/script
-     scope. `:write-cap` is consumed into Runtime.domain_registry, never
+     scope. `:write-cap` is consumed into the session's domain registry, never
      re-exposed to user code — the core-side registry IS the authority
      boundary. `:diff`/`:apply` are REQUIRED for a full domain (a domain
      with ⊥ write authority is a PROBE — register-probe below, a distinct,
@@ -928,7 +928,7 @@ let register_domains () =
   in
   let find_kv = Force_deep.find_kv in
   register "register-domain" (fun args ->
-    if Effect.perform Runtime.In_node then
+    if Effect.perform Dynamic_scope.In_node then
       failwith "register-domain: may not be called inside a node body (script-tier only, like fenced)";
     let args = force_args args in
     match args with
@@ -967,8 +967,8 @@ let register_domains () =
                                             ^ string_of_value other))
           | None -> failwith "register-domain: missing :write-cap"
         in
-        Session.set_domain (Effect.perform Runtime.Get_session) name
-          { Runtime.dm_namespace = namespace; dm_observe = observe;
+        Session.set_domain (Effect.perform Dynamic_scope.Get_session) name
+          { Session.dm_namespace = namespace; dm_observe = observe;
             dm_diff = diff; dm_apply = apply; dm_cap = write_cap;
             dm_observe_cell = observe_cell };
         VNil
@@ -979,7 +979,7 @@ let register_domains () =
      stratify, core never converges it), dm_diff/dm_apply = None. Same
      surface and error text as a standalone probe registry. *)
   register "register-probe" (fun args ->
-    if Effect.perform Runtime.In_node then
+    if Effect.perform Dynamic_scope.In_node then
       failwith "register-probe: may not be called inside a node body (script-tier only, like fenced)";
     let args = force_args args in
     match args with
@@ -989,14 +989,14 @@ let register_domains () =
          | VClosure _ | VBuiltin _ -> ()
          | _ -> failwith "register-probe: observe-fn must be a function");
         let entry = {
-          Runtime.dm_namespace = [];
+          Session.dm_namespace = [];
           dm_observe = observe_fn;
           dm_diff = None;
           dm_apply = None;
           dm_cap = read_cap;
           dm_observe_cell = None;
         } in
-        Session.set_domain (Effect.perform Runtime.Get_session) name entry;
+        Session.set_domain (Effect.perform Dynamic_scope.Get_session) name entry;
         let (_ : string) = name in (* suppress unused warning *)
         VNil
     | _ -> failwith "register-probe expects a name, an observe-fn, and a read capability");
@@ -1017,7 +1017,7 @@ let register_domains () =
         (match probe_value_for name with
          | None -> failwith ("probe: no such probe registered: " ^ name)
          | Some v ->
-             Runtime.record_read (Cell.(to_string (Probe name))) (Types.hash_value v);
+             Dynamic_scope.record_read (Cell.(to_string (Probe name))) (Types.hash_value v);
              v)
     | _ -> failwith "probe expects a probe name string");
   ()
@@ -1146,7 +1146,7 @@ let register_macros () =
       | [VSymbol p] -> p
       | _ -> failwith "gensym expects an optional string/symbol prefix"
     in
-    let n = Session.next_gensym (Effect.perform Runtime.Get_session) in
+    let n = Session.next_gensym (Effect.perform Dynamic_scope.Get_session) in
     VSymbol (Printf.sprintf "%s~%d" prefix n));
   ()
 
