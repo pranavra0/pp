@@ -11,7 +11,7 @@ the semantics these parts must honor.
 flowchart TD
     src([source text])
     reader[reader]
-    walker["tree-walker evaluator (evaluator.ml)"]
+    walker["tree-walker evaluator (evaluator.ml + evaluator_* )"]
     runtime["dynamic evaluation scope (dynamic_scope.ml)<br/>plus owned session state (session.ml)"]
 
     src --> reader
@@ -112,7 +112,15 @@ Independent sessions share no mutable evaluation state. `dynamic_scope.ml`
 provides bracketed dynamic effect scopes while evaluating a session; it owns no
 mutable resources or registries.
 
-The sole tree walker constructs one immutable evaluator operation graph:
+The sole tree walker constructs one immutable evaluator operation graph. Its
+exhaustive expression dispatch and tail mechanism remain in `evaluator.ml`;
+the narrow semantic helpers in `evaluator_*` contain no second dispatcher:
+thunk construction, application, persistent-node forcing, effects, sequential
+forms/modules, dynamic scopes, and pattern-arm selection each receive explicit
+callbacks for the operations they need. This keeps the evaluator navigable
+without splitting language semantics into competing engines.
+
+The operation graph contains:
 `force`, `eval`, and `apply`, plus a separate node-policy view for keying,
 rebuilding, and hit resolution. `main.ml` supplies that complete value to each
 new session. Consumers receive only the view they need; macro expansion receives
@@ -252,7 +260,14 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/error_context.ml` | Attaches the innermost source-form location to evaluation errors. |
 | `src/sandbox.ml` | Creates, resolves, and removes node-local scratch directories. |
 | `src/session.ml` | The abstract owner of evaluation/pass state, a complete immutable evaluator-operation value, and its `begin_evaluation`, `begin_pass`, and `begin_watch` lifecycle transitions. |
-| `src/evaluator.ml` | The tree-walking evaluator, the project's sole engine, implementing `force`, `eval`, `apply`, and the immutable operation graph. |
+| `src/evaluator.ml` | The project's sole tree-walking engine: one exhaustive expression dispatch, tail mechanism, force/trampoline, and operation graph. |
+| `src/evaluator_thunks.ml` | Content-addressed thunk construction, letrec poison thunks, and module export selection. |
+| `src/evaluator_application.ml` | Closure/builtin application and the shared tail-call continuation mechanism. |
+| `src/evaluator_node.ml` | The evaluator-facing adapter for persistent-node forcing and nested trace replay. |
+| `src/evaluator_effects.ml` | Dynamic handler lookup and the builtin effect fallback. |
+| `src/evaluator_forms.ml` | Sequential blocks, module evaluation, source loading, and top-level form evaluation. |
+| `src/evaluator_scope.ml` | Capability, handler, config, and config-read dynamic-scope forms. |
+| `src/evaluator_match.ml` | Pattern-arm matching, guard evaluation, and arm environment extension. |
 | `src/macro.ml` | `defmacro` expansion: a function from syntax-as-values to syntax, run at the expansion boundary. |
 | `src/primitives.ml` | Built-in functions and the initial environment. |
 | `src/node.ml` | Free-variable resolution, node identity, trace replay, hit policy, result validation, rebuilding, and persistence. |

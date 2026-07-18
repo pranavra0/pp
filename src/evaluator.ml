@@ -3,90 +3,15 @@
    for ordinary argument passing *)
 
 open Core_model
-open Source_error
-open Hasher
-open Dynamic_scope
-
-(* ---- Evaluation State ---- *)
-
-(* Create or retrieve a content-addressed thunk.
-   Two thunks with the same (expr, env, capabilities) are the SAME thunk.
-   Uses env.env_hash for O(1) environment identity — no recursive traversal. *)
-let make_thunk_ca (expr : expr) (env : env) : value =
-  let caps = Effect.perform Dynamic_scope.Get_capabilities in
-  let cfg = Effect.perform Dynamic_scope.Get_config in
-  let handlers = Effect.perform Dynamic_scope.Get_handlers in
-  let caps_hash = Hasher.hash_concat ("caps" :: List.map Capability.hash caps) in
-  let cfg_hash = Hasher.hash_concat ("cfg" :: List.map Identity.hash_value cfg) in
-  let hh = Hasher.hash_concat ("handlers" :: List.concat_map (fun (n,h)->[n;h]) handlers) in
-  let h = Hasher.hash_concat ["thunk"; Identity.hash_expr expr; env.env_hash; caps_hash; cfg_hash; hh] in
-  let session = Effect.perform Dynamic_scope.Get_session in
-  match Session.find_thunk session h with
-  | Some existing -> VThunk existing
-  | None ->
-      let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env; type_ann = None; thunk_loc = None; config_hash = cfg_hash; thunk_persist = false; node_caps = [] } in
-      Session.add_thunk session h t;
-      VThunk t
-
-let make_thunk_ca_typed (expr : expr) (ty : expr) (loc : (string * int) option) (env : env) : value =
-  let caps = Effect.perform Dynamic_scope.Get_capabilities in
-  let cfg = Effect.perform Dynamic_scope.Get_config in
-  let handlers = Effect.perform Dynamic_scope.Get_handlers in
-  let caps_hash = Hasher.hash_concat ("caps" :: List.map Capability.hash caps) in
-  let cfg_hash = Hasher.hash_concat ("cfg" :: List.map Identity.hash_value cfg) in
-  let hh = Hasher.hash_concat ("handlers" :: List.concat_map (fun (n,h)->[n;h]) handlers) in
-  let h = Hasher.hash_concat ["thunk-typed"; Identity.hash_expr expr; Identity.hash_expr ty; env.env_hash; caps_hash; cfg_hash; hh] in
-  let session = Effect.perform Dynamic_scope.Get_session in
-  match Session.find_thunk session h with
-  | Some existing -> VThunk existing
-  | None ->
-      let t = { thunk_status = Unevaluated; thunk_hash = Some h; thunk_expr = expr; thunk_env = env; type_ann = Some ty; thunk_loc = loc; config_hash = cfg_hash; thunk_persist = false; node_caps = [] } in
-      Session.add_thunk session h t;
-      VThunk t
-
-(* Runtime check for gradual type annotations, kept at the evaluator boundary
-   so every typed value follows the same check path. *)
 
 let cell_authorized_for = Observation.authorized_id
 
-(* Trace replay for an already-Evaluated persistent node: replay its stored
-   trace reads into the active trace frames so the caller's trace transitively
-   captures this node's world-reads (the same mechanism as cache hit replay).
-   [key_of] is the node-key function (node_key_of). *)
-let replay_node_reads = Node.replay_node_reads
+let replay_node_reads = Evaluator_node.replay_reads
 
-let force_node ~(key : Identity_types.Node_key.t) ~(run : unit -> value)
-    (t : thunk) : value =
-  Node.force ~key ~authorized:(cell_authorized_for t.node_caps) ~run t
+let force_node = Evaluator_node.force
 
-(* Module exports: the bindings of [bindings] not present in [base]
-   (insertion order preserved). With [dedup], each name is exported once —
-   newest binding wins (a value def's backpatched poison pre-binding must not
-   shadow the real binding). *)
-let new_bindings ?(dedup = false) ~(base : (string * value) list)
-    (bindings : (string * value) list) : (string * value) list =
-  let rec collect all acc =
-    match all with
-    | [] -> List.rev acc
-    | (n, v) :: rest ->
-        if List.exists (fun (pn, _) -> pn = n) base
-           || (dedup && List.exists (fun (an, _) -> an = n) acc) then
-          collect rest acc
-        else
-          collect rest ((n, v) :: acc)
-  in
-  collect bindings []
-
-(* letrec* poison for value defs in blocks: a fresh (non-content-addressed)
-   thunk pre-bound at block entry so the whole block sees the binding; forcing
-   it before the def executes raises, and the def backpatches it in place. The
-   error expression evaluates to the same text wherever it is forced. *)
-let poison_expr (name : string) : expr =
-  EApply (ESymbol "error",
-          [ELiteral (VString (name ^ ": referenced before its definition"))])
-
-let poison_thunk (name : string) (env : env) : value =
-  Environment.make_thunk (poison_expr name) env
+let make_thunk_ca = Evaluator_thunks.make
+let make_thunk_ca_typed = Evaluator_thunks.make_typed
 
 (* ---- Force: evaluate a thunk on demand ---- *)
 
@@ -271,7 +196,10 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
          This is call-by-value: arguments are evaluated before the body runs. *)
       let fn_val = force (eval fn_expr env) in
       let arg_vals = List.map (fun arg_expr -> force (eval arg_expr env)) arg_exprs in
-      apply_tail fn_val arg_vals env k
+      Evaluator_application.apply_tail
+        { eval_tail;
+          set_current_env = Session.set_current_env (session ()) }
+        fn_val arg_vals env k
 
   | EQuote e ->
       k (Quotation.quote_to_value e)
@@ -299,105 +227,21 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       k (Environment.make_closure ~name:(Some name) params body (ref env))
 
   | EDo exprs ->
-      (* All but last are non-tail; last is tail.
-         Uses a local env ref for threading — NOT current_env_ref,
-         because inner evaluations would clobber it. *)
-      let env_ref = ref env in
-      (* letrec* prologue: pre-bind every value def to a poison thunk so the
-         whole block sees the binding (LAW 4); its def backpatches it. *)
-      let poisons : (string, value) Hashtbl.t = Hashtbl.create 4 in
-      List.iter (function
-        | EDefValue (name, _) ->
-            let p = poison_thunk name !env_ref in
-            Hashtbl.replace poisons name p;
-            env_ref := Environment.extend !env_ref name p
-        | _ -> ()) exprs;
-      let rec go = function
-        | [] -> k VNil
-        | [last] -> eval_tail last !env_ref k
-        | (EDef (name, params, body)) :: rest ->
-            let closure = Environment.make_closure ~name:(Some name) params body env_ref in
-            env_ref := Environment.extend !env_ref name closure;
-            go rest
-        | (EDefNode (name, params, body)) :: rest ->
-            let closure = Environment.make_closure ~name:(Some name) params body env_ref in
-            env_ref := Environment.extend !env_ref name closure;
-            go rest
-        | (EDefValue (name, rhs)) :: rest ->
-            let v = eval rhs !env_ref in
-            (match Hashtbl.find_opt poisons name with
-             | Some (VThunk t) -> t.thunk_status <- Evaluated v
-             | _ -> ());
-            env_ref := Environment.extend !env_ref name v;
-            go rest
-        | (EImport mod_expr) :: rest ->
-            let mod_val = force (eval mod_expr !env_ref) in
-            (match mod_val with
-             | VEnvMap bindings ->
-                 env_ref := List.fold_left (fun e (n, v) ->
-                   Environment.extend e n v) !env_ref bindings;
-                 go rest
-             | _ -> failwith "import expects a module value")
-        | (ELoad path) :: rest ->
-            (* `~source:path`: the loaded file's OWN path, so its top-level
-               forms are located against it (not the reader's "<?>"
-               default) — LAW 29, via eval_expressions below,
-               which per-form-locates each of the loaded file's forms.
-               Macro expansion runs at this source-entry boundary so a
-               `load`ed file's macros are visible to the rest of THIS
-               file's forms and vice versa (load is sequential evaluation,
-               one shared macro table — Macro.ml's documented decision). *)
-            let contents = Loader.read path in
-            let exprs = expand_toplevel
-                          (Reader_braces.read_dispatch ~source:path ~path contents) in
-            ignore (eval_expressions exprs env_ref);
-            go rest
-        | (ELoadModule path) :: rest ->
-            (match eval_module_file path with
-             | VEnvMap bindings ->
-                 env_ref := List.fold_left (fun e (n, v) ->
-                   Environment.extend e n v) !env_ref bindings;
-                 go rest
-             | _ -> go rest)
-        | e :: rest ->
-            let result = force (eval e !env_ref) in
-            (match result with
-             | VEnvMap bindings ->
-                 env_ref := List.fold_left (fun e (n, v) ->
-                   Environment.extend e n v) !env_ref bindings;
-                 go rest
-             | _ -> go rest)
-      in
-      go exprs
+      Evaluator_forms.do_block
+        { eval; eval_tail; force }
+        exprs env k
   | EWithCaps (cap_expr, body) ->
-      (* REPLACES the dynamic ambient with exactly the requested cap for the
-         body's extent (never a union — that was the removed `effect` form's
-         widening backdoor), gated by cap_subseteq against the CURRENT
-         ambient (not the root grant), so narrowing composes even when code
-         lexically retains a broader value. *)
-      let cap_val = force (eval cap_expr env) in
-      let requested =
-        match cap_val with
-        | VCapability c -> c
-        | _ -> failwith "with-caps expects a capability value"
-      in
-      if not (Capability.subseteq requested (Dynamic_scope.capabilities ())) then
-        raise (Capability_error Capability.err_with_caps_widen);
-      Dynamic_scope.with_capabilities [requested] (fun () -> eval_tail body env k)
+      Evaluator_scope.with_caps { eval; eval_tail; force; apply }
+        cap_expr body env k
 
   | EPerform (name, arg_exprs) ->
       let args = List.map (fun e -> make_thunk_ca e env) arg_exprs in
       let forced_args = List.map force args in
-      k (perform_effect name forced_args)
+      k (Evaluator_effects.perform ~application:apply name forced_args)
 
   | EWithHandler (handlers, body) ->
-      let new_handlers = List.map (fun (name, handler_expr) ->
-        let handler_val = force (eval handler_expr env) in
-        (name,
-         (fun args -> apply handler_val args env),
-         Identity.hash_value handler_val)   (* handler identity in the key *)
-      ) handlers in
-      Dynamic_scope.with_handlers new_handlers (fun () -> eval_tail body env k)
+      Evaluator_scope.with_handlers { eval; eval_tail; force; apply }
+        handlers body env k
   | EDefValue (_, rhs) ->
       (* Bare expression position: evaluate the RHS and return it; binding is
          the job of the enclosing block / top level (mirrors EDef, which
@@ -415,59 +259,17 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       nest env bindings
 
   | EModule body_exprs ->
-      let base_env = Primitives.initial_env () in
-      let mod_env = ref base_env in
-      (* letrec* prologue for value defs, as in EDo. *)
-      let poisons : (string, value) Hashtbl.t = Hashtbl.create 4 in
-      let prebound_env = List.fold_left (fun acc e ->
-        match e with
-        | EDefValue (name, _) ->
-            let p = poison_thunk name acc in
-            Hashtbl.replace poisons name p;
-            Environment.extend acc name p
-        | _ -> acc) !mod_env body_exprs in
-      mod_env := prebound_env;
-      let final_env = List.fold_left (fun (env_acc : env) e ->
-        match e with
-        | EDef (def_name, params, body) ->
-            let closure = Environment.make_closure ~name:(Some def_name) params body (ref env_acc) in
-            Environment.extend env_acc def_name closure
-        | EDefNode (def_name, params, body) ->
-            let closure = Environment.make_closure ~name:(Some def_name) params body (ref env_acc) in
-            Environment.extend env_acc def_name closure
-        | EDefValue (def_name, rhs) ->
-            let v = eval rhs env_acc in
-            (match Hashtbl.find_opt poisons def_name with
-             | Some (VThunk t) -> t.thunk_status <- Evaluated v
-             | _ -> ());
-            Environment.extend env_acc def_name v
-        | EImport mod_expr ->
-            let mod_val = force (eval mod_expr env_acc) in
-            (match mod_val with
-             | VEnvMap bindings ->
-                 List.fold_left (fun e (n, v) -> Environment.extend e n v) env_acc bindings
-             | _ -> failwith "import within module expects a module value")
-        | _ ->
-            ignore (force (eval e env_acc));
-            env_acc
-      ) !mod_env body_exprs in
-      k (VEnvMap (new_bindings ~dedup:true ~base:base_env.bindings final_env.bindings))
+      k (Evaluator_forms.module_expr { eval; eval_tail; force } body_exprs)
 
   | EImport mod_expr ->
       let mod_val = force (eval mod_expr env) in
       k mod_val
 
   | ELoad path ->
-      (* Same source-entry expansion treatment as EDo's ELoad
-         arm above. *)
-      let contents = Loader.read path in
-      let exprs = expand_toplevel
-                    (Reader_braces.read_dispatch ~source:path ~path contents) in
-      let env_ref = ref env in
-      k (eval_expressions exprs env_ref)
+      k (Evaluator_forms.load { eval; eval_tail; force } path env)
 
   | ELoadModule path ->
-      k (eval_module_file path)
+      k (Evaluator_forms.module_file { eval; eval_tail; force } path)
 
   | ELocated (loc, ETyped (e, ty)) ->
       (* A located annotation becomes a typed thunk carrying the location. *)
@@ -483,81 +285,28 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
          module. The pin is part of this expression's hash, so island
          identity is structural (LAW 20) — no trace cell. *)
       let tree = Island.resolve ~uri ~pin in
-      k (eval_module_file (Island.entry_file tree))
+      k (Evaluator_forms.module_file { eval; eval_tail; force }
+           (Island.entry_file tree))
   | EWithConfig (map_expr, body) ->
-      let cfg = force (eval map_expr env) in
-      let eval_body () =
-        Dynamic_scope.with_config cfg (fun () -> eval_tail body env k)
-      in
-      (match cfg with
-       | VMap _ -> eval_body ()
-       | _ -> failwith "with-config expects a map")
+      Evaluator_scope.with_config { eval; eval_tail; force; apply }
+        map_expr body env k
   | EConfig (key_expr, default_opt) ->
       let key_val = force (eval key_expr env) in
       let key_name = match key_val with
         | VString s | VKeyword s | VSymbol s -> s
         | _ -> failwith "config key must be a string, keyword, or symbol" in
-      (* LAW 33: reading config inside a node is an observation — recorded as a
-         `config:<key>` trace cell (absence included), never part of the key. *)
-      Observation.record_config key_name;
-      (match Dynamic_scope.config_lookup key_name with
-       | Some v -> k v
-       | None ->
-           (match default_opt with
-            | Some d -> eval_tail d env k
-            | None -> k VNil))
+      Evaluator_scope.read_config { eval; eval_tail; force; apply }
+        key_name default_opt env k
 
   | EMatch (scrutinee, arms) ->
       let v = force (eval scrutinee env) in
-      let rec try_arms = function
-        | [] -> failwith "match failure"
-        | (pat, guard, body) :: rest ->
-            (match Pattern_match.match_pattern v pat with
-             | Some binds ->
-                 let env' = List.fold_left (fun e (n, v) -> Environment.extend e n v) env binds in
-                 (* A guard is evaluated under the arm's bindings; a falsy guard
-                    falls through to the next arm. Only nil/false are falsy. *)
-                 let fires = match guard with
-                   | None -> true
-                   | Some g -> (match force (eval g env') with VBool false | VNil -> false | _ -> true)
-                 in
-                 if fires then eval_tail body env' k else try_arms rest
-             | None -> try_arms rest)
-      in
-      try_arms arms
-
-(* ---- Function Application (non-tail) ---- *)
+      Evaluator_match.eval ~force ~eval ~eval_tail v arms env k
 
 and apply (fn : value) (args : value list) (env : env) : value =
-  apply_tail fn args env (fun v -> v)
-
-(* ---- Tail-position application ---- *)
-(* apply_tail fn args env k: applies fn to args, evaluates the body in
-   tail position with continuation k. This is the engine of TCO: the
-   continuation k is passed through to eval_tail on the function body,
-   so a tail-call chain never grows the OCaml stack. *)
-
-and apply_tail (fn : value) (args : value list) (env : env) (k : value -> value) : value =
-  match fn with
-  | VClosure { fn_name; params; body; env = closure_env; _ } ->
-      if List.length params <> List.length args then begin
-        let fname = match fn_name with Some n -> n | None -> "#<fn>" in
-        failwith (Printf.sprintf "arity mismatch calling %s: expected %d args, got %d"
-                    fname (List.length params) (List.length args))
-      end;
-      let env' = List.fold_left2 (fun e param arg ->
-        Environment.extend e param arg  (* arg is already a thunk *)
-      ) !closure_env params args in
-      eval_tail body env' k
-
-  | VBuiltin (_, f) ->
-      (* No re-wrapping of the error text: primitives name themselves in their
-         own messages, and wrapping here would mangle user `error` messages. *)
-      Session.set_current_env (session ()) env;
-      k (f args)
-
-  | _ ->
-      failwith (Printf.sprintf "not a function: %s" (Presentation.string_of_value fn))
+  Evaluator_application.apply
+    { eval_tail;
+      set_current_env = Session.set_current_env (session ()) }
+    fn args env
 
 
 (* Trampoline force: uses a local work queue to process thunk chains
@@ -612,215 +361,14 @@ and trampoline_force (v : value) : value =
         end
   in
   loop ()
-(* ---- Effect System ---- *)
-
-and perform_effect (name : string) (args : value list) : value =
-  (* LAW 26: WHICH handler intercepts this effect (or that none does — the
-     builtin) is an observation of ambient state; inside a node it is recorded
-     as a `handler:<effect>` trace cell so a hit under a different handler
-     (mock vs real) re-computes instead of cross-contaminating. *)
-  Observation.record_handler name;
-  (* Check for handler via effect perform *)
-  match Effect.perform (Dynamic_scope.Lookup_handler name) with
-  | Some (handler, _) -> handler args
-  | None -> perform_builtin_effect name args
-
-and perform_builtin_effect (name : string) (args : value list) : value =
-  match name with
-  | "read-file" ->
-      (match args with
-       | [VString path] ->
-           (* Node-local sandbox scratch reads are capability-free and
-              unrecorded (LAW 18) — scratch is the node's working memory.
-              Outside a sandbox: an fs-read grant returns plain data
-              (CAS-ingested, pinned for the run), a CapSecret-only grant
-              returns VSealed; see Process.read_dispatch. *)
-           Process.read_dispatch ~tag:"read-file"
-             ~cap_err:(fun p -> "read-file: capability error: no read access for " ^ p) path
-       | _ -> failwith "read-file expects a string path")
-  | "write-file" ->
-      (match args with
-       | [VString path; VString content] ->
-           (* LAW 18: inside a node, relative ⇒ sandbox scratch, absolute ⇒
-              error; scripting tier unchanged (Process.write_file_effect). *)
-           Process.write_file_effect ~has_cap:has_fs_write path content
-       | _ -> failwith "write-file expects path and content strings")
-
-  | "run" ->
-      (* Process execution — capability-gated, trace-recorded, sandboxed
-         (process.ml). *)
-      Process.run_effect args
-
-  | "run-dep!" ->
-      (* run + depfile → precise cells, no coarse tree cells.
-         `!`-suffixed — the effect name carries the effect marker, since
-         this effect trusts the tool's own report of what it read rather
-         than observing a whole granted tree. *)
-      Process.run_dep_effect args
-
-  | "http-get" ->
-      (match args with
-       | [VString url] -> Process.http_request ~method_:"GET" ~url ~body:None
-       | _ -> failwith "http-get expects a url string")
-
-  | "http-post" ->
-      (match args with
-       | [VString url; VString body] ->
-           Process.http_request ~method_:"POST" ~url ~body:(Some body)
-       | _ -> failwith "http-post expects a url string and a body string")
-
-  | "log" ->
-      (match args with
-       | [VString level; VString msg] ->
-           Printf.eprintf "[%s] %s\n%!" level msg;
-           VNil
-       | [VString msg] ->
-           Printf.eprintf "[info] %s\n%!" msg;
-           VNil
-       | _ -> failwith "log expects a message string")
-
-  (* ---- Domain primitives (src/domain_prims.ml) ---- *)
-
-  | "tree-observe" ->
-      (match args with
-       | [VString root] -> Domain_prims.tree_observe root
-       | _ -> failwith "tree-observe expects a root path string")
-
-  | "materialize-file" ->
-      (match args with
-       | [VString path; VString content] ->
-           Domain_prims.materialize_file path content false; VNil
-       | [VString path; VString content; VKeyword "executable"] ->
-           Domain_prims.materialize_file path content true; VNil
-       | _ -> failwith "materialize-file expects a path, content, and optional :executable"
-      )
-
-  | "remove-file" ->
-      (match args with
-       | [VString path] -> Domain_prims.remove_file path; VNil
-       | _ -> failwith "remove-file expects a path string")
-
-  | "proc-spawn" ->
-      (match args with
-       | [spec] -> Domain_prims.proc_spawn spec
-       | _ -> failwith "proc-spawn expects a spec map")
-
-  | "proc-alive?" ->
-      (match args with
-       | [VInt pid] -> VBool (Domain_prims.proc_alive pid)
-       | _ -> failwith "proc-alive? expects a pid integer")
-
-  | "proc-stop" ->
-      (match args with
-       | [VString name; VInt pid] -> Domain_prims.proc_stop name pid; VNil
-       | _ -> failwith "proc-stop expects a service name and a pid integer")
-
-  | "proc-reap" ->
-      (match args with
-       | [] -> Domain_prims.proc_reap (); VNil
-       | _ -> failwith "proc-reap takes no arguments")
-
-  | "domain-state-get" ->
-      (match args with
-       | [VString key] -> Domain_prims.domain_state_get key
-       | _ -> failwith "domain-state-get expects a key string")
-
-  | "domain-state-put" ->
-      (match args with
-       | [VString key; v] -> Domain_prims.domain_state_put key v; VNil
-       | _ -> failwith "domain-state-put expects a key string and a value")
-
-  | _ ->
-      failwith ("unhandled effect: " ^ name)
-
-(* ---- Helpers ---- *)
-
-and has_fs_read (path : string) : bool =
-  List.exists (fun cap -> Capability.check_fs_read cap (World_path.canonical path)) (Effect.perform Dynamic_scope.Get_capabilities)
-
-and has_fs_write (path : string) : bool =
-  List.exists (fun cap -> Capability.check_fs_write cap (World_path.canonical path)) (Effect.perform Dynamic_scope.Get_capabilities)
-
-and expand_toplevel exprs =
-  Macro.expand_toplevel_list
-    { Macro.eval = eval;
-      force_deep = Primitives.force_deep;
-      initial_env = Primitives.initial_env }
-    exprs
-
-(* (load-module "file.pp"): evaluate the file against a fresh initial env and
-   package the bindings it added as a module value. Shared by the tail
-   evaluator and EDo. *)
-and eval_module_file (path : string) : value =
-  let source = Loader.read path in
-  (* Dispatch on [path]'s extension; the location label stays the
-     reader's "<?>" default. *)
-  let exprs = expand_toplevel
-                (Reader_braces.read_dispatch ~path source) in
-  let mod_ref = ref (Primitives.initial_env ()) in
-  ignore (eval_expressions exprs mod_ref);
-  VEnvMap (new_bindings ~base:(Primitives.initial_env ()).bindings (!mod_ref).bindings)
-
-(* Evaluate expressions sequentially with mutable env — used by ELoad, ELoadModule, and REPL.
-   `exprs` is always a list of top-level-shaped forms straight out of
-   Reader.read_string (the top-level file/REPL driver, or a `load`ed file's
-   own top-level forms), so every element is individually `ELocated`. *)
-and eval_expressions (exprs : expr list) (env : env ref) : value =
-  let unwrap e = match e with ELocated (_, e') -> e' | _ -> e in
-  (* Evaluate ONE form, mutating `env` for defs/imports; wrapped in ITS OWN
-     location (LAW 29): an error escaping this form is decorated with
-     this form's file:line before it can unwind past a `load` that brought
-     it in — never doubled if a deeper form already located it. *)
-  let step (e : expr) : value =
-    Error_context.with_form_location e (fun () ->
-      match unwrap e with
-      | EDef (name, params, body) ->
-          let closure = Environment.make_closure ~name:(Some name) params body env in
-          env := Environment.extend !env name closure;
-          closure
-      | EDefNode (name, params, body) ->
-          let closure = Environment.make_closure ~name:(Some name) params body env in
-          env := Environment.extend !env name closure;
-          closure
-      | EDefValue (name, rhs) ->
-          (* Top level is sequential: the RHS is evaluated now (a forward
-             reference is an unbound-symbol error), the value bound. *)
-          let v = eval rhs !env in
-          env := Environment.extend !env name v;
-          v
-      | EImport _ ->
-          let mod_val = force (eval e !env) in
-          (match mod_val with
-           | VEnvMap bindings ->
-               env := List.fold_left (fun env' (n, v) ->
-                 Environment.extend env' n v) !env bindings;
-               mod_val
-           | _ -> failwith "import expects a module value")
-      | ELoad path ->
-          (* `~source:path`: the loaded file's OWN path (not the reader's
-             "<?>" default), so ITS forms are in turn correctly located.
-             Expanded at this source-entry boundary, same as every
-             other Reader.read_string call site. *)
-          let contents = Loader.read path in
-          let sub_exprs = expand_toplevel
-                            (Reader_braces.read_dispatch ~source:path ~path contents) in
-          eval_expressions sub_exprs env
-      | _ ->
-          let result = force (eval e !env) in
-          (match result with
-           | VEnvMap bindings ->
-               env := List.fold_left (fun env' (n, v) ->
-                 Environment.extend env' n v) !env bindings;
-               result
-           | _ -> result))
-  in
-  let rec go = function
-    | [] -> VNil
-    | [e] -> step e
-    | e :: rest -> ignore (step e); go rest
-  in
-  go exprs
 (* ---- Public API ---- *)
+
+let eval_expressions (exprs : expr list) (env : env ref) : value =
+  Evaluator_forms.expressions { eval; eval_tail; force } exprs env
+
+let perform_effect name args =
+  Evaluator_effects.perform ~application:apply name args
+
 
 (* Evaluate an expression in the initial environment *)
 let eval_program (e : expr) : value =

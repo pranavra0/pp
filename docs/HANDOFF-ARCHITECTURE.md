@@ -188,37 +188,6 @@ two orchestration functions.
 The order matters. Later boundaries assume earlier ownership and tests.
 
 
-### 14. Decompose the sole evaluator by semantic concern
-
-**Purpose:** make evaluator code navigable without fragmenting semantics.
-
-**Work:**
-
-- Keep one exhaustive expression dispatch function and one application/tail
-  mechanism.
-- Extract helpers for environments/thunk creation, application, pattern matching,
-  module/load evaluation, dynamic-scope installation, built-in effect fallback,
-  and persistent-node forcing when each has a narrow input/output contract.
-- Move node keying and store policy out through the boundaries established above.
-- Replace force-depth and other process counters with evaluator/session-owned
-  state where behavior requires mutation.
-- Use structured errors consistently at evaluator boundaries and preserve source
-  location attachment.
-- Add an exhaustiveness/property gate so a new AST constructor requires reader,
-  evaluator, printer, hashing, quote conversion, and generator updates.
-
-**Likely files:** `src/evaluator.*`, new eval modules, kernel model and frontend
-callers.
-
-**Verify:** all language expected-output tests, errors, tail calls, deep
-recursion, effects, types, macros, suite and full fuzzer.
-
-**Exit:** a reader can find expression semantics from one dispatch; extracted
-modules contain no competing evaluator; evaluator interfaces contain no store
-tables or CLI state.
-
-**Non-goal:** redesign evaluation strategy, strictness, or tail-call semantics.
-
 ### 15. Turn primitives into a declarative builtin layer
 
 **Purpose:** separate language builtins from application orchestration.
@@ -519,5 +488,5 @@ not only expected stdout.
 
 ## Immediate next action
 
-Execute roadmap item 13 only: make node identity and rebuilding a first-class
-subsystem.
+Execute roadmap item 15 only: turn primitives into a declarative builtin
+layer.
