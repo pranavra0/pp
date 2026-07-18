@@ -1,36 +1,14 @@
-(* pp cluster tokens — signed capability grants for cross-machine authority
-   (docs/THREAT-MODEL-cluster.md is the gate this implements against).
-
-   A token is (caps in the --grant CLI grammar, cluster id, issued, expires,
-   HMAC-SHA256 MAC) as CANONICAL TEXT — never a pp value. It is minted and
-   verified entirely at the CLI/transport layer: there is no reader syntax
-   for it and no way to construct or inspect one from inside a pp program,
-   so it can never be printed, laundered through a result, or cross the
-   node boundary (LAW 22's "capabilities are minted only by the root, never
-   by user code", generalized to the wire).
-
-   Verification order is MAC -> cluster id -> expiry -> parse caps, so a
-   forged, wrong-cluster, or expired token is rejected before its
-   (attacker-controlled) capability specs are ever handed to a parser.
-   Caps are parsed with Capabilities.parse_grant — the SAME function
-   `pp --grant` uses at the CLI — so `cell_authorized_for (token_to_caps
-   ...)` is the existing LAW 23b gate, fed a wire-verified capability list
-   standing where `node_caps` stands locally. Zero new authority code. *)
+(* Signed cluster tokens carry capability grants between pp processes.
+   They use canonical text, not pp values. User code cannot create or inspect
+   them. Verification checks the MAC, cluster id, expiry, and grant syntax. *)
 
 open Codec
 
 
-(* ---- Cluster identity: ~/.pp/cluster/{secret,id} ----
+(* Cluster identity: ~/.pp/cluster/{secret,id}. The secret is the trust
+   anchor. Operators copy it to other members outside pp. *)
 
-   The secret is the ONE cluster trust anchor: minted once by
-   `pp cluster-init` on a root machine, distributed to other members OUT
-   OF BAND (scp / config management / the operator's problem — the same
-   posture as an ssh host key; see docs/THREAT-MODEL-cluster.md "Trust
-   anchors"). Losing it means re-minting AND redistributing; a member
-   without a copy cannot mint OR verify tokens. *)
-
-(* Kernel purity: host effects arrive as a complete immutable service value;
-   pp.kernel names no Unix directly. *)
+(* Host effects arrive through an immutable service value. *)
 let cluster_dir host : string =
   Filename.concat (host.Host_services.home_dir ()) ".pp/cluster"
 
@@ -39,12 +17,8 @@ let id_path host : string = Filename.concat (cluster_dir host) "id"
 
 let read_trimmed host path = host.Host_services.read_secret path
 
-(* Writes [content] to a FRESH file at [path] with mode 0600, refusing to
-   overwrite an existing file (O_CREAT + O_EXCL, one syscall — no
-   check-then-create race): the one place a secret is created, so there is
-   no window where it exists world-readable, and re-running `cluster-init`
-   can never silently clobber (and invalidate every token minted against)
-   an existing secret. *)
+(* Write [content] to a new file at [path] with mode 0600. Refuse to replace
+   an existing file. *)
 let write_secret_file host path content = host.Host_services.write_secret path content
 
 let load_secret host : string =
@@ -63,14 +37,8 @@ let load_cluster_id host : string =
       "pp: no cluster id at %s — run `pp cluster-init` (it writes id and \
        secret together)" (id_path host))
 
-(* `pp cluster-init`: mint a fresh secret + cluster id. Cryptokit's secure
-   RNG (Random.secure_rng) is the entropy source — the same library
-   already used for content hashing (Hasher/Identity), no new crypto
-   dependency. The secret is hex-encoded before writing so the file is
-   plain, greppable text like every other pp on-disk artifact rather than
-   raw bytes; the hex text itself is the HMAC key material below (HMAC
-   accepts a key of any length, so there's no need to decode it back to
-   the raw 32 bytes). *)
+(* [cluster-init] creates a secret and a cluster id. The secret uses the
+   secure random source and is stored as hex text. *)
 
 (* ---- Token wire format ----
 

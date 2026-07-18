@@ -2,7 +2,7 @@ open Pp_kernel
 (* pp sexpr printer — renders a `Core_model.expr` (as produced by EITHER reader,
    src/frontend/reader.ml or src/frontend/reader_braces.ml) as s-expression text that the
    sexpr reader (src/frontend/reader.ml) re-reads to the structurally IDENTICAL expr
-   — same `ELocated` placement, hence the same LAW-20 hash. This is the
+   — same `ELocated` placement, hence the same content hash. This is the
    other half of `pp fmt` (src/frontend/printer_braces.ml is the first half),
    built with the same location-preserving discipline: pad newlines so
    every construct's recorded (file, line) lands exactly, and raise

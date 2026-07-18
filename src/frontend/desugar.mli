@@ -3,7 +3,7 @@ open Pp_kernel
 
    The shared desugars both readers and the surface layer call: block-body /
    mutual-def checking, function-body assembly (param types + return type into
-   the LAW-32 shape), and the `and`/`or`/`assert` expansions. The .mli fixes the
+   the type-check shape), and the `and`/`or`/`assert` expansions. The .mli fixes the
    boundary so these lowerings have exactly one home — a reader cannot grow its
    own private copy of the `assert` desugar (a second copy would silently
    drift from this one, e.g. a form accepted by one reader and rejected by

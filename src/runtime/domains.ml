@@ -1,37 +1,8 @@
 open Pp_kernel
-(* pp generic domain orchestration — a domain is an observe/diff/apply
-   triple of ordinary pp functions running under core-enforced discipline.
-
-   Everything TRUSTED about running a registered write-domain lives here:
-   the journal bracket, the observed_all suspension, cap threading into
-   observe/apply, plan caching, and verify-after-write. Nothing here knows
-   what "create" or "start" means — that policy is the domain's own diff/
-   apply closures (stdlib/domain-fs.pp, stdlib/domain-proc.pp, or a
-   third-party domain registered via `register-domain`). This is what
-   replaced src/reconciler.ml and src/supervisor.ml.
-
-   A domain's plan (the value its `diff` returns) is a map with two keys
-   this module inspects and nothing else:
-     :items    a list or vector of opaque per-item values — `apply`
-               interprets them; core only checks non-emptiness
-               (verify-after-write).
-     :summary  an ORDERED VECTOR of [key value] string pairs the domain
-               itself assembled (its own :kind tally, e.g. [[:root R]
-               [:create "2"] [:update "0"] [:delete "0"]] for fs,
-               [[:started "2"] ...] for proc) — core echoes this VERBATIM
-               into the journal intent line and the per-pass stderr
-               summary, so the domain (not core) decides vocabulary,
-               order, and zero-defaults; core's job is purely mechanical
-               formatting, which is what makes the SAME code path
-               reproduce the old fs-only "root=R create=C update=U
-               delete=D" journal/print bytes and a totally different
-               third-party domain's own vocabulary. A VECTOR, not a map:
-               plan caching round-trips a MISS's result through the store
-               (Codec), which canonicalizes a VMap's entry order (sorted
-               by encoded key, codec.ml) but preserves a VVector's — a
-               cache HIT reproducing the summary in a different field
-               order than the original computation would silently break
-               the byte-compatibility this format exists for. *)
+(* Generic domain orchestration. A domain supplies observe, diff, apply, and
+   optional verification functions. This module owns the journal bracket,
+   capability threading, plan cache, and verify-after-write step. Domain
+   policy stays in pp source. *)
 
 open Core_model
 
@@ -134,10 +105,8 @@ let compute_plan ~(domain_name : string) ~(diff_closure : value)
       (try Trace_repository.put Trace_repository.default ~key ~outcome:Trace_repository.Ok ~result_hash ~reads:[] with _ -> ());
       plan
 
-(* ---- Stratification (LAW 30 full form) ----
-   After root evaluation, reject if any recorded cell falls under a
-   registered write-domain's own namespace prefixes — generalized from the
-   old hardwired-to-fs/proc checks in reconciler.ml/supervisor.ml. *)
+(* ---- Stratification ----
+   Reject a read from a domain's own write namespace. *)
 let has_prefix ~(prefix : string) (s : string) : bool =
   String.length s >= String.length prefix && String.sub s 0 (String.length prefix) = prefix
 

@@ -3,7 +3,7 @@ open Core_model
 
 (* THE canonical float spelling — bit-exact via %h (so two doubles that differ
    anywhere in their bits hash and encode differently; string_of_float's ~12
-   significant digits could collide two distinct doubles into one LAW-20 key
+   significant digits could collide two distinct doubles into one content key
    and serve a wrong cached result), with nan/inf/-inf as fixed tokens (NaN
    payloads deliberately merge). Shared by hash_value below and the store
    codec (Codec.encode_float) so content identity and on-disk bytes can never
@@ -67,7 +67,7 @@ let rec hash_expr (e : expr) : string =
   | EIsland (uri, pin) ->
       (* Frame the pin option so an unpinned island (None) can never share a
          key with one pinned to the empty string (Some ""): a raw-string
-         join `Some p -> p | None -> ""` would conflate them, a LAW-20
+         join `Some p -> p | None -> ""` would conflate them, a content
          collision (island "u" "" and island "u" quote to distinct values —
          VString "" vs VNil — yet would hash identically). Caught by the
          kernel-properties injectivity property. *)

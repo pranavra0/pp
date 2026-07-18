@@ -96,7 +96,7 @@ let load t ~(key : Identity_types.Cache_key.t) : trace list =
    `pp` invocations landing on one node) serialize here instead of racing
    "read existing set, append, atomic-rename" — without the lock, the
    loser's rename can clobber the winner's freshly-written set, dropping a
-   trace. That drop is already SOUND without any lock at all (LAW 37: the
+   trace. That drop is already sound without a lock: the
    survivor either duplicates the loser's trace — determinism — or the
    loser's world simply re-misses and recomputes; never a wrong hit) — the
    lock only turns "sound but occasionally wasteful" into "sound and the

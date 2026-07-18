@@ -10,7 +10,7 @@ open Pp_kernel
    start/stop/restart decision; those live in stdlib/domain-fs.pp and
    stdlib/domain-proc.pp as real pp source, calling these primitives via
    `perform`. Every primitive that writes is trace_stack-guarded out of node
-   bodies (the LAW 31 fenced/write-file pattern) and capability-gated against
+   bodies (the fenced/write-file pattern) and capability-gated against
    the ambient dynamic capability scope — during a domain's own
    observe/apply, that ambient is exactly the domain's registered write-cap
    (Domains.with_domain / the with_ref current_capabilities [write_cap]
@@ -55,7 +55,7 @@ let has_process_cap () =
 (* ---- tree-observe: {relpath -> content-hash}, fs-read-gated ----
    Moved from Reconciler.observed_files; returns a pp VMap instead of an
    assoc list (the diff runs in pp, over pp values) and canonicalizes root
-   the same way every other fs boundary does (LAW 23 / DESIGN §2.1). *)
+   the same way every other filesystem boundary does. *)
 let tree_observe (root : string) : value =
   let root_canon = World_path.canonical root in
   let root = (root_canon :> string) in

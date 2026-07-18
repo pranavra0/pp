@@ -17,7 +17,7 @@ let force_args (args : value list) : value list = List.map force_val args
    A process-global monotonic counter, reset at the start of every fresh run
    (Evaluator.init, alongside thunk_store/handler_stack/macro table) so that
    the SAME source, run twice, expands to the byte-identical AST both times
-   — gensym'd names are baked into a macro's expansion, and LAW 20 hashes
+   — gensym'd names are baked into a macro's expansion, and identity hashes
    the expanded form, so a counter that did not reset per-run would make an
    unchanged program's node keys drift from run to run.
 
@@ -220,7 +220,7 @@ let register_lists () =
      exists exactly when the node thunk IS the mapped element: write
      `(map compile names)`, `force-deep` THAT batch, and only pair names
      with the (now-hit, already-forced) results afterward. Zero placement
-     semantics of its own (LAW 34 untouched) — `map` behaves identically
+     semantics of its own — `map` behaves identically
      under every schedule policy, including serial. *)
   register ~shape:(Exact 2) "map" (fun args env ->
     match args with
@@ -342,7 +342,7 @@ let register_caps () =
 
   (* (current-capabilities) — reifies the ambient set AS OF THE CALL as a
      VCapability. Never a mint: it observes the ceiling the code already
-     exercises on every perform (SPEC LAW 22). Callable anywhere, ambient-
+     exercises on every perform. Callable anywhere, ambient-
      gated like every other perform path — no explicit-cap argument. *)
   register "current-capabilities" (fun args _env ->
     match args with
@@ -481,8 +481,8 @@ let register_io () =
     let args = force_args args in
     match args with
     | [VString path] ->
-        (* Node-local sandbox scratch reads are capability-free and unrecorded
-           (LAW 18) — scratch is the node's working memory. Outside a
+        (* Node-local sandbox scratch reads are capability-free and unrecorded.
+           Scratch is the node's working memory. Outside a
            sandbox: an fs-read grant returns plain data (CAS-ingested,
            pinned for the run), a CapSecret-only grant returns VSealed —
            bytes pinned in-memory, NEVER the CAS; see Process.read_dispatch. *)
@@ -727,8 +727,8 @@ let register_stdlib () =
 
 let register_domains () =
   let register = register ~category:Domains in
-  (* ---- fenced: register a non-convergent action for reconciler sequencing
-     (LAW 31).  May not appear inside a node body.  The action is not
+  (* ---- fenced: register a non-convergent action for reconciliation.
+     It may not appear inside a node body. The action is not
      executed during evaluation; the active reconciler drains it after
      convergent state is applied. *)
   register "fenced" (fun args _env ->
@@ -746,13 +746,13 @@ let register_domains () =
 
      `(register-domain {:name :namespace :observe :diff :apply :write-cap
      [:observe-cell]})` — script-tier only (trace_stack guard, the same
-     LAW-31 pattern Fenced.register uses): ordinary primitive, root/script
+     pattern Fenced.register uses): ordinary primitive, root/script
      scope. `:write-cap` is consumed into the session's domain registry, never
      re-exposed to user code — the core-side registry IS the authority
      boundary. `:diff`/`:apply` are REQUIRED for a full domain (a domain
      with ⊥ write authority is a PROBE — register-probe below, a distinct,
      simpler entry point); `:namespace` is a list of cell-id string
-     PREFIXES this domain owns (stratification, LAW 30 full form);
+     PREFIXES this domain owns (stratification);
      `:observe-cell` is optional. Returns nil. *)
   let string_or_keyword where v =
     match Presentation.string_like v with

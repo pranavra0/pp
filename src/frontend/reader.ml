@@ -349,7 +349,7 @@ and parse_vector_exprs ps =
 (* Parse a vector parameter list [name1 : type1 name2 : type2 ...]
    Returns (name, type-annotation option) pairs; annotations are CHECKED —
    the def/fn assembler desugars each into a located type check ahead of the
-   body (LAW 32; they were parsed-then-discarded before). *)
+   body; they were parsed and discarded before. *)
 and parse_vector_param_list ps =
   begin match next ps with
     | TokLBracket -> ()
@@ -382,7 +382,7 @@ and parse_vector_param_list ps =
 
 (* Assemble a function's parameter names and body: each annotated parameter
    desugars into a located type check run ahead of the body, so the checks are
-   enforced at the same evaluator boundary (LAW 32). An optional return
+   enforced at the same evaluator boundary. An optional return
    annotation wraps the body. The
    desugar lives in Desugar, shared with the brace reader, so both surfaces
    produce the identical checked AST. *)
@@ -441,7 +441,7 @@ and parse_fn ps =
 
 (* Parse a parameter list: name1 [: type1] name2 [: type2] ... ) — consumes
    the closing paren. Returns (name, type-annotation option) pairs; the
-   annotations are CHECKED via desugared body checks (LAW 32). *)
+   annotations are checked via desugared body checks. *)
 and parse_param_list ps =
   let rec loop () =
     match peek ps with

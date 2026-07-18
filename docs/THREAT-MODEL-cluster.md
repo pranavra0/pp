@@ -107,7 +107,7 @@ This model does not consider these adversaries:
 ## Trust anchors
 
 - one cluster secret. `pp cluster-init` mints it on the root machine
-  (`Token.init` in `src/token.ml`): 32 bytes from Cryptokit's secure random
+  (`Cap_token.init` in `src/kernel/cap_token.ml`): 32 bytes from Cryptokit's secure random
   generator, hex-encoded, written to `~/.pp/cluster/secret` with file mode
   0600. It refuses to overwrite an existing secret, so there is no silent
   rotation that would invalidate every token already issued. Alongside the
@@ -204,34 +204,22 @@ rather than a true single-process, dual-store setup.
   attempts and is refused a sealed read, a recursive search of everything
   the test touched (every node's store, the shared sync roots, every reply
   file) for the secret's distinctive bytes finds nothing
-- claim T6: placement never changes a key or a result hash. Full remote
-  placement is a later part of this feature, so this document proves the
-  claim only for what this document's own tests cover: syncing, not
-  scheduling where code runs. This is the placement half of the wider
-  invariance argument that already holds across schedulers: a
-  node built independently on a third, never-synced member computes the
-  same key as everywhere else, because identity is a hash of the code and
-  the free variables' value hashes, independent of where it is computed
-  (LAW 20), and produces a byte-identical result object. The object synced
-  onto a receiving member, through `serve_hit` and `recv_hit`, is also
-  byte-identical to the builder's own copy
-- claim T7: garbage collection of the store, running concurrently with a
-  parallel build, causes no crash and no wrong result, and a subsequent
-  rebuild is byte-identical. Explicit store garbage collection is a later part of
-  this feature, not implemented by what this document covers. This claim
-  is listed here because the threat-model gate requires it, and it stays a
-  live claim this document continues to bind once garbage collection
-  exists. It is not exercised by the current tests
+- claim T6: placement never changes a key or a result hash. Remote placement
+  sends only data-closed node misses. The member computes the same key and
+  result as a local worker because identity uses code and free-variable
+  hashes, not location (LAW 20). `tests/048` checks this.
+- claim T7: garbage collection of the store, running beside a parallel build,
+  causes no crash or wrong result. `pp gc` marks by replay and protects recent
+  and concurrent data. `tests/050` checks this.
 
 ## What this document does not cover
 
 This document does not cover:
 
-- remote evaluation: `serve_hit` answers one question only, does this key
-  already have a verified result you're authorized to see. Nothing in
-  this document causes code to run on a peer. Forcing a node on a remote
-  member is remote placement, a later part of this feature (see the
-  remote-placement work described in `docs/STATUS.md`)
+- arbitrary remote evaluation: `serve_hit` answers one question only: does
+  this key have a verified result that the caller may read? Remote placement
+  runs only data-closed node misses through the separate `remote:MEMBER`
+  scheduler path.
 - a membership protocol: there is no network operation to join or leave
   the cluster. Membership — who holds a copy of the secret — is entirely
   an out-of-band fact the operator manages, mirrored in ambient

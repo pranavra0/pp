@@ -298,7 +298,7 @@ end
    Given (node-key, token), the serving side verifies the token, then
    calls Cache_policy.lookup ~authorized:(cell_authorized_for
    (token_to_caps token)) — zero new authority code, just the
-   existing LAW 23b gate fed a wire-verified capability list. On a hit, exactly the trace(s) the token's
+   existing authority gate fed a wire-verified capability list. On a hit, exactly the trace(s) the token's
    own capabilities cover are pushed (never an unauthorized trace, even
    though cache policy's own gate would also refuse to serve it later — this
    is defense in depth against leaking cell names/paths as metadata, LAW

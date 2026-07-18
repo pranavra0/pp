@@ -2,7 +2,7 @@ open Pp_kernel
 (* pp brace printer — renders a `Core_model.expr` (as produced by the s-expression
    reader) as brace-surface text (SPEC Appendix B) that the brace reader
    (src/frontend/reader_braces.ml) re-reads to the structurally IDENTICAL expr — same
-   `ELocated` placement, hence the same LAW-20 hash. This is the fuzzer's round-trip-gate
+   `ELocated` placement, hence the same content hash. This is the fuzzer's round-trip gate
    printer and the layer `pp fmt` (and `pp why`/`pp graph`/REPL
    display) builds on.
 
@@ -42,7 +42,7 @@ open Pp_kernel
      left-associative, cmp non-associative) — an operand parenthesizes only
      when its own level exceeds what its position admits; n-ary operator
      applications print in call form (`+(a, b, c)`) — infix is strictly
-     binary and `(+ a b c)` ≠ `(+ (+ a b) c)` under LAW 20.
+     binary and `(+ a b c)` ≠ `(+ (+ a b) c)` under the AST identity rules.
    - `EIf` always prints as `if`/`else` — the `and`/`or` desugar erases the
      distinction at read time, so re-reading yields the identical tree.
    - quasiquote ASTs print as their lowered form (cons chains, `quote {}`

@@ -1,0 +1,4 @@
+# observation head	trust assumption
+config	The command owns the session configuration.
+env	The host owns the process environment.
+probe	The probe owner supplies one volatile value per pass.

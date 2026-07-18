@@ -1,12 +1,12 @@
 open Pp_kernel
 (* pp shared reader-level desugars (SPEC Appendix B).
 
-   Every reader-level sugar whose OUTPUT participates in LAW-20 hashing lives
+   Every reader-level sugar whose output participates in content hashing lives
    here, so no reader may re-render it in its own notation. Most of these are
    shared by BOTH parsers (src/frontend/reader.ml, the s-expression surface;
    src/frontend/reader_braces.ml, the brace surface), so the two readers cannot drift:
-   the block rule + its duplicate-definition check (LAW 4), the per-parameter
-   type-check desugar (LAW 32), the `and`/`or` -> `if` desugar, and the
+   the block rule and duplicate-definition check, the per-parameter type-check
+   desugar, the `and`/`or` -> `if` desugar, and the
    `assert` -> `if`+`error` desugar (whose message string — including the
    s-expression rendering of the condition and the `at file:line` suffix — is
    part of the desugared expression and therefore of every enclosing hash;
@@ -19,7 +19,7 @@ open Pp_kernel
    [try_builder] the caller supplies, so those two shapes cannot drift.
 
    [err] is each caller's own located-parse-error raiser, so error text keeps
-   that reader's exact `msg at file:line` format (LAW 29). *)
+   that reader's exact `msg at file:line` format. *)
 
 open Core_model
 
@@ -56,7 +56,7 @@ let block_body ~(err : string -> unit) (exprs : expr list) : expr =
 
 (* Assemble a function's parameter names and body: each annotated parameter
    desugars into a located type check run ahead of the body, so the checks are
-   enforced at the same evaluator boundary (LAW 32). An optional return
+   enforced at the same evaluator boundary. An optional return
    annotation wraps the body. *)
 let assemble_fn_body locate (params : (string * expr option) list)
     (ret_ty : expr option) (body : expr) : string list * expr =
@@ -143,7 +143,7 @@ let normal_try_builder : try_builder = {
 
 (* Lower a try block to a nested if-chain. [fresh_var] supplies the temporary
    names; the caller owns the counter (reset once per top-level form) so a
-   form's LAW-20 hash depends only on the form, not on how many try blocks
+   form's content hash depends only on the form, not on how many try blocks
    preceded it — and must be invoked here, inline at parse time, in this
    top-down traversal, never deferred to a later whole-AST pass. *)
 let lower_try ~(fresh_var : unit -> string) (b : try_builder)

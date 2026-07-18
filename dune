@@ -18,11 +18,7 @@
   ; tests/067 diffs SPEC's generated surface-tables block against
   ; `pp --dump-surface-tables`, so the SPEC file must be a runtest dep.
   docs/SPEC.md
-  ; tests/074 checks each observation head has an adversarial fixture or
-  ; a DESIGN honest-edge entry, so DESIGN.md must be a runtest dep too —
-  ; without it the sandbox served a stale/absent copy and env/probe/config
-  ; (the §4-edge heads) failed under `dune runtest` while passing directly.
-  docs/DESIGN.md
+  tests/fixtures/adversarial/honest-edges.tsv
   build.pp
   scripts/run-tests.sh
   scripts/run-focused-tests.sh
@@ -54,33 +50,8 @@
     %{dep:tests/unit/parser_unit.exe})
   (run bash scripts/run-tests.sh src/app/main.exe))))
 
-; Fork-defeat regression: World_path.stdlib_root resolves
-; --reconcile/--supervise's auto-loaded
-; domain-fs.pp/domain-proc.pp (and their list.pp/map.pp/string.pp deps) to
-; _build/default/stdlib — the build-root mirror discovered above src/app/main.exe,
-; not the repo's own stdlib/ — but until this rule existed, that
-; mirror was only ever refreshed as a side effect of the `runtest` alias's
-; `(source_tree stdlib)` dependency above. A bare `dune build` (which is
-; all `bin/pp` needs, per AGENTS.md) rebuilt main.exe without touching this
-; mirror at all, so editing stdlib/*.pp and running `dune build` silently
-; kept serving the OLD stdlib content to every --reconcile/--supervise run
-; until something else happened to invoke `dune runtest` first. This is
-; exactly how the list.pp `map`-shadow fix (removing the pp-level `(def
-; (map f lst) ...)` that shadowed the batching-aware builtin, defeating
-; the parallel fan-out) silently
-; failed to take effect for `bin/pp`: the source was fixed, but the mirror
-; `bin/pp` actually reads stdlib from at runtime stayed stale.
-;
-; This rule (not just `(deps (source_tree stdlib))`) also re-lists
-; src/app/main.exe and tools/fuzz.exe explicitly: dune's default per-directory
-; alias, unless overridden, implicitly aggregates every subdirectory's own
-; default target (which is how a bare `dune build` built both executables
-; before this rule existed) — but defining ANY explicit `(alias default)`
-; rule in a directory REPLACES that implicit aggregation for the directory
-; it's declared in, root included. Naming the two executables here
-; preserves "plain `dune build` builds the interpreter and the fuzzer"
-; (AGENTS.md) while adding the stdlib mirror to the same alias, so both
-; guarantees hold from one ordinary build with no extra step.
+; Keep the standard-library mirror current for the interpreter and fuzzer.
+; Keep both executables in the default build.
 (rule
  (alias default)
  (deps (source_tree stdlib) src/app/main.exe tools/fuzz.exe tools/check-dependencies.sh)

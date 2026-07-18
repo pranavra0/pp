@@ -26,7 +26,7 @@ let hash_string (s : string) : string =
    repeat).  Distinct part LISTS therefore map to distinct pre-hash strings
    even when a part itself holds a ':' (user paths, symbol names, tags) or is
    empty.  A plain `String.concat ":"` would be ambiguous the instant any
-   part held a ':' — the LAW-20 collision class where two distinct ASTs share
+   part held a ':' — a collision where two distinct ASTs share
    one content key and pp serves a wrong cached result.  Every hash builder
    funnels through here (and through no other join), so injectivity is a
    single-site property the kernel-properties generated-AST test

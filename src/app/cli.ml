@@ -242,7 +242,7 @@ let flags raw =
       (opt1 "--dump-pins" (fun p -> raw.dump_pins_file := Some p));
     doc_of "  pp --emit-braces <file.ppl>  Print a sexpr (.ppl) file as brace-surface text (.pp/.ppb are brace surface, .ppl is the sexpr/AST surface)\n"
       (opt1 "--emit-braces" (fun f -> raw.emit_braces_file := Some f));
-    doc_of "  pp --roundtrip-braces <file.ppl>  Assert sexpr->braces->re-read AST + LAW-20 hash equality (the fuzz gate)\n"
+    doc_of "  pp --roundtrip-braces <file.ppl>  Assert sexpr->braces->re-read AST + hash equality (the fuzz gate)\n"
       (opt1 "--roundtrip-braces" (fun f -> raw.roundtrip_braces_file := Some f));
     doc_of "  pp fmt --to-braces <file> [-i]  Transpile sexpr source to brace source, carrying comments (-i/--in-place rewrites the file, same path)\n  pp fmt --to-sexpr <file> [-i]   Transpile brace source to sexpr source, carrying comments\n"
       ({ name = "fmt"; doc = ""; internal = false; handler = parse_fmt raw });

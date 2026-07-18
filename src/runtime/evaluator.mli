@@ -6,7 +6,7 @@ open Pp_kernel
    replay for persistent nodes, capability-gated cell-authority checks,
    and the REPL's eval_expressions entry point. *)
 
-(** LAW 23b: whether a set of capabilities permits reading a trace cell.
+(** Whether a set of capabilities permits reading a trace cell.
     Used to gate cache hits on the transitive read closure. *)
 
 val eval : Core_model.expr -> Core_model.env -> Core_model.value
@@ -22,9 +22,9 @@ val force : Core_model.value -> Core_model.value
 val force_node :
   key:Identity_types.Node_key.t ->
   run:(unit -> Core_model.value) -> Core_model.thunk -> Core_model.value
-(** Force a persistent node through the store: serve a verified hit (gated
-    on the caller's authority over the trace's read closure, LAW 23b),
-    re-serve a memoized failure (LAW 28), or run and store on a miss. *)
+(** Force a persistent node through the store: serve a verified hit when the
+    caller may read its trace, re-serve a memoized failure, or run and store
+    on a miss. *)
 
 val init : Session.t -> retain_thunks:bool -> unit
 (** Reset the evaluator state, clear the thunk store (unless

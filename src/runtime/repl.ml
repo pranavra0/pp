@@ -33,7 +33,7 @@ let macro_services () =
     force_deep = Force_deep.force_deep;
     initial_env = Primitives.initial_env }
 
-(* LAW 29: a runtime error escaping a top-level form reports that
+(* A runtime error escaping a top-level form reports that
    form's source location — unless its message already carries one (a
    " at …:<line>" suffix), so located errors are never double-located.
    Error_context.with_form_location is the ONE implementation, shared by the

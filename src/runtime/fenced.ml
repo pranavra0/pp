@@ -1,5 +1,5 @@
 open Pp_kernel
-(* pp fenced-effect executor (LAW 31).
+(* Fenced-effect executor.
 
    Fenced effects are non-convergent, irreversible actions (send email, charge
    card, post webhook).  They may not appear in node bodies; they are sequenced

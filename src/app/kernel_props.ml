@@ -7,8 +7,8 @@ open Pp_kernel
    and [expr]) and the kernel properties that run under them:
 
      (i)   INJECTIVITY   distinct ASTs ⇒ distinct content hash
-                         (Identity.hash_value / Identity.hash_pattern / Identity.hash_expr — the LAW-20
-                         key; a collision is a wrong-cache-serve bug, the
+                         (Identity.hash_value / Identity.hash_pattern / Identity.hash_expr — the
+                         content key; a collision is a wrong-cache-serve bug, the
                          exact class the length-framed Hasher.hash_concat below exists to kill).
      (ii)  QUOTE RT      rt = Quotation.value_to_expr ∘ Quotation.quote_to_value is TOTAL and
                          IDEMPOTENT — rt (rt e) ≡ rt e (hash-equal). The macro
@@ -154,7 +154,7 @@ let value_surface : value_tag -> value_surface = function
   | Vt_symbol | Vt_pair | Vt_vector | Vt_map | Vt_set -> Syntactic
   | Vt_closure -> Runtime_only "captures a body/env"
   | Vt_builtin -> Runtime_only "carries an OCaml function"
-  | Vt_capability -> Runtime_only "authority token, LAW 22 — not literal"
+  | Vt_capability -> Runtime_only "authority token; not literal"
   | Vt_thunk -> Runtime_only "mutable evaluation cell"
   | Vt_envmap -> Runtime_only "module export table"
   | Vt_sealed -> Runtime_only "confidential bytes, redacted surface"
@@ -774,8 +774,8 @@ let cap_properties (st : rng) ~(count : int) : unit =
 
 (* ---- (i) injectivity ---------------------------------------------------- *)
 
-(* Collect [n] samples, bucket by content hash; any bucket holding two
-   structurally-distinct members is a genuine LAW-20 collision. Because the
+(* Collect [n] samples and bucket them by content hash. Any bucket with two
+   structurally distinct members is a real identity collision. Because the
    samples are drawn from the (=)-comparable syntactic subset (no NaN, sets
    canonicalized), structural (<>) with a shared hash is exactly a collision. *)
 let injectivity (type a) ~(name : string) ~(hash : a -> string)

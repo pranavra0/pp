@@ -52,7 +52,7 @@ let rec force (v : value) : value =
            failwith "infinite recursion detected (forcing a thunk already being evaluated)"
        | Unevaluated ->
            (* Persistent nodes route through the store. Identity is the
-              LAW 20 node key (code + free-var value hashes); the trace decides
+              node key (code + free-variable value hashes); the trace decides
               validity. A stale trace falls through to recompute. *)
            if t.thunk_persist then
              let nk = node_key_of t in
@@ -87,14 +87,14 @@ and evaluate_and_store_no_key (t : thunk) : value =
   decr_force_depth ();
   force result
 
-(* LAW 20: a node's persistent key is its code structure plus the *value* hashes
+(* A node's persistent key is its code structure plus the *value* hashes
    of the free variables it references (forced, call-by-value — the key cannot
    exist before its inputs' values do). This deliberately omits the whole-env
    hash (so rebinding an unrelated global does not re-key the node), the
-   capability set (authority gates *access* to a hit — LAW 23 — never identity),
+   capability set (authority gates access to a hit, never identity),
    and the ambient config/handler stacks: a config value or handler the node
    actually observed is recorded in its trace as a `config:`/`handler:` cell
-   and governs validity, not identity (LAW 33/26). *)
+   and governs validity, not identity. *)
 and node_key_of (t : thunk) : Identity_types.Node_key.t =
   Node.key_of ~expr:t.thunk_expr ~env:t.thunk_env ~force
 
@@ -171,7 +171,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
        | _ -> eval_tail then_e env k)
 
   | ELet (bindings, body) ->
-      (* Mutual let: all bindings visible in every RHS (LAW 1).
+      (* Mutual let: all bindings are visible in every RHS.
          Create thunks with outer env, build mutual env, then backpatch
          each thunk's env so they see each other when forced. *)
       let thunks = List.map (fun (name, binding_expr) ->
@@ -281,7 +281,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       (* Resolve the inline pin to the immutable cached tree (verified
          against the pin on every resolve), then evaluate its entry.pp as a
          module. The pin is part of this expression's hash, so island
-         identity is structural (LAW 20) — no trace cell. *)
+         identity is structural — no trace cell. *)
       let tree = Island.resolve ~uri ~pin in
       k (Evaluator_forms.module_file { eval; eval_tail; force }
            (Island.entry_file tree))

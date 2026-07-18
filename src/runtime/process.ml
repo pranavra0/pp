@@ -4,9 +4,9 @@ open Pp_kernel
    (perform run CMD ARG...) ⇒ {"exit" int, "out" string, "err" string}
 
    Authority: `--grant process` (CapProcess) is required at perform time;
-   there is no way to mint it from user code (LAW 22). A denial raises a
+   there is no way to mint it from user code. A denial raises a
    structured capability error, which node caching deliberately does not memoize
-   (authority is not identity — LAW 15).
+   (authority is not identity).
 
    Trace soundness: a run inside a node is traced by the coarse-cell
    soundness floor — one whole-tree hash per fs-read grant, refined per-tool
@@ -19,7 +19,7 @@ open Pp_kernel
    itself never saw. Reads outside granted roots (system headers etc.) are
    the documented staleness hole the future `toolchain:` closure cell covers.
 
-   Sandbox (LAW 18): inside a node the child process runs
+   Sandbox: inside a node the child process runs
    with the node's scratch directory as cwd, so relative outputs land in
    node-local scratch and never in the caller's tree. The sandbox does not
    fail-close absolute paths — it is a hygiene mechanism; the trace cells
@@ -230,7 +230,7 @@ let run_dep_effect (args : value list) : value =
              (VString "err",  VString err) ]
   | _ -> failwith "run-dep! expects a depfile path, a command, and arguments"
 
-(* ---- write-file with the LAW 18 node/scripting split ----
+(* ---- write-file with the node/scripting split ----
    Shared by the builtin write-file implementation. Inside a node: a relative
    path writes node-local sandbox scratch (capability-free, unrecorded); an
    absolute path is an error — reconciled-domain writes go through the
@@ -321,9 +321,9 @@ let read_dispatch ~(tag : string) ~(cap_err : string -> string) (path : string) 
    networking/TLS surface) but AUTHORIZED against CapNetwork host[:port] —
    not CapProcess: granularity, "may read this host" is a much narrower
    grant than "may exec anything". Banned inside node bodies (trace_stack
-   guard, the same LAW-31 pattern `Fenced.register` and `write-file`'s node
-   arm use) — network reads are not convergent and are not the sanctioned
-   nondeterminism mechanism (probes are, LAW 37/38); legal in probe
+   guard, the same pattern used by `Fenced.register` and `write-file`) —
+   network reads are not convergent and are not the sanctioned nondeterminism
+   mechanism; probe observe functions may use them
    observe-fns (which run with trace_stack forced to [] —
    Observation.probe_value), domain observe/apply, and the script tier. *)
 let has_network_cap ~(host : string) ~(port : int option) : bool =

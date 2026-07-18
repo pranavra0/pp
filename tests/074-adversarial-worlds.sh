@@ -1,38 +1,38 @@
 #!/usr/bin/env bash
-# tests/074 — every user-observable read ($env, $file, $probe, ...) must
-# either defeat a hostile world or have its trust assumption written down.
+# Check every user-observable read against an adversarial fixture or a
+# structured honest-edge record.
 # pins: LAW-23 LAW-39
 #
-# Every user-observable head must have EITHER an adversarial fixture that
-# defeats a hostile world, OR a documented DESIGN.md honest-edge entry that
-# records the trust assumption and its blast radius. The rule is keyed off the
-# ONE source of truth for the head set — `pp --dump-surface-tables` renders the
-# `$KIND` heads straight from Surface_tables.obs_heads — so a NEW head cannot
-# ship unexamined: it appears here automatically and fails the build until it
-# gets a fixture or an edge entry. Coverage is derived from the table, never a
-# hand-maintained list.
+# `pp --dump-surface-tables` provides the head set. A new head therefore fails
+# until it has a fixture or a record in honest-edges.tsv.
 #
-#   fixture:  tests/fixtures/adversarial/<head>.sh   (run)
-#   edge:     a bullet in DESIGN.md's "Honest edges" section whose first line
-#             names `$head`, verified present
+# Fixture: tests/fixtures/adversarial/<head>.sh
+# Record:  tests/fixtures/adversarial/honest-edges.tsv
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FIX="$ROOT/tests/fixtures/adversarial"
-DESIGN="$ROOT/docs/DESIGN.md"
+EDGES="$FIX/honest-edges.tsv"
 
-# A head with no adversarial fixture must be justified by a documented trust
-# assumption. The allowlist lives here, but a head on it is only ACCEPTED if
-# DESIGN.md's "Honest edges" section has a bullet naming the head — a
-# dangling justification is a red build.
-edge_allowed() {  # head -> 0 if a documented honest edge may cover it
-  case "$1" in
-    env|probe|config) return 0 ;;
-    *)                return 1 ;;
-  esac
-}
-honest_edges() {  # the "Honest edges" section of DESIGN.md
-  awk '/^## Honest edges/{on=1; next} on && /^## /{exit} on' "$DESIGN"
+if ! awk -F '\t' '
+  /^[[:space:]]*#/ || NF == 0 { next }
+  NF != 2 || $1 !~ /^[a-z][a-z0-9-]*$/ || $2 == "" {
+    print "invalid honest-edge record: " $0 > "/dev/stderr"; bad=1
+  }
+  seen[$1]++
+  END {
+    for (head in seen) if (seen[head] > 1) {
+      print "duplicate honest-edge record: " head > "/dev/stderr"; bad=1
+    }
+    exit bad
+  }
+' "$EDGES"; then
+  bad "honest-edge-manifest" "invalid or duplicate record in $EDGES"
+  exit 1
+fi
+
+edge_reason() {
+  awk -F '\t' -v wanted="$1" '$1 == wanted { print $2; exit }' "$EDGES"
 }
 
 # The head set, straight from the surface table (single source).
@@ -56,17 +56,14 @@ for head in $heads; do
       bad "$head" "adversarial fixture $fixture FAILED"
     fi
   else
-    if ! edge_allowed "$head"; then
+    reason=$(edge_reason "$head")
+    if [ -z "$reason" ]; then
       bad "$head" \
-        "no adversarial fixture ($fixture) and not on the honest-edge allowlist." \
-        "Add a fixture, or allowlist $head here and document the trust assumption in DESIGN.md's honest edges."
-    elif honest_edges | grep -E "^- .*\`\\\$$head\`" >/dev/null ; then
-      echo "ok   $head (documented trust assumption: DESIGN.md honest edge)"
-      covered=$((covered + 1))
+        "no adversarial fixture ($fixture) and no honest-edge record." \
+        "Add a fixture or add a tab-separated record to $EDGES."
     else
-      bad "$head" \
-        "allowlisted, but no honest-edge bullet naming \`\$$head\` found in $DESIGN." \
-        "The justification is dangling — write the edge bullet, or fix the allowlist."
+      echo "ok   $head (honest edge: $reason)"
+      covered=$((covered + 1))
     fi
   fi
 done

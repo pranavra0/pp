@@ -3,7 +3,7 @@
    [t] is abstract: no module outside this one can construct a capability
    value except through [mint] (the CLI --grant path), [compose] (union),
    [restrict] (narrowing) and [none].  The single construction site enforces
-   SPEC LAW 22: user code narrows and unions, never constructs from scratch.
+   User code narrows and unions held capabilities. It cannot construct one.
 
    Every fs-level authority check takes [Paths.canonical], never a raw
    string, so a symlink-spelling bypass is inexpressible once both sides
@@ -27,7 +27,7 @@ val check_secret : t -> Paths.canonical -> bool
 val check_process : t -> bool
 val list_fs_paths : t -> (Paths.canonical * fs_mode) list
 
-(* ---- the subseteq monotonicity gate (LAW 22b) ---- *)
+(* ---- the subset relation: restriction cannot widen authority ---- *)
 val subseteq : t -> t list -> bool
 
 (* ---- hashing and display ---- *)

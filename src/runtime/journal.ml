@@ -1,4 +1,4 @@
-(* pp journal — the append-only intent/done audit log (LAW 31).
+(* Append-only intent/done audit log.
 
    One typed entry variant owns every line shape; [to_line]/[of_line] live
    together so a writer cannot invent a dialect the scanner does not read.
@@ -150,7 +150,7 @@ let fold (f : 'a -> entry -> 'a) (init : 'a) : 'a =
         !acc)
   end
 
-(* ---- Fenced-effect scanners (LAW 31) ---- *)
+(* ---- Fenced-effect scanners ---- *)
 
 type fenced_entry = {
   fe_key : string;

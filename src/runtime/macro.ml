@@ -2,9 +2,9 @@ open Pp_kernel
 (* pp macro expansion — defmacro: a function from syntax-as-values to
    syntax-as-values.
 
-   Architecture (LAW 20/36): expansion is the ONE shared step every code
+   Architecture: expansion is the one shared step every code
    path passes through before its own machinery ever sees a form — Identity.hash_expr
-   (the node key) operates on ALREADY-EXPANDED ASTs, so LAW 20
+   (the node key) operates on expanded ASTs, so identity
    needs no change anywhere else: it is true by construction, because
    node_key_of can never observe a macro
    call — it never survives past this module.
@@ -130,7 +130,7 @@ let match_defmacro (e : expr) : (string * string list * expr) option =
    value (Quotation.quote_to_value, total over every expr form), bind the macro's
    parameters to those values (plain values, not thunks — they are already
    fully-realized quoted data, and the macro body is expansion-time code,
-   not the program proper), run the body through the tree walker (LAW 36),
+   not the program proper), run the body through the tree walker,
    force the result deeply (a macro body may itself end in a delay/thunked
    tail), and convert the resulting value back to syntax.
 
@@ -141,7 +141,7 @@ let match_defmacro (e : expr) : (string * string list * expr) option =
    user-defined helper function from the surrounding file. Threading "the
    current top-level environment" through here would couple expansion to the
    evaluator's mutable program environment at the one point that is supposed
-   to stay phase-separated — exactly the seam LAW 36 exists to keep out of
+   to stay phase-separated — exactly the seam this module protects
    this module. Macros compose via
    ordinary data-structure primitives instead (the same restriction Racket's
    phase separation and Scheme's begin-for-syntax impose for the same
@@ -184,7 +184,7 @@ let apply_macro services expansion_count ~(name : string) ~(params : string list
    fallthrough).
 
    [loc] is the innermost enclosing source location seen so far (best-
-   effort LAW 29 preservation): re-stamped whenever
+   effort to preserve locations): re-stamped whenever
    the walk passes an ELocated node (the reader, and assemble_fn_body,
    attach these at more than just the top level — parameter type checks,
    typed bodies), and attached to the top of every expansion so an error

@@ -9,7 +9,7 @@ open Pp_kernel
    the serial miss arm calls, [Node.rebuild] (passed in as
    [j_run] by the caller) — there is no second "evaluate node in worker"
    code path. The child exits 0 on success / 1 on error; the failing trace
-   was already persisted by [Node.rebuild] itself (LAW 28). The parent NEVER
+   was already persisted by [Node.rebuild] itself. The parent never
    reads a value from a child — it reaps and falls through to the ordinary
    [Cache_policy.lookup Cache_policy.default]: the child's trace+object make it a hit, a dead child makes
    it a miss and the parent recomputes in-process. Worker death therefore
@@ -30,7 +30,7 @@ type job = {
   j_run : unit -> Core_model.value;
   (* Redundancy for this job: 1 for an ordinary batch member, N for a
      singleton force_node miss raced under [Race n] (N identical (key,run)
-     forks — sound because LAW 37 nodes are deterministic; the first
+     forks — sound because nodes are deterministic; the first
      exit-0 wins). *)
   j_width : int;
   (* The thunk this job forces. Every existing call site already has it in
@@ -146,8 +146,8 @@ let flush_before_fork () =
 
 (* Runs entirely inside the child. [j.j_run] IS [Node.rebuild]
    partially applied by the caller — the exact function the serial miss arm
-   calls; [Node.rebuild] itself persists the result object + trace (success)
-   or the failing trace (LAW 28) before returning/raising, so there is
+   calls; [Node.rebuild] itself persists the result object and trace on success
+   or the failing trace before returning or raising, so there is
    nothing left for the child to persist here. The child must flush its OWN
    stdout/stderr (anything the node body printed via `perform log` or
    otherwise) before terminating: we deliberately call [Unix._exit], which
@@ -195,7 +195,7 @@ let run_serial (jobs : job list) : unit =
    for the next queued fork. The FIRST successful (exit 0) child for a given
    key marks that key won: any other STILL-LIVE child sharing the key is a
    race loser and is killed (SIGTERM->SIGKILL) — safe by construction, since
-   `(fenced ...)` cannot appear inside a node body (LAW 31), so no
+   `(fenced ...)` cannot appear inside a node body, so no
    non-convergent action can ever be half-done inside a killed node. Once a
    key has won, remaining QUEUED (not yet forked) duplicates of that key are
    skipped rather than forked at all. *)

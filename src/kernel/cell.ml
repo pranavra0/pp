@@ -1,7 +1,7 @@
 (* pp cells — the typed taxonomy of world observations.
 
    A cell is one observable unit of the world a node can read; a trace records
-   (cell, observed-hash) pairs and a hit re-observes them (SPEC LAW 21). Cells
+   (cell, observed-hash) pairs and a hit re-observes them. Cells
    are persisted as quoted strings inside trace lines (Trace_repository's canonical
    text format), so [serialize]/[parse] round-trip EXACTLY — the
    on-disk format is frozen; this module only replaces scattered
@@ -11,7 +11,7 @@
    Observation owns re-observation and authorization; this module owns naming.
 
    File-cell paths are canonicalized before they ever reach [serialize]
-   (World_path.canonical — SPEC LAW 23: absolute realpath,
+   (World_path.canonical: absolute realpath,
    no trailing slash), so a canonical path always starts with '/'. That
    invariant RESERVES the grammar for a future host-qualified form,
    "file:<host>:<canonical-path>": the character right after
@@ -21,15 +21,15 @@
    here; this is the reservation only. *)
 
 type t =
-  | File of string         (* file contents, by canonical path (LAW 23) *)
+  | File of string         (* file contents, by canonical path *)
   | RuntimeFile of string  (* a loader read: interpreter authority, not the user's *)
   | Tool of string         (* the command binary a `run` resolved to *)
   | Tree of string         (* whole-tree content hash — the coarse soundness floor *)
   | Stat of string         (* file predicate: presence/kind, never contents *)
   | Env of string          (* environment variable, absence included *)
   | Argv                   (* the single program-argument-list cell *)
-  | Config of string       (* ambient config key observation (LAW 33) *)
-  | Handler of string      (* which handler intercepted an effect (LAW 26) *)
+  | Config of string       (* ambient config key observation *)
+  | Handler of string      (* which handler intercepted an effect *)
   | Probe of string        (* observer-written volatile cell, "probe:<name>" —
                                driver-evaluated at most once per pass, capability-
                                free at the read site (authority was consumed by

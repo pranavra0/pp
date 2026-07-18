@@ -1,38 +1,13 @@
 open Pp_kernel
-(* pp remote placement — dispatches a batch of node misses to a named
-   cluster member over the cluster transport (transport/tokens/sync live in
-   src/runtime/transport.ml + src/token.ml).
-
-   Wires Scheduler's [Remote member] policy to that transport: this
-   module is compiled AFTER Evaluator, Transport, and Token (all three sit
-   ABOVE Scheduler in the dependency graph — Transport calls
-   Observation.authorized_id, and Evaluator calls Scheduler — so this
-   is the one place that can call all four), and supplies a narrow
-   dispatcher value when the application constructs its scheduler.
-
-   THE CORE MOVE: a cluster member is a SEPARATE `pp` process with its own
-   $HOME (Store_layout.root Store_layout.default is a process-wide singleton — see transport.ml's
-   header). Rather than inventing a "force only key K" wire protocol
-   (which would need a derivation/eval split the scheduler's process-pool
-   design deliberately avoids elsewhere too), the member is simply handed the SAME top-level
-   program (byte-identical source; both sides are ordinary files on the
-   CI-loopback's shared disk, or scp'd identically in a real deployment)
-   and runs it as an ordinary `pp` invocation, under `--schedule serial` —
-   so it calls Node.rebuild itself, via its OWN completely
-   normal command dispatch control flow, no second "evaluate on member" function
-   anywhere. Whatever nodes that run forces (our assigned batch keys, plus
-   duplicate computation across machines is SOUND by determinism, LAW 37)
-
-   land in the member's OWN store; the dispatcher then pulls each assigned
-   key back via the serve-hit/recv-hit pair — the same
-   re-hash-on-receive choke point every other synced artifact goes
-   through. *)
+(* Remote placement sends data-closed node misses to a named member. The
+   member runs a normal pp process with its own session and store. Results
+   return through the same hash-checking path as other transported data. *)
 
 open Core_model
 open Codec
 
-(* ---- Members file: ambient config, never --grant (contract: an address
-   is not an authority ceiling — LAW 34's own distinction). One member per
+(* ---- Members file: ambient config, never --grant. An address is not an
+   authority ceiling. One member per
    line, "<name> <store-root-path>" — the store-root is what
    Transport.LocalDir treats as its abstract [t] (conventionally another
    node's own $HOME/.pp/store). Blank lines and '#' comments ignored. *)
@@ -208,7 +183,7 @@ let preseed_pins_from_file session ~(pins_file : string) : unit =
    "a node returns a blob ref to bytes it wrote/ingested itself"
    (the `(blob (slurp OUTPUT-FILE))` compile pattern — no `file:`
    cell records the OUTPUT file at all, since reading back a node's own
-   just-written sandbox output is not a world-observation, LAW 18). Remote
+   just-written sandbox output is not a world observation). Remote
    placement must ship these too, or a dispatcher-side consumer of the
    pulled result (e.g. `link`'s `blob-get`) finds the metadata but not the
    bytes it names. Scans a value's own STRUCTURE (VMap/VVector/VPair/VSet

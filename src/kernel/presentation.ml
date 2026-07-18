@@ -37,7 +37,7 @@ let rec string_of_value (v : value) : string =
   | VEnvMap bindings ->
       "#<envmap " ^ string_of_int (List.length bindings) ^ " exports>"
   | VSealed _ ->
-      (* LAW 39: NEVER the bytes — a print that leaked them would defeat the
+      (* Never print the bytes. A leak would defeat the
          whole feature. Every printer (REPL, `print`, debug) goes through
          this one function, so redaction is total by construction. *)
       "#<sealed>"
@@ -55,4 +55,3 @@ let string_like (v : value) : string option =
   match v with
   | VString s | VKeyword s | VSymbol s -> Some s
   | _ -> None
-

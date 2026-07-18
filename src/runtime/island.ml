@@ -10,7 +10,7 @@ open Pp_kernel
      (island <github:owner/repo#ref> "a1b2…64hex")
 
    The pin is part of the code — `Identity.hash_expr` folds uri+pin — so island
-   identity is structural (LAW 20): no lockfile, no synthetic trace cell,
+   identity is structural: no lockfile or synthetic trace cell,
    and a pinned island form is a CLOSED expression (paste it anywhere, it
    denotes the same bytes). Refs (`#main`) live in the URI and matter only
    at fetch time; the pin argument must be the 64-hex content hash.
@@ -23,7 +23,7 @@ open Pp_kernel
 
    Resolution NEVER touches the network. Fetching (git:/github:) happens
    only under --fetch-islands / --update (Island.fetch_enabled) —
-   the loader's runtime authority (LAW 24), not a user capability. An
+   the loader's runtime authority, not a user capability. An
    unpinned island form is a hard error naming the fix: eval stays pure and
    hermetic; the only impure step lives in `pp --update`. *)
 
@@ -177,7 +177,7 @@ let materialize ~(uri : string) ~(src_dir : string) : string =
   log_resolution ~uri ~pin;
   pin
 
-(* ---- Fetch (git:/github:) — runtime authority, opt-in (LAW 24, §3.5) ---- *)
+(* ---- Fetch (git:/github:) — opt-in runtime authority ---- *)
 
 (* Clone the URI's ref into a temp dir with git's plumbing only (no hooks:
    --template= gives an empty template dir, and clone never runs the

@@ -2,7 +2,7 @@ open Pp_kernel
 (* pp brace reader — the brace surface syntax (SPEC Appendix B), parsing to the
    IDENTICAL `Core_model.expr` the s-expression reader produces for the equivalent
    program: same AST, same `ELocated` placement (§B.4), same shared desugars
-   (src/frontend/desugar.ml), hence the same LAW-20 keys. The grammar implemented here
+   (src/frontend/desugar.ml), hence the same content keys. The grammar implemented here
    is exactly the one Appendix B specifies — the 7-level precedence table,
    the whitespace-sensitive infix rule (`a - b` subtracts, `a-b` is one
    identifier), `#` comments, `;`/newline statement separators with
@@ -19,8 +19,7 @@ open Pp_kernel
    - `assert`: the location is baked into the generated message string, with
      the condition rendered in s-expression notation (Desugar.desugar_assert).
 
-   Error messages carry `msg at file:line` in the sexpr reader's exact format
-   (LAW 29). *)
+   Error messages carry `msg at file:line` in the sexpr reader's exact format. *)
 
 open Core_model
 open Source_error
@@ -639,7 +638,7 @@ let parse_match_arms_generic ps ~(parse_pat : ps -> 'p)
 (* One dispatch over the head-word set, two readers. [parse_head_ctx] matches a
    head keyword once; a [head_builder] supplies how each reader parses the
    sub-parts and builds the form — the normal reader real AST (often desugared:
-   EFn via LAW-32 checks, `and`/`or`/`assert` expanded), the quasiquote reader
+   EFn via type checks, `and`/`or`/`assert` expanded), the quasiquote reader
    the quoted list DATA that reconstructs the same form. Because the match lives
    in one place, a head form cannot exist in one reader and not the other — a
    property that no longer needs a separate coverage check. Some forms are one
@@ -647,7 +646,7 @@ let parse_match_arms_generic ps ~(parse_pat : ps -> 'p)
    splice are quasiquote-only; fenced/with/vec/defmacro are normal-only); the
    builder's method for the other side raises the "not representable" error, so
    the single dispatch still enumerates the whole set. Builder methods that build
-   a block take [ps] because the normal reader validates block defs (LAW 4) and
+   a block take [ps] because the normal reader validates block definitions and
    wraps the body, work the quasiquote reader (which splices raw items) does not.
    Several quasiquote arms (config/load/island/assert) deliberately parse a
    coarse argument list rather than the normal reader's structured grammar, so a
@@ -1155,7 +1154,7 @@ and parse_stmts ps ~(closing : btok) ~(what : string) : expr list =
   in
   loop []
 
-(* block rule ⟦stmts⟧, sharing reader.ml's exact desugar + LAW-4 check;
+(* block rule ⟦stmts⟧, sharing reader.ml's exact desugar and validation;
    the error position is the token after the block, as in reader.ml *)
 and block_body_of ps (stmts : expr list) : expr =
   Desugar.block_body ~err:(fun m -> err_block ps m) stmts
@@ -2302,7 +2301,7 @@ let read state (input : string) : expr list =
     | TEOF -> ()
     | _ ->
         (* Fresh temp-var numbering per top-level form, so a form's
-           LAW-20 hash depends only on the form (and its location), never on
+           content hash depends only on the form (and its location), never on
            how many `try` blocks were parsed earlier in the process/file. *)
         state.try_counter <- 0;
         let line = (cur ps).tline in
