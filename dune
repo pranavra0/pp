@@ -25,13 +25,34 @@
   docs/DESIGN.md
   build.pp
   scripts/run-tests.sh
+  scripts/run-focused-tests.sh
+  scripts/test-categories.sh
+  scripts/check-architecture.sh
   scripts/check-state-inventory.sh
   scripts/state-inventory.allow
+  tools/check-compiler-warnings.sh
+  tools/check-dependencies.sh
+  tools/check-api-surface.sh
+  tools/api-surface.allow
+  tools/check-vertical-slices.sh
+  tools/dependency-manifest
   src/app/main.exe
-  ; tests/054 drives the fuzzer's reader-roundtrip gate
-  tools/fuzz.exe)
+  tools/fuzz.exe
+  tests/unit/kernel_unit.exe
+  tests/unit/repository_unit.exe
+  tests/unit/observation_unit.exe
+  tests/unit/lifecycle_unit.exe
+  tests/unit/parser_unit.exe)
  (action
- (run bash scripts/run-tests.sh src/app/main.exe)))
+ (progn
+  (run bash scripts/check-architecture.sh)
+  (run bash scripts/run-focused-tests.sh
+    %{dep:tests/unit/kernel_unit.exe}
+    %{dep:tests/unit/repository_unit.exe}
+    %{dep:tests/unit/observation_unit.exe}
+    %{dep:tests/unit/lifecycle_unit.exe}
+    %{dep:tests/unit/parser_unit.exe})
+  (run bash scripts/run-tests.sh src/app/main.exe))))
 
 ; Fork-defeat regression: World_path.stdlib_root resolves
 ; --reconcile/--supervise's auto-loaded
@@ -67,6 +88,23 @@
 
 (rule
  (alias architecture)
- (deps tools/check-dependencies.sh tools/dependency-manifest
-   src/kernel/dune src/frontend/dune src/runtime/dune src/app/dune)
- (action (run bash tools/check-dependencies.sh)))
+ (deps scripts/check-architecture.sh tools/check-compiler-warnings.sh
+   tools/check-dependencies.sh tools/dependency-manifest tools/check-api-surface.sh
+   tools/api-surface.allow tools/check-vertical-slices.sh
+   scripts/check-state-inventory.sh
+   scripts/state-inventory.allow dune src/kernel/dune src/frontend/dune
+   src/runtime/dune src/app/dune)
+ (action (run bash scripts/check-architecture.sh)))
+
+(rule
+ (alias unit)
+ (deps scripts/run-focused-tests.sh
+   tests/unit/kernel_unit.exe tests/unit/repository_unit.exe
+   tests/unit/observation_unit.exe tests/unit/lifecycle_unit.exe
+   tests/unit/parser_unit.exe)
+ (action (run bash scripts/run-focused-tests.sh
+   %{dep:tests/unit/kernel_unit.exe}
+   %{dep:tests/unit/repository_unit.exe}
+   %{dep:tests/unit/observation_unit.exe}
+   %{dep:tests/unit/lifecycle_unit.exe}
+   %{dep:tests/unit/parser_unit.exe})))

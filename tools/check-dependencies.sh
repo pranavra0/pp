@@ -1,13 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-manifest="$(dirname "$0")/dependency-manifest"
+script_dir=$(cd "$(dirname "$0")" && pwd)
+root=$(cd "$script_dir/.." && pwd)
+manifest="$script_dir/dependency-manifest"
+
+usage() {
+  echo "usage: $0 [--root DIR] [--manifest FILE]" >&2
+  exit 2
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --root) root=$2; shift 2 ;;
+    --manifest) manifest=$2; shift 2 ;;
+    *) usage ;;
+  esac
+done
+
+src_root="$root/src"
 status=0
 
 while IFS=: read -r layer expected; do
   [[ -z "${layer//[[:space:]]/}" || "$layer" == \#* ]] && continue
   expected="${expected# }"
-  dune_file="$(dirname "$0")/../src/$layer/dune"
+  dune_file="$src_root/$layer/dune"
   actual=$(sed -n '1,/^(executable/p' "$dune_file" |
     sed -n 's/.*(libraries \([^)]*\)).*/\1/p' |
     head -1 | tr -s ' ' | sed 's/^ //; s/ $//')
@@ -23,8 +40,8 @@ while IFS=: read -r layer expected; do
 done < "$manifest"
 
 for layer in kernel frontend; do
-  for source in "$(dirname "$0")/../src/$layer"/*.ml \
-                "$(dirname "$0")/../src/$layer"/*.mli; do
+  for source in "$src_root/$layer"/*.ml \
+                "$src_root/$layer"/*.mli; do
     if ocamldep -modules "$source" 2>/dev/null | grep -qw Unix; then
       printf 'dependency boundary: %s links Unix through %s\n' \
         "$layer" "$(basename "$source")" >&2

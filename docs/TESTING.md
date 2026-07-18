@@ -16,7 +16,8 @@ dune runtest          # runs scripts/run-tests.sh
 dune runtest --force  # re-run even if dune's cache says nothing changed
 ```
 
-`scripts/run-tests.sh` does two things:
+`dune runtest` first runs the architecture gates and five focused OCaml test
+executables, then `scripts/run-tests.sh` does two things:
 
 - runs every `tests/NNN-*.pp` and diffs its stdout against
   `tests/NNN-*.pp.expected`; a missing `.expected` file is a failure
@@ -26,6 +27,27 @@ The shell suites cover what a single-process stdout diff cannot:
 multi-process store scenarios (mutating files, grants or globals between
 `pp` invocations), expected-output oracles, watch loops, and simulated
 cluster members.
+
+The category counts are printed by `scripts/test-categories.sh`. The focused
+executables are deliberately small and use real kernel, repository,
+observation, lifecycle, and reader implementations; they do not replace the
+process and filesystem integration tests.
+
+## Smallest relevant gate
+
+Use the narrowest target while iterating, then run the full gate before handoff:
+
+```sh
+dune build @unit                 # five focused executables
+dune build @architecture         # warnings, dependencies, state, API, AST slices
+dune exec ./tools/fuzz.exe -- --grammar full --count 2000
+dune runtest                     # all focused, language, integration, and gates
+```
+
+Changes to evaluator, kernel identity, or durable repository code still require
+the full suite and the full fuzzer. The architecture gate's controlled-probe
+test is `tests/094-architecture-gates.sh`; it proves each checker rejects a
+temporary violation and removes the probe.
 
 Two proofs run outside `dune runtest` because they invoke dune or the
 network:

@@ -104,4 +104,6 @@ for i in $(seq 0 $((n - 1))); do
   sed '1d' "$out"
 done
 
+bash scripts/test-categories.sh
+
 exit $fail

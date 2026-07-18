@@ -1,0 +1,19 @@
+(executable
+ (name kernel_unit)
+ (libraries pp.kernel))
+
+(executable
+ (name repository_unit)
+ (libraries pp.kernel pp.runtime unix))
+
+(executable
+ (name observation_unit)
+ (libraries pp.kernel pp.runtime unix))
+
+(executable
+ (name lifecycle_unit)
+ (libraries pp.kernel pp.runtime unix))
+
+(executable
+ (name parser_unit)
+ (libraries pp.kernel pp.frontend))

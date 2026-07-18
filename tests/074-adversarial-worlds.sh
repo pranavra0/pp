@@ -60,7 +60,7 @@ for head in $heads; do
       bad "$head" \
         "no adversarial fixture ($fixture) and not on the honest-edge allowlist." \
         "Add a fixture, or allowlist $head here and document the trust assumption in DESIGN.md's honest edges."
-    elif honest_edges | grep -qE "^- .*\`\\\$$head\`" ; then
+    elif honest_edges | grep -E "^- .*\`\\\$$head\`" >/dev/null ; then
       echo "ok   $head (documented trust assumption: DESIGN.md honest edge)"
       covered=$((covered + 1))
     else
