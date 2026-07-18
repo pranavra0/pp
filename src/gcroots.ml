@@ -12,13 +12,13 @@
    root's closure actually touches is to re-run the SAME program, not
    merely remember a hash.
 
-   One line per root, a plain Codec-encoded (Types.value) VMap — reusing
+   One line per root, a plain Codec-encoded (Core_model.value) VMap — reusing
    the store's own canonical text codec rather than inventing a third
    bespoke line grammar (store.ml's trace lines and token.ml's token line
    already are two; this is data all the way down, so Codec fits directly,
    no hand-rolled parser needed). *)
 
-open Types
+open Core_model
 
 let roots_path () : string = Filename.concat Store.store_root "gc-roots"
 

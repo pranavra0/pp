@@ -1,6 +1,7 @@
 (* pp primitives — built-in functions *)
 
-open Types
+open Core_model
+open Source_error
 
 let session () = Effect.perform Dynamic_scope.Get_session
 let core_operations () = Session.core_operations (session ())
@@ -202,7 +203,7 @@ let probe_value_for (name : string) : value option =
    against the recorded one. *)
 let probe_observe_for_store (name : string) : string option =
   match probe_value_for name with
-  | Some v -> Some (Types.hash_value v)
+  | Some v -> Some (Identity.hash_value v)
   | None -> None
 
 (* Store.observe_cell's `domain:<name>:<sub>` dispatch — calls the
@@ -227,7 +228,7 @@ let domain_observe_cell_for_store (name : string) (sub : string) : string option
        with
        | VNil -> None
        | VString h -> Some h
-       | other -> Some (Types.hash_value other))
+       | other -> Some (Identity.hash_value other))
 
 (* A table of built-in functions: name -> value *)
 let builtins : (string, value) Hashtbl.t = Hashtbl.create 64
@@ -254,7 +255,7 @@ let arith_fold (name : string) (identity : int)
           | VFloat a, VInt b -> VFloat (float_op a (float_of_int b))
           | VFloat a, VFloat b -> VFloat (float_op a b)
           | (VInt _ | VFloat _), v | v, _ ->
-              failwith (Printf.sprintf "%s expects numbers, got %s" name (string_of_value v))
+              failwith (Printf.sprintf "%s expects numbers, got %s" name (Presentation.string_of_value v))
         ) first rest)
 
 (* Variadic chained numeric comparison (< > <= >=): true iff every adjacent
@@ -285,7 +286,7 @@ let predicate (name : string) (test : value -> bool) : unit =
 
 let initial_env () : env =
   let bindings = Hashtbl.fold (fun name v acc -> (name, v) :: acc) builtins [] in
-  env_of_bindings bindings
+  Environment.of_bindings bindings
 
 (* ---- Register all primitives ---- *)
 
@@ -374,7 +375,7 @@ let register_lists () =
           | VNil -> []
           | VPair (a, d) -> a :: splice d
           | other -> failwith ("apply expects proper lists as its argument \
-                                segments, got " ^ string_of_value other)
+                                segments, got " ^ Presentation.string_of_value other)
         in
         call_with_args fn (List.concat_map splice segs)
     | [] -> failwith "apply expects a function and at least one argument segment");
@@ -415,7 +416,7 @@ let register_lists () =
           match force_val l with
           | VNil -> VNil
           | VPair (car, cdr) -> VPair (apply1 car, go cdr)
-          | other -> failwith ("map expects a proper list, got " ^ string_of_value other)
+          | other -> failwith ("map expects a proper list, got " ^ Presentation.string_of_value other)
         in
         go lst
     | _ -> failwith "map expects a function and a list");
@@ -481,14 +482,14 @@ let register_scalars () =
   (* I/O — strict, deep-forces for display *)
   register "print" (fun args ->
     let args = List.map force_deep args in
-    List.iter (fun v -> print_string (string_of_value v)) args;
+    List.iter (fun v -> print_string (Presentation.string_of_value v)) args;
     print_newline ();
     VNil);
 
   register "string-append" (fun args ->
     let args = force_args args in
     VString (String.concat "" (List.map (fun v ->
-      match v with VString s -> s | _ -> string_of_value v
+      match v with VString s -> s | _ -> Presentation.string_of_value v
     ) args)));
 
   register "string-length" (fun args ->
@@ -545,7 +546,7 @@ let register_caps () =
           | Capability.ReadWrite -> read_ok && write_ok
         in
         if not ok then
-          raise (Types.Capability_error
+          raise (Source_error.Capability_error
             (Printf.sprintf
                "cap-restrict: cannot widen mode to :%s for %s (not held by the underlying capability)"
                (Capability.mode_name mode) (scope :> string)));
@@ -594,13 +595,13 @@ let register_metaeval () =
               else VEnvMap (List.rev !new_defs)
           | [ELocated (_, inner)] -> go [inner]
           | [EDef (name, params, body)] ->
-              let closure = Types.make_closure ~name:(Some name) params body local_env in
-              local_env := Types.extend_env !local_env name closure;
+              let closure = Environment.make_closure ~name:(Some name) params body local_env in
+              local_env := Environment.extend !local_env name closure;
               new_defs := (name, closure) :: !new_defs;
               if !new_defs = [] then VNil else VEnvMap (List.rev !new_defs)
           | [EDefValue (name, rhs)] ->
               let v = core.eval rhs !local_env in
-              local_env := Types.extend_env !local_env name v;
+              local_env := Environment.extend !local_env name v;
               new_defs := (name, v) :: !new_defs;
               VEnvMap (List.rev !new_defs)
           | [last] ->
@@ -608,13 +609,13 @@ let register_metaeval () =
               force_val (core.eval last !local_env)
           | (ELocated (_, inner)) :: rest -> go (inner :: rest)
           | (EDef (name, params, body)) :: rest ->
-              let closure = Types.make_closure ~name:(Some name) params body local_env in
-              local_env := Types.extend_env !local_env name closure;
+              let closure = Environment.make_closure ~name:(Some name) params body local_env in
+              local_env := Environment.extend !local_env name closure;
               new_defs := (name, closure) :: !new_defs;
               go rest
           | (EDefValue (name, rhs)) :: rest ->
               let v = core.eval rhs !local_env in
-              local_env := Types.extend_env !local_env name v;
+              local_env := Environment.extend !local_env name v;
               new_defs := (name, v) :: !new_defs;
               go rest
           | e :: rest ->
@@ -699,8 +700,8 @@ let register_stdlib () =
   (* ---- stdlib primitives ---- *)
 
   (* (hash-value V) — a canonical, structural content hash of ANY value
-     (Hasher.hash_value, force-deep'd first) — order-INDEPENDENT for maps/
-     sets (hash_value sorts a VMap's entries by encoded-key hash before
+     (Identity.hash_value, force-deep'd first) — order-INDEPENDENT for maps/
+     sets (Identity.hash_value sorts a VMap's entries by encoded-key hash before
      hashing, exactly like Codec's on-disk canonicalization). Needed because pp's `=` on two maps is
      plain structural (assoc-list, ORDER-sensitive) list equality: a spec
      value that round-tripped through `domain-state-get/put` (Codec sorts
@@ -710,12 +711,12 @@ let register_stdlib () =
      is not fooled by that. *)
   register "hash-value" (fun args ->
     match args with
-    | [v] -> VString (Types.hash_value (force_deep (force_val v)))
+    | [v] -> VString (Identity.hash_value (force_deep (force_val v)))
     | _ -> failwith "hash-value expects one argument");
 
   (* (hash-string S) — SHA-256 hex digest of S's raw bytes, the SAME
-     algorithm Store.hash_file_opt uses for a file's content hash (Types.
-     hash_string) — needed so a domain's `diff` (domain-fs.pp) can compute a content hash from a string PURELY (no
+     algorithm Store.hash_file_opt uses for a file's content hash (Core_model.
+     Hasher.hash_string) — needed so a domain's `diff` (domain-fs.pp) can compute a content hash from a string PURELY (no
      capability, no store I/O — unlike `blob`, this never touches
      ~/.pp/store) and compare it against what `tree-observe` observed. *)
   register "hash-string" (fun args ->
@@ -732,14 +733,14 @@ let register_stdlib () =
   (* (->string v) — the generic display conversion, the target of every
      f-string hole. A string renders as ITSELF (no surrounding quotes — the
      whole point of interpolation); every other value renders via
-     string_of_value (numbers plain, sealed values redacted to #<sealed>, lists
+     Presentation.string_of_value (numbers plain, sealed values redacted to #<sealed>, lists
      as `(a b …)`). Deep-forces so nested thunks render, like `print`. *)
   register "->string" (fun args ->
     match args with
     | [a] ->
         (match force_deep a with
          | VString s -> VString s
-         | v -> VString (string_of_value v))
+         | v -> VString (Presentation.string_of_value v))
     | _ -> failwith "->string expects exactly one argument");
 
   register "string->number" (fun args ->
@@ -811,7 +812,7 @@ let register_stdlib () =
       | [VString path] ->
           if not (List.exists (fun cap -> Capability.check_fs_read cap (World_path.canonical path))
                     (Effect.perform Dynamic_scope.Get_capabilities)) then
-            raise (Types.Capability_error
+            raise (Source_error.Capability_error
                      (name ^ ": capability error: no read access for " ^ path));
           let kind = Store.stat_kind path in
           Dynamic_scope.record_read (Store.stat_cell_id path) (Store.stat_kind_hash kind);
@@ -842,8 +843,8 @@ let register_stdlib () =
   (* (exit [N]) — terminate the run with status N (default 0). *)
   register "exit" (fun args ->
     match force_args args with
-    | [] -> raise (Types.Pp_exit 0)
-    | [VInt n] -> raise (Types.Pp_exit n)
+    | [] -> raise (Source_error.Pp_exit 0)
+    | [VInt n] -> raise (Source_error.Pp_exit n)
     | _ -> failwith "exit expects an optional integer status");
 
   (* (string-split S SEP) — split on the single-char separator, dropping
@@ -893,8 +894,8 @@ let register_stdlib () =
         let exprs = Reader.read_string source in
         (* Return as a list of quoted exprs *)
         (match exprs with
-         | [e] -> Types.quote_to_value e
-         | _ -> VVector (Array.of_list (List.map Types.quote_to_value exprs)))
+         | [e] -> Quotation.quote_to_value e
+         | _ -> VVector (Array.of_list (List.map Quotation.quote_to_value exprs)))
     | _ -> failwith "read-string expects a source string"
   );
   ()
@@ -928,10 +929,10 @@ let register_domains () =
      PREFIXES this domain owns (stratification, LAW 30 full form);
      `:observe-cell` is optional. Returns nil. *)
   let string_or_keyword where v =
-    match string_like v with
+    match Presentation.string_like v with
     | Some s -> s
     | None -> failwith (where ^ ": expected a string or keyword, got "
-                         ^ string_of_value v)
+                         ^ Presentation.string_of_value v)
   in
   let find_kv = Force_deep.find_kv ~force:force_val in
   register "register-domain" (fun args ->
@@ -942,7 +943,7 @@ let register_domains () =
     | [spec] ->
         let kvs = match spec with
           | VMap kvs -> kvs
-          | other -> failwith ("register-domain expects a map, got " ^ string_of_value other)
+          | other -> failwith ("register-domain expects a map, got " ^ Presentation.string_of_value other)
         in
         let name = match find_kv kvs "name" with
           | Some v -> string_or_keyword "register-domain :name" (force_val v)
@@ -955,7 +956,7 @@ let register_domains () =
                    string_or_keyword "register-domain :namespace" (force_val p)) arr)
                | VNil -> []
                | other -> failwith ("register-domain :namespace must be a vector of strings, got "
-                                    ^ string_of_value other))
+                                    ^ Presentation.string_of_value other))
           | None -> []
         in
         let observe = match find_kv kvs "observe" with
@@ -971,7 +972,7 @@ let register_domains () =
           | Some v -> (match force_val v with
                        | VCapability c -> c
                        | other -> failwith ("register-domain :write-cap must be a capability, got "
-                                            ^ string_of_value other))
+                                            ^ Presentation.string_of_value other))
           | None -> failwith "register-domain: missing :write-cap"
         in
         Session.set_domain (Effect.perform Dynamic_scope.Get_session) name
@@ -1024,7 +1025,7 @@ let register_domains () =
         (match probe_value_for name with
          | None -> failwith ("probe: no such probe registered: " ^ name)
          | Some v ->
-             Dynamic_scope.record_read (Cell.(to_string (Probe name))) (Types.hash_value v);
+             Dynamic_scope.record_read (Cell.(to_string (Probe name))) (Identity.hash_value v);
              v)
     | _ -> failwith "probe expects a probe name string");
   ()
@@ -1062,7 +1063,7 @@ let register_collect_and_sealed () =
               partition rest oks (e :: errs)
           | other :: _ ->
               failwith ("collect: each item must be [:ok, v] or [:err, e], got "
-                        ^ string_of_value other)
+                        ^ Presentation.string_of_value other)
         in
         partition items [] []
     | _ -> failwith "collect expects one argument");
@@ -1077,7 +1078,7 @@ let register_collect_and_sealed () =
     | [arg] ->
         (match force_val arg with
          | VSealed bytes -> VString bytes
-         | other -> failwith ("unseal expects a sealed value, got " ^ string_of_value other))
+         | other -> failwith ("unseal expects a sealed value, got " ^ Presentation.string_of_value other))
     | _ -> failwith "unseal expects one argument");
   ()
 

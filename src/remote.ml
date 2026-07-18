@@ -29,7 +29,7 @@
    re-hash-on-receive choke point every other synced artifact goes
    through. *)
 
-open Types
+open Core_model
 open Codec
 
 (* ---- Members file: ambient config, never --grant (contract: an address

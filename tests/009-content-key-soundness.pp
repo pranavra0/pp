@@ -12,7 +12,7 @@
 # silently returns the FIRST one's cached result:
 #
 # Bug 1 — env.env_hash folds in hash_value(closure), and a closure's hash
-# OMITS its captured environment (types.ml VClosure case:
+# OMITS its captured environment (identity.ml VClosure case:
 # "Env deliberately NOT hashed"). Two closures with identical
 # code but different captures hash identically, so an enclosing
 # let-thunk collides.

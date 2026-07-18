@@ -1,13 +1,13 @@
 (* Derived generators + kernel properties.
 
-   Three QuickCheck-style generators (one each for [Types.value], [pattern]
+   Three QuickCheck-style generators (one each for [Core_model.value], [pattern]
    and [expr]) and the kernel properties that run under them:
 
      (i)   INJECTIVITY   distinct ASTs ⇒ distinct content hash
-                         (hash_value / hash_pattern / hash_expr — the LAW-20
+                         (Identity.hash_value / Identity.hash_pattern / Identity.hash_expr — the LAW-20
                          key; a collision is a wrong-cache-serve bug, the
-                         exact class the length-framed hash_concat below exists to kill).
-     (ii)  QUOTE RT      rt = value_to_expr ∘ quote_to_value is TOTAL and
+                         exact class the length-framed Hasher.hash_concat below exists to kill).
+     (ii)  QUOTE RT      rt = Quotation.value_to_expr ∘ Quotation.quote_to_value is TOTAL and
                          IDEMPOTENT — rt (rt e) ≡ rt e (hash-equal). The macro
                          reflect/reify projection reaches a fixpoint in one
                          pass, so a macro re-expanding its own output never
@@ -44,7 +44,7 @@
    one explicit decision, and once compiled every property covers it at once.
    No per-feature test list exists to fall out of date. *)
 
-open Types
+open Core_model
 
 (* ------------------------------------------------------------------ rng --- *)
 
@@ -56,9 +56,9 @@ let choose (st : rng) (xs : 'a list) = List.nth xs (ri st (List.length xs))
 let pick (st : rng) (a : 'a array) = a.(ri st (Array.length a))
 
 (* Two generation modes. [Adv]ersarial content stresses the hashers — ':'
-   (the old hash_concat delimiter), the "absent" env sentinel, length-prefix
+   (the old Hasher.hash_concat delimiter), the "absent" env sentinel, length-prefix
    look-alikes ("10:xx"), empty strings, multi-byte chars, the non-finite
-   floats — the exact shapes hash_concat's length-framing must keep distinct.
+   floats — the exact shapes Hasher.hash_concat's length-framing must keep distinct.
    [Faithful] content is what the two surfaces can actually spell (valid
    identifiers, finite floats, no reserved call heads), so the printer
    round-trip property tests real reader-image ASTs rather than the printer's
@@ -69,7 +69,7 @@ let adv_names = [| "x"; "y"; "f"; "g"; "+"; "list"; "foo-bar"; "_"; "a:b";
                    "10:xx"; ""; "absent"; "λ" |]
 let adv_strings = [| ""; "a"; "b"; ":"; "a:b"; "absent"; "10:xx"; "0:";
                      "hi there"; "λ"; "line\nbreak" |]
-(* NaN is excluded: canonical_float_string merges every NaN payload to "nan"
+(* NaN is excluded: Identity.canonical_float_string merges every NaN payload to "nan"
    (documented), while OCaml (=) has nan <> nan, so a NaN would read as a
    spurious injectivity collision. -0.0 excluded for symmetry (0.0 = -0.0
    structurally but %h spells them apart). *)
@@ -199,7 +199,7 @@ and gen_value_of_tag ~(mode : mode) (st : rng) (depth : int) (tag : value_tag) :
   | Vt_symbol -> VSymbol (gen_name ~mode st)
   | Vt_pair ->
       (* Proper cons list only: an improper pair (VPair (a, non-list)) has no
-         syntax, so value_to_expr rejects it (quote round-trip would raise on a
+         syntax, so Quotation.value_to_expr rejects it (quote round-trip would raise on a
          literal dotted pair). Improper pairs are exercised by the injectivity
          corpus instead, where they belong. *)
       let n = 1 + small st in
@@ -211,14 +211,14 @@ and gen_value_of_tag ~(mode : mode) (st : rng) (depth : int) (tag : value_tag) :
       let n = small st in
       VMap (List.init n (fun _ -> (g (), g ())))
   | Vt_set ->
-      (* hash_value sorts a set's element hashes, so structural (=) and the
+      (* Identity.hash_value sorts a set's element hashes, so structural (=) and the
          hash agree only if the element list is itself canonically ordered and
          duplicate-free; otherwise a reordering would read as a spurious
          injectivity collision.  Canonicalize by content hash. *)
       let n = small st in
       let elts = List.init n (fun _ -> g ()) in
       let uniq =
-        List.sort_uniq (fun a b -> compare (hash_value a) (hash_value b)) elts in
+        List.sort_uniq (fun a b -> compare (Identity.hash_value a) (Identity.hash_value b)) elts in
       VSet uniq
   | Vt_closure | Vt_builtin | Vt_capability | Vt_thunk | Vt_envmap
   | Vt_sealed ->
@@ -639,7 +639,7 @@ let session_property () =
   let evaluate session n =
     Dynamic_scope.with_top_level session invocation
       ~f:(fun () -> (Session.core_operations session).eval
-          (ELiteral (VInt n)) Types.empty_env) ()
+          (ELiteral (VInt n)) Environment.empty) ()
   in
   if evaluate a 1 <> VInt 1 || evaluate b 2 <> VInt 2 then
     fail "evaluator-instance" "constructed evaluator operations crossed sessions";
@@ -731,16 +731,16 @@ let cap_properties (st : rng) ~(count : int) : unit =
   List.iter (fun _ ->
     let base = gen_value ~mode:Adv st (2 + ri st 3) in
     incr cap_checks;
-    if Types.contains_authority base then
+    if Value_analysis.contains_authority base then
       fail "node-ban-false-positive"
-        "contains_authority flagged a capability-free value";
+        "Value_analysis.contains_authority flagged a capability-free value";
     let payload =
       if rb st then VCapability (Capability.gen_cap st (depth ())) else VSealed "s3cr3t" in
     let buried = embed_deep st (ri st 4) payload in
     incr cap_checks;
-    if not (Types.contains_authority buried) then
+    if not (Value_analysis.contains_authority buried) then
       fail "node-ban-evaded"
-        "contains_authority missed an embedded capability/sealed value")
+        "Value_analysis.contains_authority missed an embedded capability/sealed value")
     (List.init count (fun _ -> ()))
 
 (* ---- (i) injectivity ---------------------------------------------------- *)
@@ -767,7 +767,7 @@ let injectivity (type a) ~(name : string) ~(hash : a -> string)
 
 (* ---- (ii) quote round-trip --------------------------------------------- *)
 
-(* The macro inverse law.  Let rt = value_to_expr ∘ quote_to_value —
+(* The macro inverse law.  Let rt = Quotation.value_to_expr ∘ Quotation.quote_to_value —
    the reflect-then-reify projection a macro applies to a captured form.  Two
    guarantees, both total and true for every generated expr:
 
@@ -783,7 +783,7 @@ let injectivity (type a) ~(name : string) ~(hash : a -> string)
                 second pass reproduces it exactly.  A macro that re-expands its
                 own output therefore never drifts. *)
 let quote_roundtrip (e : expr) : unit =
-  let rt x = value_to_expr (quote_to_value x) in
+  let rt x = Quotation.value_to_expr (Quotation.quote_to_value x) in
   match rt e with
   | exception ex ->
       fail "quote-rt:total"
@@ -794,7 +794,7 @@ let quote_roundtrip (e : expr) : unit =
         fail "quote-rt:total"
           (Printf.sprintf "rt(rt) raised %s on %s" (Printexc.to_string ex) (dbg e))
     | e2 ->
-        if hash_expr (strip_loc e1) <> hash_expr (strip_loc e2) then begin
+        if Identity.hash_expr (strip_loc e1) <> Identity.hash_expr (strip_loc e2) then begin
           fail "quote-rt:fixpoint"
             (Printf.sprintf "%s: rt not idempotent" (dbg e));
           if debug then Printf.eprintf "QRT\n  e  =%s\n  e1 =%s\n  e2 =%s\n"
@@ -810,7 +810,7 @@ let print_skips = ref 0
 let print_checks = ref 0
 
 let print_roundtrip (e : expr) : unit =
-  let target = hash_expr (strip_loc e) in
+  let target = Identity.hash_expr (strip_loc e) in
   let one (surface : surface_kind) ~name ~print ~read =
     if not (printable surface e) then ()   (* documented table exclusion *)
     else begin
@@ -839,7 +839,7 @@ let print_roundtrip (e : expr) : unit =
                if debug then Printf.eprintf "PRT %s NOREAD %s\n  e =%s\n  txt=<<%s>>\n"
                  name (Printexc.to_string ex) (dbg (strip_loc e)) text
            | [e'] ->
-               if hash_expr (strip_loc e') <> target then begin
+               if Identity.hash_expr (strip_loc e') <> target then begin
                  fail ("print-rt:" ^ name)
                    (Printf.sprintf "hash drift for %s via <<%s>>" target text);
                  if debug then
@@ -870,7 +870,7 @@ let near_miss_pairs : (expr * expr) list =
     (* symbol "a:b" vs application of a to b would differ anyway; here the
        empty-part case: sym "" vs a one-element apply *)
     (ESymbol "", EApply (ESymbol "", []));
-    (* list pattern [a b] vs [ab] (the hash_pattern delimiter-free join) *)
+    (* list pattern [a b] vs [ab] (the Identity.hash_pattern delimiter-free join) *)
     (EMatch (ESymbol "x",
              [ (PList ([PVariable "a"; PVariable "b"], None), None, ESymbol "a") ]),
      EMatch (ESymbol "x",
@@ -884,10 +884,34 @@ let near_miss_pairs : (expr * expr) list =
 
 let corpus_injectivity () =
   List.iter (fun (a, b) ->
-    if hash_expr a = hash_expr b then
+    if Identity.hash_expr a = Identity.hash_expr b then
       fail "injectivity:corpus"
-        (Printf.sprintf "near-miss pair collides at %s" (hash_expr a))
+        (Printf.sprintf "near-miss pair collides at %s" (Identity.hash_expr a))
   ) near_miss_pairs
+
+let extracted_model_property () =
+  let captured = ref Environment.empty in
+  let closure = Environment.make_closure ~name:(Some "self") []
+      (ESymbol "self") captured in
+  captured := Environment.extend !captured "self" closure;
+  (match Environment.lookup !captured "self" with
+   | Some found when Identity.hash_value found = Identity.hash_value closure -> ()
+   | _ -> fail "core-model:recursive-env" "recursive closure was not recoverable");
+  if Value_analysis.contains_authority closure then
+    fail "core-model:recursive-env" "recursive closure walk invented authority";
+  let quoted = Quotation.quote_to_value (EApply (ESymbol "f", [ELiteral (VInt 1)])) in
+  (match Quotation.value_to_expr quoted with
+   | EApply (ESymbol "f", [ELiteral (VInt 1)]) -> ()
+   | _ -> fail "quotation:roundtrip" "extracted quotation modules changed shape");
+  (match Pattern_match.match_pattern (VInt 7) (PVariable "x") with
+   | Some [("x", VInt 7)] -> ()
+   | _ -> fail "pattern-match:binding" "variable pattern did not bind its value");
+  if Presentation.string_of_value (VInt 7) <> "7" then
+    fail "presentation:int" "integer presentation changed";
+  if Free_vars.SS.elements
+       (Free_vars.free_vars (EFn (["x"], EApply (ESymbol "f", [ESymbol "x"]))))
+     <> ["f"] then
+    fail "free-vars:binding" "function parameter escaped as a free variable"
 
 (* ============================================================= RUNNER ===== *)
 
@@ -925,10 +949,11 @@ let run ~(seed : int) ~(count : int) : bool =
                     @ List.init count (fun _ -> gen_expr ~mode:Faithful st (depth ())) in
 
   (* (i) injectivity over all three hashers + the pinned near-miss corpus *)
-  injectivity ~name:"value" ~hash:hash_value ~show:dbg_value adv_values;
-  injectivity ~name:"pattern" ~hash:hash_pattern ~show:dbg_pat adv_patterns;
-  injectivity ~name:"expr" ~hash:hash_expr ~show:dbg adv_exprs;
+  injectivity ~name:"value" ~hash:Identity.hash_value ~show:dbg_value adv_values;
+  injectivity ~name:"pattern" ~hash:Identity.hash_pattern ~show:dbg_pat adv_patterns;
+  injectivity ~name:"expr" ~hash:Identity.hash_expr ~show:dbg adv_exprs;
   corpus_injectivity ();
+  extracted_model_property ();
 
   (* (ii) quote round-trip (value-level macro law) *)
   List.iter quote_roundtrip adv_exprs;

@@ -13,10 +13,10 @@
 
    Originally two copies of this exact logic lived in remote.ml alone;
    store.ml (compiled before remote.ml) needs the identical scan, so this is
-   factored out to the one place both can reach (Types-only, no other
+   factored out to the one place both can reach (core-model-only, no other
    dependency) rather than duplicated a second time. *)
 
-open Types
+open Core_model
 
 let is_hex64 (s : string) : bool =
   String.length s = 64

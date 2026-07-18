@@ -1,5 +1,5 @@
 include Effects
-open Types
+open Core_model
 open Effect
 
 type _ Effect.t += Get_session : Session.t Effect.t
@@ -47,8 +47,8 @@ let observe_probe name =
 
 let config_cell_id key = Cell.(to_string (Config key))
 let handler_cell_id name = Cell.(to_string (Handler name))
-let config_absent_hash = hash_string "config-cell:absent"
-let builtin_handler_hash = hash_string "handler-cell:builtin"
+let config_absent_hash = Hasher.hash_string "config-cell:absent"
+let builtin_handler_hash = Hasher.hash_string "handler-cell:builtin"
 
 let config_lookup key =
   let rec find = function
@@ -67,7 +67,7 @@ let config_lookup key =
 let observe_config key =
   match config_lookup key with
   | Some value ->
-      hash_value (Session.force (Effect.perform Get_session) value)
+      Identity.hash_value (Session.force (Effect.perform Get_session) value)
   | None -> config_absent_hash
 
 let observe_handler name =

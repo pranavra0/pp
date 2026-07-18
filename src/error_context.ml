@@ -1,4 +1,5 @@
-open Types
+open Core_model
+open Source_error
 
 let with_form_location expression f =
   match expression with

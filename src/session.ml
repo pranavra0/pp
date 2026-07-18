@@ -1,28 +1,28 @@
 type domain_entry = {
   dm_namespace : string list;
-  dm_observe : Types.value;
-  dm_diff : Types.value option;
-  dm_apply : Types.value option;
+  dm_observe : Core_model.value;
+  dm_diff : Core_model.value option;
+  dm_apply : Core_model.value option;
   dm_cap : Capability.t;
-  dm_observe_cell : Types.value option;
+  dm_observe_cell : Core_model.value option;
 }
 type t = {
   operations : Evaluator_ops.t;
-  thunks : (string, Types.thunk) Hashtbl.t;
-  macros : (string, string list * Types.expr) Hashtbl.t;
+  thunks : (string, Core_model.thunk) Hashtbl.t;
+  macros : (string, string list * Core_model.expr) Hashtbl.t;
   mutable gensym : int;
   domains : (string, domain_entry) Hashtbl.t;
-  probes : (string, Types.value) Hashtbl.t;
-  preseeded_probes : (string, Types.value) Hashtbl.t;
+  probes : (string, Core_model.value) Hashtbl.t;
+  preseeded_probes : (string, Core_model.value) Hashtbl.t;
   sealed_pins : (string, string) Hashtbl.t;
   mutable observations : (string * string) list;
-  mutable fenced_actions : (string * Types.value) list;
+  mutable fenced_actions : (string * Core_model.value) list;
   run_pins : (string, string) Hashtbl.t;
   preseeded_run_pins : (string, string) Hashtbl.t;
-  node_thunks : (string, Types.thunk) Hashtbl.t;
+  node_thunks : (string, Core_model.thunk) Hashtbl.t;
   mutable probe_observer : string -> string option;
   mutable domain_observer : string -> string -> string option;
-  mutable current_env : Types.env;
+  mutable current_env : Core_model.env;
   mutable force_depth : int;
   mutable cache_bust : int;
   mutable fenced_epoch : string;
@@ -38,7 +38,7 @@ let create operations = {
   run_pins = Hashtbl.create 64; preseeded_run_pins = Hashtbl.create 64;
   node_thunks = Hashtbl.create 256;
   probe_observer = (fun _ -> None); domain_observer = (fun _ _ -> None);
-  current_env = Types.empty_env; force_depth = 0; cache_bust = 0; fenced_epoch = "";
+  current_env = Environment.empty; force_depth = 0; cache_bust = 0; fenced_epoch = "";
 }
 let force t = t.operations.core.force
 let core_operations t = t.operations.core
@@ -52,7 +52,7 @@ let begin_pass t =
 let begin_evaluation ~retain_thunks t =
   if not retain_thunks then begin Hashtbl.clear t.thunks; Hashtbl.clear t.node_thunks end;
   Hashtbl.clear t.macros; t.gensym <- 0; Hashtbl.clear t.domains;
-  t.current_env <- Types.empty_env; t.force_depth <- 0; t.cache_bust <- 0;
+  t.current_env <- Environment.empty; t.force_depth <- 0; t.cache_bust <- 0;
   t.fenced_actions <- []; begin_pass t
 let begin_watch t = Hashtbl.clear t.node_thunks
 let find_thunk t = Hashtbl.find_opt t.thunks

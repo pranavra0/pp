@@ -222,37 +222,6 @@ executable characterization.
 
 **Non-goal:** change those decisions.
 
-### 10. Decompose core types without breaking recursive invariants
-
-**Purpose:** make the dependency root small and its responsibilities obvious.
-
-**Work:**
-
-- Draw the actual recursive type knot among expressions, values, closures,
-  environments, and thunks before moving code.
-- Keep the minimum mutually recursive declarations together in a clearly named
-  core model module.
-- Extract source locations/errors, environment operations, free-variable
-  analysis, structural identity, quote/unquote conversion, pattern matching,
-  type checking, and value presentation into modules that depend on the model.
-- Make hash inputs explicit and preserve byte-for-byte hashes unless a dedicated
-  identity migration is approved.
-- Replace broad `open Types` usage gradually with qualified ownership.
-- Add focused unit/property tests for every extracted pure operation before
-  moving it.
-
-**Likely files:** `src/types.*`, `src/hasher.*`, new kernel modules, codec,
-printers, evaluator and node callers.
-
-**Verify:** hash fixtures, tests/009, node-key tests, kernel properties, suite,
-full fuzzer.
-
-**Exit:** the recursive model contains declarations rather than unrelated
-algorithms; identity and analysis modules have narrow interfaces; hashes are
-unchanged or covered by an approved migration.
-
-**Non-goal:** alter language values, laziness, or node identity.
-
 ### 11. Establish the observation boundary
 
 **Purpose:** make dynamic cache validity and authority reviewable in one place.
@@ -670,5 +639,4 @@ not only expected stdout.
 
 ## Immediate next action
 
-Execute roadmap item 10 only: decompose core types without breaking recursive
-invariants.
+Execute roadmap item 11 only: establish the observation boundary.

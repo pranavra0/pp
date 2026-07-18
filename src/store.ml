@@ -42,7 +42,7 @@
    a missing VERSION on a non-empty store) wipes objects/, traces/, fenced-
    specs/, and procs/ — see [init] — but never blobs/ or journal/. *)
 
-open Types
+open Core_model
 
 (* ---- Store paths ---- *)
 
@@ -54,7 +54,7 @@ let objects_dir = Filename.concat store_root "objects"
 let traces_dir = Filename.concat store_root "traces"
 let version_path = Filename.concat store_root "VERSION"
 (* BUMP THIS whenever anything about the on-disk format changes — the codec
-   grammar (codec.ml), the trace line shape, Types.canonical_float_string, or
+   grammar (codec.ml), the trace line shape, Identity.canonical_float_string, or
    which dirs are versioned. The golden store fixtures are the tripwire: a
    format change without a bump (and a regenerated fixture set)
    fails byte-comparison. *)
@@ -163,7 +163,7 @@ let load_object ~key =
    path, which may contain spaces or parens) so both are quoted with
    [Codec.quote_string] — the same escaping the value codec uses, reused here
    rather than duplicated, even though this line shape (with its "." pairs)
-   is bespoke and not itself a Types.value. *)
+   is bespoke and not itself a Core_model.value. *)
 
 type trace_outcome = Ok | Failed
 
@@ -314,24 +314,24 @@ let stat_kind (path : string) : string =
   | _ -> "file"
 
 let stat_kind_hash (kind : string) : string =
-  hash_string ("stat:" ^ kind)
+  Hasher.hash_string ("stat:" ^ kind)
 
 (* Environment observations: "env:<NAME>" — value or absence. The present and
-   absent cases carry DISTINCT hash_concat tags so a variable whose value is the
+   absent cases carry DISTINCT Hasher.hash_concat tags so a variable whose value is the
    literal string "absent" cannot hash-collide with an unset variable (the old
-   `hash_string ("env:" ^ s)` vs `hash_string "env:absent"` did exactly that,
+   `Hasher.hash_string ("env:" ^ s)` vs `Hasher.hash_string "env:absent"` did exactly that,
    an observation collision that let a node hit a result cached under
-   the wrong world-state); framing via hash_concat also makes any value bytes,
+   the wrong world-state); framing via Hasher.hash_concat also makes any value bytes,
    including ':' , injective. *)
 let env_cell_id (name : string) : string = Cell.(to_string (Env name))
 let env_observed_hash (v : string option) : string =
   match v with
-  | Some s -> hash_concat ["env-present"; s]
-  | None -> hash_concat ["env-absent"]
+  | Some s -> Hasher.hash_concat ["env-present"; s]
+  | None -> Hasher.hash_concat ["env-absent"]
 
 (* The single argv cell: the program-argument list after `--`. *)
 let argv_cell_id : string = Cell.to_string Cell.Argv
-let argv_observed_hash argv : string = hash_concat ("argv" :: argv)
+let argv_observed_hash argv : string = Hasher.hash_concat ("argv" :: argv)
 
 let hash_file_opt (path : string) : string option =
   try
@@ -339,7 +339,7 @@ let hash_file_opt (path : string) : string option =
     let len = in_channel_length ic in
     let content = really_input_string ic len in
     close_in ic;
-    Some (hash_string content)
+    Some (Hasher.hash_string content)
   with _ -> None
 
 (* Whole-tree content hash — the coarse-cell soundness floor for the
@@ -372,13 +372,13 @@ let tree_hash (root : string) : string =
           | Unix.S_LNK ->
               add rel ("link->" ^ (try Unix.readlink path with _ -> "?"))
           | _ -> add rel "special");
-  hash_concat ("tree" :: List.sort compare !entries)
+  Hasher.hash_concat ("tree" :: List.sort compare !entries)
 
 let blobs_dir = Filename.concat store_root "blobs"
 
 let store_blob (content : string) : string =
   ensure_dir blobs_dir;
-  let h = hash_string content in
+  let h = Hasher.hash_string content in
   let path = Filename.concat blobs_dir h in
   if not (Sys.file_exists path) then atomic_write path content;
   h
@@ -438,7 +438,7 @@ let observe_cell (cell_id : string) : string option =
      contradicts what was actually read. *)
   | Cell.Sealed path ->
       (match Session.find_sealed_pin (Effect.perform Dynamic_scope.Get_session) cell_id with
-       | Some bytes -> Some (hash_string bytes)
+       | Some bytes -> Some (Hasher.hash_string bytes)
        | None -> hash_file_opt path)
   (* A third-party domain's own sub-cell, via the domain's own
      :observe-cell closure (wired through the session in main.ml —
@@ -459,7 +459,7 @@ let trace_verifies (tr : trace) : bool =
 (* Record a world-read made by the currently-forcing node(s). Called from the
    read primitives (slurp, read-file). *)
 let record_file_read (path : string) (content : string) : unit =
-  Dynamic_scope.record_read (file_cell_id path) (hash_string content)
+  Dynamic_scope.record_read (file_cell_id path) (Hasher.hash_string content)
 
 (* ---- Snapshot-as-CAS-ingest — torn reads are dead ----
 
@@ -501,7 +501,7 @@ let read_file_cell (path : string) : string =
            serve content h')
   | None ->
       let content = read_raw path in
-      let h = hash_string content in
+      let h = Hasher.hash_string content in
       ignore (store_blob content);
       Session.set_run_pin session cell h;
       serve content h
@@ -516,7 +516,7 @@ let read_file_cell (path : string) : string =
    cell id exactly like [run_pins] keys a "file:<path>" cell id — same
    per-run consistency (first read of a run pins; later reads of the SAME
    cell in the SAME run serve the pin), different storage (never the CAS).
-   The cell records via ordinary [Dynamic_scope.record_read] with hash_string of
+   The cell records via ordinary [Dynamic_scope.record_read] with Hasher.hash_string of
    the bytes (never the bytes themselves — that hash is what LAW 39's
    rotation-invalidation and the trace mechanism need). Returns the raw
    bytes; the caller wraps them as VSealed. *)
@@ -528,12 +528,12 @@ let read_sealed_cell (path : string) : string =
   let session = Effect.perform Dynamic_scope.Get_session in
   match Session.find_sealed_pin session cell with
   | Some bytes ->
-      Dynamic_scope.record_read cell (hash_string bytes);
+      Dynamic_scope.record_read cell (Hasher.hash_string bytes);
       bytes
   | None ->
       let bytes = read_raw path in
       Session.set_sealed_pin session cell bytes;
-      Dynamic_scope.record_read cell (hash_string bytes);
+      Dynamic_scope.record_read cell (Hasher.hash_string bytes);
       bytes
 
 (* Result of a cache lookup: a verified success, a verified (memoized) failure
@@ -682,7 +682,7 @@ let fenced_specs_dir = Filename.concat store_root "fenced-specs"
 (* A fenced spec that is not DATA is rejected at registration (fenced.ml's
    [register]), never here: by the time a spec reaches this call it is
    already known to encode. *)
-let store_fenced_spec ~(hash : string) (value : Types.value) : unit =
+let store_fenced_spec ~(hash : string) (value : Core_model.value) : unit =
   ensure_dir fenced_specs_dir;
   let path = Filename.concat fenced_specs_dir hash in
   if not (Sys.file_exists path) then
@@ -690,7 +690,7 @@ let store_fenced_spec ~(hash : string) (value : Types.value) : unit =
     | Some content -> atomic_write path content
     | None -> ()
 
-let load_fenced_spec (hash : string) : Types.value option =
+let load_fenced_spec (hash : string) : Core_model.value option =
   let path = Filename.concat fenced_specs_dir hash in
   if Sys.file_exists path then
     try Codec.decode_value (read_raw path) with _ -> None

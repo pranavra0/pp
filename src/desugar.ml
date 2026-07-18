@@ -20,7 +20,7 @@
    [err] is each caller's own located-parse-error raiser, so error text keeps
    that reader's exact `msg at file:line` format (LAW 29). *)
 
-open Types
+open Core_model
 
 (* Blocks (do bodies, multi-expression fn/def/let bodies, modules) give every
    def whole-block letrec* scope, so one name defined twice in a block is
@@ -97,7 +97,7 @@ let desugar_or (exprs : expr list) : expr =
    NOT baked into the message here — the enclosing form's [with_form_location]
    attaches it once (as Pp_error.pos), so it is never doubled. Desugars to
    if+error through the shared AST. The
-   message-less form renders the condition via quote_to_value/string_of_value —
+   message-less form renders the condition via Quotation.quote_to_value/Presentation.string_of_value —
    i.e. in AST (s-expression) notation in BOTH surfaces (Appendix B §B.4): the
    rendering is part of the hashed expression, so no reader may re-render it in
    its own notation. *)
@@ -105,7 +105,7 @@ let desugar_assert (cond : expr) (msg_opt : expr option) : expr =
   let msg_expr = match msg_opt with
     | None ->
         ELiteral (VString ("assertion failed: "
-                           ^ string_of_value (quote_to_value cond)))
+                           ^ Presentation.string_of_value (Quotation.quote_to_value cond)))
     | Some m -> m in
   EIf (cond, ELiteral VNil, EApply (ESymbol "error", [msg_expr]))
 

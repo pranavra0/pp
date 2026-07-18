@@ -1,7 +1,8 @@
 (* pp lint — convention checker for pp source files.
    Walks the AST and reports naming/style violations. *)
 
-open Types
+open Core_model
+open Source_error
 
 type warning = {
   w_file : string;
@@ -411,7 +412,7 @@ let lint_file (path : string) : unit =
     | Failure msg ->
         Printf.eprintf "pp lint: parse error in %s: %s\n%!" path msg;
         exit 1
-    | Types.Pp_error { msg; pos } ->
+    | Source_error.Pp_error { msg; pos } ->
         let loc = match pos with
           | Some (f, l) -> Printf.sprintf " at %s:%d" f l | None -> "" in
         Printf.eprintf "pp lint: parse error in %s: %s%s\n%!" path msg loc;

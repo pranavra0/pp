@@ -10,7 +10,7 @@
    different key.  The spec value is persisted by content hash so recovery can
    re-execute an unknown-status action with the same inputs. *)
 
-open Types
+open Core_model
 
 let force value =
   Session.force (Effect.perform Dynamic_scope.Get_session) value
@@ -30,13 +30,13 @@ let action_key ~(epoch : string) ~(kind : string) ~(spec_hash : string) : string
   Hasher.hash_concat ["fenced"; epoch; kind; spec_hash]
 
 let hash_spec (spec : value) : string =
-  Types.hash_value (force spec)
+  Identity.hash_value (force spec)
 
 (* Deep-force and validate that the spec is a map. *)
 let force_spec_map (spec : value) : (value * value) list =
   match force spec with
   | VMap kvs -> kvs
-  | other -> failwith ("fenced: spec must be a map, got " ^ string_of_value other)
+  | other -> failwith ("fenced: spec must be a map, got " ^ Presentation.string_of_value other)
 
 (* A fenced action may optionally name a shell command under the "run" key in
    its spec map.  The value must be a list or vector of strings [cmd arg ...],
@@ -65,17 +65,17 @@ let run_command (spec : value) : value =
               | VPair (a, d) ->
                   (match force a with
                    | VString s | VKeyword s | VSymbol s -> s
-                   | other -> failwith ("fenced: run argv must be strings, got " ^ string_of_value other))
+                   | other -> failwith ("fenced: run argv must be strings, got " ^ Presentation.string_of_value other))
                   :: collect d
-              | other -> failwith ("fenced: run must be a list of strings, got " ^ string_of_value other)
+              | other -> failwith ("fenced: run must be a list of strings, got " ^ Presentation.string_of_value other)
             in collect lst
         | VVector arr ->
             Array.to_list (Array.map (fun x ->
               match force x with
               | VString s | VKeyword s | VSymbol s -> s
-              | other -> failwith ("fenced: run argv must be strings, got " ^ string_of_value other)) arr)
+              | other -> failwith ("fenced: run argv must be strings, got " ^ Presentation.string_of_value other)) arr)
         | VString s -> ["/bin/sh"; "-c"; s]
-        | other -> failwith ("fenced: run must be a list/vector/string of strings, got " ^ string_of_value other)
+        | other -> failwith ("fenced: run must be a list/vector/string of strings, got " ^ Presentation.string_of_value other)
       in
       if argv = [] then failwith "fenced: run argv is empty";
       let cmd = List.hd argv in
@@ -113,7 +113,7 @@ let run_command (spec : value) : value =
             (VString "out", VString out);
             (VString "err", VString err)]
 
-let result_hash (v : value) : string = Types.hash_value v
+let result_hash (v : value) : string = Identity.hash_value v
 
 let register (kind : string) (spec : value) : unit =
   if Effect.perform Dynamic_scope.In_node then

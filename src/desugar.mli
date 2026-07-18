@@ -9,36 +9,36 @@
    the other). *)
 
 val check_block_defs :
-  err:(string -> unit) -> Types.expr list -> Types.expr list
+  err:(string -> unit) -> Core_model.expr list -> Core_model.expr list
 
-val block_body : err:(string -> unit) -> Types.expr list -> Types.expr
+val block_body : err:(string -> unit) -> Core_model.expr list -> Core_model.expr
 
 val assemble_fn_body :
-  (Types.expr -> Types.expr) ->
-  (string * Types.expr option) list ->
-  Types.expr option -> Types.expr -> string list * Types.expr
+  (Core_model.expr -> Core_model.expr) ->
+  (string * Core_model.expr option) list ->
+  Core_model.expr option -> Core_model.expr -> string list * Core_model.expr
 
-val desugar_and : Types.expr list -> Types.expr
-val desugar_or : Types.expr list -> Types.expr
+val desugar_and : Core_model.expr list -> Core_model.expr
+val desugar_or : Core_model.expr list -> Core_model.expr
 
-val desugar_assert : Types.expr -> Types.expr option -> Types.expr
+val desugar_assert : Core_model.expr -> Core_model.expr option -> Core_model.expr
 
 (* try-block lowering (brace surface only). [try_stmt] is the parsed statement
    vocabulary; [try_builder] is how a reader builds each lowered node (real AST
    vs quoted data); [lower_try] walks the statements once against a builder,
    with the caller owning the fresh-name counter via [fresh_var]. *)
-type try_stmt = TryBind of string * Types.expr | TryExpr of Types.expr
+type try_stmt = TryBind of string * Core_model.expr | TryExpr of Core_model.expr
 
 type try_builder = {
-  t_ok_kw : Types.expr;
-  t_sym   : string -> Types.expr;
-  t_app   : string -> Types.expr list -> Types.expr;
-  t_do    : Types.expr list -> Types.expr;
-  t_let   : string -> Types.expr -> Types.expr -> Types.expr;
-  t_if    : Types.expr -> Types.expr -> Types.expr -> Types.expr;
+  t_ok_kw : Core_model.expr;
+  t_sym   : string -> Core_model.expr;
+  t_app   : string -> Core_model.expr list -> Core_model.expr;
+  t_do    : Core_model.expr list -> Core_model.expr;
+  t_let   : string -> Core_model.expr -> Core_model.expr -> Core_model.expr;
+  t_if    : Core_model.expr -> Core_model.expr -> Core_model.expr -> Core_model.expr;
 }
 
 val normal_try_builder : try_builder
 
 val lower_try :
-  fresh_var:(unit -> string) -> try_builder -> try_stmt list -> Types.expr
+  fresh_var:(unit -> string) -> try_builder -> try_stmt list -> Core_model.expr

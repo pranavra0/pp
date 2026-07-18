@@ -17,7 +17,6 @@
    ...)` is the existing LAW 23b gate, fed a wire-verified capability list
    standing where `node_caps` stands locally. Zero new authority code. *)
 
-open Types
 open Codec
 
 
@@ -66,7 +65,7 @@ let load_cluster_id host : string =
 
 (* `pp cluster-init`: mint a fresh secret + cluster id. Cryptokit's secure
    RNG (Random.secure_rng) is the entropy source — the same library
-   already used for content hashing (Hasher/Types), no new crypto
+   already used for content hashing (Hasher/Identity), no new crypto
    dependency. The secret is hex-encoded before writing so the file is
    plain, greppable text like every other pp on-disk artifact rather than
    raw bytes; the hex text itself is the HMAC key material below (HMAC
@@ -83,7 +82,7 @@ let load_cluster_id host : string =
    EXPIRES are decimal Unix seconds. MAC is hex HMAC-SHA256 of the payload
    WITHOUT the MAC field (below), under the cluster secret. A hand-rolled
    parser mirrors store.ml's trace-line codec: this is a bespoke line
-   format, not a Types.value, so it goes through Codec's string-quoting
+   format, not a Core_model.value, so it goes through Codec's string-quoting
    helper only, not its value grammar. *)
 
 let payload_text (specs : string list) (cluster_id : string) (issued : int) (expires : int) : string =
@@ -92,7 +91,7 @@ let payload_text (specs : string list) (cluster_id : string) (issued : int) (exp
     (Codec.quote_string cluster_id) issued expires
 
 let mac_of (secret : string) (payload : string) : string =
-  hex_encode (Cryptokit.hash_string (Cryptokit.MAC.hmac_sha256 secret) payload)
+  Hasher.hex_encode (Cryptokit.hash_string (Cryptokit.MAC.hmac_sha256 secret) payload)
 
 let mint host ~(secret : string) ~(cluster_id : string) ~(specs : string list)
     ~(ttl_seconds : int) : string =

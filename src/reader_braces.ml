@@ -1,5 +1,5 @@
 (* pp brace reader — the brace surface syntax (SPEC Appendix B), parsing to the
-   IDENTICAL `Types.expr` the s-expression reader produces for the equivalent
+   IDENTICAL `Core_model.expr` the s-expression reader produces for the equivalent
    program: same AST, same `ELocated` placement (§B.4), same shared desugars
    (src/desugar.ml), hence the same LAW-20 keys. The grammar implemented here
    is exactly the one Appendix B specifies — the 7-level precedence table,
@@ -21,7 +21,8 @@
    Error messages carry `msg at file:line` in the sexpr reader's exact format
    (LAW 29). *)
 
-open Types
+open Core_model
+open Source_error
 
 type state = { source : string; mutable try_counter : int }
 
@@ -92,7 +93,7 @@ let lex ~(file : string) (input : string) : tok list =
   let lex_error l msg = raise (Pp_error { kind = Eval; msg; pos = Some (file, l) }) in
   (* A token that scanned off the end of the source — the lexer's out-of-input
      signal, distinct from a genuine bad-character error. See
-     Types.Reader_incomplete. *)
+     Source_error.Reader_incomplete. *)
   let lex_incomplete l msg =
     raise (Reader_incomplete (Printf.sprintf "%s at %s:%d" msg file l)) in
   let peek () = if !pos < len then Some input.[!pos] else None in
@@ -500,11 +501,11 @@ let group_call_segments (elems : bracket_elem list)
   go [] [] elems
 
 (* A match pattern's grammar is the same in both readers; only what it builds
-   differs — the normal reader a real [Types.pattern], the quasiquote reader the
+   differs — the normal reader a real [Core_model.pattern], the quasiquote reader the
    quoted DATA (`_`/`(lit v)`/`(var "n")`/`(list (pats…) rest)`/`(tagged "t"
    pats…)`) that value_to_pattern reads back into the identical pattern. So the
    grammar is written once, parameterized by an ['a pattern_builder] and
-   instantiated at ['a = Types.pattern] (normal) and ['a = expr] (qq). This is
+   instantiated at ['a = Core_model.pattern] (normal) and ['a = expr] (qq). This is
    the one place the two contexts return DIFFERENT types, so — unlike the
    [spine] and [try_builder] records — the builder must be parametric.
    [pb_reject_unquote] carries the one grammar difference: qq forbids
@@ -519,12 +520,12 @@ type 'a pattern_builder = {
   pb_reject_unquote : bool;
 }
 
-let normal_pattern_builder : Types.pattern pattern_builder = {
-  mk_pwild = Types.PWildcard;
-  mk_plit = (fun v -> Types.PLiteral v);
-  mk_pvar = (fun n -> Types.PVariable n);
-  mk_plist = (fun pats rest -> Types.PList (pats, rest));
-  mk_ptagged = (fun tag pats -> Types.PTagged (tag, pats));
+let normal_pattern_builder : Core_model.pattern pattern_builder = {
+  mk_pwild = Core_model.PWildcard;
+  mk_plit = (fun v -> Core_model.PLiteral v);
+  mk_pvar = (fun n -> Core_model.PVariable n);
+  mk_plist = (fun pats rest -> Core_model.PList (pats, rest));
+  mk_ptagged = (fun tag pats -> Core_model.PTagged (tag, pats));
   pb_reject_unquote = false;
 }
 
@@ -1837,7 +1838,7 @@ and parse_try_stmts ps : Desugar.try_stmt list =
 (* Parse match arms inside { } — the shared arm grammar with the normal
    pattern/expr parsers. The guard is parsed brace-free (cond) like an `if`
    condition; `=>` is not a spine infix, so the guard/body parse stops at it. *)
-and parse_match_arms ps : (Types.pattern * expr option * expr) list =
+and parse_match_arms ps : (Core_model.pattern * expr option * expr) list =
   parse_match_arms_generic ps
     ~parse_pat:parse_pattern
     ~parse_guard:(fun ps -> parse_expr ps { nl = false; cond = true })
@@ -1845,9 +1846,9 @@ and parse_match_arms ps : (Types.pattern * expr option * expr) list =
     ~mk_arm:(fun pat guard body -> (pat, guard, body))
     ~what:""
 
-(* Parse a single pattern (real Types.pattern): the shared grammar with the
+(* Parse a single pattern (real Core_model.pattern): the shared grammar with the
    normal builder. *)
-and parse_pattern ps : Types.pattern =
+and parse_pattern ps : Core_model.pattern =
   parse_pattern_generic ps normal_pattern_builder
 and parse_one_arg_form ps (mk : expr -> expr) (what : string) : expr =
   advance ps;  (* '(' *)
@@ -1946,9 +1947,9 @@ and parse_binding_group ps ~(allow_ty : bool) : (string * expr) list =
    try { ... } (parse_qq_try_stmts/qq_lower_try_block, the same
    nested let/if data lower_try_block builds as real nodes), match E { pat
    => body; ... } (parse_qq_match_arms/parse_qq_pattern, the same arm/
-   pattern data quote_to_value's EMatch case builds — value_to_expr gained
+   pattern data Quotation.quote_to_value's EMatch case builds — Quotation.value_to_expr gained
    a matching "match" case + value_to_pattern, since EMatch is a first-
-   class AST node with no prior quote_to_value inverse), postfix m[k]
+   class AST node with no prior Quotation.quote_to_value inverse), postfix m[k]
    index (parse_qq_postfix's TLBracket arm, same vector-get/hash-map-get
    accessor choice as parse_postfix), and list-literal spread
    `[a, ...rest]` (parse_qq_primary's TLBracket arm, same cons(a, rest)
@@ -2013,8 +2014,8 @@ and interp_head_qq (args : expr list) (t : Surface_tables.tmpl) : expr =
   | Surface_tables.Perform (eff, ts) ->
       qq_chain (qq_sym "perform" :: qq_sym eff :: List.map (interp_head_qq args) ts)
   | Surface_tables.Config (k, d) ->
-      (* Mirror quote_to_value (EConfig …): `(config KEY DEFAULT-or-nil)` — a
-         3-element form so value_to_expr reconstructs an EConfig after expansion. *)
+      (* Mirror Quotation.quote_to_value (EConfig …): `(config KEY DEFAULT-or-nil)` — a
+         3-element form so Quotation.value_to_expr reconstructs an EConfig after expansion. *)
       let default = match d with Some d -> interp_head_qq args d | None -> qq_nil in
       qq_chain [qq_sym "config"; interp_head_qq args k; default]
 
@@ -2046,7 +2047,7 @@ and qq_spine () : spine = {
   s_call       = (fun e elems ->
     (* In quasiquote: build the SAME `(apply f (list …) rest …)` data the
        normal reader lowers to, in quoted form — `apply`/`list` are ordinary
-       symbols, so value_to_expr reconstructs the identical EApply after macro
+       symbols, so Quotation.value_to_expr reconstructs the identical EApply after macro
        expansion (parity is free, no special reflection case). *)
     if has_spread_elem elems then
       qq_chain (qq_sym "apply" :: e ::
@@ -2234,10 +2235,10 @@ and parse_qq_cond ps : expr =
 
 (* The quasiquote reader's try_builder: the SAME nested let/if shape
    Desugar.lower_try builds, as quoted DATA (qq_chain/qq_sym) instead of real
-   ELet/EIf/EApply nodes, so value_to_expr (or the runtime `quasiquote` builtin,
+   ELet/EIf/EApply nodes, so Quotation.value_to_expr (or the runtime `quasiquote` builtin,
    for a non-macro use) reconstructs exactly what the direct `try { ... }` parse
    produces. A `let` binding becomes the `(let (vector name val) body)` data
-   shape Types.binding_pairs reads back. Every bind rhs / bare statement is
+   shape Core_model.binding_pairs reads back. Every bind rhs / bare statement is
    routed through parse_qq at the parse step (parse_try_stmts_ctx), so
    unquote/splice work in a try statement's expression position; bind NAMES stay
    bare identifiers (same convention as parse_qq_name_slot — no macro test needs
@@ -2254,7 +2255,7 @@ and qq_try_builder : Desugar.try_builder = {
 
 (* The quasiquote reader's pattern builder: the shape quote_pattern produces
    (`_`/`(lit v)`/`(var "n")`/`(list (pats…) rest)`/`(tagged "t" pats…)`), so
-   value_to_pattern reconstructs the identical Types.pattern after macro
+   value_to_pattern reconstructs the identical Core_model.pattern after macro
    expansion. A function (not a value) because its fields apply the recursive
    qq_sym/qq_chain helpers eagerly. Patterns stay fully literal here
    (pb_reject_unquote = true): unquote(...) in pattern position is a worded parse
@@ -2276,7 +2277,7 @@ and parse_qq_pattern ps : expr =
 
 (* Match arms inside quasiquote — the shared arm grammar with the qq
    pattern/expr parsers, each arm a qq list `(pat body)` or `(pat guard body)`,
-   exactly the shape quote_to_value's EMatch case builds for `arms`, then
+   exactly the shape Quotation.quote_to_value's EMatch case builds for `arms`, then
    qq_chained into the arm-list value. *)
 and parse_qq_match_arms ps : expr =
   qq_chain (parse_match_arms_generic ps

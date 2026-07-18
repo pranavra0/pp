@@ -419,7 +419,7 @@ Test: `length(map(inc, range(0, 1000000)))` evaluates to `1000000`  (the same st
 
 Every form a reader accepts, whichever surface it parses, `quote` can turn
 into a value, and quasiquote/unquote work over that structure. Quotation is
-defined against the AST (`Types.expr`), so every surface shares one
+defined against the AST (`Core_model.expr`), so every surface shares one
 quoted-data language. A Lisp whose quoted conditional (`'(if a b c)`) crashes
 is not homoiconic.
 
@@ -433,7 +433,7 @@ including splicing, nested quasiquote, vectors, and maps. `defmacro`
 (`macro.ml`) redeems the grounding: a macro receives its argument forms
 already converted by `quote_to_value`, computes over them as data (via
 `quote`/`quasiquote`/`list`/`cons`/`gensym`), and the result is converted
-back to syntax by `Types.value_to_expr` — the total, exhaustive counterpart
+back to syntax by `Quotation.value_to_expr` — the total, exhaustive counterpart
 of `quote_to_value`, so every case the reader can produce round-trips. This
 is possible only because quotation was already total in both directions the
 moment `value_to_expr` existed to complete it. `defmacro` is not itself a
@@ -1519,7 +1519,7 @@ migration.
 | LAW 7 | demand-pruning at node granularity | partial | reverse-edge dirty-propagation graph exists for push `stabilize` (`pp --watch --stabilize`, `tests/032`); a root desired-state formula and an explicit wanted-set are still absent |
 | LAW 8 | `delay` ephemeral vs `node` persistent | partial | the split exists (`node` persists to `~/.pp/store`; `delay` never persists); residual: the in-memory dedup table is not mirrored across runs, separate from the persistent node cache |
 | LAW 11 | stack-safe non-tail recursion | unimplemented | the named stack-safe-evaluator workstream; fuzz `exitdiff:tw-err: Out_of_memory`, `crash:bc:timeout` |
-| LAW 12 | total quotation, quasiquote | holds | `tests/007-phase0-laws.pp`; `defmacro` is built on this base — `Types.value_to_expr` completes the round trip, `tests/041-defmacro.pp` |
+| LAW 12 | total quotation, quasiquote | holds | `tests/007-phase0-laws.pp`; `defmacro` is built on this base — `Quotation.value_to_expr` completes the round trip, `tests/041-defmacro.pp` |
 | LAW 15 | ordering never from capabilities | partial | negative half holds; a first version of the filesystem-domain reconciler exists (`tests/018`), the process domain is absent |
 | LAW 16 | opt-in per-node caching | partial | `node { e }` cached persistently across runs ; scripting-tier expressions uncached; node writes sandbox-scratch-only (LAW 18, `tests/017`); `tests/010`, `tests/014` |
 | LAW 17 | hit is not effect replay | holds (node tier) | a `node { e }` hit does not replay in-node `log`/stdout (`tests/010`, `tests/014`) |
@@ -1566,15 +1566,15 @@ through the build-engine milestone's remaining work.
 > brace/infix surface and the exact s-expression form every brace construct
 > reads to. It defines no new semantics — every row lowers to a form the laws
 > above already govern, and those laws are stated against the AST
-> (`Types.expr`), never against a surface. The s-expression language is
+> (`Core_model.expr`), never against a surface. The s-expression language is
 > unchanged: it remains the AST's notation and the macro layer's data
 > language (`quote` yields sexpr data in both surfaces).
 >
 > The elegance criterion (frozen). Reading a brace file and reading its
-> s-expression transpilation must yield the identical `Types.expr`, and
+> s-expression transpilation must yield the identical `Core_model.expr`, and
 > therefore identical LAW 20 keys. No renames: kebab-case identifiers
 > (`string-index`, `nil?`, `proc-alive?`, `run!`) survive verbatim. Because
-> `hash_expr` covers `ELocated (file, line)`, "identical `Types.expr`" has
+> `hash_expr` covers `ELocated (file, line)`, "identical `Core_model.expr`" has
 > two load-bearing corollaries.
 >
 > 1. The brace reader must attach `ELocated` at exactly the sites the
@@ -1716,7 +1716,7 @@ Notes, each load-bearing for hash preservation:
 ### B.3 Lowering table
 
 Each row gives the s-expression text a brace form reads as; both readers
-must then agree at the `Types.expr` level. Where the sexpr reader applies a
+must then agree at the `Core_model.expr` level. Where the sexpr reader applies a
 reader-level desugar (`and`/`or` → `if`, `assert`, per-parameter type
 checks, the block rule), that desugar is a shared post-pass run identically
 downstream of both parsers, never duplicated. ⟦stmts⟧ denotes the block

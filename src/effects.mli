@@ -8,9 +8,9 @@
 type _ Effect.t +=
   | Get_invocation : Invocation.t Effect.t
   | Get_capabilities : Capability.t list Effect.t
-  | Get_config : Types.value list Effect.t
+  | Get_config : Core_model.value list Effect.t
   | Get_handlers : (string * string) list Effect.t
-  | Lookup_handler : string -> ((Types.value list -> Types.value) * string) option Effect.t
+  | Lookup_handler : string -> ((Core_model.value list -> Core_model.value) * string) option Effect.t
   | Record_read : string * string -> unit Effect.t
   | In_node : bool Effect.t
   | Current_sandbox : string option ref option Effect.t

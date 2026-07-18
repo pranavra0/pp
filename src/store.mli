@@ -18,8 +18,8 @@ val objects_dir : string
 val traces_dir : string
 val ensure_dir : string -> unit
 val atomic_write : string -> string -> unit
-val store_object : key:string -> value:Types.value -> unit
-val load_object : key:string -> Types.value option
+val store_object : key:string -> value:Core_model.value -> unit
+val load_object : key:string -> Core_model.value option
 type trace_outcome = Ok | Failed
 type trace = {
   tr_outcome : trace_outcome;
@@ -53,7 +53,7 @@ val record_file_read : string -> string -> unit
 val read_raw : string -> string
 val read_file_cell : string -> string
 val read_sealed_cell : string -> string
-type hit_result = HitOk of Types.value | HitFailed of Types.value | Miss
+type hit_result = HitOk of Core_model.value | HitFailed of Core_model.value | Miss
 val no_cache : bool ref
 val why_mode : bool ref
 val check_mode : bool ref
@@ -64,8 +64,8 @@ val mark_live : string -> unit
 val short_key : string -> string
 val why : ('a, out_channel, unit, unit, unit, unit) format6 -> 'a
 val hit : key:string -> authorized:(string -> bool) -> hit_result
-val store_fenced_spec : hash:string -> Types.value -> unit
-val load_fenced_spec : string -> Types.value option
+val store_fenced_spec : hash:string -> Core_model.value -> unit
+val load_fenced_spec : string -> Core_model.value option
 val build_reverse_index : unit -> (string, string list) Hashtbl.t
 val dirty_keys_for :
   string list -> (string, string list) Hashtbl.t -> string list

@@ -4,10 +4,10 @@
    BOTTOM of the dependency graph, so that every module that hashes —
    including [Capability], an early-compiled module that must hash an
    abstract type — goes through one definition.  The higher-level
-   [hash_value]/[hash_expr] functions stay in [Types] (they need the
-   recursive value/expr types) and are reached as [Types.hash_value] etc.;
+   [Identity.hash_value]/[Identity.hash_expr] functions stay in [Identity] (they need the
+   recursive value/expr types) and are reached as [Identity.hash_value] etc.;
    they are no longer re-exported here, because re-exporting them would make
-   [Hasher] depend on [Types] while [Types] depends on [Hasher] for these
+   [Hasher] depend on [Core_model] while [Identity] depends on [Hasher] for these
    primitives — a cycle. *)
 
 let hex_encode (s : string) : string =

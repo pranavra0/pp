@@ -1,24 +1,25 @@
 (* node — the node-key skeleton and the one rebuilder. *)
 
-open Types
+open Core_model
+open Source_error
 
 
 let fv_hash ~(name : string) (v : value) (force : value -> value) : string =
   match force v with
   | fv ->
-      if contains_authority fv then
+      if Value_analysis.contains_authority fv then
         raise (Capability_error
           (Printf.sprintf
              "node: free variable '%s' may not be or contain a %s" name
-             (if contains_sealed fv then "sealed value" else "capability")));
-      hash_concat ["fv"; name; hash_value fv]
+             (if Value_analysis.contains_sealed fv then "sealed value" else "capability")));
+      Hasher.hash_concat ["fv"; name; Identity.hash_value fv]
   | exception e ->
       (match e with
        | Capability_error _ -> raise e
-       | _ -> hash_concat ["fv"; name; hash_value v])
+       | _ -> Hasher.hash_concat ["fv"; name; Identity.hash_value v])
 
 let unbound_fv_hash ~(name : string) : string =
-  hash_concat ["fv-unbound"; name]
+  Hasher.hash_concat ["fv-unbound"; name]
 
 
 (* ---- Runtime type check (shared by the evaluator) --------------------- *)
@@ -49,7 +50,7 @@ let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
     raise (Pp_error {
       kind = Eval;
       msg = Printf.sprintf "type mismatch: expected %s, got %s"
-              type_name (string_of_value v);
+              type_name (Presentation.string_of_value v);
       pos = loc })
 
 (* Enforce a thunk's optional type annotation, resetting thunk_status to
@@ -114,7 +115,7 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
            NOT (LAW 15) and falls to the generic reset arm below. *)
         | (Failure msg | Pp_error { kind = Eval; msg; _ }) as e ->
             let errval = VString msg in
-            let err_hash = hash_value errval in
+            let err_hash = Identity.hash_value errval in
             (try Store.store_object ~key:err_hash ~value:errval with _ -> ());
             (try Store.store_trace ~key ~outcome:Store.Failed ~result_hash:err_hash
                    ~reads:(List.rev !frame) with _ -> ());
@@ -124,16 +125,16 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
             t.thunk_status <- Unevaluated;
             raise e
       in
-      if contains_authority result then begin
+      if Value_analysis.contains_authority result then begin
         t.thunk_status <- Unevaluated;
-        if contains_sealed result then
+        if Value_analysis.contains_sealed result then
           raise (Capability_error "a node may not return a sealed value")
         else
           raise (Capability_error "a node may not return a capability")
       end;
       enforce_type t result;
       t.thunk_status <- Evaluated result;
-      let result_hash = hash_value result in
+      let result_hash = Identity.hash_value result in
       (try Store.store_object ~key:result_hash ~value:result with _ -> ());
       (try Store.store_trace ~key ~outcome:Store.Ok ~result_hash
              ~reads:(List.rev !frame) with _ -> ());
@@ -150,7 +151,7 @@ let run_node_body ~(key : string) ~(run : unit -> value) (t : thunk) : value =
           | effect Dynamic_scope.Current_sandbox, k -> Effect.Deep.continue k (Some sandbox_slot)
           | e -> raise e
         in
-        if hash_value r2 <> result_hash then begin
+        if Identity.hash_value r2 <> result_hash then begin
           incr Store.volatile_count;
           Printf.eprintf
             "[check] volatile node %s: an identical run produced a different result hash\n%!"

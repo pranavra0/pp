@@ -1,4 +1,4 @@
-(* pp brace printer — renders a `Types.expr` (as produced by the s-expression
+(* pp brace printer — renders a `Core_model.expr` (as produced by the s-expression
    reader) as brace-surface text (SPEC Appendix B) that the brace reader
    (src/reader_braces.ml) re-reads to the structurally IDENTICAL expr — same
    `ELocated` placement, hence the same LAW-20 hash. This is the fuzzer's round-trip-gate
@@ -52,7 +52,7 @@
    - reader-only sugar (`|>`, cells, `reconcile`, `needs`) is never emitted:
      every such row lowers to forms with a canonical spelling below. *)
 
-open Types
+open Core_model
 
 exception Unprintable of string
 
@@ -164,7 +164,7 @@ let literal (v : value) : string =
   | VKeyword k ->
       if k <> "" && String.for_all is_name_char k then ":" ^ k
       else unpr "keyword :%s has no brace spelling" k
-  | v -> unpr "value %s is not a literal" (string_of_value v)
+  | v -> unpr "value %s is not a literal" (Presentation.string_of_value v)
 
 (* ---- emitter state ---- *)
 

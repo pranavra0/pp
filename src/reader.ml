@@ -1,6 +1,7 @@
 (* pp reader — s-expression parser with rich literals *)
 
-open Types
+open Core_model
+open Source_error
 
 (* ---- Lexer ---- *)
 
@@ -42,7 +43,7 @@ let lex_error state line msg =
 
 (* A token that scanned off the end of the source — the lexer's out-of-input
    signal, distinct from a genuine bad-character error. See
-   Types.Reader_incomplete. *)
+   Source_error.Reader_incomplete. *)
 let lex_incomplete state line msg =
   raise (Reader_incomplete (Printf.sprintf "%s at %s:%d" msg state.source line))
 
@@ -220,7 +221,7 @@ let is_symbol ps name =
 
 (* Incomplete (REPL: read more) iff the failure is at end-of-input; genuine
    otherwise. The sexpr reader has no newline tokens, so the current token IS
-   the next significant one. See Types.Reader_incomplete. *)
+   the next significant one. See Source_error.Reader_incomplete. *)
 let parse_error ps msg =
   let file = ps.source in
   let line = peek_line ps in

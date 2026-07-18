@@ -18,5 +18,5 @@ let read path =
   close_in channel;
   Dynamic_scope.record_read
     Cell.(to_string (RuntimeFile (canonical :> string)))
-    (Types.hash_string content);
+    (Hasher.hash_string content);
   content

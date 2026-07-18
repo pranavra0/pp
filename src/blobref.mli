@@ -3,4 +3,4 @@
    mark-by-replay). *)
 
 (* Scan a value's structure for "blob:<sha256>" string references. *)
-val blob_refs_in : Types.value -> string list
+val blob_refs_in : Core_model.value -> string list

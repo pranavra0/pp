@@ -29,7 +29,7 @@ plus a reader round-trip gate. This is the project's most valuable correctness
 check.
 
 
-## The data model (`types.ml`)
+## The core model
 
 Everything hangs off a few mutually recursive types:
 
@@ -37,6 +37,7 @@ Everything hangs off a few mutually recursive types:
   application, `quote`/`force`/`delay`, `effect`/`perform`/`with-handler`,
   `node`/`defnode`, `module`/`import`/`load`, `island`, `with-config`/`config`,
   and type annotations and source locations.
+- `value`: runtime data, including scalars, collections, closures,
   keyword, symbol, pair, vector, map, set, closure, builtin, capability,
   thunk, and module-env-map.
 - `thunk`: a suspended computation. It holds a mutable status
@@ -51,9 +52,11 @@ Everything hangs off a few mutually recursive types:
 - `capability`: an authority token for filesystem, network, process,
   compose, restrict, or none.
 
-`types.ml` also holds the content-addressing logic: `hash_value`,
-`hash_expr`, `hash_capability`, and the incremental `env_hash`
-construction.
+Only these mutually recursive declarations live in `core_model.ml`.
+Operations over them have explicit owners: `identity.ml` defines structural
+hashing, `environment.ml` constructs and queries environments and suspended
+computations, `free_vars.ml` analyzes expressions, and the quotation, pattern,
+presentation, and value-analysis modules own their respective pure walks.
 
 ## Content addressing
 
@@ -136,7 +139,7 @@ governs validity (SPEC law 21) — pp's dynamic answer to Haskell's static
 IO type.
 
 The node key, from `node_key_of`, hashes the code structure plus the
-value hashes of the free variables the node references (`Types.free_vars`),
+value hashes of the free variables the node references (`Free_vars.free_vars`),
 forced call-by-value. It leaves out the whole-environment hash and the
 capability set (SPEC law 20).
 
@@ -193,8 +196,16 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 
 | File | Role |
 |---|---|
-| `src/types.ml` | All core types: `expr`, `value`, `thunk`, `env`, `closure`, `capability`, `frame`, and opcodes, plus the structural content-addressed hashing (`hash_value`, `hash_expr`, `env_hash`) — the foundation of the codebase. |
-| `src/hasher.ml` | The low-level content-addressing primitives (SHA-256 via Cryptokit, `hash_concat`, `hex_encode`) that `types.ml`'s structural hashing is built on. |
+| `src/core_model.ml` | The minimum recursive declarations for expressions, values, environments, closures, and thunks. |
+| `src/source_error.ml` | Source locations and the language's located error vocabulary. |
+| `src/identity.ml` | Structural hashes for values, expressions, patterns, and capabilities. |
+| `src/environment.ml` | Environment lookup/extension and closure/thunk construction. |
+| `src/free_vars.ml` | Free-variable analysis used by node identity. |
+| `src/value_analysis.ml` | Cycle-safe inspection for authority and sealed values. |
+| `src/quotation.ml` | Total expression/value quotation conversion. |
+| `src/pattern_match.ml` | Pure pattern matching and binding extraction. |
+| `src/presentation.ml` | Runtime value presentation and list/string projections. |
+| `src/hasher.ml` | Low-level SHA-256 and injective length-framed hashing primitives. |
 | `src/blobref.ml` | Detection of `blob:<sha256>` references embedded in an ordinary value, so large bytes stay out of a node's small result. |
 | `src/force_deep.ml` | The one deep recursive force over a value — the plain structural walk that drives every reachable thunk. |
 | `src/codec.ml` | The one canonical, versioned, byte-stable text encoding for store objects and traces. |
@@ -202,7 +213,6 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/paths.ml` | The one component-boundary path-containment predicate, `Paths.under`, behind capability scopes, loader authority, and domain bounds. |
 | `src/cell.ml` | The typed cell taxonomy: the `Cell.t` variant plus `of_string` and `to_string`, with the on-disk strings frozen — naming only; observation and authority live in `store.ml` and `evaluator.ml`. |
 | `src/surface_tables.ml` | The closed surface sets (sigils, observation heads, lowering templates) as data, plus the renderer for SPEC's generated block. |
-| `src/types.ml` | All core types: `expr`, `value`, `thunk`, `env`, `closure`, `capability`, plus the structural content-addressed hashing (`hash_value`, `hash_expr`, `env_hash`) — the foundation of the codebase. |
 | `src/desugar.ml` | Reader-level desugars shared by both readers (SPEC Appendix B). |
 | `src/comments.ml` | The side channel `pp fmt` uses to carry comments across a surface transpile. |
 | `src/cap_token.ml` | Signed capability grants — cluster tokens — for cross-machine authority. |

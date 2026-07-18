@@ -3,7 +3,7 @@
 # three things always hold.
 #
 # src/kernel_props.ml holds one QuickCheck-style generator each for
-# Types.value / pattern / expr, written so that adding an AST constructor
+# Core_model.value / pattern / expr, written so that adding an AST constructor
 # cascades compile errors (expr_kind -> gen_of_tag -> expr_surface) until the
 # new form is generated and classified — coverage is derived, never
 # enumerated, from the generator's own exhaustiveness match. Under those

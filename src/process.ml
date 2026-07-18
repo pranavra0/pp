@@ -24,7 +24,8 @@
    fail-close absolute paths — it is a hygiene mechanism; the trace cells
    above are the soundness mechanism. *)
 
-open Types
+open Core_model
+open Source_error
 
 let has_process_cap () =
   List.exists Capability.check_process (Effect.perform Dynamic_scope.Get_capabilities)
@@ -122,7 +123,7 @@ let run_effect (args : value list) : value =
     raise (Capability_error "capability error: no process authority for run");
   let argv = List.map (function
     | VString s -> s
-    | v -> failwith ("run expects string command/arguments, got " ^ string_of_value v))
+    | v -> failwith ("run expects string command/arguments, got " ^ Presentation.string_of_value v))
     args
   in
   match argv with
@@ -199,7 +200,7 @@ let run_dep_effect (args : value list) : value =
         raise (Capability_error "capability error: no process authority for run-dep!");
       let argv = List.map (function
         | VString s -> s
-        | v -> failwith ("run-dep! expects string arguments, got " ^ string_of_value v))
+        | v -> failwith ("run-dep! expects string arguments, got " ^ Presentation.string_of_value v))
         cmd_args
       in
       let cmd = List.hd argv in

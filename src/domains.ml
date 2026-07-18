@@ -32,7 +32,7 @@
                order than the original computation would silently break
                the byte-compatibility this format exists for. *)
 
-open Types
+open Core_model
 
 let force value =
   Session.force (Effect.perform Dynamic_scope.Get_session) value
@@ -43,7 +43,7 @@ let plan_map (plan : value) : (value * value) list =
   match force plan with
   | VMap kvs -> kvs
   | other -> failwith ("domain diff: plan must be a map with :items and :summary, got "
-                       ^ string_of_value other)
+                       ^ Presentation.string_of_value other)
 
 (* :items may be an ordinary pp LIST (cons/nil — the natural shape
    map/filter/append produce, what domain-fs.pp/domain-proc.pp use) or a
@@ -55,7 +55,7 @@ let plan_items_empty (plan : value) : bool =
   | None | Some VNil -> true
   | Some (VVector arr) -> Array.length arr = 0
   | Some (VPair _) -> false
-  | Some other -> failwith ("domain diff: plan :items must be a list or vector, got " ^ string_of_value other)
+  | Some other -> failwith ("domain diff: plan :items must be a list or vector, got " ^ Presentation.string_of_value other)
 
 let summary_pair (entry : value) : string * string =
   let two_of arr =
@@ -67,12 +67,12 @@ let summary_pair (entry : value) : string * string =
     | VVector arr -> two_of arr
     | VPair (a, VPair (b, VNil)) -> (a, b)
     | other -> failwith ("domain diff: :summary entries must be [key value] pairs, got "
-                         ^ string_of_value other)
+                         ^ Presentation.string_of_value other)
   in
-  let ks = match string_like (force k) with Some s -> s | None -> failwith ("domain diff: :summary key must be a string, got " ^ string_of_value k) in
+  let ks = match Presentation.string_like (force k) with Some s -> s | None -> failwith ("domain diff: :summary key must be a string, got " ^ Presentation.string_of_value k) in
   let vs = match force v with
     | VString s -> s
-    | other -> failwith ("domain diff: :summary value must be a string, got " ^ string_of_value other) in
+    | other -> failwith ("domain diff: :summary value must be a string, got " ^ Presentation.string_of_value other) in
   (ks, vs)
 
 let plan_summary (plan : value) : (string * string) list =
@@ -83,11 +83,11 @@ let plan_summary (plan : value) : (string * string) list =
         | VNil -> []
         | VPair (a, d) -> summary_pair a :: collect (force d)
         | other -> failwith ("domain diff: :summary must be a list/vector of pairs, got "
-                             ^ string_of_value other)
+                             ^ Presentation.string_of_value other)
       in collect lst
   | Some VNil | None -> []
   | Some other -> failwith ("domain diff: :summary must be a list/vector of [key value] pairs, got "
-                            ^ string_of_value other)
+                            ^ Presentation.string_of_value other)
 
 (* ---- Plan caching (falls out of the existing store, no new mechanism) ----
 
@@ -105,9 +105,9 @@ let plan_summary (plan : value) : (string * string) list =
    free, with no AST to keep in sync with a node body that doesn't exist —
    the direct route is documented here as the deliberate, simpler choice. *)
 let plan_cache_key ~(diff_closure : value) ~(observed : value) ~(desired : value) : string =
-  let diff_hash = Types.hash_value diff_closure in
-  let observed_hash = Types.hash_value (Primitives.force_deep observed) in
-  let desired_hash = Types.hash_value (Primitives.force_deep desired) in
+  let diff_hash = Identity.hash_value diff_closure in
+  let observed_hash = Identity.hash_value (Primitives.force_deep observed) in
+  let desired_hash = Identity.hash_value (Primitives.force_deep desired) in
   Hasher.hash_concat ["domain-plan"; diff_hash; observed_hash; desired_hash]
 
 let compute_plan ~(domain_name : string) ~(diff_closure : value)
@@ -124,7 +124,7 @@ let compute_plan ~(domain_name : string) ~(diff_closure : value)
         try Primitives.call_with_args diff_closure [observed; desired]
         with effect Dynamic_scope.Get_capabilities, k -> Effect.Deep.continue k []
       in
-      let result_hash = Types.hash_value plan in
+      let result_hash = Identity.hash_value plan in
       (try Store.store_object ~key:result_hash ~value:plan with _ -> ());
       (try Store.store_trace ~key ~outcome:Store.Ok ~result_hash ~reads:[] with _ -> ());
       plan
@@ -202,7 +202,7 @@ let run_domain ~(name : string) ~(entry : Session.domain_entry) ~(desired : valu
     let plan = compute_plan ~domain_name:name ~diff_closure ~observed ~desired in
     let summary = plan_summary plan in
     let hash = Hasher.hash_concat
-        ["domain-pass"; name; Types.hash_value (Primitives.force_deep desired)] in
+        ["domain-pass"; name; Identity.hash_value (Primitives.force_deep desired)] in
     Journal.append (Journal.DomainIntent { hash; fields = summary });
     with_domain name entry.Session.dm_cap
       (fun () -> ignore (call_uncached apply_closure [plan]));
@@ -237,7 +237,7 @@ let run_domain ~(name : string) ~(entry : Session.domain_entry) ~(desired : valu
    the epoch must never fail an otherwise-successful reconcile pass. *)
 let record_epoch invocation (forced : value) : unit =
   try
-    let hash = Types.hash_value forced in
+    let hash = Identity.hash_value forced in
     (try Store.store_object ~key:hash ~value:forced with _ -> ());
     Journal.append (Journal.Epoch { hash });
     Gcroots.record ~keep:(Invocation.gc_keep_epochs invocation)
@@ -257,13 +257,13 @@ let run_all invocation (all_desired : value) : unit =
     | VMap kvs -> kvs
     | other ->
         failwith ("reconcile: the program must return a map of domain-name to \
-                   desired-state, got " ^ string_of_value other)
+                   desired-state, got " ^ Presentation.string_of_value other)
   in
   let resolved = List.map (fun (k, desired) ->
     let name = match k with
       | VString s | VKeyword s -> s
       | other -> failwith ("reconcile: domain name must be a string or keyword, got "
-                           ^ string_of_value other)
+                           ^ Presentation.string_of_value other)
     in
     match Session.find_domain session name with
     | None -> failwith ("reconcile: no domain registered under name '" ^ name ^ "'")

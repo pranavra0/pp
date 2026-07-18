@@ -1,4 +1,4 @@
-(* pp sexpr printer — renders a `Types.expr` (as produced by EITHER reader,
+(* pp sexpr printer — renders a `Core_model.expr` (as produced by EITHER reader,
    src/reader.ml or src/reader_braces.ml) as s-expression text that the
    sexpr reader (src/reader.ml) re-reads to the structurally IDENTICAL expr
    — same `ELocated` placement, hence the same LAW-20 hash. This is the
@@ -26,7 +26,7 @@
      printer_braces) no reserved-word wrapping is needed for symbols standing
      alone. Only an *application* headed by one of these symbols is
      unprintable (defensive: no AST either reader produces ever applies one
-     as a function — Types.expr gives each its own dedicated constructor).
+     as a function — Core_model.expr gives each its own dedicated constructor).
    - `defmacro` is deliberately NOT one of reader.ml's special forms
      (src/macro.ml's docstring); `(defmacro (name p...) body...)` is an
      perfectly ordinary application and needs no special-casing here.
@@ -41,7 +41,7 @@
      surface-only to begin with) never reaches this printer as such: it is
      already lowered to core forms by the time an AST exists. *)
 
-open Types
+open Core_model
 
 exception Unprintable of string
 
@@ -129,7 +129,7 @@ let literal (v : value) : string =
   | VKeyword k ->
       if k <> "" && String.for_all is_symbol_char k then ":" ^ k
       else unpr "keyword :%s has no sexpr spelling" k
-  | v -> unpr "value %s is not a literal" (string_of_value v)
+  | v -> unpr "value %s is not a literal" (Presentation.string_of_value v)
 
 (* ---- emitter state ----
 

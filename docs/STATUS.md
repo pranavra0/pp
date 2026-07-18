@@ -221,7 +221,7 @@ A macro is a function from syntax-as-values to syntax-as-values:
 name(params) { body }` in braces. It receives its argument forms already
 converted to values by `quote_to_value`, runs its body through the
 tree-walker before ordinary source evaluation begins (LAW 36), and the result is
-converted back to syntax by `Types.value_to_expr`.
+converted back to syntax by `Quotation.value_to_expr`.
 
 Expansion is the one shared step (`macro.ml`) the expansion boundary passes
 through before the evaluator sees a form. Because of this, LAW 20 needed no
@@ -478,7 +478,7 @@ absent.
 ### Two readers, one language
 
 pp has a second reader (`src/reader_braces.ml`) for a brace-and-infix
-surface, parsing to the exact same `Types.expr` the original s-expression
+surface, parsing to the exact same `Core_model.expr` the original s-expression
 reader always produced. Since LAW 20 keys computations on expanded code,
 surface syntax was never part of a program's identity, so this needed no
 change to node keys. The fuzzer checks print-then-reread and LAW-20 hash

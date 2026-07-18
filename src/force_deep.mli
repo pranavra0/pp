@@ -3,10 +3,10 @@
    this is the plain walk it (and others) delegate to. *)
 
 val force_deep_plain :
-  force:(Types.value -> Types.value) -> Types.value -> Types.value
+  force:(Core_model.value -> Core_model.value) -> Core_model.value -> Core_model.value
 
 (* Find the first entry in an association list whose string-like key
    matches [key], returning its forced value. *)
 val find_kv :
-  force:(Types.value -> Types.value) ->
-  (Types.value * Types.value) list -> string -> Types.value option
+  force:(Core_model.value -> Core_model.value) ->
+  (Core_model.value * Core_model.value) list -> string -> Core_model.value option

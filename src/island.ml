@@ -7,7 +7,7 @@
      (island file:./lib "a1b2…64hex")
      (island <github:owner/repo#ref> "a1b2…64hex")
 
-   The pin is part of the code — `hash_expr` folds uri+pin — so island
+   The pin is part of the code — `Identity.hash_expr` folds uri+pin — so island
    identity is structural (LAW 20): no lockfile, no synthetic trace cell,
    and a pinned island form is a CLOSED expression (paste it anywhere, it
    denotes the same bytes). Refs (`#main`) live in the URI and matter only
@@ -25,7 +25,7 @@
    unpinned island form is a hard error naming the fix: eval stays pure and
    hermetic; the only impure step lives in `pp --update`. *)
 
-open Types
+open Core_model
 
 let fetch_enabled = ref false
 

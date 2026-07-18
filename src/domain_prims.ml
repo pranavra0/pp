@@ -16,7 +16,8 @@
    threading), so these checks are the SAME mechanism `write-file`/`run`
    already use, not a new authority path. *)
 
-open Types
+open Core_model
+open Source_error
 
 let force value =
   Session.force (Effect.perform Dynamic_scope.Get_session) value
@@ -46,7 +47,7 @@ let has_process_cap () =
   List.exists Capability.check_process (Effect.perform Dynamic_scope.Get_capabilities)
 
 (* Fully force a value (map values / vector-set elements are lazy by
-   construction, primitives.ml) so Codec.encode_value and Hasher.hash_value
+   construction, primitives.ml) so Codec.encode_value and Identity.hash_value
    see actual leaves, not unevaluated thunks — the same shape as
    Fenced.force_deep / Primitives.force_deep, duplicated here for the same
    reason those two are already duplicated rather than shared (small, and
@@ -189,20 +190,20 @@ let domain_state_put (key : string) (v : value) : unit =
    value before matching. *)
 let find_field kvs key =
   Option.map (fun (_, v) -> force v)
-    (List.find_opt (fun (k', _) -> string_like k' = Some key) kvs)
+    (List.find_opt (fun (k', _) -> Presentation.string_like k' = Some key) kvs)
 
 let expect_string_field where kvs key =
   match find_field kvs key with
-  | Some v -> (match string_like v with Some s -> s | None -> failwith (Printf.sprintf "%s: %s must be a string, got %s" where key (string_of_value v)))
+  | Some v -> (match Presentation.string_like v with Some s -> s | None -> failwith (Printf.sprintf "%s: %s must be a string, got %s" where key (Presentation.string_of_value v)))
   | None -> failwith (Printf.sprintf "%s: missing '%s'" where key)
 
 let expect_opt_string_field where kvs key default_ =
   match find_field kvs key with
-  | Some v -> (match string_like v with Some s -> s | None -> failwith (Printf.sprintf "%s: %s must be a string, got %s" where key (string_of_value v)))
+  | Some v -> (match Presentation.string_like v with Some s -> s | None -> failwith (Printf.sprintf "%s: %s must be a string, got %s" where key (Presentation.string_of_value v)))
   | None -> default_
 
 let expect_string_list_field where kvs key =
-  let one v = match string_like (force v) with Some s -> s | None -> failwith (Printf.sprintf "%s: %s elements must be strings, got %s" where key (string_of_value v)) in
+  let one v = match Presentation.string_like (force v) with Some s -> s | None -> failwith (Printf.sprintf "%s: %s elements must be strings, got %s" where key (Presentation.string_of_value v)) in
   match find_field kvs key with
   | None | Some VNil -> []
   | Some (VVector arr) -> Array.to_list (Array.map one arr)
@@ -211,21 +212,21 @@ let expect_string_list_field where kvs key =
         | VNil -> []
         | VPair (a, d) -> one a :: collect (force d)
         | other -> failwith (Printf.sprintf "%s: %s must be a list/vector of strings, got %s"
-                              where key (string_of_value other))
+                              where key (Presentation.string_of_value other))
       in collect lst
   | Some other -> failwith (Printf.sprintf "%s: %s must be a list/vector of strings, got %s"
-                              where key (string_of_value other))
+                              where key (Presentation.string_of_value other))
 
 let expect_env_field where kvs key =
   match find_field kvs key with
   | None | Some VNil -> []
   | Some (VMap envkvs) ->
       List.map (fun (k, v) ->
-        let ks = match string_like (force k) with Some s -> s | None -> failwith (where ^ ": env key must be a string, got " ^ string_of_value k) in
-        let vs = match string_like (force v) with Some s -> s | None -> failwith (where ^ ": env value must be a string, got " ^ string_of_value v) in
+        let ks = match Presentation.string_like (force k) with Some s -> s | None -> failwith (where ^ ": env key must be a string, got " ^ Presentation.string_of_value k) in
+        let vs = match Presentation.string_like (force v) with Some s -> s | None -> failwith (where ^ ": env value must be a string, got " ^ Presentation.string_of_value v) in
         (ks, vs))
         envkvs
-  | Some other -> failwith (where ^ ": " ^ key ^ " must be a map, got " ^ string_of_value other)
+  | Some other -> failwith (where ^ ": " ^ key ^ " must be a map, got " ^ Presentation.string_of_value other)
 
 let env_array spec_env =
   let base = Array.to_list (Unix.environment ()) in
@@ -245,7 +246,7 @@ let proc_spawn (spec : value) : value =
     raise (Capability_error "proc-spawn: capability error: no process authority");
   let kvs = match force spec with
     | VMap kvs -> kvs
-    | other -> failwith ("proc-spawn: spec must be a map, got " ^ string_of_value other)
+    | other -> failwith ("proc-spawn: spec must be a map, got " ^ Presentation.string_of_value other)
   in
   let name = expect_string_field "proc-spawn" kvs "name" in
   let cmd = expect_string_field "proc-spawn" kvs "cmd" in
@@ -256,7 +257,7 @@ let proc_spawn (spec : value) : value =
     | Some p -> p
     | None -> failwith ("proc-spawn: command not found for service " ^ name ^ ": " ^ cmd)
   in
-  let spec_hash = Types.hash_value (Force_deep.force_deep_plain ~force spec) in
+  let spec_hash = Identity.hash_value (Force_deep.force_deep_plain ~force spec) in
   Journal.append (Journal.ProcStartIntent { name; spec_hash });
   Store.ensure_dir (domain_io_dir ());
   let argv = resolved :: args in

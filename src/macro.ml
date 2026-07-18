@@ -2,7 +2,7 @@
    syntax-as-values.
 
    Architecture (LAW 20/36): expansion is the ONE shared step every code
-   path passes through before its own machinery ever sees a form — hash_expr
+   path passes through before its own machinery ever sees a form — Identity.hash_expr
    (the node key) operates on ALREADY-EXPANDED ASTs, so LAW 20
    needs no change anywhere else: it is true by construction, because
    node_key_of can never observe a macro
@@ -58,7 +58,8 @@
    quasiquote/unquote verbatim, never renamed — they are the caller's
    syntax, not the macro's. *)
 
-open Types
+open Core_model
+open Source_error
 
 type services = {
   eval : expr -> env -> value;
@@ -125,7 +126,7 @@ let match_defmacro (e : expr) : (string * string list * expr) option =
   | _ -> None
 
 (* Apply a macro to its (unevaluated!) argument FORMS: quote each form to a
-   value (Types.quote_to_value, total over every expr form), bind the macro's
+   value (Quotation.quote_to_value, total over every expr form), bind the macro's
    parameters to those values (plain values, not thunks — they are already
    fully-realized quoted data, and the macro body is expansion-time code,
    not the program proper), run the body through the tree walker (LAW 36),
@@ -153,19 +154,19 @@ let apply_macro services expansion_count ~(name : string) ~(params : string list
     macro_error name
       (Printf.sprintf "expected %d argument(s), got %d"
          (List.length params) (List.length args));
-  let arg_values = List.map Types.quote_to_value args in
+  let arg_values = List.map Quotation.quote_to_value args in
   let macro_env =
-    List.fold_left2 (fun e p v -> Types.extend_env e p v)
+    List.fold_left2 (fun e p v -> Environment.extend e p v)
       (services.initial_env ()) params arg_values
   in
   let result =
     try services.force_deep (services.eval body macro_env)
     with
     | Failure msg -> macro_error name msg
-    | Types.Capability_error msg -> macro_error name msg
+    | Source_error.Capability_error msg -> macro_error name msg
   in
   let expanded =
-    try Types.value_to_expr result
+    try Quotation.value_to_expr result
     with Failure msg -> macro_error name msg
   in
   relocate loc expanded

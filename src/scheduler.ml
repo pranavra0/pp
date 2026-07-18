@@ -26,7 +26,7 @@ type policy = Serial | Parallel of int | Race of int | Remote of string
 
 type job = {
   j_key : string;
-  j_run : unit -> Types.value;
+  j_run : unit -> Core_model.value;
   (* Redundancy for this job: 1 for an ordinary batch member, N for a
      singleton force_node miss raced under [Race n] (N identical (key,run)
      forks — sound because LAW 37 nodes are deterministic; the first
@@ -40,7 +40,7 @@ type job = {
      already use, because Evaluator depends on Scheduler and Transport
      depends on Evaluator, so a remote dispatcher living above both cannot
      be called directly from here). *)
-  j_thunk : Types.thunk;
+  j_thunk : Core_model.thunk;
 }
 (* Ambient scheduler state.  Mutable fields keep the cycle-breaking seam
    explicit without scattering reference cells through the runtime. *)

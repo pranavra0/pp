@@ -12,11 +12,12 @@
    - printing: results are deep-forced for display (a thunk shows its value);
    - `:help`, `:why on|off` (the node-cache explainer), `:quit`. *)
 
-open Types
+open Core_model
+open Source_error
 open Evaluator
 
 (* Global environment for REPL *)
-let global_env : env ref = ref empty_env
+let global_env : env ref = ref Environment.empty
 
 (* ---- Initialization ---- *)
 
@@ -314,14 +315,14 @@ let repl_loop () =
                  (Reader_braces.read_string ~source:"<repl>" input) in
              List.iter (fun e ->
                let v = eval_one e in
-               Printf.printf "%s\n%!" (string_of_value (Primitives.force_deep v))
+               Printf.printf "%s\n%!" (Presentation.string_of_value (Primitives.force_deep v))
              ) exprs
            with
-           | Types.Pp_exit n -> exit n
-           | Types.Pp_error _ as e -> Printf.printf "Error: %s\n%!" (Printexc.to_string e)
+           | Source_error.Pp_exit n -> exit n
+           | Source_error.Pp_error _ as e -> Printf.printf "Error: %s\n%!" (Printexc.to_string e)
            | Failure msg -> Printf.printf "Error: %s\n%!" msg
            | Sys_error msg -> Printf.printf "Error: %s\n%!" msg
-           | Types.Capability_error msg -> Printf.printf "Error: %s\n%!" msg
+           | Source_error.Capability_error msg -> Printf.printf "Error: %s\n%!" msg
            | e -> Printf.printf "Error: %s\n%!" (Printexc.to_string e));
           loop ()
         end

@@ -16,7 +16,7 @@
    "trust it" entry point for a pull or a serve-hit reply to call instead.
    Every receive path (LocalDir.pull_*, [recv_hit]) funnels through them. *)
 
-open Types
+open Core_model
 open Codec
 
 exception Transport_integrity_error of string
@@ -51,7 +51,7 @@ end
    convention, so a mismatch cannot be silently accepted (T1). *)
 
 (* [text] is the canonical object encoding claimed to hash to
-   [claimed_hash] — a VALUE's content hash (Types.hash_value), NOT a hash
+   [claimed_hash] — a VALUE's content hash (Identity.hash_value), NOT a hash
    of [text] itself (store.ml's header: objects are addressed by the hash
    of the value, not of its encoding). *)
 let ingest_object ~(claimed_hash : string) (text : string) : unit =
@@ -63,7 +63,7 @@ let ingest_object ~(claimed_hash : string) (text : string) : unit =
             (corrupt or tampered in transit) — refusing to accept"
            claimed_hash))
   | Some v ->
-      let actual = hash_value v in
+      let actual = Identity.hash_value v in
       if actual <> claimed_hash then
         raise (Transport_integrity_error
           (Printf.sprintf
@@ -73,7 +73,7 @@ let ingest_object ~(claimed_hash : string) (text : string) : unit =
       else Store.store_object ~key:claimed_hash ~value:v
 
 let ingest_blob ~(claimed_hash : string) (content : string) : unit =
-  let actual = hash_string content in
+  let actual = Hasher.hash_string content in
   if actual <> claimed_hash then
     raise (Transport_integrity_error
       (Printf.sprintf
@@ -82,7 +82,7 @@ let ingest_blob ~(claimed_hash : string) (content : string) : unit =
   else ignore (Store.store_blob content)
 
 (* Traces have no self-describing content hash: their filename is a NODE
-   KEY (H(code, free-var value hashes) — see store.ml/types.ml), not
+   KEY (H(code, free-var value hashes) — see store.ml/identity.ml), not
    derivable from the trace text itself, so there is no "does this hash to
    its name" check to run here. The receive-time analog of "re-hash
    against the claimed name" for a trace SET is structural validity: every
@@ -159,7 +159,7 @@ module LocalDir = struct
                 does not re-encode as data (sealed/non-data invariant \
                 violation — should be unreachable)" hash)
          | Some content ->
-             if hash_value v <> hash then
+             if Identity.hash_value v <> hash then
                failwith (Printf.sprintf
                  "transport: push-object %s: local object does not hash \
                   to its own claimed name (local store corruption) — \
@@ -175,7 +175,7 @@ module LocalDir = struct
         failwith (Printf.sprintf
           "transport: push-blob %s: no such blob in the local store" hash)
     | Some content ->
-        if hash_string content <> hash then
+        if Hasher.hash_string content <> hash then
           failwith (Printf.sprintf
             "transport: push-blob %s: local blob does not hash to its own \
              claimed name (local store corruption) — refusing to push" hash)
@@ -318,7 +318,7 @@ let decide host ~(key : string) ~(token_text : string) : decision =
                    not re-encode as data (sealed/non-data invariant \
                    violation — should be unreachable)" key)
             | Some _ ->
-                let result_hash = hash_value v in
+                let result_hash = Identity.hash_value v in
                 let traces = Store.load_traces ~key in
                 (* Only the trace(s) whose ENTIRE closure this token's caps
                    cover — never leak a cell name/path the token doesn't

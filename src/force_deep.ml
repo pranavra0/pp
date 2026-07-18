@@ -6,7 +6,7 @@
    dispatch lives in Primitives.force_deep; this is the plain walk it (and
    others) delegate to. *)
 
-open Types
+open Core_model
 
 let rec force_deep_plain ~force (v : value) : value =
   match force v with
@@ -18,7 +18,7 @@ let rec force_deep_plain ~force (v : value) : value =
 
 let find_kv ~force (kvs : (value * value) list) (key : string) : value option =
   List.find_map (fun (k, v) ->
-    match string_like k with
+    match Presentation.string_like k with
     | Some k' when k' = key -> Some (force v)
     | _ -> None)
     kvs

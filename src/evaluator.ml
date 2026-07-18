@@ -2,7 +2,8 @@
    used only for `let`/`node`/`delay` bindings and node memoization, never
    for ordinary argument passing *)
 
-open Types
+open Core_model
+open Source_error
 open Hasher
 open Dynamic_scope
 
@@ -15,10 +16,10 @@ let make_thunk_ca (expr : expr) (env : env) : value =
   let caps = Effect.perform Dynamic_scope.Get_capabilities in
   let cfg = Effect.perform Dynamic_scope.Get_config in
   let handlers = Effect.perform Dynamic_scope.Get_handlers in
-  let caps_hash = hash_concat ("caps" :: List.map Capability.hash caps) in
-  let cfg_hash = hash_concat ("cfg" :: List.map hash_value cfg) in
-  let hh = hash_concat ("handlers" :: List.concat_map (fun (n,h)->[n;h]) handlers) in
-  let h = hash_concat ["thunk"; Types.hash_expr expr; env.env_hash; caps_hash; cfg_hash; hh] in
+  let caps_hash = Hasher.hash_concat ("caps" :: List.map Capability.hash caps) in
+  let cfg_hash = Hasher.hash_concat ("cfg" :: List.map Identity.hash_value cfg) in
+  let hh = Hasher.hash_concat ("handlers" :: List.concat_map (fun (n,h)->[n;h]) handlers) in
+  let h = Hasher.hash_concat ["thunk"; Identity.hash_expr expr; env.env_hash; caps_hash; cfg_hash; hh] in
   let session = Effect.perform Dynamic_scope.Get_session in
   match Session.find_thunk session h with
   | Some existing -> VThunk existing
@@ -31,10 +32,10 @@ let make_thunk_ca_typed (expr : expr) (ty : expr) (loc : (string * int) option) 
   let caps = Effect.perform Dynamic_scope.Get_capabilities in
   let cfg = Effect.perform Dynamic_scope.Get_config in
   let handlers = Effect.perform Dynamic_scope.Get_handlers in
-  let caps_hash = hash_concat ("caps" :: List.map Capability.hash caps) in
-  let cfg_hash = hash_concat ("cfg" :: List.map hash_value cfg) in
-  let hh = hash_concat ("handlers" :: List.concat_map (fun (n,h)->[n;h]) handlers) in
-  let h = hash_concat ["thunk-typed"; Types.hash_expr expr; Types.hash_expr ty; env.env_hash; caps_hash; cfg_hash; hh] in
+  let caps_hash = Hasher.hash_concat ("caps" :: List.map Capability.hash caps) in
+  let cfg_hash = Hasher.hash_concat ("cfg" :: List.map Identity.hash_value cfg) in
+  let hh = Hasher.hash_concat ("handlers" :: List.concat_map (fun (n,h)->[n;h]) handlers) in
+  let h = Hasher.hash_concat ["thunk-typed"; Identity.hash_expr expr; Identity.hash_expr ty; env.env_hash; caps_hash; cfg_hash; hh] in
   let session = Effect.perform Dynamic_scope.Get_session in
   match Session.find_thunk session h with
   | Some existing -> VThunk existing
@@ -204,7 +205,7 @@ let poison_expr (name : string) : expr =
           [ELiteral (VString (name ^ ": referenced before its definition"))])
 
 let poison_thunk (name : string) (env : env) : value =
-  make_thunk (poison_expr name) env
+  Environment.make_thunk (poison_expr name) env
 
 (* ---- Force: evaluate a thunk on demand ---- *)
 
@@ -290,13 +291,13 @@ and evaluate_and_store_no_key (t : thunk) : value =
 and node_key_of (t : thunk) : string =
   let e = t.thunk_expr in
   let fv_hashes =
-    Types.SS.elements (Types.free_vars e)
+    Free_vars.SS.elements (Free_vars.free_vars e)
     |> List.map (fun name ->
-      match lookup_env t.thunk_env name with
+      match Environment.lookup t.thunk_env name with
       | Some v -> Node.fv_hash ~name v force
       | None -> Node.unbound_fv_hash ~name)
   in
-  Hasher.node_key_skeleton ~expr_hash:(Types.hash_expr e) fv_hashes
+  Hasher.node_key_skeleton ~expr_hash:(Identity.hash_expr e) fv_hashes
 
 (* Remote placement: a
    node is data-closed iff every free var's FORCED value re-encodes under
@@ -315,7 +316,7 @@ and node_key_of (t : thunk) : string =
    VBuiltin is a documented, necessary carve-out to the literal codec
    check: `Primitives.initial_env` binds EVERY primitive into the base
    env (repl.ml), so an ordinary reference to `slurp`/`string-append`/etc.
-   — present in nearly every real node body — resolves via [lookup_env]
+   — present in nearly every real node body — resolves via [Environment.lookup]
    exactly like a captured user value would, and forcing it yields a
    VBuiltin, which [Codec.encode_value] correctly refuses (it is code, the
    store's non-data law). But a bare reference to a global primitive is
@@ -329,8 +330,8 @@ and node_key_of (t : thunk) : string =
    exactly like Codec.encode_value already treats it (the "free var is a
    closure stays local" contract scenario). *)
 and is_data_closed (t : thunk) : bool =
-  Types.SS.for_all (fun name ->
-    match lookup_env t.thunk_env name with
+  Free_vars.SS.for_all (fun name ->
+    match Environment.lookup t.thunk_env name with
     | None -> true
     | Some v ->
         (try
@@ -338,7 +339,7 @@ and is_data_closed (t : thunk) : bool =
            | VBuiltin _ -> true
            | fv -> Codec.encode_value fv <> None
          with _ -> false))
-    (Types.free_vars t.thunk_expr)
+    (Free_vars.free_vars t.thunk_expr)
 
 (* ---- Main Evaluator (non-tail) ---- *)
 
@@ -357,7 +358,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
   | ELiteral v -> k v
 
   | ESymbol name ->
-      (match lookup_env env name with
+      (match Environment.lookup env name with
        | Some v -> k (force v)
        | None ->
            (match Primitives.lookup name with
@@ -380,7 +381,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
         (name, make_thunk_ca binding_expr env)
       ) bindings in
       let env_mutual = List.fold_left (fun e (name, thunk) ->
-        extend_env e name thunk
+        Environment.extend e name thunk
       ) env thunks in
       List.iter (fun (_, thunk) ->
         match thunk with
@@ -390,7 +391,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       eval_tail body env_mutual k
 
   | EFn (params, body) ->
-      k (make_closure ~name:None params body (ref env))
+      k (Environment.make_closure ~name:None params body (ref env))
 
   | EApply (fn_expr, arg_exprs) ->
       (* Strict application: force fn and all args before calling.
@@ -400,7 +401,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       apply_tail fn_val arg_vals env k
 
   | EQuote e ->
-      k (Types.quote_to_value e)
+      k (Quotation.quote_to_value e)
 
   | EDelay e ->
       k (make_thunk_ca e env)
@@ -419,10 +420,10 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       k thunk_val
 
   | EDef (name, params, body) ->
-      k (make_closure ~name:(Some name) params body (ref env))
+      k (Environment.make_closure ~name:(Some name) params body (ref env))
 
   | EDefNode (name, params, body) ->
-      k (make_closure ~name:(Some name) params body (ref env))
+      k (Environment.make_closure ~name:(Some name) params body (ref env))
 
   | EDo exprs ->
       (* All but last are non-tail; last is tail.
@@ -436,32 +437,32 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
         | EDefValue (name, _) ->
             let p = poison_thunk name !env_ref in
             Hashtbl.replace poisons name p;
-            env_ref := extend_env !env_ref name p
+            env_ref := Environment.extend !env_ref name p
         | _ -> ()) exprs;
       let rec go = function
         | [] -> k VNil
         | [last] -> eval_tail last !env_ref k
         | (EDef (name, params, body)) :: rest ->
-            let closure = make_closure ~name:(Some name) params body env_ref in
-            env_ref := extend_env !env_ref name closure;
+            let closure = Environment.make_closure ~name:(Some name) params body env_ref in
+            env_ref := Environment.extend !env_ref name closure;
             go rest
         | (EDefNode (name, params, body)) :: rest ->
-            let closure = make_closure ~name:(Some name) params body env_ref in
-            env_ref := extend_env !env_ref name closure;
+            let closure = Environment.make_closure ~name:(Some name) params body env_ref in
+            env_ref := Environment.extend !env_ref name closure;
             go rest
         | (EDefValue (name, rhs)) :: rest ->
             let v = eval rhs !env_ref in
             (match Hashtbl.find_opt poisons name with
              | Some (VThunk t) -> t.thunk_status <- Evaluated v
              | _ -> ());
-            env_ref := extend_env !env_ref name v;
+            env_ref := Environment.extend !env_ref name v;
             go rest
         | (EImport mod_expr) :: rest ->
             let mod_val = force (eval mod_expr !env_ref) in
             (match mod_val with
              | VEnvMap bindings ->
                  env_ref := List.fold_left (fun e (n, v) ->
-                   extend_env e n v) !env_ref bindings;
+                   Environment.extend e n v) !env_ref bindings;
                  go rest
              | _ -> failwith "import expects a module value")
         | (ELoad path) :: rest ->
@@ -482,7 +483,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
             (match eval_module_file path with
              | VEnvMap bindings ->
                  env_ref := List.fold_left (fun e (n, v) ->
-                   extend_env e n v) !env_ref bindings;
+                   Environment.extend e n v) !env_ref bindings;
                  go rest
              | _ -> go rest)
         | e :: rest ->
@@ -490,7 +491,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
             (match result with
              | VEnvMap bindings ->
                  env_ref := List.fold_left (fun e (n, v) ->
-                   extend_env e n v) !env_ref bindings;
+                   Environment.extend e n v) !env_ref bindings;
                  go rest
              | _ -> go rest)
       in
@@ -521,7 +522,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
         let handler_val = force (eval handler_expr env) in
         (name,
          (fun args -> apply handler_val args env),
-         hash_value handler_val)   (* handler identity in the key *)
+         Identity.hash_value handler_val)   (* handler identity in the key *)
       ) handlers in
       Dynamic_scope.with_handlers new_handlers (fun () -> eval_tail body env k)
   | EDefValue (_, rhs) ->
@@ -535,7 +536,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
         | [] -> eval_tail body env' k
         | (name, expr) :: rest ->
             let thunk = make_thunk_ca expr env' in
-            let env'' = extend_env env' name thunk in
+            let env'' = Environment.extend env' name thunk in
             nest env'' rest
       in
       nest env bindings
@@ -550,28 +551,28 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
         | EDefValue (name, _) ->
             let p = poison_thunk name acc in
             Hashtbl.replace poisons name p;
-            extend_env acc name p
+            Environment.extend acc name p
         | _ -> acc) !mod_env body_exprs in
       mod_env := prebound_env;
       let final_env = List.fold_left (fun (env_acc : env) e ->
         match e with
         | EDef (def_name, params, body) ->
-            let closure = make_closure ~name:(Some def_name) params body (ref env_acc) in
-            extend_env env_acc def_name closure
+            let closure = Environment.make_closure ~name:(Some def_name) params body (ref env_acc) in
+            Environment.extend env_acc def_name closure
         | EDefNode (def_name, params, body) ->
-            let closure = make_closure ~name:(Some def_name) params body (ref env_acc) in
-            extend_env env_acc def_name closure
+            let closure = Environment.make_closure ~name:(Some def_name) params body (ref env_acc) in
+            Environment.extend env_acc def_name closure
         | EDefValue (def_name, rhs) ->
             let v = eval rhs env_acc in
             (match Hashtbl.find_opt poisons def_name with
              | Some (VThunk t) -> t.thunk_status <- Evaluated v
              | _ -> ());
-            extend_env env_acc def_name v
+            Environment.extend env_acc def_name v
         | EImport mod_expr ->
             let mod_val = force (eval mod_expr env_acc) in
             (match mod_val with
              | VEnvMap bindings ->
-                 List.fold_left (fun e (n, v) -> extend_env e n v) env_acc bindings
+                 List.fold_left (fun e (n, v) -> Environment.extend e n v) env_acc bindings
              | _ -> failwith "import within module expects a module value")
         | _ ->
             ignore (force (eval e env_acc));
@@ -638,9 +639,9 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       let rec try_arms = function
         | [] -> failwith "match failure"
         | (pat, guard, body) :: rest ->
-            (match Types.match_pattern v pat with
+            (match Pattern_match.match_pattern v pat with
              | Some binds ->
-                 let env' = List.fold_left (fun e (n, v) -> Types.extend_env e n v) env binds in
+                 let env' = List.fold_left (fun e (n, v) -> Environment.extend e n v) env binds in
                  (* A guard is evaluated under the arm's bindings; a falsy guard
                     falls through to the next arm. Only nil/false are falsy. *)
                  let fires = match guard with
@@ -672,7 +673,7 @@ and apply_tail (fn : value) (args : value list) (env : env) (k : value -> value)
                     fname (List.length params) (List.length args))
       end;
       let env' = List.fold_left2 (fun e param arg ->
-        extend_env e param arg  (* arg is already a thunk *)
+        Environment.extend e param arg  (* arg is already a thunk *)
       ) !closure_env params args in
       eval_tail body env' k
 
@@ -683,7 +684,7 @@ and apply_tail (fn : value) (args : value list) (env : env) (k : value -> value)
       k (f args)
 
   | _ ->
-      failwith (Printf.sprintf "not a function: %s" (string_of_value fn))
+      failwith (Printf.sprintf "not a function: %s" (Presentation.string_of_value fn))
 
 
 (* Trampoline force: uses a local work queue to process thunk chains
@@ -901,25 +902,25 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
     Error_context.with_form_location e (fun () ->
       match unwrap e with
       | EDef (name, params, body) ->
-          let closure = make_closure ~name:(Some name) params body env in
-          env := extend_env !env name closure;
+          let closure = Environment.make_closure ~name:(Some name) params body env in
+          env := Environment.extend !env name closure;
           closure
       | EDefNode (name, params, body) ->
-          let closure = make_closure ~name:(Some name) params body env in
-          env := extend_env !env name closure;
+          let closure = Environment.make_closure ~name:(Some name) params body env in
+          env := Environment.extend !env name closure;
           closure
       | EDefValue (name, rhs) ->
           (* Top level is sequential: the RHS is evaluated now (a forward
              reference is an unbound-symbol error), the value bound. *)
           let v = eval rhs !env in
-          env := extend_env !env name v;
+          env := Environment.extend !env name v;
           v
       | EImport _ ->
           let mod_val = force (eval e !env) in
           (match mod_val with
            | VEnvMap bindings ->
                env := List.fold_left (fun env' (n, v) ->
-                 extend_env env' n v) !env bindings;
+                 Environment.extend env' n v) !env bindings;
                mod_val
            | _ -> failwith "import expects a module value")
       | ELoad path ->
@@ -936,7 +937,7 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
           (match result with
            | VEnvMap bindings ->
                env := List.fold_left (fun env' (n, v) ->
-                 extend_env env' n v) !env bindings;
+                 Environment.extend env' n v) !env bindings;
                result
            | _ -> result))
   in

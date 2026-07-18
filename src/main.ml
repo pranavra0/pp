@@ -109,18 +109,18 @@ let stdlib_glue_sources invocation : (string * string) list =
    alone -> {"proc" v}; both -> {"fs" v, "proc" v} (both fed the SAME v). A
    bare register-domain program (neither flag) returns its own {name ->
    desired} directly — [v] unwrapped. *)
-let build_all_desired invocation (v : Types.value) : Types.value =
+let build_all_desired invocation (v : Core_model.value) : Core_model.value =
   let pairs =
-    (if Invocation.program_reconcile_root invocation <> None then [(Types.VString "fs", v)] else [])
-    @ (if Invocation.program_supervise invocation then [(Types.VString "proc", v)] else [])
+    (if Invocation.program_reconcile_root invocation <> None then [(Core_model.VString "fs", v)] else [])
+    @ (if Invocation.program_supervise invocation then [(Core_model.VString "proc", v)] else [])
   in
-  if pairs <> [] then Types.VMap pairs else v
+  if pairs <> [] then Core_model.VMap pairs else v
 
 (* Run every given file plus (when needed) the domain-registration glue, under
    ONE init — this is what lets `register-fs-domain`/`register-proc-domain`'s
    registration survive to reach the user's file. Falls back to the untouched
    per-file loop when no domain wiring is needed at all. *)
-let run_files ?(retain_thunks = false) invocation (files : string list) : Types.value option =
+let run_files ?(retain_thunks = false) invocation (files : string list) : Core_model.value option =
   if uses_domains invocation then
     let sources = stdlib_glue_sources invocation
                   @ List.map (fun f -> (f, read_file_content f)) files in
@@ -141,7 +141,7 @@ let should_run_domains invocation =
    executes for that side effect; its RETURN VALUE is discarded here in favor
    of the synced object). Without `--desired-object`, wrap the program's own
    return value via build_all_desired. *)
-let compute_all_desired invocation (last : Types.value option) : Types.value =
+let compute_all_desired invocation (last : Core_model.value option) : Core_model.value =
   match Invocation.program_desired_object invocation with
   | Some (hash, _) ->
       (match Store.load_object ~key:hash with
@@ -162,15 +162,15 @@ let compute_all_desired invocation (last : Types.value option) : Types.value =
    [all_desired] MUST be a map keyed by host name (string or keyword) and this
    indexes exactly one entry, handing the UNCHANGED Domains.run_all only that
    host's own {domain -> desired} slice. *)
-let select_member_slice invocation (all_desired : Types.value) : Types.value =
+let select_member_slice invocation (all_desired : Core_model.value) : Core_model.value =
   match Invocation.program_member_name invocation with
   | None -> all_desired
   | Some name ->
       (match Primitives.force_deep all_desired with
-       | Types.VMap kvs ->
+       | Core_model.VMap kvs ->
            (match List.find_opt (fun (k, _) ->
               match k with
-              | Types.VString s | Types.VKeyword s -> s = name
+              | Core_model.VString s | Core_model.VKeyword s -> s = name
               | _ -> false)
               kvs
             with
@@ -184,9 +184,9 @@ let select_member_slice invocation (all_desired : Types.value) : Types.value =
            failwith (Printf.sprintf
              "pp: --member-name %s: desired-state must be a map of \
               host -> {domain -> desired} to index, got %s"
-             name (Types.string_of_value other)))
+             name (Presentation.string_of_value other)))
 
-let run_domains_pass invocation (last : Types.value option) : unit =
+let run_domains_pass invocation (last : Core_model.value option) : unit =
   if should_run_domains invocation then begin
     Domains.run_all invocation (select_member_slice invocation (compute_all_desired invocation last));
     Fenced.drain ()
@@ -705,7 +705,7 @@ let main () =
            Printf.eprintf "--- emitted brace text ---\n%s" braces;
            failwith (Printf.sprintf "roundtrip: form %d is structurally unequal" i)
          end;
-         let ha = Types.hash_expr a and hb = Types.hash_expr b in
+         let ha = Identity.hash_expr a and hb = Identity.hash_expr b in
          if ha <> hb then begin
            Printf.eprintf "--- emitted brace text ---\n%s" braces;
            failwith (Printf.sprintf
@@ -776,7 +776,7 @@ let main () =
                      "--compare-hash: form count diverged: %d (%s) vs %d (%s)"
                      (List.length forms1) f1 (List.length forms2) f2);
        List.iteri (fun i (a, b) ->
-         let ha = Types.hash_expr a and hb = Types.hash_expr b in
+         let ha = Identity.hash_expr a and hb = Identity.hash_expr b in
          if ha <> hb then
            failwith (Printf.sprintf
                        "--compare-hash: form %d hash diverged: %s vs %s" i ha hb))
@@ -970,7 +970,7 @@ let main () =
         | None -> failwith "pp: --publish-object: the program produced no value"
         | Some v ->
             let forced = Primitives.force_deep v in
-            let hash = Types.hash_value forced in
+            let hash = Identity.hash_value forced in
             (match Codec.encode_value forced with
              | None ->
                  failwith "pp: --publish-object: the program's value contains \
@@ -999,7 +999,7 @@ let main () =
        (try
           let all = select_member_slice invocation (compute_all_desired invocation last) in
           let forced = Primitives.force_deep all in
-          Store.mark_live ("object:" ^ Types.hash_value forced);
+          Store.mark_live ("object:" ^ Identity.hash_value forced);
           List.iter (fun h -> Store.mark_live ("blob:" ^ h)) (Blobref.blob_refs_in forced)
         with _ ->
           (* A root whose desired-state can no longer be derived at all
@@ -1029,7 +1029,7 @@ let main () =
       | Some e, [] ->
           let results = Repl.execute_string e in
           List.iter (fun v ->
-            Printf.printf "%s\n" (Types.string_of_value v)
+            Printf.printf "%s\n" (Presentation.string_of_value v)
           ) results
       | None, [] -> Repl.repl ()
       | _, files ->
@@ -1057,7 +1057,7 @@ let main () =
               (match last with
                | None -> ()
                | Some v ->
-                   let h_scheduled = Types.hash_value v in
+                   let h_scheduled = Identity.hash_value v in
                    let saved_policy = Scheduler.state.policy in
                    let policy_name = function
                      | Scheduler.Serial -> "serial"
@@ -1072,7 +1072,7 @@ let main () =
                    (match last_serial with
                     | None -> ()
                     | Some v2 ->
-                        if Types.hash_value v2 <> h_scheduled then begin
+                        if Identity.hash_value v2 <> h_scheduled then begin
                           incr Store.volatile_count;
                           Printf.eprintf
                             "[check] schedule non-transparent: %s and serial re-runs produced different desired-state hashes\n%!"
@@ -1111,14 +1111,14 @@ let main () =
    header. Exit 1. *)
 let () =
   try main () with
-  | Types.Pp_exit n -> exit n
+  | Source_error.Pp_exit n -> exit n
   (* Pp_error's registered printer renders "<msg> at file:line". The rest are
      unlocated leaf errors that never crossed a form boundary (CLI validation,
      transport, an unlocated reader failwith). *)
-  | Types.Pp_error _ as e ->
+  | Source_error.Pp_error _ as e ->
       Printf.eprintf "pp: error: %s\n%!" (Printexc.to_string e);
       exit 1
-  | Failure msg | Types.Capability_error msg | Sys_error msg
+  | Failure msg | Source_error.Capability_error msg | Sys_error msg
   | Transport.Transport_integrity_error msg ->
       Printf.eprintf "pp: error: %s\n%!" msg;
       exit 1

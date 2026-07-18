@@ -39,7 +39,7 @@
    unrecognized input returns [None] (defense in depth — callers already
    treat [None] as a cache miss). *)
 
-open Types
+open Core_model
 
 (* ---- String quoting (bytes, not code points: safe for arbitrary UTF-8 —
    bytes >= 0x80 pass through raw and reassemble the same UTF-8 sequence) ---- *)
@@ -62,7 +62,7 @@ let quote_string (s : string) : string =
    content and the index just past the closing quote, or [None] if [start]
    is not a quote or the string is unterminated/malformed. Exposed so
    store.ml's trace codec (a distinct, bespoke line format — cell-ids and
-   hashes, not a Types.value) can reuse the same escaping rules. *)
+   hashes, not a Core_model.value) can reuse the same escaping rules. *)
 let parse_quoted_string (s : string) (start : int) : (string * int) option =
   let len = String.length s in
   if start >= len || s.[start] <> '"' then None
@@ -91,11 +91,11 @@ let parse_quoted_string (s : string) (start : int) : (string * int) option =
 
 (* ---- Floats: bit-exact round trip via OCaml's %h/float_of_string pair,
    with nan/inf/-inf special-cased to fixed tokens (merges NaN payloads).
-   The spelling is Types.canonical_float_string — the SAME function
-   hash_value uses — so content identity and on-disk bytes can never
+   The spelling is Identity.canonical_float_string — the SAME function
+   Identity.hash_value uses — so content identity and on-disk bytes can never
    disagree about float equality. ---- *)
 
-let encode_float (f : float) : string = canonical_float_string f
+let encode_float (f : float) : string = Identity.canonical_float_string f
 
 let decode_float (s : string) : float option =
   match s with

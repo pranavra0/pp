@@ -29,5 +29,5 @@ val bind : 'a option -> ('a -> 'b option) -> 'b option
 val ( >>= ) : 'a option -> ('a -> 'b option) -> 'b option
 
 (* The public entry points. *)
-val encode_value : Types.value -> string option
-val decode_value : string -> Types.value option
+val encode_value : Core_model.value -> string option
+val decode_value : string -> Core_model.value option

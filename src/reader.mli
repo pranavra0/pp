@@ -4,5 +4,5 @@
 type state
 
 val create : ?source:string -> unit -> state
-val read : state -> string -> Types.expr list
-val read_string : ?source:string -> string -> Types.expr list
+val read : state -> string -> Core_model.expr list
+val read_string : ?source:string -> string -> Core_model.expr list

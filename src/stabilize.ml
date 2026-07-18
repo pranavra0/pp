@@ -2,7 +2,7 @@
    The reverse-edge index (cell → node keys) lives in store.ml
    (build_reverse_index / dirty_keys_for). *)
 
-open Types
+open Core_model
 
 (* Side-table: node_key → in-memory thunk. Populated by the force path
    (evaluator.ml force) on every node-key

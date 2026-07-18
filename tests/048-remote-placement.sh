@@ -161,7 +161,7 @@ EOF
 
   # Desired-state hash is byte-identical, serial vs remote (case T6
   # below). --check re-runs the SAME program forced Serial against the
-  # SAME (now-warm) store and compares Types.hash_value of the
+  # SAME (now-warm) store and compares Identity.hash_value of the
   # desired-state value (main.ml's existing schedule-transparency audit,
   # extended to Remote by policy_name); a mismatch would print "schedule
   # non-transparent" and fail the audit.

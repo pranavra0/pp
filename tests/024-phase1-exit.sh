@@ -272,7 +272,7 @@ else bad "p3-parallel-null-zero-execs: $((ep_null - ep)) new execs"; fi
 # Same desired-state hash: the store is now fully warm (the null rebuild
 # above just replayed hits), so --check's schedule-transparency audit
 # (main.ml) re-runs the program forced Serial against this SAME store and
-# compares Types.hash_value of the desired-state value — all hits, so this
+# compares Identity.hash_value of the desired-state value — all hits, so this
 # adds no execs and exercises the "schedule is result-transparent" promise
 # (SPEC laws 34 and 35), not the unrelated per-node volatility double-run
 # (SPEC law 38, which only triggers on a Miss).

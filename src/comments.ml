@@ -1,7 +1,7 @@
 (* pp comments — the side channel `pp fmt` uses to carry comments
    losslessly across transpilation, without touching either reader or
    either printer's AST-facing behavior at all (comments are not part of
-   `Types.expr`; LAW-20 hashes ignore them by construction — that's exactly
+   `Core_model.expr`; LAW-20 hashes ignore them by construction — that's exactly
    why they need a channel of their own).
 
    Each surface has its own single-character comment marker to end-of-line

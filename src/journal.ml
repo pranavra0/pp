@@ -40,7 +40,7 @@ type entry =
   | Epoch of { hash : string }
       (* Recorded once
          per SUCCESSFUL Domains.run_all pass — [hash] is the desired-state
-         root object's content hash (Hasher.hash_value of the fully-forced
+         root object's content hash (Identity.hash_value of the fully-forced
          `all_desired` value that pass converged). This is the audit-log
          half of GC's root bookkeeping (frozen line shape, greppable, never
          rotated); the REPLAYABLE half (which files/grants/flags reproduce

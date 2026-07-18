@@ -7,7 +7,7 @@ CHECK="$ROOT/scripts/check-state-inventory.sh"
 
 baseline=$($CHECK --root "$ROOT" --src-dir "$ROOT/src" \
   --allowlist "$ROOT/scripts/state-inventory.allow")
-grep -q '^mutable-field|src/types.ml|thunk_status$' <<<"$baseline"
+grep -q '^mutable-field|src/core_model.ml|thunk_status$' <<<"$baseline"
 grep -q '^lazy-env|src/store.ml|crash_spec$' <<<"$baseline"
 
 tmp=$(mktemp -d)
