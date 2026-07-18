@@ -237,22 +237,22 @@ let run_domain ~(name : string) ~(entry : Runtime.domain_entry) ~(desired : valu
    journal Epoch line (audit trail) and the Gcroots manifest entry (the
    replayable "how" — see gcroots.ml). Best-effort: a failure to persist
    the epoch must never fail an otherwise-successful reconcile pass. *)
-let record_epoch (forced : value) : unit =
+let record_epoch invocation (forced : value) : unit =
   try
     let hash = Types.hash_value forced in
     (try Store.store_object ~key:hash ~value:forced with _ -> ());
     Journal.append (Journal.Epoch { hash });
-    Gcroots.record ~keep:(Runtime.invocation_get ()).gc_keep_epochs
+    Gcroots.record ~keep:(Invocation.gc_keep_epochs invocation)
       { Gcroots.gr_hash = hash;
-        gr_grants = (Runtime.invocation_get ()).initial_grant_specs;
-        gr_files = (Runtime.invocation_get ()).program_files;
-        gr_reconcile_root = (Runtime.invocation_get ()).program_reconcile_root;
-        gr_supervise = (Runtime.invocation_get ()).program_supervise;
-        gr_member_name = (Runtime.invocation_get ()).program_member_name;
-        gr_desired_object = (Runtime.invocation_get ()).program_desired_object }
+        gr_grants = Invocation.initial_grant_specs invocation;
+        gr_files = Invocation.program_files invocation;
+        gr_reconcile_root = Invocation.program_reconcile_root invocation;
+        gr_supervise = Invocation.program_supervise invocation;
+        gr_member_name = Invocation.program_member_name invocation;
+        gr_desired_object = Invocation.program_desired_object invocation }
   with _ -> ()
 
-let run_all (all_desired : value) : unit =
+let run_all invocation (all_desired : value) : unit =
   let forced = Primitives.force_deep all_desired in
   let entries = match forced with
     | VMap kvs -> kvs
@@ -278,7 +278,7 @@ let run_all (all_desired : value) : unit =
   let write_domains = List.map (fun (n, e, _) -> (n, e)) resolved in
   stratification_check write_domains;
   List.iter (fun (name, entry, desired) -> run_domain ~name ~entry ~desired) resolved;
-  record_epoch forced
+  record_epoch invocation forced
 
 (* Whether at least one registered domain can actually be converged — used
    by main.ml to decide whether a bare register-domain-only program (no

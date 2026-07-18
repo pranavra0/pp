@@ -7,7 +7,6 @@ CHECK="$ROOT/scripts/check-state-inventory.sh"
 
 baseline=$($CHECK --root "$ROOT" --src-dir "$ROOT/src" \
   --allowlist "$ROOT/scripts/state-inventory.allow")
-grep -q '^top-ref|src/runtime.ml|invocation$' <<<"$baseline"
 grep -q '^mutable-field|src/types.ml|thunk_status$' <<<"$baseline"
 grep -q '^lazy-env|src/store.ml|crash_spec$' <<<"$baseline"
 

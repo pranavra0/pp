@@ -199,6 +199,7 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/desugar.ml` | Reader-level desugars shared by both readers (SPEC Appendix B). |
 | `src/comments.ml` | The side channel `pp fmt` uses to carry comments across a surface transpile. |
 | `src/cap_token.ml` | Signed capability grants — cluster tokens — for cross-machine authority. |
+| `src/invocation.ml` | The abstract, immutable, validated command invocation: source roots, initial authority, program arguments/files, reconciliation and GC inputs. |
 | `src/host_services.ml` | The immutable interface for canonicalization, time, home discovery, and secret-file I/O; production operations are composed in `main.ml`, while tests use complete deterministic values. |
 | `src/effects.ml` | The OCaml 5 effect declarations that hold handler, config, and trace state in dynamic extent. |
 | `src/backend.ml` | The evaluator-only record of init-time hook functions that breaks the kernel↔library dependency cycle. It contains no host operations. |
@@ -212,7 +213,7 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/reader_braces.ml` | The brace-surface parser (`.pp`/`.ppb`, SPEC Appendix B) to the same `expr` AST. |
 | `src/printer_braces.ml` | Renders an `expr` back to brace-surface text: the `pp fmt --to-braces` half. |
 | `src/printer_sexpr.ml` | Renders an `expr` back to s-expression text: the `--to-sexpr` half. |
-| `src/runtime.ml` | The mutable runtime state used by the engine. |
+| `src/runtime.ml` | The mutable runtime state used by the engine. The immutable invocation is supplied explicitly at the top-level dynamic-scope boundary. |
 | `src/evaluator.ml` | The tree-walking evaluator, the project's sole engine, holding `force`, `eval`, effects, the `thunk_store`, and the node rebuilder (`force_node`, `run_node_body`). |
 | `src/macro.ml` | `defmacro` expansion: a function from syntax-as-values to syntax, run at the expansion boundary. |
 | `src/primitives.ml` | Built-in functions and the initial environment. |

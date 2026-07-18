@@ -955,14 +955,14 @@ and eval_expressions (exprs : expr list) (env : env ref) : value =
 
 (* Evaluate an expression in the initial environment *)
 let eval_program (e : expr) : value =
-  Runtime.with_top_level ~f:(fun () ->
+  Runtime.with_top_level (Effect.perform Runtime.Get_invocation) ~f:(fun () ->
     let env = Primitives.initial_env () in
     eval e env
   ) ()
 
 (* Evaluate and force (for top-level expressions) *)
 let eval_and_force (e : expr) : value =
-  Runtime.with_top_level ~f:(fun () ->
+  Runtime.with_top_level (Effect.perform Runtime.Get_invocation) ~f:(fun () ->
     force (eval_program e)
   ) ()
 

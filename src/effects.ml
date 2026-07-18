@@ -9,6 +9,7 @@
 
 
 type _ Effect.t +=
+  | Get_invocation : Invocation.t Effect.t
   | Get_capabilities : Capability.t list Effect.t
   | Get_config : Types.value list Effect.t
   | Get_handlers : (string * string) list Effect.t

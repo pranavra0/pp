@@ -226,31 +226,6 @@ executable characterization.
 
 **Non-goal:** change those decisions.
 
-### 5. Introduce an explicit invocation value
-
-**Purpose:** eliminate the global optional invocation and make CLI validation a
-single boundary.
-
-**Work:**
-
-- Move `Runtime.invocation` and `invocation_get` into an immutable abstract
-  `Invocation.t`.
-- Separate raw CLI option accumulation from validated invocation construction.
-- Pass `Invocation.t` to command handlers, store observation of argv, GC-root
-  recording, domains, and reconciliation.
-- Replace failure-on-unset with construction-time validation.
-- Keep program arguments distinct from pp command arguments in the type.
-
-**Likely files:** new invocation module, `src/main.ml`, `src/runtime.*`,
-`src/store.ml`, `src/domains.ml`, `src/gcroots.ml`.
-
-**Verify:** CLI tests, argv observation tests, reconciliation and GC tests,
-suite; full fuzzer if `store.ml` changes.
-
-**Exit:** no global invocation ref or getter remains.
-
-**Non-goal:** rewrite option syntax or introduce a CLI framework.
-
 ### 6. Create the evaluation session and lifecycle API
 
 **Purpose:** give per-run and per-pass mutable state one explicit owner.
@@ -824,4 +799,4 @@ not only expected stdout.
 
 ## Immediate next action
 
-Execute roadmap item 5 only: introduce an explicit invocation value.
+Execute roadmap item 6 only: create the evaluation session and lifecycle API.

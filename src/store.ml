@@ -331,8 +331,7 @@ let env_observed_hash (v : string option) : string =
 
 (* The single argv cell: the program-argument list after `--`. *)
 let argv_cell_id : string = Cell.to_string Cell.Argv
-let argv_observed_hash () : string =
-  hash_concat ("argv" :: (Runtime.invocation_get ()).program_argv)
+let argv_observed_hash argv : string = hash_concat ("argv" :: argv)
 
 let hash_file_opt (path : string) : string option =
   try
@@ -419,7 +418,9 @@ let observe_cell (cell_id : string) : string option =
   | Cell.Tree root -> (try Some (tree_hash root) with _ -> None)
   | Cell.Stat path -> Some (stat_kind_hash (stat_kind path))
   | Cell.Env name -> Some (env_observed_hash (Sys.getenv_opt name))
-  | Cell.Argv -> Some (argv_observed_hash ())
+  | Cell.Argv ->
+      Some (argv_observed_hash
+              (Invocation.program_argv (Effect.perform Runtime.Get_invocation)))
   (* Config and handler cells re-observe the CALLER's ambient stacks
      (LAW 33/26) through the same helpers that recorded them. *)
   | Cell.Config key -> (try Some (Runtime.observe_config key) with _ -> None)

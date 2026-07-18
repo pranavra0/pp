@@ -3,25 +3,6 @@ include Effects
 open Types
 open Effect
 
-type fenced_policy = Retry | Abort | Ask
-
-type invocation = {
-  source_roots : Paths.canonical list;
-  initial_capabilities : Capability.t list;
-  program_argv : string list;
-  program_files : string list;
-  initial_grant_specs : string list;
-  program_reconcile_root : string option;
-  program_supervise : bool;
-  program_member_name : string option;
-  program_desired_object : (string * string) option;
-  gc_keep_epochs : int;
-  fenced_policy : fenced_policy;
-}
-
-let invocation : invocation option ref = ref None
-let invocation_get () : invocation =
-  match !invocation with Some i -> i | None -> failwith "invocation not set"
 type state = {
   mutable observe_all : bool;
   mutable observed_all : (string * string) list;
@@ -294,7 +275,8 @@ let canonical_path (p : string) : Paths.canonical =
 let loader_authorized (path : string) : bool =
   let p = canonical_path path in
   let home = try Sys.getenv "HOME" with Not_found -> "/tmp" in
-  let roots = canonical_path (Filename.concat home ".pp") :: (invocation_get ()).source_roots in
+  let roots = canonical_path (Filename.concat home ".pp")
+              :: Invocation.source_roots (Effect.perform Get_invocation) in
   List.exists (fun r -> Paths.under ~root:r p) roots
 
 let loader_read (path : string) : string =
@@ -361,11 +343,6 @@ let with_form_location (e : expr) (f : unit -> 'a) : 'a =
    (the default) island resolution never touches the network. *)
 
 
-let fenced_policy_name = function
-  | Retry -> "retry"
-  | Abort -> "abort"
-  | Ask -> "ask"
-
 (* ---- The in-language reconciler-domain protocol ----
 
    ONE registry for both hats of "a domain": a probe is a domain with BOTTOM
@@ -426,9 +403,10 @@ let probe_values : (string, value) Hashtbl.t = Hashtbl.create 16
    loop) — same points, different justification per cell kind. *)
 let sealed_pins : (string, string) Hashtbl.t = Hashtbl.create 16
 
-let with_top_level ~f x =
+let with_top_level (invocation : Invocation.t) ~f x =
   try f x with
-  | effect Get_capabilities, k -> Effect.Deep.continue k (invocation_get ()).initial_capabilities
+  | effect Get_invocation, k -> Effect.Deep.continue k invocation
+  | effect Get_capabilities, k -> Effect.Deep.continue k (Invocation.initial_capabilities invocation)
   | effect Get_config, k -> Effect.Deep.continue k []
   | effect Get_handlers, k -> Effect.Deep.continue k []
   | effect (Lookup_handler _), k -> Effect.Deep.continue k None

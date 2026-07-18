@@ -40,7 +40,7 @@ val stat_kind_hash : string -> string
 val env_cell_id : string -> string
 val env_observed_hash : string option -> string
 val argv_cell_id : string
-val argv_observed_hash : unit -> string
+val argv_observed_hash : string list -> string
 val hash_file_opt : string -> string option
 val tree_hash : string -> string
 val blobs_dir : string

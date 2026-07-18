@@ -273,9 +273,9 @@ let walk_files (path : string) (acc : (string * string) list ref) : unit =
          with _ -> ())
     | _ -> ())
 
-let pre_observe_granted_scope () : (string * string * string) list =
+let pre_observe_granted_scope invocation : (string * string * string) list =
   let roots =
-    Capability.list_fs_paths (Capability.compose (Runtime.invocation_get ()).initial_capabilities)
+    Capability.list_fs_paths (Capability.compose (Invocation.initial_capabilities invocation))
     |> List.filter_map (fun ((p : Paths.canonical), m) -> match m with
          | Capability.Read | Capability.ReadWrite -> Some (p :> string)
          | Capability.Write -> None)
@@ -335,13 +335,13 @@ let member_env (member_home : string) : string array =
    plain recursive walk) computes them in-process exactly like a dead local
    race/parallel worker. Worker/member failure degrades to local, never a
    wrong answer or a hang. *)
-let ship_and_pull host ~(member_home : string) (closed : Scheduler.job list) : unit =
+let ship_and_pull host invocation ~(member_home : string) (closed : Scheduler.job list) : unit =
   let scratch = Filename.temp_file "pp-remote" "" in
   Sys.remove scratch;
   Unix.mkdir scratch 0o755;
   Fun.protect ~finally:(fun () -> try Runtime.remove_tree scratch with _ -> ()) (fun () ->
     let member_store_root = Filename.concat member_home store_suffix in
-    let pins = pre_observe_granted_scope () in
+    let pins = pre_observe_granted_scope invocation in
     List.iter (fun (_, hash, content) ->
       ignore (Store.store_blob content);
       Transport.LocalDir.push_blob member_store_root ~hash)
@@ -351,7 +351,7 @@ let ship_and_pull host ~(member_home : string) (closed : Scheduler.job list) : u
       (String.concat "" (List.map (fun (c, h, _) -> pin_line c h) pins));
     let secret = Cap_token.load_secret host and cluster_id = Cap_token.load_cluster_id host in
     let token_text =
-      Cap_token.mint host ~secret ~cluster_id ~specs:(Runtime.invocation_get ()).initial_grant_specs
+      Cap_token.mint host ~secret ~cluster_id ~specs:(Invocation.initial_grant_specs invocation)
         ~ttl_seconds:remote_ttl_seconds
     in
     let token_file = Filename.concat scratch "token" in
@@ -375,7 +375,7 @@ let ship_and_pull host ~(member_home : string) (closed : Scheduler.job list) : u
     let argv =
       ["--remote-node"; token_file; pins_file; shared_root; keys_file; reply_file;
        "--schedule"; "serial"]
-      @ (Runtime.invocation_get ()).program_files
+      @ Invocation.program_files invocation
     in
     let log_file = Filename.concat scratch "log" in
     let code = spawn_member ~exe ~argv ~env:(member_env member_home) ~log_file in
@@ -424,7 +424,7 @@ let ship_and_pull host ~(member_home : string) (closed : Scheduler.job list) : u
    that pool is simply whatever runs next in-process. An unknown member, or
    any exception anywhere in the pipeline, degrades the WHOLE batch to
    local the same way (never a partial-crash, never a hang). *)
-let dispatch_remote host ~(member : string) (jobs : Scheduler.job list) : unit =
+let dispatch_remote host invocation ~(member : string) (jobs : Scheduler.job list) : unit =
   try
     match find_member_root member with
     | None ->
@@ -435,10 +435,10 @@ let dispatch_remote host ~(member : string) (jobs : Scheduler.job list) : unit =
          | Error msg -> Store.why "remote: %s — batch stays local" msg
          | Ok member_home ->
              let closed = List.filter (fun j -> Evaluator.is_data_closed j.Scheduler.j_thunk) jobs in
-             if closed <> [] then ship_and_pull host ~member_home closed)
+             if closed <> [] then ship_and_pull host invocation ~member_home closed)
   with e ->
     Store.why "remote: dispatch to %s failed (%s) — batch stays local"
       member (Printexc.to_string e)
 
-let init host : unit =
-  Scheduler.state.remote_dispatch <- dispatch_remote host
+let init host invocation : unit =
+  Scheduler.state.remote_dispatch <- dispatch_remote host invocation

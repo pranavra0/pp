@@ -35,7 +35,7 @@ let with_toplevel_location = Runtime.with_form_location
 
 (* Tree-walker: process a single expression *)
 let process_expr (e : expr) : value =
-  Runtime.with_top_level ~f:(fun () ->
+  Runtime.with_top_level (Effect.perform Runtime.Get_invocation) ~f:(fun () ->
     with_toplevel_location e (fun () ->
       match eval_expressions [e] global_env with
       | VEnvMap _ as v -> v

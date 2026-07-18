@@ -821,8 +821,8 @@ let register_stdlib () =
   register "argv" (fun args ->
     match args with
     | [] ->
-        let av = (Runtime.invocation_get ()).program_argv in
-        Runtime.record_read Store.argv_cell_id (Store.argv_observed_hash ());
+        let av = Invocation.program_argv (Effect.perform Runtime.Get_invocation) in
+        Runtime.record_read Store.argv_cell_id (Store.argv_observed_hash av);
         List.fold_right (fun s acc -> VPair (VString s, acc)) av VNil
     | _ -> failwith "argv takes no arguments");
 

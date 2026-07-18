@@ -50,9 +50,9 @@ let pp_quote (s : string) : string =
   Buffer.add_char buf '"';
   Buffer.contents buf
 
-let uses_domains () =
-  let i = Runtime.invocation_get () in
-  i.program_reconcile_root <> None || i.program_supervise
+let uses_domains invocation =
+  Invocation.program_reconcile_root invocation <> None
+  || Invocation.program_supervise invocation
 
 (* Domain driver wiring. `--reconcile ROOT` auto-loads stdlib/domain-fs.pp and
    registers it with a write-cap cap-restrict'd to ROOT, wrapping the
@@ -66,8 +66,8 @@ let uses_domains () =
    perform survive into the user program's evaluation — two SEPARATE
    calls would each re-init and wipe Runtime.domain_registry
    (Evaluator.init resets it every fresh run). *)
-let stdlib_glue_sources () : (string * string) list =
-  if not (uses_domains ()) then []
+let stdlib_glue_sources invocation : (string * string) list =
+  if not (uses_domains invocation) then []
   else match Runtime.stdlib_root () with
     | None ->
         failwith "pp: could not locate the stdlib/ directory next to the running \
@@ -79,7 +79,7 @@ let stdlib_glue_sources () : (string * string) list =
              (pp_quote (Filename.concat root f))))
           ["list.pp"; "map.pp"; "string.pp"]
         in
-        let fs_glue = match (Runtime.invocation_get ()).program_reconcile_root with
+        let fs_glue = match Invocation.program_reconcile_root invocation with
           | None -> []
           | Some r ->
               let canon = Runtime.canonical_path r in
@@ -97,7 +97,7 @@ let stdlib_glue_sources () : (string * string) list =
                   (pp_quote (canon :> string)) (pp_quote (canon :> string)))]
         in
         let proc_glue =
-          if not (Runtime.invocation_get ()).program_supervise then []
+          if not (Invocation.program_supervise invocation) then []
           else
             [("<domain-glue:proc>", Printf.sprintf
                 "(load %s)\n(register-proc-domain (current-capabilities))\n"
@@ -109,11 +109,10 @@ let stdlib_glue_sources () : (string * string) list =
    alone -> {"proc" v}; both -> {"fs" v, "proc" v} (both fed the SAME v). A
    bare register-domain program (neither flag) returns its own {name ->
    desired} directly — [v] unwrapped. *)
-let build_all_desired (v : Types.value) : Types.value =
-  let i = Runtime.invocation_get () in
+let build_all_desired invocation (v : Types.value) : Types.value =
   let pairs =
-    (if i.program_reconcile_root <> None then [(Types.VString "fs", v)] else [])
-    @ (if i.program_supervise then [(Types.VString "proc", v)] else [])
+    (if Invocation.program_reconcile_root invocation <> None then [(Types.VString "fs", v)] else [])
+    @ (if Invocation.program_supervise invocation then [(Types.VString "proc", v)] else [])
   in
   if pairs <> [] then Types.VMap pairs else v
 
@@ -121,10 +120,10 @@ let build_all_desired (v : Types.value) : Types.value =
    ONE init — this is what lets `register-fs-domain`/`register-proc-domain`'s
    registration survive to reach the user's file. Falls back to the untouched
    per-file loop when no domain wiring is needed at all. *)
-let run_files (files : string list) : Types.value option =
+let run_files invocation (files : string list) : Types.value option =
   Runtime.state.fenced_actions <- [];
-  if uses_domains () then
-    let sources = stdlib_glue_sources ()
+  if uses_domains invocation then
+    let sources = stdlib_glue_sources invocation
                   @ List.map (fun f -> (f, read_file_content f)) files in
     match List.rev (Repl.execute_sources sources) with
     | v :: _ -> Some v | [] -> None
@@ -134,8 +133,8 @@ let run_files (files : string list) : Types.value option =
       match List.rev (Repl.execute_file f) with
       | v :: _ -> Some v | [] -> None) None files
 
-let should_run_domains () =
-  uses_domains () || Domains.any_write_domain_registered ()
+let should_run_domains invocation =
+  uses_domains invocation || Domains.any_write_domain_registered ()
 
 (* The by-hash desired-value seam: `--desired-object HASH ROOT` substitutes
    the DERIVATION of the desired-state root entirely — the object was already
@@ -144,8 +143,8 @@ let should_run_domains () =
    executes for that side effect; its RETURN VALUE is discarded here in favor
    of the synced object). Without `--desired-object`, wrap the program's own
    return value via build_all_desired. *)
-let compute_all_desired (last : Types.value option) : Types.value =
-  match (Runtime.invocation_get ()).program_desired_object with
+let compute_all_desired invocation (last : Types.value option) : Types.value =
+  match Invocation.program_desired_object invocation with
   | Some (hash, _) ->
       (match Store.load_object ~key:hash with
        | Some v -> v
@@ -156,7 +155,7 @@ let compute_all_desired (last : Types.value option) : Types.value =
               published there via --publish-object" hash))
   | None ->
       (match last with
-       | Some v -> build_all_desired v
+       | Some v -> build_all_desired invocation v
        | None -> failwith "reconcile: the program produced no value")
 
 (* Host-qualified domain distribution: host-keying is opt-in ONLY via an
@@ -165,8 +164,8 @@ let compute_all_desired (last : Types.value option) : Types.value =
    [all_desired] MUST be a map keyed by host name (string or keyword) and this
    indexes exactly one entry, handing the UNCHANGED Domains.run_all only that
    host's own {domain -> desired} slice. *)
-let select_member_slice (all_desired : Types.value) : Types.value =
-  match (Runtime.invocation_get ()).program_member_name with
+let select_member_slice invocation (all_desired : Types.value) : Types.value =
+  match Invocation.program_member_name invocation with
   | None -> all_desired
   | Some name ->
       (match Primitives.force_deep all_desired with
@@ -189,9 +188,9 @@ let select_member_slice (all_desired : Types.value) : Types.value =
               host -> {domain -> desired} to index, got %s"
              name (Types.string_of_value other)))
 
-let run_domains_pass (last : Types.value option) : unit =
-  if should_run_domains () then begin
-    Domains.run_all (select_member_slice (compute_all_desired last));
+let run_domains_pass invocation (last : Types.value option) : unit =
+  if should_run_domains invocation then begin
+    Domains.run_all invocation (select_member_slice invocation (compute_all_desired invocation last));
     Fenced.drain ()
   end
 
@@ -207,7 +206,7 @@ let snapshot_cell_hashes (cell_ids : string list) : (string * string) list =
    persistent store's trace verification naturally skips unchanged nodes
    (hits) and recomputes changed ones (misses), so --watch and --once collapse
    to one store-level path. *)
-let watch_loop ~files ~interval ~stabilize =
+let watch_loop invocation ~files ~interval ~stabilize =
   Runtime.state.observe_all <- true;
   let last_desired = ref None in
   let run_program () =
@@ -220,9 +219,9 @@ let watch_loop ~files ~interval ~stabilize =
     Runtime.state.observed_all <- [];     (* clear collected observations *)
     (* Re-read and execute the program (plus, if --reconcile/--supervise is
        active, the domain-registration glue — run_files/uses_domains). *)
-    let last = run_files files in
+    let last = run_files invocation files in
     last_desired := last;
-    run_domains_pass last;
+    run_domains_pass invocation last;
     (* Collect the cells we need to poll and snapshot their current hashes. *)
     let cell_ids = List.sort_uniq compare (List.map fst Runtime.state.observed_all) in
     snapshot_cell_hashes cell_ids
@@ -236,9 +235,9 @@ let watch_loop ~files ~interval ~stabilize =
     Hashtbl.clear Runtime.probe_values;  (* probes re-evaluate fresh each pass *)
     Hashtbl.clear Runtime.sealed_pins;   (* sealed bytes never survive a pass *)
     Runtime.state.observed_all <- [];
-    let last = run_files files in
+    let last = run_files invocation files in
     last_desired := last;
-    run_domains_pass last;
+    run_domains_pass invocation last;
     let cell_ids = List.sort_uniq compare (List.map fst Runtime.state.observed_all) in
     let new_obs = snapshot_cell_hashes cell_ids in
     let new_set = List.map fst new_obs in
@@ -288,7 +287,7 @@ let watch_loop ~files ~interval ~stabilize =
          changed: the plan cache (Domains.compute_plan) makes an unchanged
          pass a cache hit, not a re-walk. *)
       (match !last_desired with
-       | Some v -> run_domains_pass (Some v)
+       | Some v -> run_domains_pass invocation (Some v)
        | None -> ());
       loop snapshot
     end
@@ -319,7 +318,7 @@ let run_transport_pull (kind, id, root) : unit =
   | "trace" -> Transport.LocalDir.pull_trace root ~key:id
   | _ -> failwith ("pp --transport-pull: unknown artifact kind " ^ kind)
 
-let run_serve_hit host (key, token_file, shared_root, reply_file) : unit =
+let run_serve_hit host invocation (key, token_file, shared_root, reply_file) : unit =
   let token_text = read_file_content token_file in
   (* Store.hit re-observes the trace's read cells, which performs the
      Lookup_handler/Record_read effects (observe_handler, file observation).
@@ -331,7 +330,7 @@ let run_serve_hit host (key, token_file, shared_root, reply_file) : unit =
      builtin default the build itself recorded and makes Record_read a
      no-op, so a synced node verifies exactly as it does locally. *)
   let reply =
-    Runtime.with_top_level
+    Runtime.with_top_level invocation
       ~f:(fun () -> Transport.serve_hit host ~key ~token_text ~shared_root) ()
   in
   Store.atomic_write reply_file reply
@@ -374,7 +373,7 @@ let main () =
   let graph_mode = ref false in
   let stabilize = ref false in
   let supervise = ref false in
-  let fenced_policy = ref Runtime.Abort in
+  let fenced_policy = ref Invocation.Abort in
   let island_pins_file = ref None in
   (* Cluster transport/token CLI seam. *)
   let cluster_init_mode = ref false in
@@ -621,9 +620,9 @@ let main () =
     doc_of "  pp --fenced-policy retry|abort|ask  Unknown-status fenced-action policy (default: abort)\n"
       (opt1 "--fenced-policy" (fun policy ->
          match policy with
-         | "retry" -> fenced_policy := Runtime.Retry
-         | "abort" -> fenced_policy := Runtime.Abort
-         | "ask" -> fenced_policy := Runtime.Ask
+         | "retry" -> fenced_policy := Invocation.Retry
+         | "abort" -> fenced_policy := Invocation.Abort
+         | "ask" -> fenced_policy := Invocation.Ask
          | _ -> failwith ("invalid --fenced-policy: " ^ policy)));
 
     doc_of "  pp why <file.pp>         Explain node cache hits/misses (capability-filtered)\n"
@@ -842,26 +841,23 @@ let main () =
     | None -> List.map (fun spec -> Capability.mint ~realpath:host.canonical_realpath spec) (List.rev !grants)
   in
 
-  Runtime.invocation := Some {
-    source_roots;
-    initial_capabilities = initial_caps;
-    program_argv = !program_argv;
-    program_files = List.rev !files;
-    initial_grant_specs = List.rev !grants;
-    program_reconcile_root = !reconcile_root;
-    program_supervise = !supervise;
-    program_member_name = !member_name;
-    program_desired_object = !desired_object_args;
-    gc_keep_epochs = !gc_keep_epochs;
-    fenced_policy = !fenced_policy;
-  };
+  let invocation =
+    match Invocation.create ~source_roots ~initial_capabilities:initial_caps ~command_argv:args
+      ~program_argv:!program_argv ~program_files:(List.rev !files)
+      ~initial_grant_specs:(List.rev !grants)
+      ~program_reconcile_root:!reconcile_root ~program_supervise:!supervise
+      ~program_member_name:!member_name ~program_desired_object:!desired_object_args
+      ~gc_keep_epochs:!gc_keep_epochs ~fenced_policy:!fenced_policy with
+    | Ok invocation -> invocation
+    | Error msg -> failwith ("pp: " ^ msg)
+  in
   (* Loader authority bound: the interpreter may load source from
      the CLI-named programs' directories, the cwd, and ~/.pp — nothing else.
      Also reachable: the resolved stdlib/ dir next to the
      running executable, so `--reconcile`/`--supervise`'s auto-loaded
      stdlib/domain-fs.pp / domain-proc.pp work from ANY cwd. *)
   Store.init ();
-  Remote.init host;
+  Remote.init host invocation;
   (* `--gc-mark` (internal — only `pp gc`'s own replay
      subprocess, src/store_gc.ml, sets this) turns on Store.hit's
      mark-by-replay side channel for the whole remainder of this process. *)
@@ -961,11 +957,14 @@ let main () =
   (match !transport_pull_args with
    | Some a -> run_transport_pull a; exit 0 | None -> ());
   (match !serve_hit_args with
-   | Some a -> run_serve_hit host a; exit 0 | None -> ());
+   | Some a -> run_serve_hit host invocation a; exit 0 | None -> ());
   (match !recv_hit_args with
    | Some a -> run_recv_hit a; exit 0 | None -> ());
   (* ---- `pp gc` (explicit, never automatic) ---- *)
-  if !gc_mode then (Store_gc.run ~grace_seconds:!gc_grace_seconds; exit 0);
+  if !gc_mode then
+    (Runtime.with_top_level invocation
+       ~f:(fun () -> Store_gc.run ~grace_seconds:!gc_grace_seconds) ();
+     exit 0);
   (* ---- `--publish-object <shared-root>` — the by-hash
      desired-value PUBLISH seam's dispatcher side: run the program
      normally, store its (fully-forced) value as an ordinary content-
@@ -978,7 +977,8 @@ let main () =
      actions or journals (nothing here ever touches either). *)
   (match !publish_object_root with
    | Some shared_root ->
-       let last = run_files (List.rev !files) in
+       let last = Runtime.with_top_level invocation
+           ~f:(fun () -> run_files invocation (List.rev !files)) () in
        (match last with
         | None -> failwith "pp: --publish-object: the program produced no value"
         | Some v ->
@@ -1007,9 +1007,10 @@ let main () =
      construction: nothing below this branch ever runs. *)
   (match !gc_mark_out with
    | Some out ->
-       let last = run_files (List.rev !files) in
+       let last = Runtime.with_top_level invocation
+           ~f:(fun () -> run_files invocation (List.rev !files)) () in
        (try
-          let all = select_member_slice (compute_all_desired last) in
+          let all = select_member_slice invocation (compute_all_desired invocation last) in
           let forced = Primitives.force_deep all in
           Store.mark_live ("object:" ^ Types.hash_value forced);
           List.iter (fun h -> Store.mark_live ("blob:" ^ h)) (Blobref.blob_refs_in forced)
@@ -1036,7 +1037,7 @@ let main () =
           f updated skipped)
       (List.rev !files);
   begin
-    let _ = Runtime.with_top_level ~f:(fun () ->
+    let _ = Runtime.with_top_level invocation ~f:(fun () ->
       (match !eval_str, !files with
       | Some e, [] ->
           let results = Repl.execute_string e in
@@ -1047,10 +1048,10 @@ let main () =
       | _, files ->
           let files = List.rev files in
           if !watch then
-            watch_loop ~files ~interval:!watch_interval ~stabilize:!stabilize
+            watch_loop invocation ~files ~interval:!watch_interval ~stabilize:!stabilize
           else begin
-            let last = run_files files in
-            run_domains_pass last;
+            let last = run_files invocation files in
+            run_domains_pass invocation last;
             (match !dump_pins_file with
              | Some path ->
                  let buf = Buffer.create 256 in
@@ -1080,7 +1081,7 @@ let main () =
                    in
                    Scheduler.state.policy <- Scheduler.Serial;
                    Hashtbl.clear Store.run_pins;
-                   let last_serial = run_files files in
+                   let last_serial = run_files invocation files in
                    Scheduler.state.policy <- saved_policy;
                    (match last_serial with
                     | None -> ()
@@ -1107,7 +1108,7 @@ let main () =
           which performs Record_read/Get_observe_all — so this after-run serve
           must hold the same top-level observation context the run itself held
           (line 1050), or a clean hit crashes on an unhandled effect. *)
-       Runtime.with_top_level
+       Runtime.with_top_level invocation
          ~f:(fun () ->
            Remote.serve_assigned_keys host ~token_text ~keys_file ~shared_root
              ~reply_file) ()

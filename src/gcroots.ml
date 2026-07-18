@@ -4,7 +4,7 @@
    NOT the frozen journal grammar: journal.ml's `Epoch` entry is the
    append-only, never-rotated, greppable audit-log record of a pass's root
    hash — this is GC's OWN bookkeeping, capped to the last
-   [Runtime.gc_keep_epochs] entries, recording enough to REPLAY a root
+   the invocation's retained-epoch count, recording enough to REPLAY a root
    program (files, --grant specs, --reconcile/--supervise/
    --member-name/--desired-object) — mark-by-replay's load-bearing
    precondition: traces do not record child-keys, so there is no on-disk

@@ -73,7 +73,6 @@ top-ref|src/reader.ml|lex_line|pass
 top-ref|src/reader_braces.ml|try_counter|pass
 top-ref|src/repl.ml|global_env|command
 top-ref|src/repl.ml|history|command
-top-ref|src/runtime.ml|invocation|invocation
 top-ref|src/runtime.ml|sandbox_counter|node
 top-ref|src/scheduler.ml|fork_count|test-diagnostic
 top-ref|src/scheduler.ml|sigint_installed|process-service

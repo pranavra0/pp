@@ -149,7 +149,7 @@ let execute_current ~(kind : string) ~(spec : value) : unit =
 (* Execute a single unknown-status fenced action during recovery.  Uses the
    key/epoch/kind/spec-hash stored in the journal; loads the persisted spec by
    hash so the action runs with the same inputs. *)
-let execute_recovery ~(policy : Runtime.fenced_policy) ~(entry : Journal.fenced_entry) : unit =
+let execute_recovery ~(policy : Invocation.fenced_policy) ~(entry : Journal.fenced_entry) : unit =
   let spec =
     match Store.load_fenced_spec entry.Journal.fe_spec_hash with
     | Some v -> v
@@ -161,13 +161,13 @@ let execute_recovery ~(policy : Runtime.fenced_policy) ~(entry : Journal.fenced_
   in
   let result =
     match policy with
-    | Runtime.Retry -> run_command spec
-    | Runtime.Abort ->
+    | Invocation.Retry -> run_command spec
+    | Invocation.Abort ->
         VMap [(VString "aborted", VBool true);
               (VString "policy", VString "abort");
               (VString "kind", VString entry.Journal.fe_kind);
               (VString "spec-hash", VString entry.Journal.fe_spec_hash)]
-    | Runtime.Ask ->
+    | Invocation.Ask ->
         if not (Unix.isatty Unix.stdin) then
           failwith ("fenced: unknown-status policy is 'ask' but stdin is not a tty; " ^
                     "use --fenced-policy retry|abort for non-interactive use");
@@ -186,11 +186,11 @@ let execute_recovery ~(policy : Runtime.fenced_policy) ~(entry : Journal.fenced_
    reconciliation proceeds.  The recovered epoch becomes the epoch for the
    current pass, so a subsequently registered action with the same kind/spec
    deduplicates against the recovered intent. *)
-let recover_unknown ~(policy : Runtime.fenced_policy) : unit =
+let recover_unknown ~(policy : Invocation.fenced_policy) : unit =
   let unknowns = Journal.find_unknown_fenced () in
   if unknowns <> [] then
     Printf.eprintf "[fenced] %d unknown-status action(s) in journal; applying policy=%s\n%!"
-      (List.length unknowns) (Runtime.fenced_policy_name policy);
+      (List.length unknowns) (Invocation.fenced_policy_name policy);
   List.iter (fun entry ->
     execute_recovery ~policy ~entry;
     current_epoch := entry.Journal.fe_epoch) unknowns
