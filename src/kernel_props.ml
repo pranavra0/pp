@@ -624,8 +624,22 @@ let host_services_property () =
    | _ -> fail "host-services-fake" "deterministic clock did not expire token")
 
 let session_property () =
-  let a = Session.create Evaluator.operations
-  and b = Session.create Evaluator.operations in
+  let calls_a = ref 0 and calls_b = ref 0 in
+  let scheduler_a =
+    Scheduler.create ~policy:Scheduler.Serial
+      ~remote_dispatch:(fun ~member:_ _ -> incr calls_a)
+  in
+  let scheduler_b =
+    Scheduler.create ~policy:Scheduler.Serial
+      ~remote_dispatch:(fun ~member:_ _ -> incr calls_b)
+  in
+  Scheduler.set_policy scheduler_a (Scheduler.Remote "a");
+  Scheduler.dispatch_batch scheduler_a [];
+  if Scheduler.policy scheduler_b <> Scheduler.Serial
+     || !calls_a <> 1 || !calls_b <> 0 then
+    fail "scheduler-isolation" "scheduler handles shared policy or dispatch state";
+  let a = Session.create ~scheduler:scheduler_a Evaluator.operations
+  and b = Session.create ~scheduler:scheduler_b Evaluator.operations in
   let invocation =
     match Invocation.create ~source_roots:[] ~initial_capabilities:[]
       ~command_argv:[] ~program_argv:[] ~program_files:[]

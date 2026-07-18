@@ -444,15 +444,15 @@ deferred to later work, since it needs the reverse index.
 
 ### Distribution: a scheduler handler over a process pool
 
-The near-term plan ships process-pool parallelism only. Cluster support is
-deferred.
+The implemented distribution path uses process-pool parallelism locally and
+the same scheduler seam for cluster placement.
 
-This ships as a `parallel`/`race` schedule handler over local worker
-processes, not OCaml 5 domains, because the interpreter is saturated with
+This uses a `parallel`/`race` schedule handler over local worker processes,
+not OCaml 5 domains, because the interpreter is saturated with
 global mutable state and processes give isolation that matches the
-sandbox model already in place. Cluster forcing, by-hash object sync, and
-signed capability tokens move to a later, speculative phase, gated behind
-a written threat-model document.
+sandbox model already in place. Cluster forcing uses a separate member
+process, by-hash object sync, and signed capability tokens; the same
+process/store boundaries apply there without introducing a second evaluator.
 
 Parallel dispatch forks at the point of dispatch, rather than keeping a
 persistent worker pool: `Scheduler.dispatch_batch` forks up to the

@@ -108,9 +108,18 @@ continuations.
 macros and gensyms, domains and probes, observations, sealed and file pins,
 fenced actions, and stabilization's node index. Its named lifecycle operations
 reset or retain those families at evaluation, pass, and watch boundaries.
-Independent sessions share no mutable evaluation state. `dynamic_scope.ml`
-provides bracketed dynamic effect scopes while evaluating a session; it owns no
-mutable resources or registries.
+Independent sessions share no mutable evaluation state. Each session also
+owns one `Scheduler.t`, which carries policy, remote dispatch, fork
+bookkeeping, and fork instrumentation. `dynamic_scope.ml` provides bracketed
+dynamic effect scopes while evaluating a session; it owns no mutable resources
+or registries.
+
+The application constructs the scheduler and passes its narrow remote
+dispatcher at the same boundary where it constructs the session. The
+application wraps the run in the scheduler's signal-handler scope, which
+restores the previous SIGINT handler on every exit path. There is no mutable
+callback-installation step and no process-global scheduler state, so two
+sessions can carry different policies and dispatchers.
 
 The sole tree walker constructs one immutable evaluator operation graph. Its
 exhaustive expression dispatch and tail mechanism remain in `evaluator.ml`;
@@ -230,7 +239,7 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/presentation.ml` | Runtime value presentation and list/string projections. |
 | `src/hasher.ml` | Low-level SHA-256 and injective length-framed hashing primitives. |
 | `src/blobref.ml` | Detection of `blob:<sha256>` references embedded in an ordinary value, so large bytes stay out of a node's small result. |
-| `src/force_deep.ml` | The deep structural force and its scheduler-aware batch collection/dispatch boundary. |
+| `src/force_deep.ml` | The deep structural force and its session-scheduler-aware batch collection/dispatch boundary. |
 | `src/codec.ml` | The one canonical, versioned, byte-stable text encoding for store objects and traces. |
 | `src/constant_time.ml` | Constant-time byte comparison, used to verify signed tokens without a timing side channel. |
 | `src/paths.ml` | The one component-boundary path-containment predicate, `Paths.under`, behind capability scopes, loader authority, and domain bounds. |
@@ -259,7 +268,7 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/loader.ml` | Source loading under bounded interpreter authority, including trace recording. |
 | `src/error_context.ml` | Attaches the innermost source-form location to evaluation errors. |
 | `src/sandbox.ml` | Creates, resolves, and removes node-local scratch directories. |
-| `src/session.ml` | The abstract owner of evaluation/pass state and explicit function invocation, a complete immutable evaluator-operation value, and its `begin_evaluation`, `begin_pass`, and `begin_watch` lifecycle transitions. |
+| `src/session.ml` | The abstract owner of evaluation/pass state, its scheduler handle, explicit function invocation, a complete immutable evaluator-operation value, and its `begin_evaluation`, `begin_pass`, and `begin_watch` lifecycle transitions. |
 | `src/evaluator.ml` | The project's sole tree-walking engine: one exhaustive expression dispatch, tail mechanism, force/trampoline, and operation graph. |
 | `src/evaluator_thunks.ml` | Content-addressed thunk construction, letrec poison thunks, and module export selection. |
 | `src/evaluator_application.ml` | Closure/builtin application, explicit builtin environments, and the shared tail-call continuation mechanism. |
@@ -287,8 +296,8 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/domain_prims.ml` | The trusted mechanics that back in-language domains: atomic `materialize-file` and `remove-file`, `tree-observe`, `proc-spawn`, `proc-alive?`, `proc-stop`, `proc-reap`, and `domain-state-get`/`put` — owning no policy of its own. |
 | `src/domains.ml` | Generic domain orchestration: the journal bracket, `observed_all` suspension, threading capabilities into observe and apply, plan caching through cache policy with no synthetic node, verify-after-write, and stratification. `stdlib/domain-fs.pp` and `domain-proc.pp` hold the filesystem and process policy as pp source; `main.ml` then drains fenced actions. |
 | `src/process.ml` | The `run` process effect: executes an external command under capability. |
-| `src/scheduler.ml` | The fork-at-dispatch process-pool scheduler for node misses (`serial`, `parallel:N`, `race:N`, `remote:MEMBER`). |
-| `src/remote.ml` | Remote placement: dispatches a batch of node misses to a named cluster member over the transport. |
+| `src/scheduler.ml` | The explicitly constructed fork-at-dispatch scheduler handle for node misses (`serial`, `parallel:N`, `race:N`, `remote:MEMBER`), including child ownership and signal lifecycle. |
+| `src/remote.ml` | Builds the narrow remote dispatcher that sends data-closed node misses to a named cluster member over the transport. |
 | `src/transport.ml` | Cross-machine sync of hash-named store artifacts, plus the capability-gated serve-hit path. |
 | `src/stabilize.ml` | The push scheduler: a side table from `node_key` to `thunk`, plus dirty reset using `Store_index`'s reverse edges. |
 | `src/repl.ml` | REPL and file-execution helpers. |

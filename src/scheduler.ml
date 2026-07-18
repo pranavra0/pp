@@ -32,32 +32,32 @@ type job = {
      forks — sound because LAW 37 nodes are deterministic; the first
      exit-0 wins). *)
   j_width : int;
-  (* The thunk this job forces. Every existing call site
-     already has it in scope; carried here so remote dispatch can test
-     data-closedness (Evaluator.is_data_closed) and read node_caps without
-     Scheduler itself depending on Evaluator (see remote_dispatch_hook
-     below — the same cycle-breaking indirection Primitives' *_ref values
-     already use, because Evaluator depends on Scheduler and Transport
-     depends on Evaluator, so a remote dispatcher living above both cannot
-     be called directly from here). *)
+  (* The thunk this job forces. Every existing call site already has it in
+     scope; the narrow remote dispatcher uses it to test data-closedness. *)
   j_thunk : Core_model.thunk;
 }
-(* Ambient scheduler state.  Mutable fields keep the cycle-breaking seam
-   explicit without scattering reference cells through the runtime. *)
-type state = {
+type t = {
   mutable policy : policy;
-  mutable remote_dispatch : member:string -> job list -> unit;
+  remote_dispatch : member:string -> job list -> unit;
+  live_children : (int, Identity_types.Node_key.t) Hashtbl.t;
+  mutable signal_handler : Sys.signal_behavior option;
+  mutable fork_count : int;
+  fork_log_path : string option;
 }
 
-let state = {
-  policy = Serial;
-  remote_dispatch = (fun ~member:_ (_ : job list) -> ());
+let create ~policy ~remote_dispatch = {
+  policy;
+  remote_dispatch;
+  live_children = Hashtbl.create 16;
+  signal_handler = None;
+  fork_count = 0;
+  fork_log_path = Sys.getenv_opt "PP_FORK_LOG";
 }
+
+let policy t = t.policy
+let set_policy t policy = t.policy <- policy
 
 (* ---- Live-child bookkeeping (for SIGINT and race-loser kills) ---- *)
-
-(* pid -> job key, for every child currently forked and not yet reaped. *)
-let live_children : (int, Identity_types.Node_key.t) Hashtbl.t = Hashtbl.create 16
 
 let kill_grace_seconds = 0.5
 
@@ -97,30 +97,42 @@ let cleanup_child_sandboxes (pid : int) : unit =
     let plen = String.length prefix in
     Array.iter (fun name ->
       if String.length name >= plen && String.sub name 0 plen = prefix then
-        Sandbox.remove_tree (Filename.concat tmp name))
+        Fswalk.remove_tree (Filename.concat tmp name))
       (Sys.readdir tmp)
   with _ -> ()
 
-let reap_and_cleanup (pid : int) : unit =
-  Hashtbl.remove live_children pid;
+let reap_and_cleanup (scheduler : t) (pid : int) : unit =
+  Hashtbl.remove scheduler.live_children pid;
   cleanup_child_sandboxes pid
 
-(* SIGINT: kill every live child (TERM->KILL) before the process exits, so a
-   Ctrl-C never leaves orphaned workers running. Installed once, lazily, the
-   first time dispatch_batch actually forks anything. *)
-let sigint_installed = ref false
+let kill_all_live (scheduler : t) =
+  let pids = Hashtbl.fold (fun pid _ acc -> pid :: acc)
+      scheduler.live_children [] in
+  List.iter (fun pid -> terminate_pid pid; reap_and_cleanup scheduler pid) pids
 
-let kill_all_live () =
-  let pids = Hashtbl.fold (fun pid _ acc -> pid :: acc) live_children [] in
-  List.iter (fun pid -> terminate_pid pid; reap_and_cleanup pid) pids
+let install_signal_handler (scheduler : t) =
+  match scheduler.signal_handler with
+  | Some _ -> ()
+  | None ->
+      let previous = Sys.signal Sys.sigint (Sys.Signal_handle (fun _ ->
+        kill_all_live scheduler;
+        exit 130)) in
+      scheduler.signal_handler <- Some previous
 
-let install_sigint_handler () =
-  if not !sigint_installed then begin
-    sigint_installed := true;
-    ignore (Sys.signal Sys.sigint (Sys.Signal_handle (fun _ ->
-      kill_all_live ();
-      exit 130)))
-  end
+let restore_signal_handler (scheduler : t) =
+  match scheduler.signal_handler with
+  | None -> ()
+  | Some previous ->
+      Sys.set_signal Sys.sigint previous;
+      scheduler.signal_handler <- None
+
+let with_signal_handler scheduler ~f x =
+  install_signal_handler scheduler;
+  Fun.protect
+    ~finally:(fun () ->
+      kill_all_live scheduler;
+      restore_signal_handler scheduler)
+    (fun () -> f x)
 
 (* ---- fork/exec-free "exec" of one job in a child ---- *)
 
@@ -152,23 +164,20 @@ let run_child (j : job) : unit =
    time (wall-clock masked a regression once: a shadowed `map` silently
    defeated batching and a timing-only test read it as "no spare cores").
    PP_FORK_LOG=<path> appends one line per fork; a test asserts the count. *)
-let fork_count = ref 0
-let fork_log_path = lazy (Sys.getenv_opt "PP_FORK_LOG")
-
-let fork_job (j : job) : int =
+let fork_job (scheduler : t) (j : job) : int =
   flush_before_fork ();
   match Unix.fork () with
   | 0 -> run_child j; Unix._exit 1 (* unreachable: run_child always _exit's *)
   | pid ->
-      incr fork_count;
-      (match Lazy.force fork_log_path with
+      scheduler.fork_count <- scheduler.fork_count + 1;
+      (match scheduler.fork_log_path with
        | Some p ->
            (try
               let fd = Unix.openfile p [Unix.O_WRONLY; Unix.O_APPEND; Unix.O_CREAT] 0o644 in
               ignore (Unix.write_substring fd "fork\n" 0 5); Unix.close fd
             with _ -> ())
        | None -> ());
-      Hashtbl.replace live_children pid j.j_key; pid
+      Hashtbl.replace scheduler.live_children pid j.j_key; pid
 
 (* ---- dispatch_batch ---- *)
 
@@ -189,8 +198,7 @@ let run_serial (jobs : job list) : unit =
    non-convergent action can ever be half-done inside a killed node. Once a
    key has won, remaining QUEUED (not yet forked) duplicates of that key are
    skipped rather than forked at all. *)
-let run_concurrent (limit : int) (jobs : job list) : unit =
-  install_sigint_handler ();
+let run_concurrent (scheduler : t) (limit : int) (jobs : job list) : unit =
   let limit = max 1 limit in
   let queue = Queue.create () in
   List.iter (fun j -> for _ = 1 to max 1 j.j_width do Queue.push j queue done) jobs;
@@ -198,12 +206,12 @@ let run_concurrent (limit : int) (jobs : job list) : unit =
   let live_count = ref 0 in
   let kill_losers_for (key : Identity_types.Node_key.t) : unit =
     let losers =
-      Hashtbl.fold (fun p k acc -> if k = key then p :: acc else acc)
-        live_children []
+        Hashtbl.fold (fun p k acc -> if k = key then p :: acc else acc)
+        scheduler.live_children []
     in
     List.iter (fun p ->
       terminate_pid p;
-      reap_and_cleanup p;
+      reap_and_cleanup scheduler p;
       decr live_count)
       losers
   in
@@ -215,10 +223,10 @@ let run_concurrent (limit : int) (jobs : job list) : unit =
     match (try Some (Unix.wait ()) with Unix.Unix_error (Unix.ECHILD, _, _) -> None) with
     | None -> live_count := 0
     | Some (pid, status) ->
-        if not (Hashtbl.mem live_children pid) then reap_one ()
+        if not (Hashtbl.mem scheduler.live_children pid) then reap_one ()
         else begin
-          let key = Hashtbl.find live_children pid in
-          reap_and_cleanup pid;
+          let key = Hashtbl.find scheduler.live_children pid in
+          reap_and_cleanup scheduler pid;
           decr live_count;
           let ok = match status with Unix.WEXITED 0 -> true | _ -> false in
           if ok && not (Hashtbl.mem succeeded_keys key) then begin
@@ -233,18 +241,15 @@ let run_concurrent (limit : int) (jobs : job list) : unit =
       if Hashtbl.mem succeeded_keys j.j_key then ()
         (* a duplicate of an already-won race: never fork it *)
       else begin
-        ignore (fork_job j);
+        ignore (fork_job scheduler j);
         incr live_count
       end
     done;
     if !live_count > 0 then reap_one ()
   done
 
-(* Remote dispatch is installed by [Remote.init] into the shared scheduler
-   state.  The default is the safe local-degrade path. *)
-
-let dispatch_batch (jobs : job list) : unit =
-  match state.policy with
+let dispatch_batch (scheduler : t) (jobs : job list) : unit =
+  match scheduler.policy with
   | Serial -> run_serial jobs
-  | Parallel n | Race n -> run_concurrent n jobs
-  | Remote member -> state.remote_dispatch ~member jobs
+  | Parallel n | Race n -> run_concurrent scheduler n jobs
+  | Remote member -> scheduler.remote_dispatch ~member jobs

@@ -35,3 +35,12 @@ and walk_dir dir rel cb =
         | st ->
             cb ~rel:r ~path:p (Entry st)
       ) names
+
+let remove_tree path =
+  let entries = ref [] in
+  walk ~root:path ~cb:(fun ~rel:_ ~path visit -> match visit with
+    | Entry st -> entries := (path, st.Unix.st_kind = Unix.S_DIR) :: !entries
+    | Lstat_failed | Readdir_failed -> ());
+  List.iter (fun (p, dir) ->
+    try if dir then Unix.rmdir p else Sys.remove p with _ -> ())
+    (List.rev !entries)

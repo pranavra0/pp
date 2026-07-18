@@ -2,6 +2,11 @@
 # Fork-at-dispatch scheduler stress test, plus a fenced-effects negative
 # check under non-serial schedules.
 #
+# The worker contract asserted here is deliberate: fork inherits the active
+# session state needed by the node body, while the parent receives no OCaml
+# value. Results return through the durable object/trace store; reaping and
+# killed-worker sandbox cleanup belong to the scheduler handle.
+#
 #   race:3 — a deliberately slow node, cold, under serial then race:3:
 #      identical result, byte-identical program text (only the --schedule
 #      flag differs), exactly one surviving trace line, wall-clock roughly a
@@ -174,6 +179,25 @@ if [ "$out2" = "99" ] && [ "$e_after" -eq "$e_before" ]; then
   ok "race8-samekey-nolock-subsequent-hit"
 else
   bad "race8-samekey-nolock-subsequent-hit" "got '$out2', $((e_after - e_before)) new execs"
+fi
+
+# ---- fork inherits the dynamic session state needed by node bodies ----
+cat > "$TMP/inherited-session.pp" <<'EOF'
+def int-range(a, b) { if a >= b { nil } else { cons(a, int-range(a + 1, b)) } }
+def sum-list(xs) { if nil?(xs) { 0 } else { car(xs) + sum-list(cdr(xs)) } }
+def make(i) { node { perform ask(i) + $config("offset") } }
+with {
+  config: { :offset -> 10 },
+  handlers: { :ask -> fn(n) { n + 1 } }
+} {
+  print(sum-list(force-deep(map(make, int-range(1, 3)))))
+}
+EOF
+out=$($PP --schedule parallel:2 "$TMP/inherited-session.pp" 2>"$TMP/inherited-session.err")
+if [ "$out" = "25" ]; then
+  ok "parallel-inherits-config-and-handler-state"
+else
+  bad "parallel-inherits-config-and-handler-state" "got '$out'" "$(cat "$TMP/inherited-session.err")"
 fi
 
 # =====================================================================

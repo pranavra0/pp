@@ -401,7 +401,7 @@ pins, remains future design work (see DESIGN.md).
 
 ### Running work in parallel
 
-`--schedule serial|parallel:N|race:N` (`src/scheduler.ml`) forks worker
+`--schedule serial|parallel:N|race:N|remote:MEMBER` (`src/scheduler.ml`) forks worker
 processes at the point where a batch of persistent nodes misses the
 cache. The `map` builtin, which does not force its arguments, builds a
 batch of unforced node thunks; `force-deep` collects every reachable
@@ -416,8 +416,17 @@ in-process, since forking buys nothing for a batch of one.
 A worker runs exactly the same function the serial code path calls, and
 exits 0 or 1; the parent never reads a value from a child, only checks the
 store after reaping, so a dead worker just degrades to an ordinary serial
-recompute. `--schedule` is ambient — read only by the miss code path and
-the scheduler, never part of a node's key or trace. `--check` under a
+recompute. `--schedule` is session-owned — read only by the miss code path and
+the scheduler, never part of a node's key or trace. The application constructs
+the scheduler with its narrow remote dispatcher and owns the signal-handler
+scope; the scheduler handle alone owns live-child cleanup. A forked worker
+inherits the session's dynamic capabilities, handlers, config, observation
+pins, and thunk memo through copy-on-write. It returns no value to the parent:
+the node result object and trace are the durable store channel, and the parent
+reaps the child before ordinary lookup. Remote placement follows the same
+rebuilder, but its separate member process receives pins and returns assigned
+objects/traces through the transport's verified serve-hit/recv-hit channel.
+`--check` under a
 non-serial schedule re-runs the whole program forced serial against the
 same store and fails on any mismatch, auditing that the schedule choice
 never changes the result.

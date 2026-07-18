@@ -1,5 +1,4 @@
 # kind|source file|declaration|owner
-lazy-env|src/scheduler.ml|fork_log_path|process-service
 lazy-env|src/store_layout.ml|crash_spec|durable-store
 lazy-env|src/trace_repository.ml|trace_lock_enabled|durable-store
 mutable-field|src/cache_policy.ml|check_enabled|command
@@ -18,7 +17,8 @@ mutable-field|src/printer_sexpr.ml|line|pass
 mutable-field|src/reader.ml|pos|pass
 mutable-field|src/reader_braces.ml|pos|pass
 mutable-field|src/scheduler.ml|policy|command
-mutable-field|src/scheduler.ml|remote_dispatch|process-service
+mutable-field|src/scheduler.ml|signal_handler|process-service
+mutable-field|src/scheduler.ml|fork_count|process-service
 mutable-field|src/core_model.ml|node_caps|node
 mutable-field|src/core_model.ml|thunk_env|node
 mutable-field|src/core_model.ml|thunk_hash|node
@@ -45,11 +45,8 @@ top-ref|src/primitives.ml|declarations|builtin-catalog
 top-ref|src/repl.ml|global_env|command
 top-ref|src/repl.ml|history|command
 top-ref|src/sandbox.ml|counter|node
-top-ref|src/scheduler.ml|fork_count|test-diagnostic
-top-ref|src/scheduler.ml|sigint_installed|process-service
 top-ref|src/environment.ml|env_counter|process-service
 top-table|src/primitives.ml|builtins|process-service
-top-table|src/scheduler.ml|live_children|process-service
 mutable-field|src/session.ml|fenced_actions|evaluation-session
 mutable-field|src/session.ml|gensym|evaluation-session
 mutable-field|src/session.ml|observations|pass

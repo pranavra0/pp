@@ -219,7 +219,8 @@ let force ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
   match lookup_hit ~key ~authorized t with
   | Some value -> value
   | None ->
-      (match Scheduler.state.policy with
+      let scheduler = Session.scheduler (Effect.perform Dynamic_scope.Get_session) in
+      (match Scheduler.policy scheduler with
        | Scheduler.Race width when width > 1 ->
            let job = {
              Scheduler.j_key = key;
@@ -227,7 +228,7 @@ let force ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
              j_width = width;
              j_thunk = t;
            } in
-           Scheduler.dispatch_batch [job];
+           Scheduler.dispatch_batch scheduler [job];
            (match lookup_hit ~key ~authorized t with
             | Some value -> value
             | None -> rebuild ~key ~run t)

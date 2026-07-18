@@ -1,12 +1,6 @@
 let counter = ref 0
 
-let remove_tree path =
-  let entries = ref [] in
-  Fswalk.walk ~root:path ~cb:(fun ~rel:_ ~path visit -> match visit with
-    | Fswalk.Entry st -> entries := (path, st.Unix.st_kind = Unix.S_DIR) :: !entries
-    | _ -> ());
-  List.iter (fun (p, dir) -> try if dir then Unix.rmdir p else Sys.remove p with _ -> ())
-    (List.rev !entries)
+let remove_tree = Fswalk.remove_tree
 
 let current ~create =
   match Effect.perform Dynamic_scope.Current_sandbox with

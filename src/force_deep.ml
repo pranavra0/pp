@@ -24,10 +24,11 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
   let seen_pairs : value list ref = ref [] in
   let jobs = ref [] in
   let session = Effect.perform Dynamic_scope.Get_session in
+  let scheduler = Session.scheduler session in
   let node = Session.node_operations session in
   let core = Session.core_operations session in
   let race_width () =
-    match Scheduler.state.policy with Scheduler.Race n -> n | _ -> 1
+    match Scheduler.policy scheduler with Scheduler.Race n -> n | _ -> 1
   in
   let job_run (t : thunk) (key : Identity_types.Node_key.t) () : value =
     node.run_body ~key ~run:(fun () -> core.eval t.thunk_expr t.thunk_env) t
@@ -60,10 +61,12 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
   List.rev !jobs
 
 let force_deep (v : value) : value =
-  (match Scheduler.state.policy with
+  let session = Effect.perform Dynamic_scope.Get_session in
+  let scheduler = Session.scheduler session in
+  (match Scheduler.policy scheduler with
    | Scheduler.Serial -> ()
    | Scheduler.Parallel _ | Scheduler.Race _ | Scheduler.Remote _ ->
        (match collect_unevaluated_nodes v with
         | [] -> ()
-        | jobs -> Scheduler.dispatch_batch jobs));
-  force_deep_plain ~force:(Session.force (Effect.perform Dynamic_scope.Get_session)) v
+        | jobs -> Scheduler.dispatch_batch scheduler jobs));
+  force_deep_plain ~force:(Session.force session) v

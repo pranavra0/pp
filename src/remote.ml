@@ -6,10 +6,8 @@
    module is compiled AFTER Evaluator, Transport, and Token (all three sit
    ABOVE Scheduler in the dependency graph — Transport calls
    Observation.authorized_id, and Evaluator calls Scheduler — so this
-   is the one place that can call all four), and wires itself into
-   [Scheduler.remote_dispatch_hook] at [init] time, exactly the
-   cycle-breaking indirection evaluator.ml already uses for
-   Primitives.*_ref.
+   is the one place that can call all four), and supplies a narrow
+   dispatcher value when the application constructs its scheduler.
 
    THE CORE MOVE: a cluster member is a SEPARATE `pp` process with its own
    $HOME (Store_layout.root Store_layout.default is a process-wide singleton — see transport.ml's
@@ -416,7 +414,7 @@ let ship_and_pull host invocation ~(member_home : string) (closed : Scheduler.jo
                           local miss and recomputes in-process"
                  (Printexc.to_string e)))
 
-(* The Scheduler.remote_dispatch_hook target: filters [jobs] to the
+(* The scheduler dispatcher filters [jobs] to the
    data-closed subset (contract point 2 — the codec's non-data predicate,
    Evaluator.is_data_closed, at this new decision point) and ships only
    those; every non-data-closed job is left untouched here and falls
@@ -441,5 +439,5 @@ let dispatch_remote host invocation ~(member : string) (jobs : Scheduler.job lis
     Cache_policy.diagnose Cache_policy.default "remote: dispatch to %s failed (%s) — batch stays local"
       member (Printexc.to_string e)
 
-let init host invocation : unit =
-  Scheduler.state.remote_dispatch <- dispatch_remote host invocation
+let dispatcher host invocation : member:string -> Scheduler.job list -> unit =
+  dispatch_remote host invocation

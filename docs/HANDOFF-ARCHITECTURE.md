@@ -176,7 +176,7 @@ two orchestration functions.
   lifecycle wiring.
 - `main.ml` owns option parsing, wiring, commands, watch loops, reconciliation,
   and cluster behavior.
-- REPL, lint, scheduler, fenced-action, and several counter states
+- REPL, lint, fenced-action, and several counter states
   remain process-global.
 - Current documentation contains duplicated entries, incomplete prose, and
   implementation claims that have drifted.
@@ -185,34 +185,6 @@ two orchestration functions.
 
 The order matters. Later boundaries assume earlier ownership and tests.
 
-
-### 16. Construct scheduler and distribution state explicitly
-
-**Purpose:** remove scheduler globals and clarify process/fork ownership.
-
-**Work:**
-
-- Make scheduler policy, live-child bookkeeping, fork instrumentation, signal
-  installation, and remote dispatch part of an explicit scheduler handle.
-- Install and restore signal handling at the application boundary with defined
-  ownership.
-- Pass a narrow remote dispatcher when constructing a scheduler; remove mutable
-  callback installation.
-- Document and test which session state is intentionally inherited through
-  fork-on-dispatch and which durable store channel returns results.
-- Keep serial, parallel, race, and remote policies driving the same node
-  rebuilder.
-
-**Likely files:** `src/scheduler.ml`, `src/remote.ml`, `src/transport.ml`,
-force-deep, main/commands.
-
-**Verify:** parallel stress/fork count, race behavior, remote placement, cluster
-sync/exit, sandbox cleanup, suite.
-
-**Exit:** two scheduler handles can be constructed without shared policy or
-callbacks; live-child cleanup has one owner.
-
-**Non-goal:** change scheduling results or add a new transport.
 
 ### 17. Separate domain policy, reconciliation, and fenced actions
 

@@ -413,6 +413,7 @@ let main () =
 
   let program_argv = ref [] in
   let gc_keep_epochs = ref 5 in
+  let schedule_policy = ref Scheduler.Serial in
 
   (* Arg-shape helpers: each returns the tokens it did not consume. A flag
      with too few args following it fails loudly rather than being silently
@@ -431,20 +432,20 @@ let main () =
         (* Ambient — read only by the miss arms and Scheduler.dispatch_batch;
            NEVER by node_key_of, never in a trace (LAW 26/34). *)
         (match spec with
-         | "serial" -> Scheduler.state.policy <- Scheduler.Serial
+         | "serial" -> schedule_policy := Scheduler.Serial
          | _ ->
              (match String.split_on_char ':' spec with
               | ["parallel"; n] ->
                   (match int_of_string_opt n with
-                   | Some n when n > 0 -> Scheduler.state.policy <- Scheduler.Parallel n
+                   | Some n when n > 0 -> schedule_policy := Scheduler.Parallel n
                    | _ -> failwith ("invalid --schedule parallel width: " ^ n))
               | ["race"; n] ->
                   (match int_of_string_opt n with
-                   | Some n when n > 0 -> Scheduler.state.policy <- Scheduler.Race n
+                   | Some n when n > 0 -> schedule_policy := Scheduler.Race n
                    | _ -> failwith ("invalid --schedule race width: " ^ n))
               | ["remote"; m] ->
                   if m = "" then failwith "invalid --schedule remote spec: empty member name"
-                  else Scheduler.state.policy <- Scheduler.Remote m
+                  else schedule_policy := Scheduler.Remote m
               | _ -> failwith ("invalid --schedule spec: " ^ spec)));
         rest
     | [] -> failwith "--schedule requires a spec"
@@ -843,14 +844,18 @@ let main () =
     | Ok invocation -> invocation
     | Error msg -> failwith ("pp: " ^ msg)
   in
-  let session = Session.create Evaluator.operations in
+  let scheduler =
+    Scheduler.create ~policy:!schedule_policy
+      ~remote_dispatch:(Remote.dispatcher host invocation)
+  in
+  let session = Session.create ~scheduler Evaluator.operations in
   (* Loader authority bound: the interpreter may load source from
      the CLI-named programs' directories, the cwd, and ~/.pp — nothing else.
      Also reachable: the resolved stdlib/ dir next to the
      running executable, so `--reconcile`/`--supervise`'s auto-loaded
      stdlib/domain-fs.pp / domain-proc.pp work from ANY cwd. *)
   Store_layout.init Store_layout.default;
-  Remote.init host invocation;
+  Scheduler.with_signal_handler scheduler ~f:(fun () ->
   (* `--gc-mark` (internal — only `pp gc`'s own replay
      subprocess, src/store_gc.ml, sets this) turns on cache policy's
      mark-by-replay side channel for the whole remainder of this process. *)
@@ -1056,22 +1061,27 @@ let main () =
                          name);
                  Store_layout.atomic_replace path (Buffer.contents buf)
              | None -> ());
-            if Cache_policy.check_enabled Cache_policy.default && Scheduler.state.policy <> Scheduler.Serial then
+            if Cache_policy.check_enabled Cache_policy.default &&
+               Scheduler.policy scheduler <> Scheduler.Serial then
               (match last with
                | None -> ()
                | Some v ->
                    let h_scheduled = Identity.hash_value v in
-                   let saved_policy = Scheduler.state.policy in
+                   let saved_policy = Scheduler.policy scheduler in
                    let policy_name = function
                      | Scheduler.Serial -> "serial"
                      | Scheduler.Parallel n -> Printf.sprintf "parallel:%d" n
                      | Scheduler.Race n -> Printf.sprintf "race:%d" n
                      | Scheduler.Remote m -> Printf.sprintf "remote:%s" m
                    in
-                   Scheduler.state.policy <- Scheduler.Serial;
-                   Session.begin_pass session;
-                   let last_serial = run_files invocation files in
-                   Scheduler.state.policy <- saved_policy;
+                   Scheduler.set_policy scheduler Scheduler.Serial;
+                   let last_serial =
+                     Fun.protect
+                       ~finally:(fun () -> Scheduler.set_policy scheduler saved_policy)
+                       (fun () ->
+                         Session.begin_pass session;
+                         run_files invocation files)
+                   in
                    (match last_serial with
                     | None -> ()
                     | Some v2 ->
@@ -1108,7 +1118,7 @@ let main () =
     Printf.eprintf "[check] FAIL: %d volatile node(s) flagged\n%!"
       (Cache_policy.volatile_count Cache_policy.default);
     exit 1
-  end
+  end) ()
 
 (* Uncaught runtime errors print as one clean line, not an OCaml backtrace
    header. Exit 1. *)

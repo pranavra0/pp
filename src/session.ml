@@ -8,6 +8,7 @@ type domain_entry = {
 }
 type t = {
   operations : Evaluator_ops.t;
+  scheduler : Scheduler.t;
   thunks : (string, Core_model.thunk) Hashtbl.t;
   macros : (string, string list * Core_model.expr) Hashtbl.t;
   mutable gensym : int;
@@ -25,8 +26,9 @@ type t = {
   mutable fenced_epoch : string;
 }
 
-let create operations = {
+let create ~scheduler operations = {
   operations;
+  scheduler;
   thunks = Hashtbl.create 1024; macros = Hashtbl.create 16; gensym = 0;
   domains = Hashtbl.create 16; probes = Hashtbl.create 16;
   preseeded_probes = Hashtbl.create 16;
@@ -39,6 +41,7 @@ let create operations = {
 let force t = t.operations.core.force
 let core_operations t = t.operations.core
 let node_operations t = t.operations.node
+let scheduler t = t.scheduler
 let call t ~env fn args =
   match fn with
   | Core_model.VClosure c ->
