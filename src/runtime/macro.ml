@@ -164,7 +164,8 @@ let apply_macro services expansion_count ~(name : string) ~(params : string list
     try services.force_deep (services.eval body macro_env)
     with
     | Failure msg -> macro_error name msg
-    | Source_error.Capability_error msg -> macro_error name msg
+    | Source_error.Error error ->
+        macro_error name (Source_error.string_of_t error)
   in
   let expanded =
     try Quotation.value_to_expr result

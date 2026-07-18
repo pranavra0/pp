@@ -136,16 +136,18 @@ let fold (f : 'a -> entry -> 'a) (init : 'a) : 'a =
   if not (Sys.file_exists path) then init
   else begin
     let ic = open_in path in
-    let acc = ref init in
-    (try
-       while true do
-         match of_line (input_line ic) with
-         | Some e -> acc := f !acc e
-         | None -> ()
-       done
-     with End_of_file -> ());
-    close_in ic;
-    !acc
+    Fun.protect
+      ~finally:(fun () -> close_in_noerr ic)
+      (fun () ->
+        let acc = ref init in
+        (try
+           while true do
+             match of_line (input_line ic) with
+             | Some e -> acc := f !acc e
+             | None -> ()
+           done
+         with End_of_file -> ());
+        !acc)
   end
 
 (* ---- Fenced-effect scanners (LAW 31) ---- *)

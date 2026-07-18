@@ -371,10 +371,10 @@ let register_caps () =
           | Capability.ReadWrite -> read_ok && write_ok
         in
         if not ok then
-          raise (Source_error.Capability_error
+          capability
             (Printf.sprintf
                "cap-restrict: cannot widen mode to :%s for %s (not held by the underlying capability)"
-               (Capability.mode_name mode) (scope :> string)));
+               (Capability.mode_name mode) (scope :> string));
         VCapability (Capability.restrict ~mode cap scope)
     | _ -> failwith "cap-restrict expects a capability, a scope string, and an optional mode keyword (:ro/:rw/:wo)");
 
@@ -638,8 +638,7 @@ let register_stdlib () =
       | [VString path] ->
           if not (List.exists (fun cap -> Capability.check_fs_read cap (World_path.canonical path))
                     (Effect.perform Dynamic_scope.Get_capabilities)) then
-            raise (Source_error.Capability_error
-                     (name ^ ": capability error: no read access for " ^ path));
+            capability (name ^ ": capability error: no read access for " ^ path);
           let kind = Observation.stat_kind path in
           Observation.record (Observation.stat path) (Observation.stat_hash kind);
           VBool (if want_dir then kind = "dir" else kind <> "absent")

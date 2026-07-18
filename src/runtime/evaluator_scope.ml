@@ -16,7 +16,7 @@ let with_caps operations cap_expr body env k =
     | _ -> failwith "with-caps expects a capability value"
   in
   if not (Capability.subseteq requested (Dynamic_scope.capabilities ())) then
-    raise (Capability_error Capability.err_with_caps_widen);
+    capability Capability.err_with_caps_widen;
   Dynamic_scope.with_capabilities [requested]
     (fun () -> operations.eval_tail body env k)
 

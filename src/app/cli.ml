@@ -1,5 +1,6 @@
 open Pp_runtime
 open Pp_kernel
+open Source_error
 type fmt_target = To_braces | To_sexpr
 
 type t = {
@@ -134,28 +135,28 @@ let opt1 name f =
   { name; doc = ""; internal = true;
     handler = function
       | a :: rest -> f a; rest
-      | [] -> failwith (name ^ " requires one argument") }
+      | [] -> command (name ^ " requires one argument") }
 let doc_of doc flag = { flag with doc; internal = false }
 let opt2 name f =
   { name; doc = ""; internal = true;
     handler = function
       | a :: b :: rest -> f a b; rest
-      | _ -> failwith (name ^ " requires two arguments") }
+      | _ -> command (name ^ " requires two arguments") }
 let opt3 name f =
   { name; doc = ""; internal = true;
     handler = function
       | a :: b :: c :: rest -> f a b c; rest
-      | _ -> failwith (name ^ " requires three arguments") }
+      | _ -> command (name ^ " requires three arguments") }
 let opt4 name f =
   { name; doc = ""; internal = true;
     handler = function
       | a :: b :: c :: d :: rest -> f a b c d; rest
-      | _ -> failwith (name ^ " requires four arguments") }
+      | _ -> command (name ^ " requires four arguments") }
 let opt5 name f =
   { name; doc = ""; internal = true;
     handler = function
       | a :: b :: c :: d :: e :: rest -> f a b c d e; rest
-      | _ -> failwith (name ^ " requires five arguments") }
+      | _ -> command (name ^ " requires five arguments") }
 
 let parse_fmt raw rest =
   let to_braces = ref None and to_sexpr = ref None and in_place = ref false in
@@ -164,20 +165,26 @@ let parse_fmt raw rest =
     | "--to-sexpr" :: file :: more -> to_sexpr := Some file; loop more
     | ("-i" | "--in-place") :: more -> in_place := true; loop more
     | [] -> ()
-    | bad :: _ -> failwith ("pp fmt: unrecognized argument: " ^ bad)
+    | bad :: _ -> command ("pp fmt: unrecognized argument: " ^ bad)
   in
   loop rest;
   raw.fmt := (match !to_braces, !to_sexpr with
     | Some file, None -> Some (To_braces, file, !in_place)
     | None, Some file -> Some (To_sexpr, file, !in_place)
-    | _ -> failwith "pp fmt: specify exactly one of --to-braces or --to-sexpr");
+    | _ -> command "pp fmt: specify exactly one of --to-braces or --to-sexpr");
   []
 
 let parse_kernel_props raw rest =
   let seed = ref 1 and count = ref 3000 in
   let rec loop = function
-    | "--seed" :: n :: more -> seed := int_of_string n; loop more
-    | "--count" :: n :: more -> count := int_of_string n; loop more
+    | "--seed" :: n :: more ->
+        seed := (match int_of_string_opt n with
+          | Some value -> value | None -> command ("invalid --kernel-props seed: " ^ n));
+        loop more
+    | "--count" :: n :: more ->
+        count := (match int_of_string_opt n with
+          | Some value -> value | None -> command ("invalid --kernel-props count: " ^ n));
+        loop more
     | _ -> ()
   in
   loop rest;
@@ -204,7 +211,7 @@ let flags raw =
     doc_of "  pp --mint-token <out> <ttl-secs> [--grant ...]  Mint a signed cluster token\n"
       (opt2 "--mint-token" (fun out ttl ->
         raw.mint_token := Some (out, match int_of_string_opt ttl with
-          | Some n -> n | None -> failwith ("invalid --mint-token ttl-seconds: " ^ ttl))));
+          | Some n -> n | None -> command ("invalid --mint-token ttl-seconds: " ^ ttl))));
     doc_of "  pp --transport-push/--transport-pull object|blob|trace <id> <root>  Local-dir sync (internal)\n"
       (opt3 "--transport-push" (fun k id root -> raw.transport_push := Some (k, id, root)));
     { (opt3 "--transport-pull" (fun k id root -> raw.transport_pull := Some (k, id, root))) with internal = true };
@@ -241,7 +248,7 @@ let flags raw =
       ({ name = "fmt"; doc = ""; internal = false; handler = parse_fmt raw });
     { (opt2 "--compare-hash" (fun a b -> raw.compare_hash := Some (a, b))) with internal = true };
     { (opt2 "--list-comments" (fun surface file ->
-        raw.list_comments := Some ((match surface with "sexpr" -> `Sexpr | "brace" -> `Brace | _ -> failwith "--list-comments requires sexpr|brace <file>"), file))) with internal = true };
+        raw.list_comments := Some ((match surface with "sexpr" -> `Sexpr | "brace" -> `Brace | _ -> command "--list-comments requires sexpr|brace <file>"), file))) with internal = true };
     doc_of "  pp --fenced-policy retry|abort|ask  Unknown-status fenced-action policy (default: abort)\n"
       (opt1 "--fenced-policy" set_fenced);
     doc_of "  pp why <file.pp>         Explain node cache hits/misses (capability-filtered)\n"
@@ -283,27 +290,30 @@ let validated raw =
     | ["serial"] -> Scheduler.Serial
     | ["parallel"; n] ->
         (match int_of_string_opt n with Some n when n > 0 -> Scheduler.Parallel n
-         | _ -> failwith ("invalid --schedule parallel width: " ^ n))
+         | _ -> command ("invalid --schedule parallel width: " ^ n))
     | ["race"; n] ->
         (match int_of_string_opt n with Some n when n > 0 -> Scheduler.Race n
-         | _ -> failwith ("invalid --schedule race width: " ^ n))
+         | _ -> command ("invalid --schedule race width: " ^ n))
     | ["remote"; member] when member <> "" -> Scheduler.Remote member
-    | ["remote"; _] -> failwith "invalid --schedule remote spec: empty member name"
-    | _ -> failwith ("invalid --schedule spec: " ^ !(raw.schedule))
+    | ["remote"; _] -> command "invalid --schedule remote spec: empty member name"
+    | _ -> command ("invalid --schedule spec: " ^ !(raw.schedule))
   in
   let fenced_policy = match !(raw.fenced_policy) with
     | "retry" -> Invocation.Retry | "abort" -> Invocation.Abort
     | "ask" -> Invocation.Ask
-    | value -> failwith ("invalid --fenced-policy: " ^ value)
+    | value -> command ("invalid --fenced-policy: " ^ value)
   in
-  let interval = float_of_string !(raw.watch_interval) in
+  let interval = match float_of_string_opt !(raw.watch_interval) with
+    | Some value when value >= 0.0 -> value
+    | _ -> command ("invalid --watch-interval: " ^ !(raw.watch_interval))
+  in
   let keep = match int_of_string_opt !(raw.gc_keep_epochs) with
     | Some n when n > 0 -> n
-    | _ -> failwith ("invalid --gc-keep-epochs: " ^ !(raw.gc_keep_epochs))
+    | _ -> command ("invalid --gc-keep-epochs: " ^ !(raw.gc_keep_epochs))
   in
   let grace = match float_of_string_opt !(raw.gc_grace_seconds) with
     | Some n when n >= 0.0 -> n
-    | _ -> failwith ("invalid --gc-grace-seconds: " ^ !(raw.gc_grace_seconds))
+    | _ -> command ("invalid --gc-grace-seconds: " ^ !(raw.gc_grace_seconds))
   in
   { command_argv = raw.command_argv; program_argv = !(raw.program_argv);
     files = List.rev !(raw.files); grants = List.rev !(raw.grants);

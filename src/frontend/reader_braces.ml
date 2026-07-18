@@ -91,12 +91,12 @@ let lex ~(file : string) (input : string) : tok list =
   let line = ref 1 in
   let toks = ref [] in
   let last_end = ref (-1) in   (* char index just past the previous token *)
-  let lex_error l msg = raise (Pp_error { kind = Eval; msg; pos = Some (file, l) }) in
+  let lex_error l msg = reader ~location:(file, l) msg in
   (* A token that scanned off the end of the source — the lexer's out-of-input
      signal, distinct from a genuine bad-character error. See
      Source_error.Reader_incomplete. *)
   let lex_incomplete l msg =
-    raise (Reader_incomplete (Printf.sprintf "%s at %s:%d" msg file l)) in
+    incomplete ~location:(file, l) msg in
   let peek () = if !pos < len then Some input.[!pos] else None in
   let peek_at k = if !pos + k < len then Some input.[!pos + k] else None in
   let advance () = incr pos in
@@ -352,8 +352,8 @@ let parse_error ps msg =
     else match ps.toks.(i).t with TNewline -> next_sig (i + 1) | _ -> ps.toks.(i)
   in
   if (next_sig ps.pos).t = TEOF then
-    raise (Reader_incomplete (Printf.sprintf "%s at %s:%d" msg file line))
-  else raise (Pp_error { kind = Eval; msg; pos = Some (file, line) })
+    incomplete ~location:(file, line) msg
+  else reader ~location:(file, line) msg
 
 (* Skip newline tokens (used wherever the statement-continuation rule makes
    newlines insignificant: inside brackets, after an operator/'='/'->'/','
@@ -2375,5 +2375,5 @@ let needs_more_input ?(source : string = "<repl>") (input : string) : bool =
   try ignore (read_string ~source input); false
   with
   | Reader_incomplete _ -> true
-  | Failure _ -> false
+  | Error (Reader (Syntax _)) | Failure _ -> false
   | _ -> false

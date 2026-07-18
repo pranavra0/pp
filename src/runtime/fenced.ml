@@ -90,10 +90,16 @@ let run_command (spec : value) : value =
       let tmp_out = Filename.temp_file "pp-fenced-out" "" in
       let tmp_err = Filename.temp_file "pp-fenced-err" "" in
       let pid =
-        Unix.create_process_env resolved (Array.of_list (resolved :: args))
-          (Array.of_list env) Unix.stdin
-          (Unix.openfile tmp_out [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o644)
-          (Unix.openfile tmp_err [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o644)
+        let fd_out = Unix.openfile tmp_out [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o644 in
+        Fun.protect
+          ~finally:(fun () -> Unix.close fd_out)
+          (fun () ->
+            let fd_err = Unix.openfile tmp_err [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o644 in
+            Fun.protect
+              ~finally:(fun () -> Unix.close fd_err)
+              (fun () ->
+                Unix.create_process_env resolved (Array.of_list (resolved :: args))
+                  (Array.of_list env) Unix.stdin fd_out fd_err))
       in
       let (_, status) = Unix.waitpid [] pid in
       let exit_code = match status with
@@ -104,9 +110,12 @@ let run_command (spec : value) : value =
       let read_file path =
         try
           let ic = open_in path in
-          let s = really_input_string ic (in_channel_length ic) in
-          close_in ic; Sys.remove path; s
-        with _ -> (try Sys.remove path with _ -> ()); ""
+          let s = Fun.protect
+            ~finally:(fun () -> close_in_noerr ic)
+            (fun () -> really_input_string ic (in_channel_length ic)) in
+          (try Sys.remove path with Sys_error _ -> ()); s
+        with Sys_error _ | Unix.Unix_error _ | End_of_file ->
+          (try Sys.remove path with Sys_error _ -> ()); ""
       in
       let out = read_file tmp_out in
       let err = read_file tmp_err in

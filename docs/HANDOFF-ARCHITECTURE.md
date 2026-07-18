@@ -188,38 +188,6 @@ two orchestration functions.
 The order matters. Later boundaries assume earlier ownership and tests.
 
 
-### 21. Standardize errors and resource safety
-
-**Purpose:** make failure contracts as understandable as success paths.
-
-**Work:**
-
-- Inventory `Failure`, wildcard exception catches, ignored Unix errors, and
-  process exits by boundary.
-- Define structured error variants for reader, evaluator, capability, store,
-  transport, command validation, and recoverable operational failures where
-  callers make decisions based on kind.
-- Preserve the rule that evaluative failures may be cached while capability
-  failures may not; make that decision exhaustive in types.
-- Use protected/bracket operations for files, locks, sandboxes, child processes,
-  dynamic scopes, and temporary directories.
-- Keep best-effort cleanup explicitly distinguished from correctness-critical
-  cleanup.
-- Test normal return, language error, OCaml exception, signal/child death, and
-  relevant effect-continuation paths.
-
-**Likely files:** all world and evaluator boundaries, with focused tests per
-module.
-
-**Verify:** error-message/location tests, capability adversarial tests, crash
-injection, scheduler cleanup, suite and fuzzer where evaluator changes.
-
-**Exit:** cross-module control flow does not depend on parsing error strings;
-resource ownership and cleanup are visible at construction sites.
-
-**Non-goal:** expose internal OCaml errors as new language-visible distinctions
-without a semantic decision.
-
 ### 22. Add permanent architecture and feedback gates
 
 **Purpose:** keep the resulting architecture from decaying.

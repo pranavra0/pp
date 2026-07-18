@@ -321,10 +321,10 @@ let repl_loop () =
              ) exprs
            with
            | Source_error.Pp_exit n -> exit n
-           | Source_error.Pp_error _ as e -> Printf.printf "Error: %s\n%!" (Printexc.to_string e)
+           | Source_error.Error error ->
+               Printf.printf "Error: %s\n%!" (Source_error.string_of_t error)
            | Failure msg -> Printf.printf "Error: %s\n%!" msg
            | Sys_error msg -> Printf.printf "Error: %s\n%!" msg
-           | Source_error.Capability_error msg -> Printf.printf "Error: %s\n%!" msg
            | e -> Printf.printf "Error: %s\n%!" (Printexc.to_string e));
           loop ()
         end

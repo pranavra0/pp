@@ -1,12 +1,13 @@
 open Pp_runtime
 open Pp_kernel
+open Source_error
 let fenced_decision cli (entry : Journal.fenced_entry) =
   match Cli.fenced_policy cli with
   | Invocation.Retry -> Fenced.Retry
   | Invocation.Abort -> Fenced.Abort
   | Invocation.Ask ->
       if not (Unix.isatty Unix.stdin) then
-        failwith "fenced: unknown-status policy is 'ask' but stdin is not a tty; use --fenced-policy retry|abort for non-interactive use";
+        command "fenced: unknown-status policy is 'ask' but stdin is not a tty; use --fenced-policy retry|abort for non-interactive use";
       Printf.printf "Fenced action %s (kind=%s) has unknown status.  Retry? [y/N]: %!"
         entry.Journal.fe_key entry.Journal.fe_kind;
       let line = try input_line stdin with End_of_file -> "n" in

@@ -96,7 +96,7 @@ let desugar_or (exprs : expr list) : expr =
 (* (assert cond [msg]) — a located runtime check: a false/nil condition raises
    `assertion failed: <form>` (or the custom message). The source location is
    NOT baked into the message here — the enclosing form's [with_form_location]
-   attaches it once (as Pp_error.pos), so it is never doubled. Desugars to
+   attaches it once as structured error location, so it is never doubled. Desugars to
    if+error through the shared AST. The
    message-less form renders the condition via Quotation.quote_to_value/Presentation.string_of_value —
    i.e. in AST (s-expression) notation in BOTH surfaces (Appendix B §B.4): the

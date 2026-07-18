@@ -1,5 +1,6 @@
 open Pp_runtime
 open Pp_kernel
+open Source_error
 let read_file path =
   let ic = open_in path in
   Fun.protect ~finally:(fun () -> close_in_noerr ic)
@@ -21,7 +22,7 @@ let uses_domains cli =
 let stdlib_glue_sources cli =
   if not (uses_domains cli) then []
   else match World_path.stdlib_root () with
-    | None -> failwith "pp: could not locate the stdlib/ directory next to the running executable (needed for --reconcile/--supervise's domain-fs.pp/domain-proc.pp)"
+    | None -> command "pp: could not locate the stdlib/ directory next to the running executable (needed for --reconcile/--supervise's domain-fs.pp/domain-proc.pp)"
     | Some root ->
         let common = List.map (fun file ->
           ("<stdlib:" ^ file ^ ">", Printf.sprintf "(load %s)\n" (pp_quote (Filename.concat root file))))
@@ -67,12 +68,12 @@ let compute_desired _ctx cli last =
   | Some (hash, _) ->
       (match Object_repository.get Object_repository.default ~key:hash with
        | Some value -> value
-       | None -> failwith (Printf.sprintf
+       | None -> command (Printf.sprintf
          "pp: --desired-object %s: not found in the local store even after pulling — check the shared root and that it was published there via --publish-object" hash))
   | None ->
       (match last with
        | Some value -> build_all_desired cli value
-       | None -> failwith "reconcile: the program produced no value")
+       | None -> command "reconcile: the program produced no value")
 
 let select_member_slice cli desired =
   match Cli.member_name cli with
@@ -85,8 +86,8 @@ let select_member_slice cli desired =
               | Core_model.VString value | Core_model.VKeyword value -> value = name
               | _ -> false) entries with
             | Some (_, value) -> value
-            | None -> failwith (Printf.sprintf
+            | None -> command (Printf.sprintf
               "pp: --member-name %s: no such host key in the desired-state map (host-qualified distribution expects {host -> {domain -> desired}})" name))
-       | value -> failwith (Printf.sprintf
+       | value -> command (Printf.sprintf
            "pp: --member-name %s: desired-state must be a map of host -> {domain -> desired} to index, got %s"
            name (Presentation.string_of_value value)))

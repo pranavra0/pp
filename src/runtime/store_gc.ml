@@ -63,12 +63,18 @@ let run_replay (exe : string) (r : Gcroots.root) : string list option =
   let argv = argv_of_root r mark_out in
   let fd_out =
     Unix.openfile log_path [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o600 in
-  let fd_in = Unix.openfile "/dev/null" [Unix.O_RDONLY] 0 in
-  let pid =
-    Fun.protect ~finally:(fun () -> Unix.close fd_in; Unix.close fd_out)
-      (fun () -> Unix.create_process exe (Array.of_list (exe :: argv)) fd_in fd_out fd_out)
+  let status =
+    Fun.protect
+      ~finally:(fun () -> Unix.close fd_out)
+      (fun () ->
+        let fd_in = Unix.openfile "/dev/null" [Unix.O_RDONLY] 0 in
+        Fun.protect
+          ~finally:(fun () -> Unix.close fd_in)
+          (fun () ->
+            let pid = Unix.create_process exe (Array.of_list (exe :: argv))
+                fd_in fd_out fd_out in
+            snd (Unix.waitpid [] pid)))
   in
-  let (_, status) = Unix.waitpid [] pid in
   let ok = match status with Unix.WEXITED 0 -> true | _ -> false in
   if ok && Sys.file_exists mark_out then begin
     let lines =

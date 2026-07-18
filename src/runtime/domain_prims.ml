@@ -67,7 +67,7 @@ let tree_observe (root : string) : value =
      "capability-gated" (a grant with NEITHER is refused) without demanding
      authority a write-only domain was never meant to need. *)
   if not (has_fs_read root || has_fs_write root) then
-    raise (Capability_error ("tree-observe: capability error: no read or write access for " ^ root));
+    capability ("tree-observe: capability error: no read or write access for " ^ root);
   let acc = ref [] in
   if Sys.file_exists root && Sys.is_directory root then
     Fswalk.walk ~root ~cb:(fun ~rel ~path visit ->
@@ -91,15 +91,21 @@ let materialize_file (path : string) (content : string) (executable : bool) : un
   let path_canon = World_path.canonical path in
   let path = (path_canon :> string) in
   if not (has_fs_write path) then
-    raise (Capability_error ("materialize-file: capability error: no write access for " ^ path));
+    capability ("materialize-file: capability error: no write access for " ^ path);
   mkdir_p (Filename.dirname path);
   let tmp = path ^ ".pp-tmp." ^ string_of_int (Unix.getpid ()) in
   let oc = open_out_bin tmp in
-  (try output_string oc content
-   with exn -> close_out oc; (try Sys.remove tmp with _ -> ()); raise exn);
-  close_out oc;
-  (* Atomic replacement of requested world state, not repository persistence. *)
-  Unix.rename tmp path;
+  let renamed = ref false in
+  Fun.protect
+    ~finally:(fun () ->
+      close_out_noerr oc;
+      if not !renamed then (try Sys.remove tmp with Sys_error _ -> ()))
+    (fun () ->
+      output_string oc content;
+      close_out oc;
+      (* Atomic replacement of requested world state, not repository persistence. *)
+      Unix.rename tmp path;
+      renamed := true);
   if executable then (try Unix.chmod path 0o755 with _ -> ());
   Cell_repository.unpin_file path
 
@@ -116,7 +122,7 @@ let remove_file (path : string) : unit =
   let path_canon = World_path.canonical path in
   let path = (path_canon :> string) in
   if not (has_fs_write path) then
-    raise (Capability_error ("remove-file: capability error: no write access for " ^ path));
+    capability ("remove-file: capability error: no write access for " ^ path);
   (try Sys.remove path with _ -> ());
   Cell_repository.unpin_file path;
   prune_empty_dirs (Filename.dirname path)
@@ -131,7 +137,7 @@ let remove_file (path : string) : unit =
    capability set, since diff must be pure) this can never hold (no
    capability is a subset of nothing unless it grants nothing), so diff
    calling domain-state-get/put
-   is a Capability_error automatically — closing that side-channel with the
+   is a structured capability error automatically — closing that side-channel with the
    SAME mechanism diff's purity already uses, not a new checker. *)
 let require_domain_context (who : string) : Session.domain_entry * string =
   match Effect.perform Dynamic_scope.Get_domain with
@@ -142,8 +148,8 @@ let require_domain_context (who : string) : Session.domain_entry * string =
        | Some entry ->
            if Capability.subseteq entry.Session.dm_cap (Effect.perform Dynamic_scope.Get_capabilities)
            then (entry, name)
-           else raise (Capability_error
-                    (who ^ ": capability error: no authority for domain " ^ name)))
+           else capability
+                    (who ^ ": capability error: no authority for domain " ^ name))
 
 let domain_state_root (domain_name : string) : string =
   Filename.concat (Store_layout.root Store_layout.default) (Filename.concat "domain-state" domain_name)
@@ -157,12 +163,13 @@ let domain_state_get (key : string) : value =
   if Sys.file_exists path then
     (try
        let ic = open_in_bin path in
-       let s = really_input_string ic (in_channel_length ic) in
-       close_in ic;
+       let s = Fun.protect
+         ~finally:(fun () -> close_in_noerr ic)
+         (fun () -> really_input_string ic (in_channel_length ic)) in
        match Codec.decode_value s with
        | Some v -> v
        | None -> VNil
-     with _ -> VNil)
+     with Sys_error _ | Unix.Unix_error _ | End_of_file -> VNil)
   else VNil
 
 let domain_state_put (key : string) (v : value) : unit =
@@ -243,7 +250,7 @@ let err_file name = Filename.concat (domain_io_dir ()) ("svc-" ^ Hasher.hash_str
 let proc_spawn (spec : value) : value =
   require_no_node_body "proc-spawn";
   if not (has_process_cap ()) then
-    raise (Capability_error "proc-spawn: capability error: no process authority");
+    capability "proc-spawn: capability error: no process authority";
   let kvs = match force spec with
     | VMap kvs -> kvs
     | other -> failwith ("proc-spawn: spec must be a map, got " ^ Presentation.string_of_value other)
@@ -292,7 +299,7 @@ let is_alive (pid : int) : bool =
 
 let proc_alive (pid : int) : bool =
   if not (has_process_cap ()) then
-    raise (Capability_error "proc-alive?: capability error: no process authority");
+    capability "proc-alive?: capability error: no process authority";
   is_alive pid
 
 (* (perform proc-stop name pid) — TERM, poll up to 1s, then KILL; owns its
@@ -301,7 +308,7 @@ let proc_alive (pid : int) : bool =
 let proc_stop (name : string) (pid : int) : unit =
   require_no_node_body "proc-stop";
   if not (has_process_cap ()) then
-    raise (Capability_error "proc-stop: capability error: no process authority");
+    capability "proc-stop: capability error: no process authority";
   Journal.append (Journal.ProcStopIntent { name });
   (try
      Unix.kill pid Sys.sigterm;

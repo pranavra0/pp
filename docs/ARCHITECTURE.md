@@ -171,13 +171,22 @@ miss, `validate_result` enforces the node boundary, and the persistence helpers
 write the result and trace. Serial forcing and scheduler workers both invoke
 the same `rebuild` operation.
 
-A node that raises a `Failure` stores a failing trace and re-serves the
-same error until a recorded read changes (SPEC law 28). A raising thunk
-resets away from `Evaluating` rather than getting stuck there. A hit is
-served only if the caller is authorized to read the whole closure of cells
-the trace depends on, checked by `Cache_policy.lookup ~authorized` and
-`Observation.authorized` (SPEC law 23b). A capability denial, `Capability_error`,
-is never memoized.
+A node that raises an evaluative error stores a failing trace and re-serves the
+same error until a recorded read changes (SPEC law 28). A raising thunk resets
+away from `Evaluating` rather than getting stuck there. A hit is served only if
+the caller is authorized to read the whole closure of cells the trace depends
+on, checked by `Cache_policy.lookup ~authorized` and `Observation.authorized`
+(SPEC law 23b). `Source_error.cache_decision` exhaustively keeps capability
+errors out of the persistent failure cache while allowing evaluative failures
+to be cached.
+
+Boundary failures use `Source_error.t` variants for readers, evaluation,
+capabilities, stores, transport, command validation, and recoverable
+operations. Locations are fields, not text parsed by callers. Files,
+descriptors, locks, temporary outputs, child processes, and node sandboxes are
+owned by `Fun.protect` scopes at their construction sites. Cleanup that is
+only a safety net is named as best-effort and cannot replace an atomic write,
+descriptor close, or child reap.
 
 
 With `pp --watch --stabilize`, the reverse-edge index built by

@@ -19,8 +19,13 @@ open Pp_kernel
 
 open Core_model
 open Codec
+open Source_error
 
-exception Transport_integrity_error of string
+let raise_integrity message =
+  raise (Error (Transport (Integrity { artifact = "wire"; message })))
+
+let raise_unavailable peer message =
+  raise (Error (Transport (Unavailable { peer; message })))
 
 (* ---- The abstract shape: local-dir today, ssh later ----
 
@@ -58,28 +63,28 @@ end
 let ingest_object ~(claimed_hash : string) (text : string) : unit =
   match Codec.decode_value text with
   | None ->
-      raise (Transport_integrity_error
+      raise_integrity
         (Printf.sprintf
            "object %s: received bytes do not decode as a pp value \
             (corrupt or tampered in transit) — refusing to accept"
-           claimed_hash))
+           claimed_hash)
   | Some v ->
       let actual = Identity.hash_value v in
       if actual <> claimed_hash then
-        raise (Transport_integrity_error
+        raise_integrity
           (Printf.sprintf
              "object %s: content hashes to %s, not its claimed name — \
               refusing to accept (corrupt or tampered in transit)"
-             claimed_hash actual))
+             claimed_hash actual)
       else Object_repository.put Object_repository.default ~key:claimed_hash ~value:v
 
 let ingest_blob ~(claimed_hash : string) (content : string) : unit =
   let actual = Hasher.hash_string content in
   if actual <> claimed_hash then
-    raise (Transport_integrity_error
+    raise_integrity
       (Printf.sprintf
          "blob %s: content hashes to %s, not its claimed name — refusing \
-          to accept (corrupt or tampered in transit)" claimed_hash actual))
+          to accept (corrupt or tampered in transit)" claimed_hash actual)
   else ignore (Blob_repository.put Blob_repository.default content)
 
 (* Traces have no self-describing content hash: their filename is a NODE
@@ -97,15 +102,15 @@ let ingest_blob ~(claimed_hash : string) (content : string) : unit =
 let ingest_trace_lines ~(key : string) (raw : string) : unit =
   let lines = String.split_on_char '\n' raw |> List.filter (fun l -> l <> "") in
   if lines = [] then
-    raise (Transport_integrity_error
-      (Printf.sprintf "trace %s: empty (corrupt or tampered in transit)" key));
+    raise_integrity
+      (Printf.sprintf "trace %s: empty (corrupt or tampered in transit)" key);
   List.iter (fun line ->
     match Trace_repository.of_line line with
     | None ->
-        raise (Transport_integrity_error
+        raise_integrity
           (Printf.sprintf
              "trace %s: unparseable line — refusing to accept (corrupt or \
-              tampered in transit): %s" key line))
+              tampered in transit): %s" key line)
     | Some tr ->
         Trace_repository.put Trace_repository.default
           ~key:(Identity_types.Cache_key.of_string key)
@@ -146,7 +151,7 @@ module LocalDir = struct
   let push_object (root : t) ~(hash : string) : unit =
     match Object_repository.get Object_repository.default ~key:hash with
     | None ->
-        failwith (Printf.sprintf
+        raise_unavailable root (Printf.sprintf
           "transport: push-object %s: no such object in the local store" hash)
     | Some v ->
         (match Codec.encode_value v with
@@ -157,13 +162,13 @@ module LocalDir = struct
                 constructor at all — this branch should be unreachable —
                 but push refuses to ship on any doubt, never "ship and
                 hope". *)
-             failwith (Printf.sprintf
+             raise_unavailable root (Printf.sprintf
                "transport: push-object %s: refusing to ship a value that \
                 does not re-encode as data (sealed/non-data invariant \
                 violation — should be unreachable)" hash)
          | Some content ->
              if Identity.hash_value v <> hash then
-               failwith (Printf.sprintf
+               raise_unavailable root (Printf.sprintf
                  "transport: push-object %s: local object does not hash \
                   to its own claimed name (local store corruption) — \
                   refusing to push" hash)
@@ -175,11 +180,11 @@ module LocalDir = struct
   let push_blob (root : t) ~(hash : string) : unit =
     match Blob_repository.get Blob_repository.default hash with
     | None ->
-        failwith (Printf.sprintf
+        raise_unavailable root (Printf.sprintf
           "transport: push-blob %s: no such blob in the local store" hash)
     | Some content ->
         if Hasher.hash_string content <> hash then
-          failwith (Printf.sprintf
+          raise_unavailable root (Printf.sprintf
             "transport: push-blob %s: local blob does not hash to its own \
              claimed name (local store corruption) — refusing to push" hash)
         else begin
@@ -216,7 +221,7 @@ module LocalDir = struct
     let mine = Trace_repository.load Trace_repository.default
       ~key:(Identity_types.Cache_key.of_string key) in
     if mine = [] then
-      failwith (Printf.sprintf
+      raise_unavailable root (Printf.sprintf
         "transport: push-trace %s: no local traces for this node key" key)
     else push_trace_filtered root ~key ~traces:mine
 
@@ -228,19 +233,19 @@ module LocalDir = struct
   let pull_object (root : t) ~(hash : string) : unit =
     let path = Filename.concat (objects_dir root) hash in
     if not (Sys.file_exists path) then
-      failwith (Printf.sprintf "transport: pull-object %s: not found at %s" hash root)
+      raise_unavailable root (Printf.sprintf "transport: pull-object %s: not found at %s" hash root)
     else ingest_object ~claimed_hash:hash (Cell_repository.read_raw path)
 
   let pull_blob (root : t) ~(hash : string) : unit =
     let path = Filename.concat (blobs_dir root) hash in
     if not (Sys.file_exists path) then
-      failwith (Printf.sprintf "transport: pull-blob %s: not found at %s" hash root)
+      raise_unavailable root (Printf.sprintf "transport: pull-blob %s: not found at %s" hash root)
     else ingest_blob ~claimed_hash:hash (Cell_repository.read_raw path)
 
   let pull_trace (root : t) ~(key : string) : unit =
     let path = Filename.concat (traces_dir root) key in
     if not (Sys.file_exists path) then
-      failwith (Printf.sprintf "transport: pull-trace %s: not found at %s" key root)
+      raise_unavailable root (Printf.sprintf "transport: pull-trace %s: not found at %s" key root)
     else ingest_trace_lines ~key (Cell_repository.read_raw path)
 
   (* Control has no generic realization for local-dir without a listening
@@ -254,8 +259,9 @@ module LocalDir = struct
      function. *)
   let control (_ : t) ~(request : string) : string =
     ignore request;
-    failwith "transport: LocalDir.control is not used this stage — see \
-              Transport.serve_hit / Transport.recv_hit"
+    raise_unavailable "local-dir"
+      "transport: LocalDir.control is not used this stage — see \
+       Transport.serve_hit / Transport.recv_hit"
 end
 
 (* Conformance check only (never instantiated): proves LocalDir's shape
@@ -274,7 +280,7 @@ module Ssh : TRANSPORT = struct
   type t = string (* a host spec, e.g. "user@host" *)
 
   let not_yet (op : string) (host : t) : 'a =
-    failwith (Printf.sprintf
+    raise_unavailable host (Printf.sprintf
       "pp: transport ssh: %s not implemented (host %s) — local-dir is the \
        only transport; ssh drops in behind the identical TRANSPORT shape" op host)
 
@@ -434,8 +440,8 @@ let parse_reply_text (text : string) : reply_decision option =
 let recv_hit ~(reply_text : string) ~(shared_root : string) : reply_decision =
   match parse_reply_text reply_text with
   | None ->
-      raise (Transport_integrity_error
-        ("serve-hit reply: unrecognized or malformed: " ^ String.trim reply_text))
+      raise_integrity
+        ("serve-hit reply: unrecognized or malformed: " ^ String.trim reply_text)
   | Some (RHit { key; result_hash; blob_hashes } as d) ->
       LocalDir.pull_object shared_root ~hash:result_hash;
       LocalDir.pull_trace shared_root ~key;

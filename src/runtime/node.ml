@@ -17,7 +17,7 @@ let resolve_free_variables ~(expr : expr) ~(env : env)
        match Environment.lookup env name with
        | Some value ->
            (try (name, Some (force value)) with
-            | Capability_error _ as error -> raise error
+            | Error (Capability _) as error -> raise error
             | _ -> (name, Some value))
        | None -> (name, None))
 
@@ -25,11 +25,11 @@ let authorize_free_variables (free_variables : (string * value option) list) : u
   List.iter (fun (name, value) ->
     match value with
     | Some value when Value_analysis.contains_authority value ->
-        raise (Capability_error
+        authority_escape
           (Printf.sprintf
              "node: free variable '%s' may not be or contain a %s" name
              (if Value_analysis.contains_sealed value then
-                "sealed value" else "capability")))
+                "sealed value" else "capability"))
     | Some _ | None -> ())
     free_variables
 
@@ -72,14 +72,11 @@ let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
     | _ -> false
   in
   if not ok then
-    (* The annotation site [loc] is a precise location, carried as Pp_error.pos
-       (not baked into the message, which would double-locate once an enclosing
-       form's with_form_location saw it). *)
-    raise (Pp_error {
-      kind = Eval;
-      msg = Printf.sprintf "type mismatch: expected %s, got %s"
-              type_name (Presentation.string_of_value v);
-      pos = loc })
+    (* Keep the annotation location separate from the message so an enclosing
+       form boundary cannot duplicate it. *)
+    eval ?location:loc
+      (Printf.sprintf "type mismatch: expected %s, got %s"
+              type_name (Presentation.string_of_value v))
 
 (* Enforce a thunk's optional type annotation, resetting thunk_status to
    Unevaluated if the check fails. The reset is load-bearing: typed thunks are
@@ -116,17 +113,17 @@ let serve_hit ~(t : thunk) (h : Cache_policy.result) : value option =
       Some cached
   | Cache_policy.HitFailed errval ->
       (match errval with
-       | VString msg -> failwith msg
-       | _ -> failwith "node failed (cached)")
+       | VString msg -> eval msg
+       | _ -> eval "node failed (cached)")
   | Cache_policy.Miss -> None
 
 let validate_result (t : thunk) (result : value) : unit =
   if Value_analysis.contains_authority result then begin
     t.thunk_status <- Unevaluated;
     if Value_analysis.contains_sealed result then
-      raise (Capability_error "a node may not return a sealed value")
+      authority_escape "a node may not return a sealed value"
     else
-      raise (Capability_error "a node may not return a capability")
+      authority_escape "a node may not return a capability"
   end;
   enforce_type t result
 
@@ -172,14 +169,22 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
             Effect.Deep.continue k (Effect.perform (Dynamic_scope.Record_read (c, h)))
         | effect Dynamic_scope.In_node, k -> Effect.Deep.continue k true
         | effect Dynamic_scope.Current_sandbox, k -> Effect.Deep.continue k (Some sandbox_slot)
-        (* Memoize a genuine failure (LAW 28). A plain Failure, or an Eval-kind
-           Pp_error a nested `load`'s form boundary already wrapped, is
-           cacheable; a Capability error (raw or Pp_error kind=Capability) is
-           NOT (LAW 15) and falls to the generic reset arm below. *)
-        | (Failure msg | Pp_error { kind = Eval; msg; _ }) as e ->
+        (* Evaluative failures are durable results; authority failures are
+           dependent on the caller and must leave no cached failure behind. *)
+        | Error error as e ->
+            (match cache_decision error with
+             | Cacheable ->
+                 persist_failure ~key ~reads:(List.rev !frame)
+                   (string_of_t error);
+                 t.thunk_status <- Unevaluated;
+                 raise e
+             | Do_not_cache ->
+                 t.thunk_status <- Unevaluated;
+                 raise e)
+        | Failure msg ->
             persist_failure ~key ~reads:(List.rev !frame) msg;
             t.thunk_status <- Unevaluated;
-            raise e
+            raise (Error (Evaluator { message = msg; location = None }))
         | e ->
             t.thunk_status <- Unevaluated;
             raise e

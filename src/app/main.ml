@@ -8,10 +8,13 @@ let () =
     Command_dispatch.run host cli
   with
   | Source_error.Pp_exit n -> exit n
-  | Source_error.Pp_error _ as error ->
-      Printf.eprintf "pp: error: %s\n%!" (Printexc.to_string error);
+  | Source_error.Error error ->
+      Printf.eprintf "pp: error: %s\n%!" (Source_error.string_of_t error);
       exit 1
-  | Failure msg | Source_error.Capability_error msg | Sys_error msg
-  | Transport.Transport_integrity_error msg ->
+  | Source_error.Reader_incomplete error ->
+      Printf.eprintf "pp: error: %s\n%!"
+        (Source_error.string_of_t (Source_error.Reader error));
+      exit 1
+  | Failure msg | Sys_error msg ->
       Printf.eprintf "pp: error: %s\n%!" msg;
       exit 1

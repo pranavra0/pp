@@ -40,13 +40,13 @@ type state = { source : string; mutable line : int }
 let create ?(source = "<?>") () = { source; line = 1 }
 
 let lex_error state line msg =
-  raise (Pp_error { kind = Eval; msg; pos = Some (state.source, line) })
+  reader ~location:(state.source, line) msg
 
 (* A token that scanned off the end of the source — the lexer's out-of-input
    signal, distinct from a genuine bad-character error. See
    Source_error.Reader_incomplete. *)
 let lex_incomplete state line msg =
-  raise (Reader_incomplete (Printf.sprintf "%s at %s:%d" msg state.source line))
+  incomplete ~location:(state.source, line) msg
 
 (* Lex a string into a list of (token, start_line) pairs. *)
 let lex state (input : string) : (token * int) list =
@@ -223,8 +223,8 @@ let parse_error ps msg =
   let file = ps.source in
   let line = peek_line ps in
   if peek ps = TokEOF then
-    raise (Reader_incomplete (Printf.sprintf "%s at %s:%d" msg file line))
-  else raise (Pp_error { kind = Eval; msg; pos = Some (file, line) })
+    incomplete ~location:(file, line) msg
+  else reader ~location:(file, line) msg
 
 (* Collect items until the [closing] delimiter (consumed); [what] names the
    form in the unterminated-at-EOF error. One loop for every bracketed form. *)

@@ -412,10 +412,10 @@ let lint_file (path : string) : unit =
     | Failure msg ->
         Printf.eprintf "pp lint: parse error in %s: %s\n%!" path msg;
         exit 1
-    | Source_error.Pp_error { msg; pos; _ } ->
-        let loc = match pos with
+    | Source_error.Error (Source_error.Reader (Source_error.Syntax { message; location })) ->
+        let loc = match location with
           | Some (f, l) -> Printf.sprintf " at %s:%d" f l | None -> "" in
-        Printf.eprintf "pp lint: parse error in %s: %s%s\n%!" path msg loc;
+        Printf.eprintf "pp lint: parse error in %s: %s%s\n%!" path message loc;
         exit 1
   in
   (* Walk every top-level form *)

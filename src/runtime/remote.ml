@@ -298,15 +298,19 @@ let remote_ttl_seconds = 600
 let spawn_member ~(exe : string) ~(argv : string list) ~(env : string array)
     ~(log_file : string) : int =
   let fd_out = Unix.openfile log_file [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o600 in
-  let fd_in = Unix.openfile "/dev/null" [Unix.O_RDONLY] 0 in
-  let pid =
-    Fun.protect ~finally:(fun () -> Unix.close fd_in; Unix.close fd_out)
-      (fun () -> Unix.create_process_env exe (Array.of_list (exe :: argv)) env fd_in fd_out fd_out)
-  in
-  let (_, status) = Unix.waitpid [] pid in
-  match status with
-  | Unix.WEXITED n -> n
-  | Unix.WSIGNALED s | Unix.WSTOPPED s -> 128 + s
+  Fun.protect
+    ~finally:(fun () -> Unix.close fd_out)
+    (fun () ->
+      let fd_in = Unix.openfile "/dev/null" [Unix.O_RDONLY] 0 in
+      Fun.protect
+        ~finally:(fun () -> Unix.close fd_in)
+        (fun () ->
+          let pid = Unix.create_process_env exe (Array.of_list (exe :: argv))
+              env fd_in fd_out fd_out in
+          let (_, status) = Unix.waitpid [] pid in
+          match status with
+          | Unix.WEXITED n -> n
+          | Unix.WSIGNALED s | Unix.WSTOPPED s -> 128 + s))
 
 let member_env (member_home : string) : string array =
   let is_home kv = String.length kv >= 5 && String.sub kv 0 5 = "HOME=" in

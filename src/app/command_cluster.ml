@@ -1,5 +1,6 @@
 open Pp_runtime
 open Pp_kernel
+open Source_error
 let read_raw path = Cell_repository.read_raw path
 
 let run_transport direction (kind, id, root) =
@@ -10,13 +11,13 @@ let run_transport direction (kind, id, root) =
   | `Pull, "object" -> Transport.LocalDir.pull_object root ~hash:id
   | `Pull, "blob" -> Transport.LocalDir.pull_blob root ~hash:id
   | `Pull, "trace" -> Transport.LocalDir.pull_trace root ~key:id
-  | _, _ -> failwith (Printf.sprintf "pp --transport-%s: unknown artifact kind %s"
+  | _, _ -> command (Printf.sprintf "pp --transport-%s: unknown artifact kind %s"
     (match direction with `Push -> "push" | `Pull -> "pull") kind)
 
 let cluster_init host =
   Store_layout.ensure_dir (Cap_token.cluster_dir host);
   if Sys.file_exists (Cap_token.secret_path host) then
-    failwith (Printf.sprintf
+    command (Printf.sprintf
       "pp cluster-init: a cluster secret already exists at %s — refusing to overwrite (this would invalidate every token already minted against it); remove it by hand first if you really mean to rotate"
       (Cap_token.secret_path host));
   let secret = Hasher.hex_encode (Cryptokit.Random.string Cryptokit.Random.secure_rng 32) in
@@ -97,12 +98,12 @@ let publish ctx cli =
       Dynamic_scope.with_top_level (App_context.session ctx) (App_context.invocation ctx)
         ~f:(fun () ->
           match Command_run.run_files ctx cli (Cli.files cli) with
-          | None -> failwith "pp: --publish-object: the program produced no value"
+          | None -> command "pp: --publish-object: the program produced no value"
           | Some value ->
               let forced = Force_deep.force_deep value in
               let hash = Identity.hash_value forced in
               (match Codec.encode_value forced with
-               | None -> failwith "pp: --publish-object: the program's value contains code (a closure/thunk/handle) and cannot be published as data"
+               | None -> command "pp: --publish-object: the program's value contains code (a closure/thunk/handle) and cannot be published as data"
                | Some _ -> Object_repository.put Object_repository.default ~key:hash ~value:forced);
               List.iter (fun blob ->
                 try Transport.LocalDir.push_blob shared_root ~hash:blob with _ -> ())

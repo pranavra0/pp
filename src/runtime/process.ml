@@ -4,8 +4,8 @@ open Pp_kernel
    (perform run CMD ARG...) ⇒ {"exit" int, "out" string, "err" string}
 
    Authority: `--grant process` (CapProcess) is required at perform time;
-   there is no way to mint it from user code (LAW 22). A denial raises
-   Capability_error, which node caching deliberately does not memoize
+   there is no way to mint it from user code (LAW 22). A denial raises a
+   structured capability error, which node caching deliberately does not memoize
    (authority is not identity — LAW 15).
 
    Trace soundness: a run inside a node is traced by the coarse-cell
@@ -71,19 +71,21 @@ let record_run_observations (resolved : string) : unit =
 
 let read_all_exn (path : string) : string =
   let ic = open_in_bin path in
-  let len = in_channel_length ic in
-  let s = really_input_string ic len in
-  close_in ic; s
+  Fun.protect
+    ~finally:(fun () -> close_in_noerr ic)
+    (fun () -> really_input_string ic (in_channel_length ic))
 
 let read_all (path : string) : string =
-  try read_all_exn path with _ -> ""
+  try read_all_exn path with
+  | Sys_error _ | Unix.Unix_error _ | End_of_file -> ""
 
 (* Execute argv, capturing stdout/stderr; cwd is the node sandbox when inside
    a node (created on demand), the process cwd otherwise. Every execution is
    journaled — "null rebuild executes zero external processes" is proved by
    the journal, not asserted. *)
 let exec (argv : string list) : int * string * string =
-  (try Journal.append (Journal.Exec argv) with _ -> ());
+  (try Journal.append (Journal.Exec argv) with
+   | Sys_error _ | Unix.Unix_error _ -> ());
   let out_f = Filename.temp_file "pp-run" ".out" in
   let err_f = Filename.temp_file "pp-run" ".err" in
   let cleanup () =
@@ -92,36 +94,39 @@ let exec (argv : string list) : int * string * string =
   in
   Fun.protect ~finally:cleanup (fun () ->
     let fd_out = Unix.openfile out_f [Unix.O_WRONLY; Unix.O_TRUNC] 0o600 in
-    let fd_err = Unix.openfile err_f [Unix.O_WRONLY; Unix.O_TRUNC] 0o600 in
-    let fd_in = Unix.openfile "/dev/null" [Unix.O_RDONLY] 0 in
-    (* Close the fds even if create_process raises (e.g. the binary vanished
-       between resolve_cmd and exec) — the outer cleanup only removes the temp
-       files. Same shape as Store_gc.run_replay / Remote. *)
-    let pid =
-      Fun.protect
-        ~finally:(fun () ->
-          Unix.close fd_in; Unix.close fd_out; Unix.close fd_err)
-        (fun () ->
-           let saved_cwd = Unix.getcwd () in
-           (match Sandbox.current ~create:true with
-            | Some d -> (try Unix.chdir d with _ -> ())
-            | None -> ());
-           Fun.protect
-             ~finally:(fun () -> try Unix.chdir saved_cwd with _ -> ())
-             (fun () ->
-                Unix.create_process (List.hd argv) (Array.of_list argv)
-                  fd_in fd_out fd_err))
-    in
-    let (_, status) = Unix.waitpid [] pid in
-    let code = match status with
-      | Unix.WEXITED n -> n
-      | Unix.WSIGNALED s | Unix.WSTOPPED s -> 128 + s
-    in
-    (code, read_all out_f, read_all err_f))
+    Fun.protect
+      ~finally:(fun () -> Unix.close fd_out)
+      (fun () ->
+        let fd_err = Unix.openfile err_f [Unix.O_WRONLY; Unix.O_TRUNC] 0o600 in
+        Fun.protect
+          ~finally:(fun () -> Unix.close fd_err)
+          (fun () ->
+            let fd_in = Unix.openfile "/dev/null" [Unix.O_RDONLY] 0 in
+            Fun.protect
+              ~finally:(fun () -> Unix.close fd_in)
+              (fun () ->
+                let saved_cwd = Unix.getcwd () in
+                (match Sandbox.current ~create:true with
+                 | Some d -> (try Unix.chdir d with Unix.Unix_error _ -> ())
+                 | None -> ());
+                let pid =
+                  Fun.protect
+                    ~finally:(fun () ->
+                      try Unix.chdir saved_cwd with Unix.Unix_error _ -> ())
+                    (fun () ->
+                       Unix.create_process (List.hd argv) (Array.of_list argv)
+                         fd_in fd_out fd_err)
+                in
+                let (_, status) = Unix.waitpid [] pid in
+                let code = match status with
+                  | Unix.WEXITED n -> n
+                  | Unix.WSIGNALED s | Unix.WSTOPPED s -> 128 + s
+                in
+                (code, read_all out_f, read_all err_f)))))
 
 let run_effect (args : value list) : value =
   if not (has_process_cap ()) then
-    raise (Capability_error "capability error: no process authority for run");
+    capability "capability error: no process authority for run";
   let argv = List.map (function
     | VString s -> s
     | v -> failwith ("run expects string command/arguments, got " ^ Presentation.string_of_value v))
@@ -198,7 +203,7 @@ let run_dep_effect (args : value list) : value =
   match args with
   | VString depfile :: (VString _ :: _ as cmd_args) ->
       if not (has_process_cap ()) then
-        raise (Capability_error "capability error: no process authority for run-dep!");
+    capability "capability error: no process authority for run-dep!";
       let argv = List.map (function
         | VString s -> s
         | v -> failwith ("run-dep! expects string arguments, got " ^ Presentation.string_of_value v))
@@ -267,10 +272,10 @@ let sandbox_read (path : string) : string option =
   | Some scratch ->
       (try
          let ic = open_in scratch in
-         let s = really_input_string ic (in_channel_length ic) in
-         close_in ic;
-         Some s
-       with _ -> None)
+         Fun.protect
+           ~finally:(fun () -> close_in_noerr ic)
+           (fun () -> Some (really_input_string ic (in_channel_length ic)))
+       with Sys_error _ | Unix.Unix_error _ | End_of_file -> None)
   | None -> None
 
 (* ---- Sealed cells: read dispatch shared by slurp/read-file ----
@@ -308,7 +313,7 @@ let read_dispatch ~(tag : string) ~(cap_err : string -> string) (path : string) 
           (try VSealed (Cell_repository.read_sealed path)
            with Sys_error msg -> failwith (tag ^ ": " ^ msg))
         else
-          raise (Capability_error (cap_err path))
+          capability (cap_err path)
 
 (* ---- Network: `(perform http-get url)` / `(perform http-post url body)` ----
 
@@ -384,8 +389,8 @@ let http_request ~(method_ : string) ~(url : string) ~(body : string option) : v
       (String.lowercase_ascii method_));
   let (_scheme, host, port) = parse_http_url url in
   if not (has_network_cap ~host ~port:(Some port)) then
-    raise (Capability_error
-      (Printf.sprintf "capability error: no network authority for %s:%d" host port));
+    capability
+      (Printf.sprintf "capability error: no network authority for %s:%d" host port);
   let curl = curl_bin () in
   let base_argv = [curl; "-sS"; "--max-time"; "30"; "-w"; "\n%{http_code}"] in
   let (argv, cleanup) =
@@ -394,7 +399,9 @@ let http_request ~(method_ : string) ~(url : string) ~(body : string option) : v
     | Some content ->
         let tmp = Filename.temp_file "pp-http-body" "" in
         let oc = open_out_bin tmp in
-        output_string oc content; close_out oc;
+        Fun.protect
+          ~finally:(fun () -> close_out_noerr oc)
+          (fun () -> output_string oc content);
         (base_argv @ ["-X"; "POST"; "--data-binary"; "@" ^ tmp; url],
          fun () -> (try Sys.remove tmp with _ -> ()))
   in

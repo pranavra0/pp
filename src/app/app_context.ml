@@ -1,5 +1,6 @@
 open Pp_runtime
 open Pp_kernel
+open Source_error
 type t = {
   host : Host_services.t;
   invocation : Invocation.t;
@@ -38,7 +39,7 @@ let initial_capabilities host cli =
   | Some (token_file, _, _, _, _) ->
       (match Cap_token.token_to_caps host (Cell_repository.read_raw token_file) with
        | Ok caps -> caps
-       | Error reason -> failwith ("pp: --remote-node: token rejected: " ^ reason))
+       | Error reason -> command ("pp: --remote-node: token rejected: " ^ reason))
   | None ->
       List.map (fun spec -> Capability.mint ~realpath:host.Host_services.canonical_realpath spec)
         (Cli.grants cli)
@@ -60,7 +61,7 @@ let create host cli =
       ~gc_keep_epochs:(Cli.gc_keep_epochs cli)
       ~fenced_policy:(Cli.fenced_policy cli) with
     | Ok value -> value
-    | Error message -> failwith ("pp: " ^ message)
+    | Error message -> command ("pp: " ^ message)
   in
   let scheduler =
     Scheduler.create ~policy:(Cli.schedule_policy cli)
