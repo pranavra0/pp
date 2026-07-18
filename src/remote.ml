@@ -5,7 +5,7 @@
    Wires Scheduler's [Remote member] policy to that transport: this
    module is compiled AFTER Evaluator, Transport, and Token (all three sit
    ABOVE Scheduler in the dependency graph — Transport calls
-   Evaluator.cell_authorized_for, and Evaluator calls Scheduler — so this
+   Observation.authorized_id, and Evaluator calls Scheduler — so this
    is the one place that can call all four), and wires itself into
    [Scheduler.remote_dispatch_hook] at [init] time, exactly the
    cycle-breaking indirection evaluator.ml already uses for
@@ -153,7 +153,7 @@ let parse_pin_probe_line (line : string) : (string * string) option =
    pass, populating the session's probe cache directly — no blob, no
    CAS, no re-hash-before-trust step, since the value's bytes travel
    in-line in the pin file itself rather than by content-addressed
-   reference. [probe_value_for] (primitives.ml) consults
+   reference. [Observation.probe_value] (primitives.ml) consults
    probe cache first, unconditionally, before ever calling a
    registered probe's observe-fn — so a pre-seeded entry here short-
    circuits the observe-fn for the whole pass exactly like an
@@ -269,7 +269,7 @@ let walk_files (path : string) (acc : (string * string) list ref) : unit =
   Fswalk.walk ~root:path ~cb:(fun ~rel:_ ~path visit ->
     match visit with
     | Fswalk.Entry { Unix.st_kind = Unix.S_REG; _ } ->
-        (try acc := (Store.file_cell_id path, Store.read_raw path) :: !acc
+        (try acc := (Cell.serialize (Observation.file path), Store.read_raw path) :: !acc
          with _ -> ())
     | _ -> ())
 

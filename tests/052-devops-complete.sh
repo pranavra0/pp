@@ -34,7 +34,7 @@
 #
 # Then the demo's OWN diagonal oracle (needs no pinning — deploy.pp's
 # desired root is a pure function of file:/sealed: cells, whose hashes
-# Store.observe_cell computes from disk bytes alone): 6 pull-row hashes
+# Observation.observe computes from disk bytes alone): 6 pull-row hashes
 # (placement serial/parallel:N/remote:B) via
 # --publish-object, asserted string-equal; --schedule parallel:N/remote:B
 # --check, asserted green (the direct placement-transparency proof); 6

@@ -49,8 +49,6 @@ top-table|src/store.ml|gc_live|test-diagnostic
 mutable-field|src/session.ml|fenced_actions|evaluation-session
 mutable-field|src/session.ml|gensym|evaluation-session
 mutable-field|src/session.ml|observations|pass
-mutable-field|src/session.ml|domain_observer|evaluation-session
-mutable-field|src/session.ml|probe_observer|evaluation-session
 mutable-field|src/session.ml|cache_bust|evaluation-session
 mutable-field|src/session.ml|current_env|evaluation-session
 mutable-field|src/session.ml|force_depth|evaluation-session

@@ -130,33 +130,15 @@ let force_deep (v : value) : value =
         | jobs -> Scheduler.dispatch_batch jobs));
   Force_deep.force_deep_plain ~force:(core_operations ()).force v
 
-(* ---- Probes: shared evaluate-and-pin logic ----
-
-   One implementation, used both by the `probe` primitive (registered below)
-   and by Store-facing re-observation wired in main.ml
-   (Dynamic_scope.probe_observer) — so a live program's `(probe name)` read and a
-   later trace-verification pass compute the identical value the identical
-   way and can never disagree (mirrors Dynamic_scope.proc_observer/observe_proc's
-   existing shape, same reason). *)
+(* Probe evaluation and pinning live in Observation; the primitive below uses
+   that same path as trace verification. *)
 
 (* Invoke a function value on already-evaluated args. *)
 let invoke (fn : value) (args : value list) : value =
   (core_operations ()).apply fn args
     (Session.current_env (Effect.perform Dynamic_scope.Get_session))
 
-(* Call a zero-argument function value. *)
-let call_zero_arg (fn : value) : value =
-  match fn with
-  | VClosure c ->
-      if c.params <> [] then
-        failwith (Printf.sprintf
-          "probe: observe-fn expects 0 arguments, got a closure of %d"
-          (List.length c.params));
-      invoke fn []
-  | VBuiltin _ -> invoke fn []
-  | _ -> failwith "probe: observe-fn is not a function"
-
-(* Call a function value with a fixed argument list — register-domain needs
+ (* Call a function value with a fixed argument list — register-domain needs
    1-arg (apply) and 2-arg (diff) calls into user-registered closures from
    OCaml orchestration (Domains.ml). *)
 let call_with_args (fn : value) (args : value list) : value =
@@ -170,67 +152,7 @@ let call_with_args (fn : value) (args : value list) : value =
   | VBuiltin _ -> invoke fn args
   | _ -> failwith "domain function value is not a function"
 
-(* [Some v]: the probe's value for this pass
-   after the first read, so a probe fires AT MOST ONCE per pass no matter how
-   many times it is read (demand-pruned: an unread probe never fires at all,
-   since this function is never called for it). [None]: no probe registered
-   under [name] — the caller decides what that means (a hard error for
-   `(probe name)`; an unverifiable trace cell for Store's re-observation, so
-   a trace naming a probe this process never registered simply misses). *)
-let probe_value_for (name : string) : value option =
-  let session = Effect.perform Dynamic_scope.Get_session in
-  match Session.find_probe session name with
-  | Some v -> Some v
-  | None ->
-      (match Session.find_domain session name with
-       | None -> None
-       | Some entry ->
-           let result =
-             try call_zero_arg entry.Session.dm_observe
-             with
-             | effect (Dynamic_scope.Record_read _), k -> Effect.Deep.continue k ()
-             | effect Dynamic_scope.In_node, k -> Effect.Deep.continue k false
-             | effect Dynamic_scope.Get_capabilities, k -> Effect.Deep.continue k [entry.Session.dm_cap]
-           in
-           Session.set_probe session name result;
-           Some result)
-
-(* Store.observe_cell's "probe:" arm, via the session probe observer
-   (wired in main.ml). Re-observing a probe cell at hit time evaluates the
-   probe (once per pass, pinned — [probe_value_for] is the SAME cache
-   `(probe name)` reads below, so a node forced earlier in this pass and one
-   verified later never disagree) and returns its hash for comparison
-   against the recorded one. *)
-let probe_observe_for_store (name : string) : string option =
-  match probe_value_for name with
-  | Some v -> Some (Identity.hash_value v)
-  | None -> None
-
-(* Store.observe_cell's `domain:<name>:<sub>` dispatch — calls the
-   registered domain's own `:observe-cell` closure (fn (sub) -> hash|nil),
-   the proc_observer/probe_observer pattern generalized to third-party
-   domains. Runs under the domain's own registered cap (mirrors
-   probe_value_for's with_ref discipline) so a domain's O(1) targeted
-   re-observation can itself read whatever it needs to answer. [None]: no
-   such domain, or it declared no :observe-cell — cannot re-observe, the
-   caller (Store.observe_cell) treats that as a forced miss. *)
-let domain_observe_cell_for_store (name : string) (sub : string) : string option =
-  match Session.find_domain (Effect.perform Dynamic_scope.Get_session) name with
-  | None -> None
-  | Some { Session.dm_observe_cell = None; _ } -> None
-  | Some { Session.dm_observe_cell = Some fn; dm_cap; _ } ->
-      (match
-         (try call_with_args fn [VString sub]
-          with
-          | effect (Dynamic_scope.Record_read _), k -> Effect.Deep.continue k ()
-          | effect Dynamic_scope.In_node, k -> Effect.Deep.continue k false
-          | effect Dynamic_scope.Get_capabilities, k -> Effect.Deep.continue k [dm_cap])
-       with
-       | VNil -> None
-       | VString h -> Some h
-       | other -> Some (Identity.hash_value other))
-
-(* A table of built-in functions: name -> value *)
+ (* A table of built-in functions: name -> value *)
 let builtins : (string, value) Hashtbl.t = Hashtbl.create 64
 
 let register (name : string) (f : value list -> value) : unit =
@@ -715,7 +637,7 @@ let register_stdlib () =
     | _ -> failwith "hash-value expects one argument");
 
   (* (hash-string S) — SHA-256 hex digest of S's raw bytes, the SAME
-     algorithm Store.hash_file_opt uses for a file's content hash (Core_model.
+     algorithm Observation.hash_file uses for a file's content hash (Core_model.
      Hasher.hash_string) — needed so a domain's `diff` (domain-fs.pp) can compute a content hash from a string PURELY (no
      capability, no store I/O — unlike `blob`, this never touches
      ~/.pp/store) and compare it against what `tree-observe` observed. *)
@@ -805,7 +727,7 @@ let register_stdlib () =
   (* File predicates: capability-gated observations recorded as `stat:` trace
      cells — presence/kind only, never contents, so a node that probed
      existence recomputes exactly when the path appears/disappears/changes
-     kind (see Store.stat_cell_id). *)
+     kind. *)
   let stat_primitive name want_dir =
     register name (fun args ->
       match force_args args with
@@ -814,8 +736,8 @@ let register_stdlib () =
                     (Effect.perform Dynamic_scope.Get_capabilities)) then
             raise (Source_error.Capability_error
                      (name ^ ": capability error: no read access for " ^ path));
-          let kind = Store.stat_kind path in
-          Dynamic_scope.record_read (Store.stat_cell_id path) (Store.stat_kind_hash kind);
+          let kind = Observation.stat_kind path in
+          Observation.record (Observation.stat path) (Observation.stat_hash kind);
           VBool (if want_dir then kind = "dir" else kind <> "absent")
       | _ -> failwith (name ^ " expects a path string"))
   in
@@ -827,7 +749,7 @@ let register_stdlib () =
     match args with
     | [] ->
         let av = Invocation.program_argv (Effect.perform Dynamic_scope.Get_invocation) in
-        Dynamic_scope.record_read Store.argv_cell_id (Store.argv_observed_hash av);
+        Observation.record Cell.Argv (Observation.argv_hash av);
         List.fold_right (fun s acc -> VPair (VString s, acc)) av VNil
     | _ -> failwith "argv takes no arguments");
 
@@ -836,7 +758,7 @@ let register_stdlib () =
     match force_args args with
     | [VString name] ->
         let v = Sys.getenv_opt name in
-        Dynamic_scope.record_read (Store.env_cell_id name) (Store.env_observed_hash v);
+        Observation.record (Cell.Env name) (Observation.env_hash v);
         (match v with Some s -> VString s | None -> VNil)
     | _ -> failwith "env-get expects a variable name string");
 
@@ -1009,11 +931,11 @@ let register_domains () =
         VNil
     | _ -> failwith "register-probe expects a name, an observe-fn, and a read capability");
   (* ---- `probe` primitive: one-time evaluated lazy read of a registered probe ----
-     a pass evaluates observe-fn (via probe_value_for, above: OUTSIDE the
+     a pass evaluates observe-fn (via Observation.probe_value, above: OUTSIDE the
      trace stack, under exactly the registered read-cap) and pins the
      result in the session for the rest of the pass; every read
      (first or not) records ONLY the `probe:<name>` cell into the caller's
-     trace, via the ordinary record_read every other cell-observing
+     trace, via the Observation.record path every other cell-observing
      primitive uses (slurp's `file:`, env-get's `env:`, …) — capability-free
      at THIS call site, because the read-cap's authority was already spent
      evaluating the probe, not reading its pinned result. An unregistered
@@ -1022,10 +944,10 @@ let register_domains () =
     let args = force_args args in
     match args with
     | [VString name] | [VKeyword name] ->
-        (match probe_value_for name with
+        (match Observation.probe_value name with
          | None -> failwith ("probe: no such probe registered: " ^ name)
          | Some v ->
-             Dynamic_scope.record_read (Cell.(to_string (Probe name))) (Identity.hash_value v);
+             Observation.record (Cell.Probe name) (Identity.hash_value v);
              v)
     | _ -> failwith "probe expects a probe name string");
   ()

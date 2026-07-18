@@ -286,94 +286,6 @@ let store_trace ~key ~outcome ~result_hash ~reads =
       atomic_write (trace_path key) content
     ))
 
-(* ---- Cell observation and trace verification ----
-   A cell-id is "file:<canonical-path>". Its observed hash is the hash of the
-   file's current contents; a missing/unreadable cell observes as None, which
-   never matches a recorded hash (so it forces a miss). *)
-
-(* A file cell-id is "file:<canonical-path>" (SPEC LAW 23 / DESIGN §2.1):
-   the path is canonicalized once, here, via World_path.canonical, so the
-   hit-time authority check (which canonicalizes independently in
-   Capabilities.path_grants) and the staleness check agree regardless of
-   which spelling (symlink, /var vs /private/var, trailing slash) the
-   program used. *)
-let file_cell_id (path : string) : string =
-  Cell.(to_string (File ((World_path.canonical path) :> string)))
-
-(* A stat cell — "stat:<canonical-path>" — records what a file *predicate*
-   observed: presence and kind, never contents. Precise for file-exists?/
-   dir?: creating or deleting the path invalidates, content edits do not; a
-   trace that observed absence re-verifies while the path stays absent. *)
-let stat_cell_id (path : string) : string =
-  Cell.(to_string (Stat ((World_path.canonical path) :> string)))
-
-let stat_kind (path : string) : string =
-  match Unix.lstat path with
-  | { Unix.st_kind = Unix.S_DIR; _ } -> "dir"
-  | exception _ -> "absent"
-  | _ -> "file"
-
-let stat_kind_hash (kind : string) : string =
-  Hasher.hash_string ("stat:" ^ kind)
-
-(* Environment observations: "env:<NAME>" — value or absence. The present and
-   absent cases carry DISTINCT Hasher.hash_concat tags so a variable whose value is the
-   literal string "absent" cannot hash-collide with an unset variable (the old
-   `Hasher.hash_string ("env:" ^ s)` vs `Hasher.hash_string "env:absent"` did exactly that,
-   an observation collision that let a node hit a result cached under
-   the wrong world-state); framing via Hasher.hash_concat also makes any value bytes,
-   including ':' , injective. *)
-let env_cell_id (name : string) : string = Cell.(to_string (Env name))
-let env_observed_hash (v : string option) : string =
-  match v with
-  | Some s -> Hasher.hash_concat ["env-present"; s]
-  | None -> Hasher.hash_concat ["env-absent"]
-
-(* The single argv cell: the program-argument list after `--`. *)
-let argv_cell_id : string = Cell.to_string Cell.Argv
-let argv_observed_hash argv : string = Hasher.hash_concat ("argv" :: argv)
-
-let hash_file_opt (path : string) : string option =
-  try
-    let ic = open_in_bin path in
-    let len = in_channel_length ic in
-    let content = really_input_string ic len in
-    close_in ic;
-    Some (Hasher.hash_string content)
-  with _ -> None
-
-(* Whole-tree content hash — the coarse-cell soundness floor for the
-   `run` effect: every regular file under [root] contributes its relative path
-   and content hash (sorted); symlinks contribute their target, other kinds a
-   marker. Coarse — ANY change under the root invalidates — but sound and
-   cheaply re-observable; per-tool depfile adapters refine it later. *)
-let tree_hash (root : string) : string =
-  let entries = ref [] in
-  let add rel part = entries := (rel ^ "=" ^ part) :: !entries in
-  Fswalk.walk ~root ~cb:(fun ~rel ~path visit ->
-    match visit with
-    | Fswalk.Lstat_failed ->
-        if rel = "" then add "" "missing"
-        else add rel "unstattable"
-    | Fswalk.Readdir_failed ->
-        add rel "unreadable-dir"
-    | Fswalk.Entry st ->
-        if rel = "" then
-          (* Root entry: hash_file_opt for any non-directory root
-             (including symlinks — reads content, not target) *)
-          match st.Unix.st_kind with
-          | Unix.S_DIR -> ()
-          | _ -> add "" (match hash_file_opt root with Some h -> h | None -> "unreadable")
-        else
-          match st.Unix.st_kind with
-          | Unix.S_DIR -> ()
-          | Unix.S_REG ->
-              add rel (match hash_file_opt path with Some h -> h | None -> "unreadable")
-          | Unix.S_LNK ->
-              add rel ("link->" ^ (try Unix.readlink path with _ -> "?"))
-          | _ -> add rel "special");
-  Hasher.hash_concat ("tree" :: List.sort compare !entries)
-
 let blobs_dir = Filename.concat store_root "blobs"
 
 let store_blob (content : string) : string =
@@ -393,65 +305,11 @@ let load_blob (h : string) : string option =
 
 (* Per-run pin table: cell-id → content hash of the run's snapshot. *)
 let unpin_file (path : string) : unit =
-  Session.remove_run_pin (Effect.perform Dynamic_scope.Get_session) (file_cell_id path)
-
-(* Re-observe a cell's current world state (one arm per Cell kind). *)
-let observe_cell (cell_id : string) : string option =
-  match Cell.of_string cell_id with
-  | Cell.File path ->
-      (* A pinned cell re-observes its run snapshot, keeping validity
-         decisions consistent with what this run's nodes actually read. *)
-      (match Session.find_run_pin (Effect.perform Dynamic_scope.Get_session) cell_id with
-       | Some h -> Some h
-       | None -> hash_file_opt path)
-  | Cell.RuntimeFile path ->
-      (* A loader read: re-observed like a file cell; authority-exempt
-         at hit time (the read was the interpreter's, not the user's). *)
-      hash_file_opt path
-  | Cell.Tool path ->
-      (* The command binary a `run` resolved to: re-observed as its
-         current content hash, like a file cell under a different authority
-         rule (process grant, not fs — see cell_authorized). *)
-      hash_file_opt path
-  | Cell.Tree root -> (try Some (tree_hash root) with _ -> None)
-  | Cell.Stat path -> Some (stat_kind_hash (stat_kind path))
-  | Cell.Env name -> Some (env_observed_hash (Sys.getenv_opt name))
-  | Cell.Argv ->
-      Some (argv_observed_hash
-              (Invocation.program_argv (Effect.perform Dynamic_scope.Get_invocation)))
-  (* Config and handler cells re-observe the CALLER's ambient stacks
-     (LAW 33/26) through the same helpers that recorded them. *)
-  | Cell.Config key -> (try Some (Dynamic_scope.observe_config key) with _ -> None)
-  | Cell.Handler name -> (try Some (Dynamic_scope.observe_handler name) with _ -> None)
-  | Cell.Proc name -> (try Dynamic_scope.observe_proc name with _ -> None)
-  (* Probes: re-observing evaluates the probe (once per pass, pinned in
-     the same session cache `(probe name)` reads) via the
-     session probe observer (wired
-     in main.ml — Store cannot depend on Primitives directly). A probe this
-     process never registered returns None: cannot re-observe, never
-     verifies, forces a miss (the sound, conservative answer). *)
-  | Cell.Probe name -> (try Dynamic_scope.observe_probe name with _ -> None)
-  (* Sealed cells: re-hash the CURRENT bytes without ingesting — mirrors
-     the read-path logic (read_sealed_cell below) but never writes a pin or
-     touches the CAS; a pin from THIS run is preferred
-     over a fresh disk read so a re-observation inside the same pass never
-     contradicts what was actually read. *)
-  | Cell.Sealed path ->
-      (match Session.find_sealed_pin (Effect.perform Dynamic_scope.Get_session) cell_id with
-       | Some bytes -> Some (Hasher.hash_string bytes)
-       | None -> hash_file_opt path)
-  (* A third-party domain's own sub-cell, via the domain's own
-     :observe-cell closure (wired through the session in main.ml —
-     the proc_observer/probe_observer indirection, generalized: Store
-     cannot depend on Primitives directly). A domain with no :observe-cell,
-     or one this process never registered, returns None — cannot
-     re-observe, never verifies, forces a miss (the sound default). *)
-  | Cell.Domain { name; sub } -> (try Dynamic_scope.observe_domain_cell name sub with _ -> None)
-  | Cell.Unknown _ -> None  (* cannot re-observe ⇒ never verifies *)
+  Session.remove_run_pin (Effect.perform Dynamic_scope.Get_session) (Cell.serialize (Observation.file path))
 
 let trace_verifies (tr : trace) : bool =
   List.for_all (fun (cell_id, recorded_hash) ->
-    match observe_cell cell_id with
+    match Observation.observe_id cell_id with
     | Some current -> current = recorded_hash
     | None -> false)
     tr.tr_reads
@@ -459,7 +317,7 @@ let trace_verifies (tr : trace) : bool =
 (* Record a world-read made by the currently-forcing node(s). Called from the
    read primitives (slurp, read-file). *)
 let record_file_read (path : string) (content : string) : unit =
-  Dynamic_scope.record_read (file_cell_id path) (Hasher.hash_string content)
+  Observation.record (Observation.file path) (Hasher.hash_string content)
 
 (* ---- Snapshot-as-CAS-ingest — torn reads are dead ----
 
@@ -483,9 +341,9 @@ let read_raw (path : string) : string =
    coherent). Only pp's own write-file advances a cell's snapshot
    (unpin_file). *)
 let read_file_cell (path : string) : string =
-  let cell = file_cell_id path in
+  let cell = Cell.serialize (Observation.file path) in
   let serve content h =
-    Dynamic_scope.record_read cell h;
+    Observation.record (Cell.parse cell) h;
     content
   in
   let session = Effect.perform Dynamic_scope.Get_session in
@@ -516,24 +374,24 @@ let read_file_cell (path : string) : string =
    cell id exactly like [run_pins] keys a "file:<path>" cell id — same
    per-run consistency (first read of a run pins; later reads of the SAME
    cell in the SAME run serve the pin), different storage (never the CAS).
-   The cell records via ordinary [Dynamic_scope.record_read] with Hasher.hash_string of
+   The cell records via [Observation.record] with Hasher.hash_string of
    the bytes (never the bytes themselves — that hash is what LAW 39's
    rotation-invalidation and the trace mechanism need). Returns the raw
    bytes; the caller wraps them as VSealed. *)
 let sealed_cell_id (path : string) : string =
-  Cell.(to_string (Sealed ((World_path.canonical path) :> string)))
+  Cell.serialize (Observation.sealed path)
 
 let read_sealed_cell (path : string) : string =
   let cell = sealed_cell_id path in
   let session = Effect.perform Dynamic_scope.Get_session in
   match Session.find_sealed_pin session cell with
   | Some bytes ->
-      Dynamic_scope.record_read cell (Hasher.hash_string bytes);
+      Observation.record (Cell.parse cell) (Hasher.hash_string bytes);
       bytes
   | None ->
       let bytes = read_raw path in
       Session.set_sealed_pin session cell bytes;
-      Dynamic_scope.record_read cell (Hasher.hash_string bytes);
+      Observation.record (Cell.parse cell) (Hasher.hash_string bytes);
       bytes
 
 (* Result of a cache lookup: a verified success, a verified (memoized) failure
@@ -607,7 +465,7 @@ let hit ~key ~authorized : hit_result =
     let classify t =
       match
         List.find_opt (fun (c, h) ->
-          match observe_cell c with
+          match Observation.observe_id c with
           | Some cur -> cur <> h
           | None -> true)
           t.tr_reads
@@ -656,14 +514,14 @@ let hit ~key ~authorized : hit_result =
                (short_key key)
                (match tr.tr_outcome with Ok -> "ok" | Failed -> "failing")
                (List.length tr.tr_reads);
-             List.iter (fun (c, h) -> Dynamic_scope.record_read c h) tr.tr_reads;
+             Observation.replay tr.tr_reads;
              (* GC mark (see [gc_marking]'s header comment above):
                 a verified hit means this trace/object/blob(s) are LIVE for
                 whichever root program is currently being replayed. *)
              mark_live ("trace:" ^ key);
              mark_live ("object:" ^ tr.tr_result_hash);
              List.iter (fun (c, h) ->
-               match Cell.of_string c with
+               match Cell.parse c with
                | Cell.File _ -> mark_live ("blob:" ^ h)
                | _ -> ())
                tr.tr_reads;

@@ -16,7 +16,6 @@ let read path =
   let channel = open_in (canonical :> string) in
   let content = really_input_string channel (in_channel_length channel) in
   close_in channel;
-  Dynamic_scope.record_read
-    Cell.(to_string (RuntimeFile (canonical :> string)))
+  Observation.record (Cell.RuntimeFile (canonical :> string))
     (Hasher.hash_string content);
   content

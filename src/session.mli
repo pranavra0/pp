@@ -42,10 +42,6 @@ val remove_run_pin : t -> string -> unit
 val iter_run_pins : t -> (string -> string -> unit) -> unit
 val set_node_thunk : t -> string -> Core_model.thunk -> unit
 val find_node_thunk : t -> string -> Core_model.thunk option
-val set_probe_observer : t -> (string -> string option) -> unit
-val observe_probe : t -> string -> string option
-val set_domain_observer : t -> (string -> string -> string option) -> unit
-val observe_domain : t -> string -> string -> string option
 val current_env : t -> Core_model.env
 val set_current_env : t -> Core_model.env -> unit
 val force_depth : t -> int

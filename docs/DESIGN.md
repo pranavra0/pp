@@ -713,7 +713,7 @@ existing `File`, `Tree`, `Stat` and `Proc` kinds, so there is no
 store-format change. Authorisation is a subset check of the registered
 `write_cap` against the caller's held capabilities — no new authority
 code, the same narrowing check `with-caps` uses. `:observe-cell (fn (sub)
--> hash|nil)` gives `Store.observe_cell` an O(1) targeted re-observation,
+-> hash|nil)` gives `Observation.observe` an O(1) targeted re-observation,
 generalising the existing process-observer and probe-observer hook
 pattern.
 

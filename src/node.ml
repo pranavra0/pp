@@ -75,9 +75,7 @@ let enforce_type (t : thunk) (result : value) : unit =
 let replay_node_reads (t : thunk) (key_of : thunk -> string) : unit =
   if t.thunk_persist && Effect.perform Dynamic_scope.In_node then
     let traces = Store.load_traces ~key:(key_of t) in
-    List.iter (fun tr ->
-      List.iter (fun (c, h) -> Dynamic_scope.record_read c h) tr.Store.tr_reads
-    ) traces
+    List.iter (fun tr -> Observation.replay tr.Store.tr_reads) traces
 
 
 (* ---- Serve hit / run node body (the rebuilder) ------------------------ *)

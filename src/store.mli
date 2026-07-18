@@ -5,7 +5,7 @@
    [store_blob], [atomic_write]) — the only places a durable write happens, so
    a crash-injection harness that kills the process at each of these calls and
    restarts can assert the store is always valid-or-invalidated, never wrong —
-   the read/verify path ([load_object], [load_traces], [hit], [observe_cell]), the
+   the read/verify path ([load_object], [load_traces], [hit]), the
    cell-id/observation helpers, and the audit/GC surface. The .mli fixes the
    boundary so durable writes route ONLY through these choke points — the path
    plumbing ([obj_path]/[trace_path]/[version_path]/[locks_dir]/…), the lock
@@ -33,21 +33,10 @@ val store_trace :
   key:string ->
   outcome:trace_outcome ->
   result_hash:string -> reads:(string * string) list -> unit
-val file_cell_id : string -> string
-val stat_cell_id : string -> string
-val stat_kind : string -> string
-val stat_kind_hash : string -> string
-val env_cell_id : string -> string
-val env_observed_hash : string option -> string
-val argv_cell_id : string
-val argv_observed_hash : string list -> string
-val hash_file_opt : string -> string option
-val tree_hash : string -> string
 val blobs_dir : string
 val store_blob : string -> string
 val load_blob : string -> string option
 val unpin_file : string -> unit
-val observe_cell : string -> string option
 val trace_verifies : trace -> bool
 val record_file_read : string -> string -> unit
 val read_raw : string -> string

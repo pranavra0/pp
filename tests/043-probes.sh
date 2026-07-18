@@ -163,7 +163,7 @@ assert "register-probe-in-node-errors" "node bod" present
 #     long-running `pp --watch` process on a timer, with no special-cased
 #     wiring — a probe read is an ordinary cell observation, so the
 #     existing generic watch-loop polling (session observations ->
-#     Store.observe_cell) already covers `probe:` cells for free.
+#     Observation.observe) already covers `probe:` cells for free.
 # =====================================================================
 rm -rf "$TMP/.pp"
 printf '1\n' > "$COUNTER"

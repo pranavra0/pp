@@ -303,7 +303,7 @@ let decide host ~(key : string) ~(token_text : string) : decision =
   match Cap_token.token_to_caps host token_text with
   | Error reason -> DDeny reason
   | Ok caps ->
-      let authorized = Evaluator.cell_authorized_for caps in
+      let authorized = Observation.authorized_id caps in
       (match Store.hit ~key ~authorized with
        | Store.Miss -> DMiss
        | Store.HitOk v | Store.HitFailed v ->
@@ -333,7 +333,7 @@ let decide host ~(key : string) ~(token_text : string) : decision =
                   List.sort_uniq compare
                     (List.concat_map (fun tr ->
                        List.filter_map (fun (c, h) ->
-                         match Cell.of_string c with
+                         match Cell.parse c with
                          | Cell.File _ -> Some h
                          | _ -> None)
                          tr.Store.tr_reads)

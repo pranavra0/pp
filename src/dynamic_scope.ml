@@ -40,13 +40,6 @@ let record_read cell_id observed_hash =
   if Effect.perform Get_observe_all then
     Session.add_observation (Effect.perform Get_session) (cell_id, observed_hash)
 
-let observe_proc _ = None
-
-let observe_probe name =
-  Session.observe_probe (Effect.perform Get_session) name
-
-let config_cell_id key = Cell.(to_string (Config key))
-let handler_cell_id name = Cell.(to_string (Handler name))
 let config_absent_hash = Hasher.hash_string "config-cell:absent"
 let builtin_handler_hash = Hasher.hash_string "handler-cell:builtin"
 
@@ -74,15 +67,6 @@ let observe_handler name =
   match Effect.perform (Lookup_handler name) with
   | Some (_, hash) -> hash
   | None -> builtin_handler_hash
-
-let record_config_read key =
-  record_read (config_cell_id key) (observe_config key)
-
-let record_handler_observation name =
-  record_read (handler_cell_id name) (observe_handler name)
-
-let observe_domain_cell name sub =
-  Session.observe_domain (Effect.perform Get_session) name sub
 
 let with_top_level (session : Session.t) (invocation : Invocation.t) ~f x =
   try f x with

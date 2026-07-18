@@ -3,16 +3,14 @@
    A cell is one observable unit of the world a node can read; a trace records
    (cell, observed-hash) pairs and a hit re-observes them (SPEC LAW 21). Cells
    are persisted as quoted strings inside trace lines (store.ml's canonical
-   text format), so [to_string]/[of_string] round-trip EXACTLY — the
+   text format), so [serialize]/[parse] round-trip EXACTLY — the
    on-disk format is frozen; this module only replaces scattered
    "file:" ^ path concatenations and prefix-sniffing cascades with one
    constructor/parser pair.
 
-   Who re-observes and who may read each kind is decided elsewhere
-   (Store.observe_cell / Evaluator.cell_authorized_for); this module owns only
-   the naming.
+   Observation owns re-observation and authorization; this module owns naming.
 
-   File-cell paths are canonicalized before they ever reach [to_string]
+   File-cell paths are canonicalized before they ever reach [serialize]
    (World_path.canonical — SPEC LAW 23: absolute realpath,
    no trailing slash), so a canonical path always starts with '/'. That
    invariant RESERVES the grammar for a future host-qualified form,
@@ -32,7 +30,6 @@ type t =
   | Argv                   (* the single program-argument-list cell *)
   | Config of string       (* ambient config key observation (LAW 33) *)
   | Handler of string      (* which handler intercepted an effect (LAW 26) *)
-  | Proc of string         (* supervised service: running spec hash or stopped *)
   | Probe of string        (* observer-written volatile cell, "probe:<name>" —
                                driver-evaluated at most once per pass, capability-
                                free at the read site (authority was consumed by
@@ -43,19 +40,10 @@ type t =
                                themselves never enter the CAS (session-only pins,
                                in-memory-only) *)
   | Domain of { name : string; sub : string }
-                           (* a third-party registered domain's own
-                              sub-cell, "domain:<name>:<sub>" — fs/proc keep
-                              their existing File/Tree/Stat/Proc kinds (no
-                              store-format bump); this kind exists only for
-                              domains registered via `register-domain` that
-                              supply an `:observe-cell` closure (the
-                              proc_observer/probe_observer hook pattern,
-                              generalized). [sub] is opaque to core — whatever
-                              string the domain's own diff/apply chose to
-                              name its own sub-observation. *)
+                           (* registered domain sub-cell; [sub] is opaque *)
   | Unknown of string      (* unrecognized kind: can never re-verify *)
 
-let to_string = function
+let serialize = function
   | File path -> "file:" ^ path
   | RuntimeFile path -> "runtime:file:" ^ path
   | Tool path -> "tool:" ^ path
@@ -65,16 +53,15 @@ let to_string = function
   | Argv -> "argv:"
   | Config key -> "config:" ^ key
   | Handler name -> "handler:" ^ name
-  | Proc name -> "proc:" ^ name
   | Probe name -> "probe:" ^ name
   | Sealed path -> "sealed:" ^ path
   | Domain { name; sub } -> "domain:" ^ name ^ ":" ^ sub
   | Unknown s -> s
 
 (* The string-payload cell kinds: prefix + how to rebuild the constructor from
-   the stripped payload. Most-specific prefix first (of_string tries them in
-   order, so "runtime:file:" must precede "file:"). of_string derives from this
-   one table; to_string stays the explicit exhaustive match above (the compiler
+   the stripped payload. Most-specific prefix first ([parse] tries them in
+   order, so "runtime:file:" must precede "file:"). [parse] derives from this
+   one table; [serialize] stays the explicit exhaustive match above (the compiler
    forces a printed form for a new constructor); the round-trip ratchet below
    ties the two so a kind added to one direction but not the other fails. Argv
    (no payload) and Domain (two fields) are structurally special, handled
@@ -88,12 +75,11 @@ let string_kinds : (string * (string -> t)) list = [
   "env:",          (fun p -> Env p);
   "config:",       (fun p -> Config p);
   "handler:",      (fun p -> Handler p);
-  "proc:",         (fun p -> Proc p);
   "probe:",        (fun p -> Probe p);
   "sealed:",       (fun p -> Sealed p);
 ]
 
-let of_string (s : string) : t =
+let parse (s : string) : t =
   let has prefix =
     let plen = String.length prefix in
     String.length s >= plen && String.sub s 0 plen = prefix
@@ -118,15 +104,15 @@ let of_string (s : string) : t =
 
 (* Round-trip ratchet: a new constructor makes the [_cover] match non-exhaustive
    (a build error, which the comment sends here), and the assertion fails the
-   build if to_string/of_string disagree for any representative. *)
+   build if serialize/parse disagree for any representative. *)
 let () =
   let _cover : t -> unit = function
     | File _ | RuntimeFile _ | Tool _ | Tree _ | Stat _ | Env _ | Argv
-    | Config _ | Handler _ | Proc _ | Probe _ | Sealed _ | Domain _
+    | Config _ | Handler _ | Probe _ | Sealed _ | Domain _
     | Unknown _ -> ()
   in
-  List.iter (fun t -> assert (of_string (to_string t) = t))
+  List.iter (fun t -> assert (parse (serialize t) = t))
     [ File "/x"; RuntimeFile "/x"; Tool "/x"; Tree "/x"; Stat "/x"; Env "X";
-      Argv; Config "k"; Handler "h"; Proc "p"; Probe "p"; Sealed "/x";
+      Argv; Config "k"; Handler "h"; Probe "p"; Sealed "/x";
       Domain { name = "d"; sub = "s" }; Domain { name = "d"; sub = "" };
       Unknown "zzz:unrecognized" ]

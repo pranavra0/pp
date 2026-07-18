@@ -47,8 +47,8 @@ let resolve_cmd (cmd : string) : string option =
     find (String.split_on_char ':' path)
 
 let record_tool_cell (resolved : string) : unit =
-  match Store.hash_file_opt resolved with
-  | Some h -> Dynamic_scope.record_read (Cell.(to_string (Tool ((World_path.canonical resolved) :> string)))) h
+  match Observation.hash_file resolved with
+  | Some h -> Observation.record (Observation.tool resolved) h
   | None -> ()
 
 (* The coarse-cell soundness floor: one whole-tree hash per fs-read
@@ -59,7 +59,7 @@ let record_tree_cells () : unit =
     List.iter (fun ((path : Paths.canonical), mode) ->
       match mode with
       | Capability.Read | Capability.ReadWrite ->
-          Dynamic_scope.record_read (Cell.(to_string (Tree (path :> string)))) (Store.tree_hash (path :> string))
+          Observation.record (Cell.Tree (path :> string)) (Observation.tree_hash (path :> string))
       | Capability.Write -> ())
     (Capability.list_fs_paths cap))
     (Effect.perform Dynamic_scope.Get_capabilities)
@@ -187,8 +187,8 @@ let record_depfile_cells (deps : string list) : unit =
            (Effect.perform Dynamic_scope.Get_capabilities)
       then ignore (Store.read_file_cell dep)
       else
-        match Store.hash_file_opt dep with
-        | Some h -> Dynamic_scope.record_read (Cell.(to_string (Tool ((World_path.canonical dep) :> string)))) h
+        match Observation.hash_file dep with
+        | Some h -> Observation.record (Observation.tool dep) h
         | None -> ()
     end)
     deps
@@ -319,7 +319,7 @@ let read_dispatch ~(tag : string) ~(cap_err : string -> string) (path : string) 
    arm use) — network reads are not convergent and are not the sanctioned
    nondeterminism mechanism (probes are, LAW 37/38); legal in probe
    observe-fns (which run with trace_stack forced to [] —
-   Primitives.probe_value_for), domain observe/apply, and the script tier. *)
+   Observation.probe_value), domain observe/apply, and the script tier. *)
 let has_network_cap ~(host : string) ~(port : int option) : bool =
   List.exists (fun cap -> Capability.check_network cap ~host ~port)
     (Effect.perform Dynamic_scope.Get_capabilities)

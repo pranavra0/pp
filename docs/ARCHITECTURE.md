@@ -148,7 +148,7 @@ same error until a recorded read changes (SPEC law 28). A raising thunk
 resets away from `Evaluating` rather than getting stuck there. A hit is
 served only if the caller is authorized to read the whole closure of cells
 the trace depends on, checked by `Store.hit ~authorized` and
-`cell_authorized` (SPEC law 23b). A capability denial, `Capability_error`,
+`Observation.authorized` (SPEC law 23b). A capability denial, `Capability_error`,
 is never memoized.
 
 
@@ -158,9 +158,13 @@ With `pp --watch --stabilize`, the reverse-edge index built by
 The session lifecycle keeps the thunk memo alive across watch
 iterations, so clean nodes skip `Store.hit` entirely.
 
-This is still narrow. It covers file cells only, folds config and handlers
-into the key rather than tracking them as separate traces, and has no
-cutoff for inline-nested nodes.
+`Observation` is the exhaustive boundary for constructing, parsing, recording,
+replaying, re-observing, and authorizing every cell kind. File, stat, env, argv,
+config, handler, probe, sealed, domain, tool, and tree reads all pass through
+it. Session owns the probe and domain registries it consults; Store has no
+upward observer callback. The retired, never-produced `proc:` spelling parses
+as unknown so an old trace conservatively misses while its bytes remain
+readable. Inline-nested cutoff remains absent.
 
 ## Islands (`island.ml`)
 
@@ -211,7 +215,8 @@ world (files, processes, the network). `main.ml` is the thin entry point;
 | `src/codec.ml` | The one canonical, versioned, byte-stable text encoding for store objects and traces. |
 | `src/constant_time.ml` | Constant-time byte comparison, used to verify signed tokens without a timing side channel. |
 | `src/paths.ml` | The one component-boundary path-containment predicate, `Paths.under`, behind capability scopes, loader authority, and domain bounds. |
-| `src/cell.ml` | The typed cell taxonomy: the `Cell.t` variant plus `of_string` and `to_string`, with the on-disk strings frozen — naming only; observation and authority live in `store.ml` and `evaluator.ml`. |
+| `src/cell.ml` | The closed cell taxonomy and its byte-stable `parse`/`serialize` mapping. |
+| `src/observation.ml` | Typed cell construction, observation hashes, record/replay, re-observation, and hit authorization. |
 | `src/surface_tables.ml` | The closed surface sets (sigils, observation heads, lowering templates) as data, plus the renderer for SPEC's generated block. |
 | `src/desugar.ml` | Reader-level desugars shared by both readers (SPEC Appendix B). |
 | `src/comments.ml` | The side channel `pp fmt` uses to carry comments across a surface transpile. |

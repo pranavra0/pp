@@ -20,8 +20,6 @@ type t = {
   run_pins : (string, string) Hashtbl.t;
   preseeded_run_pins : (string, string) Hashtbl.t;
   node_thunks : (string, Core_model.thunk) Hashtbl.t;
-  mutable probe_observer : string -> string option;
-  mutable domain_observer : string -> string -> string option;
   mutable current_env : Core_model.env;
   mutable force_depth : int;
   mutable cache_bust : int;
@@ -37,7 +35,6 @@ let create operations = {
   fenced_actions = [];
   run_pins = Hashtbl.create 64; preseeded_run_pins = Hashtbl.create 64;
   node_thunks = Hashtbl.create 256;
-  probe_observer = (fun _ -> None); domain_observer = (fun _ _ -> None);
   current_env = Environment.empty; force_depth = 0; cache_bust = 0; fenced_epoch = "";
 }
 let force t = t.operations.core.force
@@ -85,10 +82,6 @@ let remove_run_pin t = Hashtbl.remove t.run_pins
 let iter_run_pins t f = Hashtbl.iter f t.run_pins
 let set_node_thunk t = Hashtbl.replace t.node_thunks
 let find_node_thunk t = Hashtbl.find_opt t.node_thunks
-let set_probe_observer t f = t.probe_observer <- f
-let observe_probe t = t.probe_observer
-let set_domain_observer t f = t.domain_observer <- f
-let observe_domain t = t.domain_observer
 let current_env t = t.current_env
 let set_current_env t env = t.current_env <- env
 let force_depth t = t.force_depth

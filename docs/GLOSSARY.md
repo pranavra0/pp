@@ -76,8 +76,8 @@ brace-to-s-expression mapping.
   today: `file:<path>`, `config:<key>`,
   `handler:<effect>`, `tool:<binary>`, `tree:<root>` (the coarse floor for
   `run`), `runtime:file:<path>`, `stat:<path>`, `env:<NAME>`, and `argv:`,
-  plus `probe:<name>` and `sealed:<path>` (see below). Planned: `glob:`
-  and `domain:<name>:<sub>` for third-party domains.
+  plus `probe:<name>`, `sealed:<path>`, and `domain:<name>:<sub>` for
+  registered domains (see below).
 - probe (real): the sanctioned way to depend on something nondeterministic
   (SPEC laws 37 and 38). A script-tier call to
   `register-probe(name, observe-fn, read-cap)` registers an observer;

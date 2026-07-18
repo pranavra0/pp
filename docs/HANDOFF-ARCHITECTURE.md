@@ -222,35 +222,6 @@ executable characterization.
 
 **Non-goal:** change those decisions.
 
-### 11. Establish the observation boundary
-
-**Purpose:** make dynamic cache validity and authority reviewable in one place.
-
-**Work:**
-
-- Define typed operations for constructing and parsing cells, observing a cell,
-  recording an observation, replaying observations, and checking authorization.
-- Move file/stat/env/argv/config/handler/probe/sealed/domain/tool/tree observation
-  behavior behind this boundary one cell kind at a time.
-- Ensure record-time and hit-time observation share the same implementation or
-  an exhaustive typed pairing that cannot drift.
-- Decide the dormant `Proc` cell deliberately: implement and test it or remove
-  unreachable observer plumbing while retaining an explicit compatibility plan
-  for serialized cell names if necessary.
-- Replace observer callbacks installed from `main.ml` with constructed registry
-  or observer values owned by the session.
-
-**Likely files:** `src/cell.*`, `src/store.ml`, `src/runtime.*`,
-`src/primitives.ml`, `src/process.ml`, `src/evaluator.ml`, `src/domains.ml`.
-
-**Verify:** tests/010 through tests/024, probes, sealed, domains, canonical-cell
-and adversarial-world tests; suite and full fuzzer.
-
-**Exit:** adding a cell kind produces an exhaustive compiler/test obligation;
-Store does not reach upward through runtime observer hooks.
-
-**Non-goal:** broaden what pp observes or change cache semantics.
-
 ### 12. Split durable storage from cache policy
 
 **Purpose:** turn `store.ml` into small repositories with one auditable durable
@@ -639,4 +610,4 @@ not only expected stdout.
 
 ## Immediate next action
 
-Execute roadmap item 11 only: establish the observation boundary.
+Execute roadmap item 12 only: split durable storage from cache policy.

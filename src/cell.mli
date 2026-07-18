@@ -7,7 +7,7 @@
    matches on them exhaustively — that exhaustiveness is the ratchet (adding
    a constructor without deciding its surface story fails the build), so
    hiding the constructors would defeat it. The interface exists to fix the
-   boundary (only [t], [to_string], [of_string] cross it) so no future code
+   boundary (only [t], [serialize], [parse] cross it) so no future code
    grows a private cell helper that other modules reach into. *)
 
 type t =
@@ -20,14 +20,13 @@ type t =
   | Argv
   | Config of string
   | Handler of string
-  | Proc of string
   | Probe of string
   | Sealed of string
   | Domain of { name : string; sub : string; }
   | Unknown of string
 
 (* Canonical wire spelling of a cell id (e.g. [File "p"] -> "file:p"). *)
-val to_string : t -> string
+val serialize : t -> string
 
-(* Inverse of [to_string]; unrecognized spellings become [Unknown]. *)
-val of_string : string -> t
+(* Inverse of [serialize]; unrecognized spellings become [Unknown]. *)
+val parse : string -> t

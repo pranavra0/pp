@@ -47,72 +47,7 @@ let make_thunk_ca_typed (expr : expr) (ty : expr) (loc : (string * int) option) 
 (* Runtime check for gradual type annotations, kept at the evaluator boundary
    so every typed value follows the same check path. *)
 
-(* LAW 23b: whether a set of capabilities permits reading a trace cell. Used
-   to gate cache hits on the transitive read closure. The match is
-   exhaustive over Cell.t so adding a cell kind forces an authority decision
-   here. Parameterized on the capability set (rather than reading
-   !current_capabilities directly) because "the caller's capabilities" for a
-   node hit-gate is the forcing thunk's
-   node_caps — its ambient AT CREATION — not necessarily whatever is live in
-   current_capabilities at force time (with-caps can have narrowed the
-   dynamic ambient in between). *)
-let cell_authorized_for (caps : Capability.t list) (cell_id : string) : bool =
-  let has_fs_read path =
-    List.exists (fun cap -> Capability.check_fs_read cap (Paths.canonicalize ~realpath:(fun x -> x) path)) caps
-  in
-  match Cell.of_string cell_id with
-  | Cell.File path -> has_fs_read path
-  (* A coarse tree observation (the `run` effect's coarse-cell soundness
-     floor) is covered by an fs-read grant over the root. *)
-  | Cell.Tree root -> has_fs_read root
-  (* A tool observation came from a `run`; serving a result that embeds
-     one requires process authority, not an fs grant over the binary. *)
-  | Cell.Tool _ ->
-      List.exists (fun cap -> Capability.check_process cap) caps
-  (* A file-predicate observation (file-exists?/dir?) discloses presence,
-     so serving it requires the same fs-read authority as recording it. *)
-  | Cell.Stat path -> has_fs_read path
-  (* No user authority attaches: config/handler are ambient (LAW 33/26),
-     runtime:file loader reads ran under interpreter authority bounded to
-     source roots + ~/.pp, never the user's own capabilities,
-     env/argv/proc are program-level inputs. Unknown cells never verify, so
-     authorizing them is moot. *)
-  | Cell.RuntimeFile _ | Cell.Env _ | Cell.Argv
-  | Cell.Config _ | Cell.Handler _ | Cell.Proc _ | Cell.Unknown _ -> true
-  (* Probes: authority-exempt at the hit gate, like runtime:/config:/
-     handler:/proc: above — deliberately, not an oversight. The read_cap's
-     authority was already consumed ONCE, at probe evaluation time (under
-     with_ref current_capabilities [read_cap]), not at
-     every read; gating a CACHE HIT on it again would re-require an
-     authority the reading caller structurally cannot hold any other way
-     (probe reads are capability-free at the read site by design — LAW 37's
-     whole point is that the DECLARED nondeterminism mechanism, not the
-     reader, carries the authority). LAW 23b's transitive-closure concern
-     (a narrow caller laundering a broad SECRET read through an aggregator)
-     does not apply here: a probe's value is not confidential — sealed
-     cells are the confidentiality mechanism, and unlike Cell.Sealed below,
-     Cell.Probe never gates on CapSecret. Any caller who can force the node
-     at all may observe what the probe produced. *)
-  | Cell.Probe _ -> true
-  (* Sealed cells: the opposite choice from Probe above — a sealed read
-     is confidential, so a hit requires the caller to independently hold a
-     covering CapSecret grant over the path, exactly like Cell.File requires
-     fs-read authority. This is what makes LAW 23b's transitive-closure
-     check and LAW 23c's `pp why` redaction protect a secret exactly the way
-     they already protect a narrow fs grant: a caller without the secret
-     grant cannot hit a node whose closure read it, even through an
-     aggregator that spans callers. *)
-  | Cell.Sealed path ->
-      List.exists (fun cap -> Capability.check_secret cap (Paths.canonicalize ~realpath:(fun x -> x) path)) caps
-  (* A third-party domain's own sub-cell. Authorization is
-     cap_subseteq of the REGISTERED write-cap against the caller's held
-     set — zero new authority code, the same narrowing check with-caps
-     uses. An unregistered (in THIS process) domain name never verifies —
-     the sound, conservative default, like Cell.Unknown. *)
-  | Cell.Domain { name; sub = _ } ->
-      (match Session.find_domain (Effect.perform Dynamic_scope.Get_session) name with
-       | Some entry -> Capability.subseteq entry.Session.dm_cap caps
-       | None -> false)
+let cell_authorized_for = Observation.authorized_id
 
 (* Trace replay for an already-Evaluated persistent node: replay its stored
    trace reads into the active trace frames so the caller's trace transitively
@@ -626,7 +561,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
         | _ -> failwith "config key must be a string, keyword, or symbol" in
       (* LAW 33: reading config inside a node is an observation — recorded as a
          `config:<key>` trace cell (absence included), never part of the key. *)
-      Dynamic_scope.record_config_read key_name;
+      Observation.record_config key_name;
       (match Dynamic_scope.config_lookup key_name with
        | Some v -> k v
        | None ->
@@ -746,7 +681,7 @@ and perform_effect (name : string) (args : value list) : value =
      builtin) is an observation of ambient state; inside a node it is recorded
      as a `handler:<effect>` trace cell so a hit under a different handler
      (mock vs real) re-computes instead of cross-contaminating. *)
-  Dynamic_scope.record_handler_observation name;
+  Observation.record_handler name;
   (* Check for handler via effect perform *)
   match Effect.perform (Dynamic_scope.Lookup_handler name) with
   | Some (handler, _) -> handler args

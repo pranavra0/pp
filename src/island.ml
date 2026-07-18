@@ -92,9 +92,9 @@ let islands_root () =
 let cache_src_root () = Filename.concat (islands_root ()) "src"
 let cached_tree (pin : string) = Filename.concat (cache_src_root ()) pin
 
-(* One hasher in the project: the pin IS Store.tree_hash (the same canonical
+(* One hasher in the project: the pin IS Observation.tree_hash (the same canonical
    tree digest the `run` effect's coarse cells use). Don't invent a second. *)
-let canonical_tree_hash (dir : string) : string = Store.tree_hash dir
+let canonical_tree_hash (dir : string) : string = Observation.tree_hash dir
 
 let verify_pin ~(dir : string) ~(pin : string) : (unit, string) result =
   let h = canonical_tree_hash dir in

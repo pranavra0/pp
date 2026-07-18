@@ -74,7 +74,7 @@ let tree_observe (root : string) : value =
     Fswalk.walk ~root ~cb:(fun ~rel ~path visit ->
       match visit with
       | Fswalk.Entry { Unix.st_kind = Unix.S_REG; _ } ->
-          (match Store.hash_file_opt path with
+          (match Observation.hash_file path with
            | Some h -> acc := (VString rel, VString h) :: !acc
            | None -> ())
       | _ -> ());

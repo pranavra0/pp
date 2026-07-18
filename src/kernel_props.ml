@@ -643,6 +643,15 @@ let session_property () =
   in
   if evaluate a 1 <> VInt 1 || evaluate b 2 <> VInt 2 then
     fail "evaluator-instance" "constructed evaluator operations crossed sessions";
+  Dynamic_scope.with_top_level a invocation ~f:(fun () ->
+    let read = (Cell.serialize (Cell.Env "X"), Observation.env_hash (Some "v")) in
+    Session.clear_observations a;
+    Observation.record (Cell.Env "X") (snd read);
+    let recorded = Session.observations a in
+    Session.clear_observations a;
+    Observation.replay [read];
+    if Session.observations a <> recorded then
+      fail "observation:record-replay" "record and replay took different paths") ();
   Session.set_macro a "only-a" ([], ELiteral (VInt 1));
   Session.set_probe a "probe" (VInt 1);
   Session.set_probe b "probe" (VInt 2);
@@ -913,6 +922,20 @@ let extracted_model_property () =
      <> ["f"] then
     fail "free-vars:binding" "function parameter escaped as a free variable"
 
+let observation_boundary_property () =
+  let cells =
+    [ Cell.File "/x"; RuntimeFile "/x"; Tool "/x"; Tree "/x"; Stat "/x";
+      Env "X"; Argv; Config "k"; Handler "h"; Probe "p"; Sealed "/x";
+      Domain { name = "d"; sub = "s" }; Unknown "future:x" ]
+  in
+  List.iter (fun cell ->
+    if Cell.parse (Cell.serialize cell) <> cell then
+      fail "observation:cell-roundtrip" (Cell.serialize cell)) cells;
+  if Cell.parse "proc:legacy" <> Cell.Unknown "proc:legacy" then
+    fail "observation:legacy-proc" "legacy proc cell did not conservatively miss";
+  if Observation.env_hash None = Observation.env_hash (Some "absent") then
+    fail "observation:env-framing" "absence collided with a present value"
+
 (* ============================================================= RUNNER ===== *)
 
 (* Build the per-tag corpus: one canonical instance of EVERY constructor, so
@@ -954,6 +977,7 @@ let run ~(seed : int) ~(count : int) : bool =
   injectivity ~name:"expr" ~hash:Identity.hash_expr ~show:dbg adv_exprs;
   corpus_injectivity ();
   extracted_model_property ();
+  observation_boundary_property ();
 
   (* (ii) quote round-trip (value-level macro law) *)
   List.iter quote_roundtrip adv_exprs;

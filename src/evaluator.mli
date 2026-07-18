@@ -5,7 +5,6 @@
    replay for persistent nodes, capability-gated cell-authority checks,
    and the REPL's eval_expressions entry point. *)
 
-val cell_authorized_for : Capability.t list -> string -> bool
 (** LAW 23b: whether a set of capabilities permits reading a trace cell.
     Used to gate cache hits on the transitive read closure. *)
 

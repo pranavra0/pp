@@ -1467,7 +1467,7 @@ must never find secret plaintext; and `string_of_value` and every printer
 redact to `#<sealed>`, since a print that leaked the bytes would defeat the
 feature. `VSealed` joins the node-boundary ban exactly like `VCapability` —
 the free-variable ban and the result ban, both directions —
-and `cell_authorized_for` requires a covering `CapSecret` grant to serve a
+and `Observation.authorized` requires a covering `CapSecret` grant to serve a
 hit on a `sealed:` cell. LAW 23's transitive-closure and
 introspection-filtering clauses fall out unchanged: a narrow caller cannot
 launder a cached secret read through an aggregator, and `pp why` redacts it.

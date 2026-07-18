@@ -196,7 +196,7 @@ let print_graph ?(verbose = false) () = Store.print_graph ~verbose ()
 
 let snapshot_cell_hashes (cell_ids : string list) : (string * string) list =
   List.filter_map (fun id ->
-    match Store.observe_cell id with
+    match Observation.observe_id id with
     | Some h -> Some (id, h) | None -> None) cell_ids
 
 (* --watch polling loop: run the program, snapshot observed cell hashes, poll
@@ -251,7 +251,7 @@ let watch_loop session invocation ~files ~interval ~stabilize =
        this still restarts killed services within one interval. *)
     let changed_cells =
       List.filter_map (fun (cell_id, recorded_hash) ->
-        match Store.observe_cell cell_id with
+        match Observation.observe_id cell_id with
         | Some h when h <> recorded_hash -> Some cell_id
         | _ -> None) snapshot
     in
@@ -887,9 +887,6 @@ let main () =
   (match !pin_file with
    | Some path -> Remote.preseed_pins_from_file session ~pins_file:path
    | None -> ());
-  Session.set_probe_observer session Primitives.probe_observe_for_store;
-  Session.set_domain_observer session Primitives.domain_observe_cell_for_store;
-
   (* Collect every cell observation made by the program: needed for
      stratification (LAW 30) and for --watch polling. Unconditional (not
      gated on --reconcile/--watch/--supervise): a program may call
@@ -1090,7 +1087,7 @@ let main () =
   (match !remote_node_args with
    | Some (token_file, _, shared_root, keys_file, reply_file) ->
        let token_text = Store.read_raw token_file in
-       (* Store.hit replays a verified trace's reads via Dynamic_scope.record_read,
+       (* Store.hit replays a verified trace's reads via Observation.replay,
           which performs Record_read/Get_observe_all — so this after-run serve
           must hold the same top-level observation context the run itself held
           (line 1050), or a clean hit crashes on an unhandled effect. *)
