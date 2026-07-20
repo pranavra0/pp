@@ -29,11 +29,12 @@ the voice and the example conventions. Match them.
 
 Examples are real files in `examples/`, run for real. **Never invent output.**
 If you can't make an example run and produce the output you want, change the
-example — do not fake it. Two kinds:
+example — do not fake it. Three manifest kinds are available:
 
 - **`examples/<name>.pp`** — a pp program. Render it with `#example("<name>")`.
   The build runs `pp <name>.pp` and shows the source, the command, and the
-  output.
+  output. The manifest marks ordinary programs `pp`; examples intentionally
+  demonstrating a failure use `pp-error` and must exit nonzero.
 - **`examples/<name>.sh`** — a shell transcript, for anything one `pp` run can't
   show (caching across runs, incremental rebuilds, reconcile loops, deploys).
   Render it with `#example("<name>", sh: true)`. The script is run with `$PP`

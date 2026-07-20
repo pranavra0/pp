@@ -8,8 +8,7 @@
 > - holds: the tree-walker satisfies it, verified by tests or the
 >   metamorphic fuzzer.
 > - partial: the mechanism exists but is buggy or incomplete. The prose
->   cites the matching change-log entry in [STATUS.md](STATUS.md) or the
->   fuzzer signature.
+>   cites the matching test, fuzzer signature, or status-table entry.
 > - unimplemented: a target only. Nothing in `src/` does this yet.
 >
 > The enforcement mechanism is the metamorphic fuzzer (`tools/fuzz.ml`; see
@@ -29,7 +28,8 @@
 > first pinned group; the rest are paid down under the same gate.
 >
 > Cross-references: design rationale and the numbered design decisions live in
-> [DESIGN.md](DESIGN.md); the change ledger in [STATUS.md](STATUS.md).
+> [DESIGN.md](DESIGN.md); current limits are summarized by the status table at
+> the end of this document.
 
 ---
 

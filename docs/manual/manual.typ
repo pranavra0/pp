@@ -58,3 +58,4 @@
 #include "chapters/A1-language-reference.typ"
 #include "chapters/B-cli-reference.typ"
 #include "chapters/C-stdlib-index.typ"
+#include "chapters/D-style-guide.typ"

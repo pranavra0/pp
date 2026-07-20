@@ -5,7 +5,7 @@
 This appendix indexes the two layers of pp's vocabulary that are not special
 forms: the builtins compiled into the binary (`src/runtime/primitives.ml`) and the
 standard library written in pp itself (`stdlib/*.pp`). Special forms — `if`,
-`let`, `def`, `fn`, `delay`, `force`, `node`, `perform`, `handle`, `quote`, and
+`let`, `def`, `fn`, `delay`, `force`, `node`, `perform`, `with-handler`, `quote`, and
 the rest — belong to the language reference, not here.
 
 Signatures use pp calling syntax: `name(arg, …)`. A trailing `…` marks a
@@ -47,6 +47,7 @@ These are always in scope — no `load` needed.
   [`car(p)`], [First element of a pair; `nil` for `nil`.],
   [`cdr(p)`], [Rest of a pair; `nil` for `nil`.],
   [`list(x, …)`], [Build a proper list from its arguments (lazy in the elements).],
+  [`apply(f, …segments)`], [Apply `f` to the concatenated argument lists; used by call-spread syntax.],
   [`map(f, lst)`], [Apply `f` to each element, consing the results without forcing them — the parallel fan-out point the scheduler batches on.],
   [`nil?(x)`], [True if `x` is `nil`.],
 )
@@ -100,6 +101,7 @@ Each takes one argument, forces it, and returns a boolean.
   table.header([*Signature*], [*Description*]),
   [`string-append(s, …)`], [Concatenate; non-string arguments are rendered first.],
   [`string-length(s)`], [Length of a string in bytes.],
+  [`->string(v)`], [Render any value without string quotes; strings are returned unchanged.],
   [`string-split(s, sep)`], [Split `s` on the single-character `sep`, dropping empty fields.],
   [`string-index(s, sub)`], [Index of the first occurrence of `sub`, or `nil`.],
   [`string-trim(s)`], [`s` with leading and trailing whitespace removed.],
@@ -181,6 +183,7 @@ reading contents.
   [`register-probe(name, observe-fn, read-cap)`], [Register a read-only probe: a domain with no write authority. Script-tier only.],
   [`probe(name)`], [Read a registered probe's value, pinned once per pass and recorded as a `probe:` cell.],
   [`fenced(kind, spec)`], [Register a non-convergent (fenced) action for the reconciler to drain after convergent state is applied.],
+  [`collect(results)`], [Partition `[:ok, value]` and `[:err, error]` results into one aggregate result.],
   [`unseal(v)`], [Convert a sealed value to a string — the one sanctioned exit from `secret:` bytes.],
   [`eval-pp(code)`], [Parse and evaluate a code string in the current run's environment and macro table.],
   [`apply-pp(fn, args)`], [Apply `fn` to a list of already-evaluated arguments.],

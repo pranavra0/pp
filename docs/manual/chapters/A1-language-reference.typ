@@ -8,12 +8,21 @@ variables share one namespace, and evaluation is inner-first and strict — a
 form's arguments are values by the time it runs.
 
 The special forms — the syntax the reader treats specially, rather than
-ordinary function calls — are: `if`, `do`, `let`, `let*`, `fn`, `def`,
-`defnode`, `quote`, `quasiquote` with `unquote` and `unquote-splicing`, `and`,
-`or`, `delay`, `force`, `node`, `perform`, `with-handler`, `with-caps`,
-`with-config`, `config`, `module`, `import`, `load`, `load-module`, `island`,
-and the `:` type annotation. `defmacro` is recognized structurally at the top
-level. Everything else is a function.
+ordinary function calls — are: `if`, `do`, `let`, `let*`, `fn`, `def`, `node`,
+`match`, `quote`, `quasiquote` with `unquote` and `splice`, `and`, `or`,
+`delay`, `force`, `perform`, `with-handler`, `with-caps`, `with-config`,
+`config`, `assert`, `module`, `import`, `load`, `load-module`, `island`,
+`reconcile`, `try`, and the `:` type annotation. `defmacro` is recognized
+structurally at the top level; `needs` modifies a named `node` definition.
+Everything else is a function. In the s-expression surface, named node forms
+are represented as `defnode`, and `splice` is represented as
+`unquote-splicing`.
+
+The brace surface also supplies infix operators, pipelines (`|>`), f-strings,
+spread (`...`), observation sigils (`$file`, `$env`, `$glob`, `$probe`,
+`$secret`, `$config`), and the `with { caps: ..., config: ..., handlers: ... }
+{ ... }` clause form. Their exact lowerings are listed in the syntax appendix
+of `SPEC.md`.
 
 == Value types
 
@@ -78,6 +87,23 @@ no loop keyword — recursion is the loop, and tail calls run in constant stack.
 
 #example("ref-fn")
 
+== Nodes
+
+`node { ... }` creates a persistent, content-addressed computation. Its body
+runs when forced, and its result can be reused across processes. A named,
+zero-argument node uses `node build { ... }` and binds a node thunk. A
+parameterized `node compile(src) { ... }` is the brace spelling of the
+s-expression `defnode` form; applied named-node keying remains a documented
+LAW 6 follow-up, so the current persistent keying guarantee is for node
+thunks, not an argument-keyed application cache. `needs` narrows the
+capabilities available to the node body, for example `node read(path) needs
+fs.read(path) { ... }`.
+
+The node key contains the body and the values of the free variables it reads;
+ambient capabilities, handlers, and config are not identity inputs.
+
+#example("node-identity")
+
 == Sequencing
 
 `do` forces each form in order for its effects and returns the value of the
@@ -123,14 +149,29 @@ on non-thunks.
 == Effects and config
 
 `perform` dispatches an effect to the nearest handler installed by
-`with-handler`. Handling an effect yourself needs no capability.
+`with-handler`. The clause form `with { handlers: { :name -> fn(...) { ... } } }
+{ ... }` installs the same handler map. Handling an effect yourself needs no
+capability. Built-in world effects include `read-file`, `write-file`, `run`,
+`run-dep!`, `http-get`, `http-post`, `log`, `tree-observe`, the process effects,
+and the domain-state effects; user handlers may define additional effect names.
 
 #example("ref-perform")
 
 Config is ambient, dynamically-scoped data, distinct from capabilities.
-`config` reads a key, with an optional default for when it is absent.
+`with-config(map) { ... }` installs a temporary config frame, and `config` reads
+a key with an optional default for when it is absent. `with-caps(cap) { ... }`
+narrows the current capability set for the body's dynamic extent; it cannot
+widen authority.
 
 #example("ref-config")
+
+== Assertions
+
+`assert(condition)` raises a located error when the condition is false.
+`assert(condition, message)` uses the supplied message. It is syntax sugar for
+an `if` that returns `nil` on success and calls `error` on failure.
+
+#example("ref-assert")
 
 == Macros
 
@@ -159,6 +200,20 @@ A module is a block whose definitions become a value. `import` merges that
 value's exports into the current scope; a module's own body is a fresh scope.
 
 #example("ref-module")
+
+`load("path.pp")` evaluates a file in the current scope. `load-module("path.pp")`
+evaluates it in a fresh scope and returns its definitions as a module value.
+`island(uri, pin)` imports a content-addressed module tree; an unpinned island
+is an error. The CLI and workflow details are in the Modules and islands
+chapter.
+
+== Desired state
+
+`reconcile { key -> value, ... }` is identity-preserving sugar for the final
+desired-state map consumed by `--reconcile`; it does not perform reconciliation
+inside the language.
+
+#example("ref-reconcile")
 
 == Lists
 
@@ -375,7 +430,7 @@ the corresponding trace cell, making it visible to the cache-validity system.
   [`$file("path")`], [`slurp("path")`], [`file:`],
   [`$env("VAR")`], [`env-get("VAR")`], [`env:`],
   [`$env("VAR", "default")`], [`if nil?(env-get("VAR")) "default" env-get("VAR")`], [`env:`],
-  [`$glob("pattern")`], [`list-dir("pattern")`], [`tree:`],
+  [`$glob("pattern")`], [`perform tree-observe("pattern")`], [`tree:`],
   [`$probe("name")`], [`probe("name")`], [`probe:`],
   [`$secret("path")`], [`slurp("path")`], [`sealed:`],
 )
