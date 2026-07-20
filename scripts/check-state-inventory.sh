@@ -20,7 +20,6 @@ while [ "$#" -gt 0 ]; do
 done
 
 cd "$root"
-shopt -s nullglob globstar
 tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
 
@@ -32,8 +31,7 @@ relpath() {
   esac
 }
 
-for file in "$src_dir"/**/*.ml "$src_dir"/**/*.mli; do
-  [ -f "$file" ] || continue
+while IFS= read -r file; do
   rel=$(relpath "$file")
 
   awk -v file="$rel" '
@@ -75,7 +73,7 @@ for file in "$src_dir"/**/*.ml "$src_dir"/**/*.mli; do
     [ -n "$signal" ] || signal="line-$line"
     printf 'signal-handler|%s|%s\n' "$rel" "$signal" >> "$tmp"
   done < <(grep -En 'Sys\.(set_)?signal[[:space:]]' "$file" || true)
-done
+done < <(find "$src_dir" -type f \( -name '*.ml' -o -name '*.mli' \) -print | sort)
 
 sort -u "$tmp" -o "$tmp"
 cat "$tmp"

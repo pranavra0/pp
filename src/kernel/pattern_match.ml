@@ -42,4 +42,3 @@ let rec match_pattern (v : value) (p : pattern) : (string * value) list option =
           in
           match_tagged rest pats
       | _ -> None
-

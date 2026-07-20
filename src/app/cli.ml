@@ -270,7 +270,7 @@ let flags raw =
       (flag "--help" (fun () -> raw.help := true));
     { (flag "-h" (fun () -> ())) with internal = true };
     doc_of "  pp --once <file.pp>        Run once and exit (explicit; default behavior)\n"
-      (flag "--once" (fun () -> ())); 
+      (flag "--once" (fun () -> ()));
     doc_of "  pp --watch <file.pp>       Run, then watch cell changes and re-evaluate\n  pp --watch --stabilize <file>  Watch with push stabilize (dirty-propagation)\n"
       (flag "--watch" (fun () -> raw.watch := true));
     doc_of "  pp --watch-interval <s>   Poll interval for --watch (default 1.0)\n"

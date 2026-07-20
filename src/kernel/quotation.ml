@@ -309,4 +309,3 @@ and value_to_pattern (v : value) : pattern =
        | None -> failwith "value_to_expr: malformed tagged pattern")
   | other -> failwith (Printf.sprintf
       "value_to_expr: cannot convert %s to a pattern" (string_of_value other))
-

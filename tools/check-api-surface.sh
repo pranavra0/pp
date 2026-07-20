@@ -60,12 +60,13 @@ actual="$tmp/actual"
 awk -F'|' '/^[[:space:]]*#/ || NF == 0 { next } NF != 3 { print "invalid API manifest row: " $0 > "/dev/stderr"; bad=1; next } { print $1 "|" $2 } END { if (bad) exit 1 }' "$manifest" | sort -u > "$expected"
 
 for dir in src/kernel src/frontend; do
-  while IFS= read -r file; do
+  for file in "$root/$dir"/*.mli; do
+    [ -f "$file" ] || continue
     rel=${file#"$root"/}
     surface=$(declarations "$file" | sort)
     hash=$(printf '%s\n' "$surface" | digest)
     printf '%s|%s\n' "$rel" "$hash"
-  done < <(find "$root/$dir" -maxdepth 1 -type f -name '*.mli' -print | sort)
+  done
 done > "$actual"
 sort -u "$actual" -o "$actual"
 
