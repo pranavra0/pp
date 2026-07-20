@@ -4,8 +4,8 @@ Short definitions of the vocabulary. See [DESIGN.md](DESIGN.md) for the
 concept model, [SPEC.md](SPEC.md) for the semantics, and
 [ARCHITECTURE.md](ARCHITECTURE.md) for the code structure.
 
-Terms marked (planned) do not exist in the code yet; see
-[STATUS.md](STATUS.md) for what does.
+Terms marked (planned) do not exist in the code yet; see the status table in
+[SPEC.md](SPEC.md) for current implementation limits.
 
 The forms below are shown in `.pp`'s default brace surface. `.ppl` files,
 and macros written with `quote`, `quasiquote`, or `defmacro`, use the
@@ -217,8 +217,8 @@ brace-to-s-expression mapping.
 - engine: the tree-walking evaluator (`evaluator.ml`), pp's single execution
   engine.
 - oracle: the tree-walker, taken as ground truth in tests. It can still be
-  wrong — see the thunk key entry above, and [STATUS.md](STATUS.md), for its
-  now-fixed key bugs.
+  wrong — see the thunk key entry above and the status table in [SPEC.md](SPEC.md)
+  for its now-fixed key bugs.
 - metamorphic testing: generating semantics-preserving program twins and
   asserting identical output — pp's core correctness check, enforced by
   `dune runtest` and the fuzzer (see [TESTING.md](TESTING.md)).

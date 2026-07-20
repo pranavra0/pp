@@ -22,15 +22,17 @@ load("stdlib/list.pp")
 
 # ---- the examples the manual runs -------------------------------------------
 # Each entry is (NAME KIND GRANTS):
-# KIND "pp" — examples/NAME.pp, run through pp; GRANTS is the extra flag
-# string, shown verbatim in the rendered command (usually "").
+# KIND "pp" — examples/NAME.pp, run through pp and expected to succeed.
+# KIND "pp-error" — examples/NAME.pp, run through pp and expected to fail.
+# GRANTS is the extra flag string, shown verbatim in the rendered command
+# (usually "").
 # KIND "sh" — examples/NAME.sh, a shell transcript run with $PP bound to the
 # pp binary; the script sets its own temp HOME so its store is
 # hermetic and its output reproducible. Use for substrate demos
 # (caching, rebuilds, deploys) that a single pp run can't show.
 # Drop a file in examples/ and add a line here and it goes live: the build runs
 # it and embeds its real output; a broken example fails the build.
-let examples = list(list("hello", "pp", ""), list("type-error", "pp", ""), list("lang-bindings", "pp", ""), list("lang-functions", "pp", ""), list("lang-laziness", "pp", ""), list("lang-effects", "pp", ""), list("lang-config", "pp", ""), list("node-identity", "pp", ""), list("node-freevars", "pp", ""), list("node-reuse", "sh", ""), list("caching", "sh", ""), list("store-layout", "sh", ""), list("store-rebuild", "sh", ""), list("build-incremental", "sh", ""), list("cap-read", "pp", ""), list("cap-grant", "sh", ""), list("cap-secret", "sh", ""), list("mod-module", "pp", ""), list("mod-load-module", "sh", ""), list("mod-island", "sh", ""), list("domain-reconcile", "sh", ""), list("dist-by-hash", "sh", ""), list("be-fuzz", "sh", ""), list("ref-atoms", "pp", ""), list("ref-collections", "pp", ""), list("ref-arith", "pp", ""), list("ref-compare", "pp", ""), list("ref-bool", "pp", ""), list("ref-let", "pp", ""), list("ref-letstar", "pp", ""), list("ref-def", "pp", ""), list("ref-fn", "pp", ""), list("ref-do", "pp", ""), list("ref-if", "pp", ""), list("ref-types", "pp", ""), list("ref-type-error", "pp", ""), list("ref-quote", "pp", ""), list("ref-delay", "pp", ""), list("ref-perform", "pp", ""), list("ref-config", "pp", ""), list("ref-defmacro", "pp", ""), list("ref-module", "pp", ""), list("ref-list-ops", "pp", ""), list("ref-map-ops", "pp", ""), list("ref-string-ops", "pp", ""), list("ref-predicates", "pp", ""), list("ref-list-stdlib", "sh", ""), list("ref-map-stdlib", "sh", ""), list("ref-string-stdlib", "sh", ""), list("ref-list-vec-literals", "pp", ""), list("ref-index-access", "pp", ""), list("ref-map-update", "pp", ""), list("ref-sigils", "pp", ""), list("ref-fstrings", "pp", ""), list("ref-call-spread", "pp", ""), list("ref-match-guards", "pp", ""), list("ref-try", "pp", ""), list("ref-collect", "pp", ""))
+let examples = list(list("hello", "pp", ""), list("type-error", "pp-error", ""), list("lang-bindings", "pp", ""), list("lang-functions", "pp", ""), list("lang-laziness", "pp", ""), list("lang-effects", "pp", ""), list("lang-config", "pp", ""), list("node-identity", "pp", ""), list("node-freevars", "pp", ""), list("node-reuse", "sh", ""), list("caching", "sh", ""), list("store-layout", "sh", ""), list("store-rebuild", "sh", ""), list("build-incremental", "sh", ""), list("cap-read", "pp-error", ""), list("cap-grant", "sh", ""), list("cap-secret", "sh", ""), list("mod-module", "pp", ""), list("mod-load-module", "sh", ""), list("mod-island", "sh", ""), list("domain-reconcile", "sh", ""), list("dist-by-hash", "sh", ""), list("be-fuzz", "sh", ""), list("ref-atoms", "pp", ""), list("ref-collections", "pp", ""), list("ref-arith", "pp", ""), list("ref-compare", "pp", ""), list("ref-bool", "pp", ""), list("ref-let", "pp", ""), list("ref-letstar", "pp", ""), list("ref-def", "pp", ""), list("ref-fn", "pp", ""), list("ref-do", "pp", ""), list("ref-if", "pp", ""), list("ref-types", "pp", ""), list("ref-type-error", "pp-error", ""), list("ref-quote", "pp", ""), list("ref-delay", "pp", ""), list("ref-perform", "pp", ""), list("ref-config", "pp", ""), list("ref-assert", "pp", ""), list("ref-reconcile", "pp", ""), list("ref-defmacro", "pp", ""), list("ref-module", "pp", ""), list("ref-list-ops", "pp", ""), list("ref-map-ops", "pp", ""), list("ref-string-ops", "pp", ""), list("ref-predicates", "pp", ""), list("ref-list-stdlib", "sh", ""), list("ref-map-stdlib", "sh", ""), list("ref-string-stdlib", "sh", ""), list("ref-list-vec-literals", "pp", ""), list("ref-index-access", "pp", ""), list("ref-map-update", "pp", ""), list("ref-sigils", "pp", ""), list("ref-fstrings", "pp", ""), list("ref-call-spread", "pp", ""), list("ref-match-guards", "pp", ""), list("ref-try", "pp", ""), list("ref-collect", "pp", ""))
 # ch 1-2: introduction + the language in brief
 
 
@@ -106,8 +108,22 @@ def run-one(manual-dir, pp-bin, spec) {
     string-append("cd ", manual-dir, "/examples && ", pp-bin, gflag, " ", name, ".pp")
   }, captured = node {
     slurp(abs-file)
-    let (r = perform run("sh", "-c", real-cmd)) {
-      string-append(hash-map-get(r, "out"), hash-map-get(r, "err"))
+    let (r = perform run("sh", "-c", real-cmd),
+         exit-code = hash-map-get(r, "exit"),
+         out = hash-map-get(r, "out"),
+         err = hash-map-get(r, "err")) {
+      if (kind = "pp-error") {
+        if exit-code = 0 {
+          error("manual error example unexpectedly succeeded")
+        } else {
+          string-append(out, err)
+        }
+      } else if exit-code = 0 {
+        string-append(out, err)
+      } else {
+        error(string-append("manual example failed (exit ",
+          number->string(exit-code), "): ", err, out))
+      }
     }
   }) {
     if is-sh { nil } else {

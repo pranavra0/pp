@@ -48,8 +48,7 @@ with-config({:host -> "db1"}) {
   print(key)
 }
 
-def double(x) { x * 2 }
-let (m = module { export double }) {
+let (m = module { def double(x) { x * 2 } }) {
   import(m); double(21)
 }
 ```
@@ -80,7 +79,7 @@ Read more:
 
 - [docs/manual/](docs/manual/) — reference manual, all examples run by pp
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the code fits together
-- [docs/STATUS.md](docs/STATUS.md) — what works, discrepancy ledger
+- [docs/SPEC.md](docs/SPEC.md) — semantic laws and current status table
 - [AGENTS.md](AGENTS.md) — for AI coding agents
 
 Run `dune runtest` for the test suite.

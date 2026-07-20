@@ -2,7 +2,7 @@
 
 This document explains why the current architecture has its shape. It does
 not list implementation status. See [ARCHITECTURE.md](ARCHITECTURE.md) for
-ownership, [SPEC.md](SPEC.md) for laws, and [STATUS.md](STATUS.md) for limits.
+ownership, and [SPEC.md](SPEC.md) for laws and current limits.
 
 ## Principles
 
@@ -147,4 +147,4 @@ write only through the atomic replacement boundary.
 
 Keep comments local and factual. Do not use comments to record roadmap steps,
 old module names, or test history. Put stable reasons here and current facts
-in `ARCHITECTURE.md` or `STATUS.md`.
+in `ARCHITECTURE.md` or the status table in `SPEC.md`.

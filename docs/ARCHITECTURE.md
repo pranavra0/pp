@@ -1,9 +1,8 @@
 # pp architecture
 
 This document describes the current implementation. It uses source and Dune
-files as the source of truth. See [SPEC.md](SPEC.md) for language laws,
-[DESIGN.md](DESIGN.md) for design reasons, and [STATUS.md](STATUS.md) for
-verified limits.
+files as the source of truth. See [SPEC.md](SPEC.md) for language laws and
+verified limits, and [DESIGN.md](DESIGN.md) for design reasons.
 
 ## Data flow
 

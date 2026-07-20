@@ -39,7 +39,7 @@ than marking them done.
 | Learning the language by example | [docs/manual/](docs/manual/) |
 | Which source file owns what; data flow | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Vocabulary (cell, node, trace, island, …) | [docs/GLOSSARY.md](docs/GLOSSARY.md) |
-| What works today; discrepancy ledger | [docs/STATUS.md](docs/STATUS.md) |
+| What works today; discrepancy ledger | [docs/SPEC.md](docs/SPEC.md) — status table |
 | Why it's designed this way; rejected features (don't re-propose) | [docs/DESIGN.md](docs/DESIGN.md) |
 | Running/adding tests, the fuzzer | [docs/TESTING.md](docs/TESTING.md) |
 | CLI flags | `pp --help` |
