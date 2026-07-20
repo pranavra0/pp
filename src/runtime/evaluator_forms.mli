@@ -21,3 +21,6 @@ val load : operations -> string -> Core_model.env -> Core_model.value
 
 val expressions :
   operations -> Core_model.expr list -> Core_model.env ref -> Core_model.value
+
+val expressions_list :
+  operations -> Core_model.expr list -> Core_model.env ref -> Core_model.value list

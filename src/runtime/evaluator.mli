@@ -16,6 +16,10 @@ val eval_expressions : Core_model.expr list -> Core_model.env ref -> Core_model.
 (** Evaluate expressions sequentially, mutating the environment for
     definitions and imports. Used by [ELoad], [ELoadModule], and the REPL. *)
 
+val eval_expressions_list :
+  Core_model.expr list -> Core_model.env ref -> Core_model.value list
+(** Evaluate a source's forms in one scope pass and retain each result. *)
+
 val force : Core_model.value -> Core_model.value
 (** Force a thunk to a value; passes through non-thunk values unchanged. *)
 

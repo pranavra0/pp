@@ -72,6 +72,7 @@ and thunk = {
   mutable thunk_hash : string option;
   thunk_expr : expr;
   mutable thunk_env : env;
+  thunk_name : string option;
   type_ann : expr option;
   thunk_loc : (string * int) option;
   config_hash : string;

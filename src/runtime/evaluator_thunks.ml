@@ -1,7 +1,7 @@
 open Pp_kernel
 open Core_model
 
-let make_with_hash ~tag (expr : expr) (type_ann : expr option)
+let make_with_hash ?name ~tag (expr : expr) (type_ann : expr option)
     (loc : (string * int) option) (env : env) : value =
   let caps = Effect.perform Dynamic_scope.Get_capabilities in
   let cfg = Effect.perform Dynamic_scope.Get_config in
@@ -29,6 +29,7 @@ let make_with_hash ~tag (expr : expr) (type_ann : expr option)
         thunk_hash = Some hash;
         thunk_expr = expr;
         thunk_env = env;
+        thunk_name = name;
         type_ann;
         thunk_loc = loc;
         config_hash = cfg_hash;
@@ -38,7 +39,7 @@ let make_with_hash ~tag (expr : expr) (type_ann : expr option)
       Session.add_thunk session hash thunk;
       VThunk thunk
 
-let make expr env = make_with_hash ~tag:"thunk" expr None None env
+let make ?name expr env = make_with_hash ?name ~tag:"thunk" expr None None env
 
 let make_typed expr ty loc env =
   make_with_hash ~tag:"thunk-typed" expr (Some ty) loc env

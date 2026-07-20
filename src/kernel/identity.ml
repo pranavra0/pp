@@ -22,7 +22,7 @@ let rec hash_expr (e : expr) : string =
   | ELet (bindings, body) ->
       let bparts = List.map (fun (n, e) ->
         Hasher.hash_concat ["let_bind"; n; hash_expr e]
-      ) bindings in
+      ) (List.sort (fun (n1, _) (n2, _) -> String.compare n1 n2) bindings) in
       Hasher.hash_concat ("let" :: bparts @ [hash_expr body])
   | EFn (params, body) ->
       Hasher.hash_concat ["fn"; Hasher.hash_concat ("params" :: params); hash_expr body]

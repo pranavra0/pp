@@ -52,6 +52,11 @@ let process_expr (e : expr) : value =
       | v -> v)
   ) ()
 
+let process_exprs (exprs : expr list) : value list =
+  Dynamic_scope.with_top_level (Effect.perform Dynamic_scope.Get_session)
+    (Effect.perform Dynamic_scope.Get_invocation) ~f:(fun () ->
+    Evaluator.eval_expressions_list exprs global_env) ()
+
 (* Tree-walker: execute a source string. The WHOLE file's forms
    are expanded together, in order, before any of them is evaluated — a
    `defmacro` earlier in the string must be visible to a use later in the
@@ -65,7 +70,7 @@ let execute_string ?(retain_thunks = false) ?(source : string = "<?>") (input : 
   let exprs =
     Macro.expand_toplevel_list (macro_services ())
       (Reader_braces.read_dispatch ~source ~path:source input) in
-  List.map process_expr exprs
+  process_exprs exprs
 
 (* Tree-walker: execute a source file *)
 let execute_file ?(retain_thunks = false) (path : string) : value list =
@@ -96,7 +101,7 @@ let execute_sources ?(retain_thunks = false) (sources : (string * string) list) 
     let exprs =
       Macro.expand_toplevel_list (macro_services ())
         (Reader_braces.read_dispatch ~source ~path:source input) in
-    List.map process_expr exprs)
+    process_exprs exprs)
     sources
 
 (* =================================================================== *)

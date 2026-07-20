@@ -1,5 +1,5 @@
 open Pp_kernel
-val make : Core_model.expr -> Core_model.env -> Core_model.value
+val make : ?name:string -> Core_model.expr -> Core_model.env -> Core_model.value
 
 val make_typed :
   Core_model.expr ->

@@ -81,6 +81,7 @@ and thunk = {
   mutable thunk_hash : string option;  (* precomputed content-addressable hash *)
   thunk_expr : expr;
   mutable thunk_env : env;
+  thunk_name : string option;          (* binding name, for force-cycle errors *)
   type_ann : expr option;              (* lazy gradual type annotation *)
   thunk_loc : (string * int) option;   (* source location for error reporting *)
   config_hash : string;                (* ReaderT config snapshot identity *)

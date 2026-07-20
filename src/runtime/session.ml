@@ -24,6 +24,7 @@ type t = {
   preseeded_run_pins : (string, string) Hashtbl.t;
   node_thunks : (Identity_types.Node_key.t, Core_model.thunk) Hashtbl.t;
   mutable force_depth : int;
+  mutable force_path : Core_model.thunk list;
   mutable cache_bust : int;
   mutable fenced_epoch : string;
   mutable fenced_epoch_recovered : bool;
@@ -39,7 +40,7 @@ let create ~scheduler operations = {
   fenced_actions = []; fenced_epoch_nonce = 0;
   run_pins = Hashtbl.create 64; preseeded_run_pins = Hashtbl.create 64;
   node_thunks = Hashtbl.create 256;
-  force_depth = 0; cache_bust = 0; fenced_epoch = "";
+  force_depth = 0; force_path = []; cache_bust = 0; fenced_epoch = "";
   fenced_epoch_recovered = false;
 }
 let force t = t.operations.core.force
@@ -69,7 +70,7 @@ let begin_pass t =
 let begin_evaluation ~retain_thunks t =
   if not retain_thunks then begin Hashtbl.clear t.thunks; Hashtbl.clear t.node_thunks end;
   Hashtbl.clear t.macros; t.gensym <- 0; Hashtbl.clear t.domains;
-  t.force_depth <- 0; t.cache_bust <- 0;
+  t.force_depth <- 0; t.force_path <- []; t.cache_bust <- 0;
   reset_pass_state t;
   if t.fenced_epoch_recovered then t.fenced_epoch_recovered <- false
   else t.fenced_epoch <- ""
@@ -109,6 +110,8 @@ let force_depth t = t.force_depth
 let set_force_depth t n = t.force_depth <- n
 let incr_force_depth t = t.force_depth <- t.force_depth + 1
 let decr_force_depth t = t.force_depth <- t.force_depth - 1
+let force_path t = t.force_path
+let set_force_path t path = t.force_path <- path
 let next_cache_bust t = t.cache_bust <- t.cache_bust + 1; t.cache_bust
 let fenced_epoch t = t.fenced_epoch
 let start_fenced_epoch t epoch =
