@@ -7,7 +7,9 @@
 #     c forces b (trace transitively includes f1 + f2)
 #     d reads f3 independently
 #
-#   On each cell change, push stabilize must produce the same
+#   On each cell change, push stabilize must retain clean evaluated thunks and
+#   reset only the dirty nodes. This is the watch-pass retention boundary; the
+#   store still supplies the same results on a later cold evaluation.
 #
 # Runs under an isolated HOME.
 set -uo pipefail
@@ -72,33 +74,33 @@ run_test() {
   local WATCH_PID=$!
 
   # --- Cold run assertions (poll until the cold pass has logged each node) ---
-  assert_count "$label-cold-A" "A" 1 "$out"
-  assert_count "$label-cold-B" "B" 1 "$out"
-  assert_count "$label-cold-C" "C" 1 "$out"
-  assert_count "$label-cold-D" "D" 1 "$out"
+  new_watch_pass "$label-cold-A" "A" 1 "$out"
+  new_watch_pass "$label-cold-B" "B" 1 "$out"
+  new_watch_pass "$label-cold-C" "C" 1 "$out"
+  new_watch_pass "$label-cold-D" "D" 1 "$out"
 
   # --- Step 1: change f1 — A/B/C dirty, D clean. Poll the nodes that recompute
   # first (that advances real time through a full watch pass), then assert D
   # stayed put. ---
   echo "F1-v2" > "$TMP/f1"
-  assert_count "$label-step1-A" "A" 2 "$out"
-  assert_count "$label-step1-B" "B" 2 "$out"
-  assert_count "$label-step1-C" "C" 2 "$out"
-  assert_count "$label-step1-D" "D" 1 "$out"
+  new_watch_pass "$label-step1-A" "A" 2 "$out"
+  new_watch_pass "$label-step1-B" "B" 2 "$out"
+  new_watch_pass "$label-step1-C" "C" 2 "$out"
+  new_watch_pass "$label-step1-D" "D" 1 "$out"
 
   # --- Step 2: change f3 — D dirty. Poll D first. ---
   echo "F3-v2" > "$TMP/f3"
-  assert_count "$label-step2-D" "D" 2 "$out"
-  assert_count "$label-step2-B" "B" "$step2_B" "$out"
-  assert_count "$label-step2-C" "C" "$step2_C" "$out"
-  assert_count "$label-step2-A" "A" 2 "$out"
+  new_watch_pass "$label-step2-D" "D" 2 "$out"
+  new_watch_pass "$label-step2-B" "B" "$step2_B" "$out"
+  new_watch_pass "$label-step2-C" "C" "$step2_C" "$out"
+  new_watch_pass "$label-step2-A" "A" 2 "$out"
 
   # --- Step 3: revert f1 — A/B/C dirty, D clean ---
   echo "F1-v3" > "$TMP/f1"
-  assert_count "$label-step3-A" "A" "$step3_A" "$out"
-  assert_count "$label-step3-B" "B" "$step3_B" "$out"
-  assert_count "$label-step3-C" "C" "$step3_C" "$out"
-  assert_count "$label-step3-D" "D" 2 "$out"
+  new_watch_pass "$label-step3-A" "A" "$step3_A" "$out"
+  new_watch_pass "$label-step3-B" "B" "$step3_B" "$out"
+  new_watch_pass "$label-step3-C" "C" "$step3_C" "$out"
+  new_watch_pass "$label-step3-D" "D" 2 "$out"
 
   kill $WATCH_PID 2>/dev/null
   wait $WATCH_PID 2>/dev/null || true

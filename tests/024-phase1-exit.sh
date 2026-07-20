@@ -42,7 +42,7 @@ TU=$((N + 1))
 #
 # `compile` builds but does NOT force its node — the pairing-trap-safe
 # pattern is `(map compile names)` (map applies compile to each name via the
-# apply hook WITHOUT forcing the result), `force-deep` THAT batch (the
+# evaluator apply operation WITHOUT forcing the result), `force-deep` THAT batch (the
 # scheduler's fork fan-out point sees every sibling node before any of them
 # runs), and only THEN pair names back up with the now-hit results via
 # `zip2`. Do NOT rewrite this as `(map2 (fn (n) (cons n (compile n))) names)`
@@ -272,7 +272,7 @@ else bad "p3-parallel-null-zero-execs: $((ep_null - ep)) new execs"; fi
 # Same desired-state hash: the store is now fully warm (the null rebuild
 # above just replayed hits), so --check's schedule-transparency audit
 # (main.ml) re-runs the program forced Serial against this SAME store and
-# compares Types.hash_value of the desired-state value — all hits, so this
+# compares Identity.hash_value of the desired-state value — all hits, so this
 # adds no execs and exercises the "schedule is result-transparent" promise
 # (SPEC laws 34 and 35), not the unrelated per-node volatility double-run
 # (SPEC law 38, which only triggers on a Miss).

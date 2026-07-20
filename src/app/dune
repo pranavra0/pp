@@ -1,0 +1,14 @@
+(library
+ (name pp_app)
+ (public_name pp.app)
+ (wrapped true)
+ (modules cli app_context command_run command_reconcile command_watch command_frontend command_developer command_cluster command_gc command_island command_eval command_dispatch kernel_props)
+ (libraries pp.kernel pp.frontend pp.runtime cryptokit unix)
+ (flags -no-strict-sequence))
+
+(executable
+ (name main)
+ (public_name pp)
+ (modules main)
+ (libraries pp.app pp.runtime pp.frontend pp.kernel cryptokit dune-build-info)
+ (flags -no-strict-sequence))

@@ -4,8 +4,8 @@
 # docs/THREAT-MODEL-cluster.md for the threat model this guards against.
 #
 # Two SIMULATED cluster members are two `pp` process invocations differing
-# only in $HOME (Store.store_root is a process-wide singleton fixed at
-# startup, so "two stores" means "two processes" — see transport.ml's
+# only in $HOME (the default repository layout is fixed at startup, so
+# "two stores" means "two processes" — see transport.ml's
 # module header); they share a WORK dir (the underlying "world" both
 # members can observe identically, like tests/019) and a cluster
 # secret/id distributed out of band via a plain file copy (simulating
@@ -15,7 +15,7 @@
 #     receiving --transport-pull reject it via re-hash-on-receive (case T1
 #     below).
 #   A tampered-MAC token, and an expired token, are both denied by
-#     --serve-hit before Store.hit ever runs (case T2 below).
+#     --serve-hit before cache lookup (case T2 below).
 #   A token whose capabilities don't cover the trace's read closure gets a
 #     MISS from --serve-hit, even though the bytes are on local disk — a
 #     broader token gets a hit for the SAME key (authority is re-checked
@@ -275,5 +275,30 @@ if diff -q "$NODEA/.pp/store/objects/$RESULT_HASH" "$NODEB/.pp/store/objects/$RE
 else
   echo "FAIL T6-byte-identical-object-via-serve-hit"; fail=1
 fi
+
+# A node result may contain a blob reference without reading a file cell.
+# Direct serve-hit must transfer that blob too, or the receiving node cannot
+# consume the otherwise-valid cached result (follow-up to T6).
+BLOB_NODEA="$TMP/blob-nodeA"; BLOB_NODEB="$TMP/blob-nodeB"; BLOB_SHARED="$TMP/blob-shared"
+mkdir -p "$BLOB_NODEA" "$BLOB_NODEB"
+mkdir -p "$BLOB_NODEA/.pp/cluster" "$BLOB_NODEB/.pp/cluster"
+cp "$NODEA/.pp/cluster/secret" "$NODEA/.pp/cluster/id" "$BLOB_NODEA/.pp/cluster/"
+cp "$NODEA/.pp/cluster/secret" "$NODEA/.pp/cluster/id" "$BLOB_NODEB/.pp/cluster/"
+cat > "$TMP/blob-result.pp" <<'EOF'
+let (ref = force(node { blob("payload") })) { print(blob-get(ref)) }
+EOF
+HOME="$BLOB_NODEA" "$PP" "$TMP/blob-result.pp" > "$TMP/out" 2>&1
+assert "result-blob-builds" "payload" present
+BLOB_KEY=$(ls "$BLOB_NODEA/.pp/store/traces")
+HOME="$BLOB_NODEA" "$PP" --mint-token "$TMP/blob-token.txt" 3600
+HOME="$BLOB_NODEA" "$PP" --serve-hit "$BLOB_KEY" "$TMP/blob-token.txt" "$BLOB_SHARED" "$TMP/blob-reply.txt" > "$TMP/out" 2>&1
+assert "result-blob-serve-hit" "serve-hit-reply hit" present "$TMP/blob-reply.txt"
+BLOB_COUNT=$(find "$BLOB_SHARED/blobs" -type f 2>/dev/null | wc -l | tr -d ' ')
+if [ "$BLOB_COUNT" -ge 1 ]; then echo "ok   result-blob-pushed"
+else echo "FAIL result-blob-pushed: expected at least one blob, got $BLOB_COUNT"; fail=1; fi
+HOME="$BLOB_NODEB" "$PP" --recv-hit "$TMP/blob-reply.txt" "$BLOB_SHARED" > "$TMP/out" 2>&1
+assert "result-blob-recv-hit" "recv-hit: hit" present
+HOME="$BLOB_NODEB" "$PP" "$TMP/blob-result.pp" > "$TMP/out" 2>&1
+assert "result-blob-consumable-after-sync" "payload" present
 
 exit $fail

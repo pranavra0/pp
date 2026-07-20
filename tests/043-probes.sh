@@ -17,8 +17,7 @@
 # observe-fn fresh, and the node's stored trace is re-verified against
 # whatever the counter says NOW. Section (6) below additionally proves the
 # SAME mechanism live under one long-running `pp --watch` process: probe
-# reads are ordinary cell observations (Runtime.observed_all/Store.
-# observe_cell), so the existing generic watch-loop polling picks up a
+# reads are ordinary session observations, so generic watch-loop polling picks up a
 # changed probe cell with NO special-cased wiring.
 set -uo pipefail
 PP=${PP:-bin/pp}
@@ -88,7 +87,7 @@ assert "run4-value-1"            "\\[info\\] 1$" present
 
 # =====================================================================
 # (2) probe value never lands under ~/.pp/store's objects/traces — a probe
-#     is re-evaluated every pass (Runtime.probe_values is in-memory-only,
+#     is re-evaluated every pass (the probe cache is in-memory-only,
 #     cleared per pass; there is no separate "probe cache" on disk the way
 #     there is a node objects/traces store), per SPEC law 38's volatility
 #     exclusion. traces/ records only (cell-id, HASH) pairs, never the raw
@@ -162,8 +161,8 @@ assert "register-probe-in-node-errors" "node bod" present
 # (6) --watch: the SAME probe cell change, detected live by one
 #     long-running `pp --watch` process on a timer, with no special-cased
 #     wiring — a probe read is an ordinary cell observation, so the
-#     existing generic watch-loop polling (Runtime.observed_all ->
-#     Store.observe_cell) already covers `probe:` cells for free.
+#     existing generic watch-loop polling (session observations ->
+#     Observation.observe) already covers `probe:` cells for free.
 # =====================================================================
 rm -rf "$TMP/.pp"
 printf '1\n' > "$COUNTER"

@@ -30,7 +30,7 @@ Cluster forcing must protect these assets:
 
 - store integrity: the content address is the integrity check. pp names a
   result, a blob or a trace only by a hash of its own bytes (for a value
-  object, the hash of the decoded value — see the header of `store.ml`).
+  object, the hash of the decoded value — see `object_repository.ml`).
   Distribution must never let a hash-named artifact's bytes fail to match
   that name
 - capability authority: pp mints capabilities once, only at the root, and
@@ -107,7 +107,7 @@ This model does not consider these adversaries:
 ## Trust anchors
 
 - one cluster secret. `pp cluster-init` mints it on the root machine
-  (`Token.init` in `src/token.ml`): 32 bytes from Cryptokit's secure random
+  (`Cap_token.init` in `src/kernel/cap_token.ml`): 32 bytes from Cryptokit's secure random
   generator, hex-encoded, written to `~/.pp/cluster/secret` with file mode
   0600. It refuses to overwrite an existing secret, so there is no silent
   rotation that would invalidate every token already issued. Alongside the
@@ -142,14 +142,14 @@ Each claim below is an adversarial test. All run end-to-end in
 that differ only in their `$HOME` directory. This stands in for distinct
 machines at the process level, sharing a "world" directory the way the
 continuous-integration loopback local-directory transport does. See the
-module header of `src/transport.ml` for why the tests use this shape
+module header of `src/runtime/transport.ml` for why the tests use this shape
 rather than a true single-process, dual-store setup.
 
 - claim T1: pp re-hashes every synced artifact before use, and refuses any
   mismatch rather than silently accepting it. `Transport.ingest_object` and
   `ingest_blob` decode and hash the received bytes, then compare the result
-  against the claimed name, before ever calling `Store.store_object` or
-  `store_blob`. No other function in `transport.ml` writes a remote
+  against the claimed name, before ever calling the object or blob
+  repository. No other function in `transport.ml` writes a remote
   artifact into the local store. Traces have no self-describing content
   hash — their name is a node key, not a hash of their own bytes — so
   `ingest_trace_lines` instead rejects any line that fails to parse under
@@ -161,7 +161,7 @@ rather than a true single-process, dual-store setup.
   serving anything. `Token.verify` checks the MAC first, then the cluster
   id, then the expiry, and only then parses the capabilities, so a forged
   token never reaches the capability parser. `Transport.decide` calls
-  `Token.token_to_caps` before it ever touches `Store.hit`, so a rejected
+  `Token.token_to_caps` before it ever touches cache policy, so a rejected
   token never moves a single byte: `serve_hit`'s push logic sits only
   inside the branch for a granted hit, and is structurally unreachable
   from the denial branch. Tested: a flipped byte in the MAC and a token
@@ -171,7 +171,7 @@ rather than a true single-process, dual-store setup.
   transitive read closure isn't fully covered by the requesting token's
   capabilities, even when the bytes already sit on local disk.
   `Transport.decide` computes the authorized set from `token_to_caps` and
-  passes it to the unchanged `Store.hit` function, the same gate a local
+  passes it to `Cache_policy.lookup`, the same gate a local
   caller with narrow capabilities hits. A token covering an unrelated
   directory gets a miss for a key whose trace reads a cell outside that
   directory, while a broader token gets a hit for the identical key. This
@@ -179,7 +179,7 @@ rather than a true single-process, dual-store setup.
   the bytes happen to be present
 - claim T4: `pp why`, run over a synced trace, redacts according to the
   requester's own token or grant, matching what a purely local run redacts
-  (LAW 23c). Redaction is enforced entirely by `Store.hit`'s authorized
+  (LAW 23c). Redaction is enforced entirely by cache policy's authorized
   predicate at read time, independent of how the trace arrived. So a trace
   synced from a build with a broad token, once on a member's disk, redacts
   identically to a trace built locally there, provided that member's own
@@ -194,7 +194,7 @@ rather than a true single-process, dual-store setup.
   construction, not just by testing: a node that touches a sealed value
   already fails at the existing node boundary — a node may not return a
   sealed value, and `Codec.encode_value` returns nothing for one — so
-  there is nothing for `Store.hit` to find for such a key, and `serve_hit`
+  there is nothing for cache policy to find for such a key, and `serve_hit`
   can only ever answer with a miss. As defence in depth, `Transport.decide`
   and `LocalDir.push_object` both re-check `Codec.encode_value` before
   shipping anything, and hard-fail, naming the violation, rather than
@@ -204,34 +204,22 @@ rather than a true single-process, dual-store setup.
   attempts and is refused a sealed read, a recursive search of everything
   the test touched (every node's store, the shared sync roots, every reply
   file) for the secret's distinctive bytes finds nothing
-- claim T6: placement never changes a key or a result hash. Full remote
-  placement is a later part of this feature, so this document proves the
-  claim only for what this document's own tests cover: syncing, not
-  scheduling where code runs. This is the placement half of the wider
-  invariance argument that already holds across schedulers: a
-  node built independently on a third, never-synced member computes the
-  same key as everywhere else, because identity is a hash of the code and
-  the free variables' value hashes, independent of where it is computed
-  (LAW 20), and produces a byte-identical result object. The object synced
-  onto a receiving member, through `serve_hit` and `recv_hit`, is also
-  byte-identical to the builder's own copy
-- claim T7: garbage collection of the store, running concurrently with a
-  parallel build, causes no crash and no wrong result, and a subsequent
-  rebuild is byte-identical. Store garbage collection is a later part of
-  this feature, not implemented by what this document covers. This claim
-  is listed here because the threat-model gate requires it, and it stays a
-  live claim this document continues to bind once garbage collection
-  exists. It is not exercised by the current tests
+- claim T6: placement never changes a key or a result hash. Remote placement
+  sends only data-closed node misses. The member computes the same key and
+  result as a local worker because identity uses code and free-variable
+  hashes, not location (LAW 20). `tests/048` checks this.
+- claim T7: garbage collection of the store, running beside a parallel build,
+  causes no crash or wrong result. `pp gc` marks by replay and protects recent
+  and concurrent data. `tests/050` checks this.
 
 ## What this document does not cover
 
 This document does not cover:
 
-- remote evaluation: `serve_hit` answers one question only, does this key
-  already have a verified result you're authorized to see. Nothing in
-  this document causes code to run on a peer. Forcing a node on a remote
-  member is remote placement, a later part of this feature (see the
-  remote-placement work described in `docs/STATUS.md`)
+- arbitrary remote evaluation: `serve_hit` answers one question only: does
+  this key have a verified result that the caller may read? Remote placement
+  runs only data-closed node misses through the separate `remote:MEMBER`
+  scheduler path.
 - a membership protocol: there is no network operation to join or leave
   the cluster. Membership — who holds a copy of the secret — is entirely
   an out-of-band fact the operator manages, mirrored in ambient

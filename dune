@@ -1,6 +1,10 @@
 ; `dune runtest` — the single-engine test suite. Runs from the build root so
 ; test files can `(load "stdlib/list.pp")`. The driver checks expected output
 ; and runs the shell oracles. See docs/TESTING.md.
+(env
+ (dev
+  (flags (:standard -warn-error @1..3@5..28@30..39@43@46..47@49..57@61..62-40))))
+
 (rule
  (alias runtest)
  (deps
@@ -14,47 +18,64 @@
   ; tests/067 diffs SPEC's generated surface-tables block against
   ; `pp --dump-surface-tables`, so the SPEC file must be a runtest dep.
   docs/SPEC.md
-  ; tests/074 checks each observation head has an adversarial fixture or
-  ; a DESIGN honest-edge entry, so DESIGN.md must be a runtest dep too —
-  ; without it the sandbox served a stale/absent copy and env/probe/config
-  ; (the §4-edge heads) failed under `dune runtest` while passing directly.
-  docs/DESIGN.md
+  tests/fixtures/adversarial/honest-edges.tsv
   build.pp
   scripts/run-tests.sh
-  src/main.exe
-  ; tests/054 drives the fuzzer's reader-roundtrip gate
-  tools/fuzz.exe)
+  scripts/run-focused-tests.sh
+  scripts/test-categories.sh
+  scripts/check-architecture.sh
+  scripts/check-state-inventory.sh
+  scripts/state-inventory.allow
+  tools/check-compiler-warnings.sh
+  tools/check-dependencies.sh
+  tools/check-api-surface.sh
+  tools/api-surface.allow
+  tools/check-vertical-slices.sh
+  tools/dependency-manifest
+  src/app/main.exe
+  tools/fuzz.exe
+  tests/unit/kernel_unit.exe
+  tests/unit/repository_unit.exe
+  tests/unit/observation_unit.exe
+  tests/unit/lifecycle_unit.exe
+  tests/unit/parser_unit.exe)
  (action
-  (run bash scripts/run-tests.sh src/main.exe)))
+ (progn
+  (run bash scripts/check-architecture.sh)
+  (run bash scripts/run-focused-tests.sh
+    %{dep:tests/unit/kernel_unit.exe}
+    %{dep:tests/unit/repository_unit.exe}
+    %{dep:tests/unit/observation_unit.exe}
+    %{dep:tests/unit/lifecycle_unit.exe}
+    %{dep:tests/unit/parser_unit.exe})
+  (run bash scripts/run-tests.sh src/app/main.exe))))
 
-; Fork-defeat regression, root cause: Runtime.stdlib_root()
-; (src/runtime.ml) resolves --reconcile/--supervise's auto-loaded
-; domain-fs.pp/domain-proc.pp (and their list.pp/map.pp/string.pp deps) to
-; _build/default/stdlib — the sibling directory of main.exe, i.e. THIS
-; mirror, not the repo's own stdlib/ — but until this rule existed, that
-; mirror was only ever refreshed as a side effect of the `runtest` alias's
-; `(source_tree stdlib)` dependency above. A bare `dune build` (which is
-; all `bin/pp` needs, per AGENTS.md) rebuilt main.exe without touching this
-; mirror at all, so editing stdlib/*.pp and running `dune build` silently
-; kept serving the OLD stdlib content to every --reconcile/--supervise run
-; until something else happened to invoke `dune runtest` first. This is
-; exactly how the list.pp `map`-shadow fix (removing the pp-level `(def
-; (map f lst) ...)` that shadowed the batching-aware builtin, defeating
-; the parallel fan-out) silently
-; failed to take effect for `bin/pp`: the source was fixed, but the mirror
-; `bin/pp` actually reads stdlib from at runtime stayed stale.
-;
-; This rule (not just `(deps (source_tree stdlib))`) also re-lists
-; src/main.exe and tools/fuzz.exe explicitly: dune's default per-directory
-; alias, unless overridden, implicitly aggregates every subdirectory's own
-; default target (which is how a bare `dune build` built both executables
-; before this rule existed) — but defining ANY explicit `(alias default)`
-; rule in a directory REPLACES that implicit aggregation for the directory
-; it's declared in, root included. Naming the two executables here
-; preserves "plain `dune build` builds the interpreter and the fuzzer"
-; (AGENTS.md) while adding the stdlib mirror to the same alias, so both
-; guarantees hold from one ordinary build with no extra step.
+; Keep the standard-library mirror current for the interpreter and fuzzer.
+; Keep both executables in the default build.
 (rule
  (alias default)
- (deps (source_tree stdlib) src/main.exe tools/fuzz.exe)
+ (deps (source_tree stdlib) src/app/main.exe tools/fuzz.exe tools/check-dependencies.sh)
  (action (progn)))
+
+(rule
+ (alias architecture)
+ (deps scripts/check-architecture.sh tools/check-compiler-warnings.sh
+   tools/check-dependencies.sh tools/dependency-manifest tools/check-api-surface.sh
+   tools/api-surface.allow tools/check-vertical-slices.sh
+   scripts/check-state-inventory.sh
+   scripts/state-inventory.allow dune src/kernel/dune src/frontend/dune
+   src/runtime/dune src/app/dune)
+ (action (run bash scripts/check-architecture.sh)))
+
+(rule
+ (alias unit)
+ (deps scripts/run-focused-tests.sh
+   tests/unit/kernel_unit.exe tests/unit/repository_unit.exe
+   tests/unit/observation_unit.exe tests/unit/lifecycle_unit.exe
+   tests/unit/parser_unit.exe)
+ (action (run bash scripts/run-focused-tests.sh
+   %{dep:tests/unit/kernel_unit.exe}
+   %{dep:tests/unit/repository_unit.exe}
+   %{dep:tests/unit/observation_unit.exe}
+   %{dep:tests/unit/lifecycle_unit.exe}
+   %{dep:tests/unit/parser_unit.exe})))

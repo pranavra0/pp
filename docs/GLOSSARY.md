@@ -65,7 +65,7 @@ brace-to-s-expression mapping.
   (`tests/016`). Cutoff for
   inline-nested nodes, and push-mode dirty-propagation over the
   reverse-edge graph, are still planned.
-  (`objects/`, `traces/`), `store.ml`, used by the engine for `node { e }`
+  (`objects/`, `traces/`), accessed through repositories and cache policy, used by the engine for `node { e }`
   thunks.
 
 ### The outside world
@@ -76,15 +76,15 @@ brace-to-s-expression mapping.
   today: `file:<path>`, `config:<key>`,
   `handler:<effect>`, `tool:<binary>`, `tree:<root>` (the coarse floor for
   `run`), `runtime:file:<path>`, `stat:<path>`, `env:<NAME>`, and `argv:`,
-  plus `probe:<name>` and `sealed:<path>` (see below). Planned: `glob:`
-  and `domain:<name>:<sub>` for third-party domains.
+  plus `probe:<name>`, `sealed:<path>`, and `domain:<name>:<sub>` for
+  registered domains (see below).
 - probe (real): the sanctioned way to depend on something nondeterministic
   (SPEC laws 37 and 38). A script-tier call to
   `register-probe(name, observe-fn, read-cap)` registers an observer;
   `probe(name)` reads it from anywhere. The observe function runs at most
   once per pass, under exactly `read-cap`, recording only a
   capability-free `probe:<name>` cell. pp never persists this:
-  `Runtime.probe_values` lives in memory and clears every pass, since a
+  Probe values live only in the session and clear every pass, since a
   probe is volatility, not something to cache.
 - sealed cell (real): a confidential read (SPEC law 39). `--grant
   secret:<path>` mints a `CapSecret`; a read covered by it, not by a
@@ -116,7 +116,7 @@ brace-to-s-expression mapping.
   `{service-name → spec}`, consumed by `pp --supervise` (`tests/033`).
 - reconciler: retired as a proper noun; there is no `reconciler.ml` any
   more. A domain is now an `observe`/`diff`/`apply` triple of pp functions
-  running under core-enforced discipline (`src/domains.ml`), not a
+  running under core-enforced discipline (`src/runtime/domains.ml`), not a
   privileged OCaml module. The filesystem domain (`stdlib/domain-fs.pp`,
   `pp --reconcile ROOT`) and the process domain (`stdlib/domain-proc.pp`,
   `pp --supervise`) are both live, converging by content hash and
@@ -129,7 +129,7 @@ brace-to-s-expression mapping.
   `tests/046`). It is registered with
   `register-domain({:name :namespace :observe :diff :apply :write-cap})`.
   A probe (see above) is a domain with no write authority: one registry,
-  `Runtime.domain_registry`, serving both roles.
+  owned by `Session`, serving both roles.
 
 ### Scheduling
 

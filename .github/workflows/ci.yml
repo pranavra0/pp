@@ -26,6 +26,12 @@ jobs:
       - name: Build
         run: opam exec -- dune build
 
+      - name: Architecture gates
+        run: opam exec -- dune build @architecture
+
+      - name: Focused unit gates
+        run: opam exec -- dune build @unit
+
       - name: Test suite (dune runtest)
         run: opam exec -- dune runtest --force
 

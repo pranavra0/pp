@@ -2,7 +2,7 @@
 # Cell-id canonicalization (SPEC law 23).
 #
 #   A cell-id is canonicalized before hashing: absolute real-path (symlinks
-#   resolved), no trailing slash. Done once, in Runtime.canonical_path, and
+#   resolved), no trailing slash. Done once, in World_path.canonical, and
 #   applied at every file:/tree:/stat:/tool:/runtime:file: construction
 #   site, every --grant path, and the loader bound — so two syntactically
 #   different paths naming the same inode are one cell (this path-prefix

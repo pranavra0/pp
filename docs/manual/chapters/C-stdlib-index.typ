@@ -3,7 +3,7 @@
 = Builtins and the standard library
 
 This appendix indexes the two layers of pp's vocabulary that are not special
-forms: the builtins compiled into the binary (`src/primitives.ml`) and the
+forms: the builtins compiled into the binary (`src/runtime/primitives.ml`) and the
 standard library written in pp itself (`stdlib/*.pp`). Special forms — `if`,
 `let`, `def`, `fn`, `delay`, `force`, `node`, `perform`, `handle`, `quote`, and
 the rest — belong to the language reference, not here.

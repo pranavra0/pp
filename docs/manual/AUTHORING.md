@@ -60,7 +60,7 @@ Conventions:
   random data in output. Run sh examples with `cd examples` semantics in mind —
   pp reports source locations relative to its working directory.
 - Verify every primitive/form against the binary before using it (`pp -e '…'`,
-  `grep src/primitives.ml`, the `tests/` and `examples/` trees). This codebase
+  `grep src/runtime/primitives.ml`, the `tests/` and `examples/` trees). This codebase
   has a history of docs claiming things that aren't true; that's the whole
   reason the examples run.
 

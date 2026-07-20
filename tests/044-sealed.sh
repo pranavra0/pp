@@ -5,7 +5,7 @@
 #
 # `--grant secret:<path>` mints CapSecret. A read covered by CapSecret and
 # NOT by CapFilesystem returns VSealed instead of VString: print redacts
-# ("#<sealed>"), the bytes pin in-memory only (Runtime.sealed_pins, NEVER
+# ("#<sealed>"), the bytes pin in-memory only in the session, never
 # store_blob/the CAS), and the node boundary bans VSealed both directions
 # exactly like VCapability. `(unseal v)` is the one explicit way out to
 # VString — a Vault/SOPS-style boundary, not dataflow tainting: unsealing

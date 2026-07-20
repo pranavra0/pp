@@ -109,6 +109,124 @@ echo "W2" > "$TMP/a.c"
 assert_count "build-watch-second" "COMPILE" 2 "$TMP/watch-build-out"
 kill $WATCH_PID 2>/dev/null
 wait $WATCH_PID 2>/dev/null || true
+
+# --- (f) one process, two evaluations: evaluator state is rebuilt while the
+# persistent store remains available. Macro definitions and gensym names are
+# source-derived, so the second evaluation must not inherit the first one's
+# macro or counter; dynamic config and handlers must unwind at the boundary. ---
+rm -rf "$TMP/.pp"
+cat > "$TMP/lifecycle.pp" <<EOF
+defmacro stale(x) { 1 }
+print(string-trim(slurp("$TMP/lifecycle-phase")))
+print(stale(7))
+print(gensym("g"))
+with-config({:mode -> "scoped"}) { print(config(:mode, "default")) }
+with-handler(log = fn(x) { print("handled", x) }) { perform log("first") }
+EOF
+printf 'one\n' > "$TMP/lifecycle-phase"
+timeout 12 "$PP" --watch --watch-interval 0.1 --grant "fs:$TMP:ro" \
+  "$TMP/lifecycle.pp" > "$TMP/lifecycle-out" 2> "$TMP/lifecycle-err" &
+WATCH_PID=$!
+new_watch_pass "evaluation-one" '^"one"$' 1 "$TMP/lifecycle-out"
+new_watch_pass "evaluation-one-macro" '^1$' 1 "$TMP/lifecycle-out"
+new_watch_pass "evaluation-one-gensym" '^g~1$' 1 "$TMP/lifecycle-out"
+new_watch_pass "evaluation-one-config" '^"scoped"$' 1 "$TMP/lifecycle-out"
+new_watch_pass "evaluation-one-handler" '^"handled""first"$' 1 "$TMP/lifecycle-out"
+
+cat > "$TMP/lifecycle.pp" <<EOF
+def stale(x) { 9 }
+print(string-trim(slurp("$TMP/lifecycle-phase")))
+print(stale(7))
+print(gensym("g"))
+print(config(:mode, "default"))
+perform log("second")
+EOF
+printf 'two\n' > "$TMP/lifecycle-phase"
+new_watch_pass "evaluation-two" '^"two"$' 1 "$TMP/lifecycle-out"
+new_watch_pass "evaluation-two-function-not-macro" '^9$' 1 "$TMP/lifecycle-out"
+new_watch_pass "evaluation-two-gensym-reset" '^g~1$' 2 "$TMP/lifecycle-out"
+new_watch_pass "evaluation-two-config-reset" '^"default"$' 1 "$TMP/lifecycle-out"
+new_watch_pass "evaluation-two-handler-reset" '^\[info\] second$' 1 "$TMP/lifecycle-err"
+kill $WATCH_PID 2>/dev/null
+wait $WATCH_PID 2>/dev/null || true
+
+# Observations are rebuilt from the current source on a new evaluation. After
+# the second source stops reading `obsolete`, changing that old cell must not
+# cause a third watch pass.
+rm -rf "$TMP/.pp"
+printf 'one\n' > "$TMP/observation-phase"
+printf 'old-one\n' > "$TMP/obsolete"
+cat > "$TMP/observations-one.pp" <<EOF
+print(string-trim(slurp("$TMP/observation-phase")))
+print(string-trim(slurp("$TMP/obsolete")))
+EOF
+cat > "$TMP/observations-two.pp" <<EOF
+print(string-trim(slurp("$TMP/observation-phase")))
+EOF
+timeout 12 "$PP" --watch --watch-interval 0.1 --grant "fs:$TMP:ro" \
+  "$TMP/observations-one.pp" > "$TMP/observations-out" 2> "$TMP/observations-err" &
+WATCH_PID=$!
+new_watch_pass "observations-evaluation-one" '^"old-one"$' 1 "$TMP/observations-out"
+cp "$TMP/observations-two.pp" "$TMP/observations-one.pp"
+printf 'two\n' > "$TMP/observation-phase"
+new_watch_pass "observations-evaluation-two" '^"two"$' 1 "$TMP/observations-out"
+printf 'old-two\n' > "$TMP/obsolete"
+assert_count_stable "observations-reset-at-evaluation" '^"two"$' 1 "$TMP/observations-out"
+kill $WATCH_PID 2>/dev/null
+wait $WATCH_PID 2>/dev/null || true
+
+# Source-derived registry entries do not survive a new evaluation. The second
+# watch pass intentionally fails while looking up the probe/domain entry that
+# only the first source registered.
+rm -rf "$TMP/.pp"
+cat > "$TMP/registry-one.pp" <<EOF
+register-probe("stale", fn() { 1 }, cap-none())
+print(string-trim(slurp("$TMP/registry-phase")))
+print(probe("stale"))
+EOF
+cat > "$TMP/registry-two.pp" <<EOF
+print(string-trim(slurp("$TMP/registry-phase")))
+print(probe("stale"))
+EOF
+printf 'one\n' > "$TMP/registry-phase"
+timeout 12 "$PP" --watch --watch-interval 0.1 --grant "fs:$TMP:ro" \
+  "$TMP/registry-one.pp" \
+  > "$TMP/registry-out" 2> "$TMP/registry-err" &
+WATCH_PID=$!
+new_watch_pass "registry-evaluation-one" '^1$' 1 "$TMP/registry-out"
+cp "$TMP/registry-two.pp" "$TMP/registry-one.pp"
+printf 'two\n' > "$TMP/registry-phase"
+wait_for 8 grep -q 'no such probe registered: stale' "$TMP/registry-err" \
+  && ok "registry-evaluation-two-resets-probe-domain" \
+  || bad "registry-evaluation-two-resets-probe-domain" "$(cat "$TMP/registry-err")"
+wait $WATCH_PID 2>/dev/null || true
+
+# --- (g) probe values and sealed pins are per-watch-pass, not per command ---
+rm -rf "$TMP/.pp"
+mkdir -p "$TMP/world"
+printf '1\n' > "$TMP/world/counter"
+printf 'aa\n' > "$TMP/secret"
+cat > "$TMP/pass-state.pp" <<EOF
+register-probe("counter", fn() {
+  string-trim(slurp("$TMP/world/counter"))
+}, cap-restrict(current-capabilities(), "$TMP/world/counter", :ro))
+print(probe("counter"))
+print(probe("counter"))
+print(string-length(unseal(slurp("$TMP/secret"))))
+EOF
+timeout 12 "$PP" --watch --watch-interval 0.1 --grant "fs:$TMP/world:ro" \
+  --grant "secret:$TMP/secret" "$TMP/pass-state.pp" \
+  > "$TMP/pass-state-out" 2> "$TMP/pass-state-err" &
+WATCH_PID=$!
+new_watch_pass "pass-one-probe-value" '^"1"$' 2 "$TMP/pass-state-out"
+new_watch_pass "pass-one-sealed-length" '^3$' 1 "$TMP/pass-state-out"
+printf '2\n' > "$TMP/world/counter"
+printf 'bbbb\n' > "$TMP/secret"
+new_watch_pass "pass-two-probe-value" '^"2"$' 2 "$TMP/pass-state-out"
+new_watch_pass "pass-two-sealed-length" '^5$' 1 "$TMP/pass-state-out"
+kill $WATCH_PID 2>/dev/null
+wait $WATCH_PID 2>/dev/null || true
+
 rm -rf "$TMP/.pp"
 # Program that returns a desired-state map
 cat > "$TMP/reconcile.pp" <<EOF
@@ -117,7 +235,7 @@ EOF
 echo "RECONCILE-CONTENT" > "$TMP/a.c"
 OUTROOT="$TMP/outroot"
 mkdir -p "$OUTROOT"
-HOME="$TMP" "$PP" --once --grant "fs:$OUTROOT:rw" --grant "fs:$TMP:ro" --reconcile "$OUTROOT" \
+HOME="$TMP" new_evaluation --grant "fs:$OUTROOT:rw" --grant "fs:$TMP:ro" --reconcile "$OUTROOT" \
   "$TMP/reconcile.pp" > "$TMP/rec-out" 2>&1
 assert "once-reconcile-create" "create=1" present "$TMP/rec-out"
 [ -f "$OUTROOT/file.txt" ] && echo "ok   once-reconcile-file" \

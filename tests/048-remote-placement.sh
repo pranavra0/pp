@@ -4,10 +4,10 @@
 # tests/047-cluster-sync.sh.
 #
 # Two SIMULATED cluster members are two `pp` process invocations differing
-# only in $HOME (Store.store_root is a process-wide singleton — same CI
+# only in $HOME (the default repository layout is process-wide — the same CI
 # loopback shape tests/047 already uses); a "cluster member" (NODEB) is
 # addressed via ~/.pp/cluster/members on the dispatcher (NODEA), never
-# --grant. src/remote.ml is the implementation; internal seams
+# --grant. src/runtime/remote.ml is the implementation; internal seams
 # (--remote-node, PP_REMOTE_TEST_HOOK[_AFTER]) are exercised directly here,
 # the way tests/047 drives --serve-hit/--recv-hit directly.
 #
@@ -161,7 +161,7 @@ EOF
 
   # Desired-state hash is byte-identical, serial vs remote (case T6
   # below). --check re-runs the SAME program forced Serial against the
-  # SAME (now-warm) store and compares Types.hash_value of the
+  # SAME (now-warm) store and compares Identity.hash_value of the
   # desired-state value (main.ml's existing schedule-transparency audit,
   # extended to Remote by policy_name); a mismatch would print "schedule
   # non-transparent" and fail the audit.
@@ -226,13 +226,13 @@ fi
 # ===========================================================================
 # Part 2: the member must observe the DISPATCHER's pinned bytes, never
 # its own (possibly-drifted) disk, for a pre-seeded cell. Uses the
-# PP_REMOTE_TEST_HOOK[_AFTER] seam (src/remote.ml) to force a deterministic
+# PP_REMOTE_TEST_HOOK[_AFTER] seam (src/runtime/remote.ml) to force a deterministic
 # window a real dispatcher/member network round-trip would occupy anyway:
 # HOOK runs right after the dispatcher pushes pins (bytes = "V1") but
 # before the member is spawned — mutates the SHARED file to "V2", so if
 # the member observed its own disk instead of the pin it would read "V2".
 # HOOK_AFTER runs once the member has exited (reverting to "V1") so the
-# dispatcher's OWN post-pull Store.hit re-validation (against the CURRENT
+# dispatcher's own post-pull cache re-validation (against the current
 # world, same as any local hit) also agrees, proving a full clean hit on
 # the DISPATCHER's original bytes, not a fluke of timing.
 # ===========================================================================

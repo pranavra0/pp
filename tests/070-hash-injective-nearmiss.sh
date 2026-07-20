@@ -3,7 +3,7 @@
 # differently, so each recomputes instead of wrongly serving the other's
 # cached result.
 #
-# hash_concat frames every part as `<len>:<bytes>` (src/types.ml), so two
+# hash_concat frames every part as `<len>:<bytes>` (src/kernel/core_model.ml), so two
 # distinct part LISTS can never share a pre-hash string just because a part
 # contains ':' or matches an absent-marker. Two observation encodings that
 # collided under the old `String.concat ":"` join are the surface-reachable

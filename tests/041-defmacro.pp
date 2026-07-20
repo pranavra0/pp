@@ -37,7 +37,7 @@ print("=== caller variable of the same name (M3 hygiene discipline) ===")
 # caller's `tmp` (bound to 7) is what `unquote(a)` refers to, not the
 # macro's own temporary. This is the same computed-binding-name shape
 # quasiquote{} needs `unquote(...)` in a name slot for
-# (src/reader_braces.ml's parse_qq_name_slot) — `unquote(g)` names the
+# (src/frontend/reader_braces.ml's parse_qq_name_slot) — `unquote(g)` names the
 # binding itself, not just its value.
 defmacro first-truthy(a, b) {
   let* (g = gensym("tmp")) {

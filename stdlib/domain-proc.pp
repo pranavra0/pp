@@ -3,7 +3,7 @@
 # This is the POLICY half of the domain: start/stop/
 # restart decisions on spec-hash (here: spec VALUE) change. The TRUSTED
 # MECHANICS (fork/exec/reap, TERM->poll->KILL, per-domain state
-# persistence) are OCaml primitives (src/domain_prims.ml): proc-spawn,
+# persistence) are OCaml primitives (src/runtime/domain_prims.ml): proc-spawn,
 # proc-alive?, proc-stop, proc-reap, domain-state-get/put. main.ml's
 # `--supervise` auto-loads this file and calls `register-proc-domain`.
 #

@@ -419,7 +419,7 @@ Test: `length(map(inc, range(0, 1000000)))` evaluates to `1000000`  (the same st
 
 Every form a reader accepts, whichever surface it parses, `quote` can turn
 into a value, and quasiquote/unquote work over that structure. Quotation is
-defined against the AST (`Types.expr`), so every surface shares one
+defined against the AST (`Core_model.expr`), so every surface shares one
 quoted-data language. A Lisp whose quoted conditional (`'(if a b c)`) crashes
 is not homoiconic.
 
@@ -433,7 +433,7 @@ including splicing, nested quasiquote, vectors, and maps. `defmacro`
 (`macro.ml`) redeems the grounding: a macro receives its argument forms
 already converted by `quote_to_value`, computes over them as data (via
 `quote`/`quasiquote`/`list`/`cons`/`gensym`), and the result is converted
-back to syntax by `Types.value_to_expr` — the total, exhaustive counterpart
+back to syntax by `Quotation.value_to_expr` — the total, exhaustive counterpart
 of `quote_to_value`, so every case the reader can produce round-trips. This
 is possible only because quotation was already total in both directions the
 moment `value_to_expr` existed to complete it. `defmacro` is not itself a
@@ -721,7 +721,7 @@ through free variables, so the compile re-runs but the link hits
 (`tests/016`). Not implemented: cutoff for a node inline-nested in its
 dependent's body, where the parent's trace subsumes the child's reads, so the
 parent re-runs regardless. The reverse-edge dirty-propagation graph now
-exists and is used by push-mode `stabilize` (`Store.build_reverse_index`,
+exists and is used by push-mode `stabilize` (`Store_index.reverse`,
 `Stabilize.reset_dirty`; `pp --watch --stabilize`; `tests/032`); pull-mode
 re-verification still walks from the root when `--stabilize` is not used.
 Glob and toolchain-closure cells are not yet recorded.
@@ -829,10 +829,10 @@ DESIGN.md derives the transitive requirement and its precomputed
 
 **Status: holds** (with one residual gap) — path checks are component-aware
 and full-path (`/tmp` does not grant `/tmpevil`), and the full path is now
-uniformly canonicalised first: `Runtime.canonical_path` — absolute realpath,
+uniformly canonicalised first: `World_path.canonical` — absolute realpath,
 symlinks resolved, no trailing slash — runs at every `file:`/`tree:`/`stat:`/
 `tool:`/`runtime:file:` construction site, at `--grant` parse time, and at
-the loader bound (`Runtime.loader_authorized`). `Capabilities.path_grants`
+the loader bound (`Loader.authorized`). `Capabilities.path_grants`
 re-applies it to both sides of every scope check, so a grant spelled one way
 authorises a cell observed another way — a symlinked source tree, macOS
 `/var` versus `/private/var`, a trailing slash (`tests/036`). A path that
@@ -841,7 +841,7 @@ rest lexically, so a write-target's cell id is stable before and after the
 file is created (`tests/036`). Unicode normalisation (NFC) is not
 implemented — a documented residual gap that needs a new dependency and is
 orthogonal to the realpath fix. The transitive-closure requirement holds : a hit is served only if the caller's capabilities cover every
-cell in the stored trace's read closure (`Store.hit ~authorized`), and
+cell in the stored trace's read closure (`Cache_policy.lookup ~authorized`), and
 because reads propagate to enclosing nodes the closure is transitive — a
 narrow caller cannot launder a broad read through a cached aggregator
 (`tests/013` tree-walker, `tests/014`). A capability denial raises the
@@ -879,7 +879,7 @@ whose closure touches the standard library. The runtime/user split is
 load-bearing, not cosmetic.
 
 **Status: holds** — every loader read  goes through
-`Runtime.loader_read`: bounded to the directories of the programs named on
+`Loader.read`: bounded to the directories of the programs named on
 the command line, the working directory, and `~/.pp`. Loading anything else
 errors, with or without a grant. Each read is recorded as a
 `runtime:file:<path>` trace cell that participates in cache validity —
@@ -1033,7 +1033,7 @@ back silently to the reader's `"<?>"` placeholder), and each of its
 top-level forms is evaluated (the tree-walker's `eval_expressions`) or
 evaluated one at a time, under the same
 never-doubled location decoration as the outer top-level driver
-(`Runtime.with_form_location`/`message_has_location` — one implementation,
+(`Error_context.with_form_location`/`message_has_location` — one implementation,
 shared across runs and both nesting levels). An error inside the loaded
 file is decorated with its own `file:line` before it can unwind past the
 `load`, so the `load(…)` call site's own decorator, seeing a message that
@@ -1070,15 +1070,14 @@ with reality re-observed rather than trusted from a state file.
 write-discipline law is now enforced generically, for any registered domain,
 not hardwired to the filesystem. A domain is an `observe`/`diff`/`apply`
 triple of ordinary pp functions (`register-domain`, scripting tier), and
-core (`src/domains.ml`) wraps every domain's `apply` in the same journal
+core (`src/runtime/domains.ml`) wraps every domain's `apply` in the same journal
 bracket, `observed_all` suspension, plan cache, and verify-after-write,
-regardless of what the domain converges. The project's earlier
-`src/reconciler.ml` and `src/supervisor.ml` OCaml modules are deleted; the
-trusted mechanics they contained — atomic materialize/remove, fork/exec/
-reap, per-domain state persistence — moved into primitives
+regardless of what the domain converges. The trusted mechanics —
+atomic materialize/remove, fork/exec/reap, and
+per-domain state persistence — live in primitives
 (`tree-observe`, `materialize-file`, `remove-file`, `proc-spawn`,
 `proc-alive?`, `proc-stop`, `proc-reap`, `domain-state-get`/`put` in
-`src/domain_prims.ml`), and all the policy — the tree-walk diff, the
+`src/runtime/domain_prims.ml`), and all the policy — the tree-walk diff, the
 start/stop/restart decision — moved into `stdlib/domain-fs.pp` and
 `stdlib/domain-proc.pp` as ordinary pp source.
 
@@ -1102,7 +1101,7 @@ changed, since the plan cache turns a no-op pass into a cache hit.
 
 Push stabilize: `pp --watch --stabilize prog.pp` uses the reverse-edge index
 from stored traces to reset only dirty thunks, so clean nodes skip
-`Store.hit` entirely; the test `tests/032` confirms the same
+repository lookup entirely; the test `tests/032` confirms the same
 re-evaluation patterns to pull mode on the engine.
 
 The process domain: `pp --supervise prog.pp` auto-loads
@@ -1275,7 +1274,7 @@ rebuilt the deployment-boundary blunt instrument inside the language.
 **Status: holds** for the negative half: no location surface exists in any
 reader, and this absence is verified. The positive half now lands for local
 process-pool parallelism: `--schedule serial|parallel:N|race:N` selects a
-result-transparent handler (`src/scheduler.ml`) that forks worker processes
+result-transparent handler (`src/runtime/scheduler.ml`) that forks worker processes
 at the dispatch point. A worker runs the exact `run_node_body` the serial
 miss arm calls, with no second force path, and communicates only through the
 store; a dead worker degrades to an ordinary in-process recompute, never a
@@ -1292,7 +1291,7 @@ from `~/.pp/cluster/members`/`$PP_CLUSTER_MEMBERS`, ambient config, never
 this law already draws between location and syntax. A member is an ordinary
 second `pp` invocation of the byte-identical program; a non-data-closed
 node, an unreachable member, or a crashed member all degrade to local
-compute, never a wrong answer (`src/remote.ml`).
+compute, never a wrong answer (`src/runtime/remote.ml`).
 
 A later stage of this same cluster work adds cluster membership's
 write-domain half: host-qualified domain distribution generalises the
@@ -1302,7 +1301,7 @@ same kind of ambient identifier this law already uses for
 `--grant`, so the negative half of this law stays intact. It hands the
 unchanged `Domains.run_all` (LAW 30) only that host's slice; a member is
 simply `pp --watch [--supervise] --member-name <n>` on its own slice, the
-local supervisor's existing per-machine story, verbatim. Store garbage
+local supervisor's existing per-machine story, verbatim. Explicit store garbage
 collection (`pp gc`, explicit, never automatic) is orthogonal to placement:
 it never runs during a scheduled force, only via its own command, and is
 documented alongside LAW 30.
@@ -1345,7 +1344,7 @@ redundancy only — LAW 37 nodes are deterministic, so racing identical
 `(key, run)` jobs is sound, while heterogeneous racing of different
 computations stays out of scope until the declared-nondeterminism cells of
 LAW 37/38 exist. The first success wins, losers are killed
-(`SIGTERM` then `SIGKILL`), and the parent re-enters `Store.hit` exactly as
+(`SIGTERM` then `SIGKILL`), and the parent re-enters `Cache_policy.lookup` exactly as
 the batch path does. Cluster and distributed racing is a later milestone,
 gated on a threat model.
 
@@ -1445,7 +1444,7 @@ the node body and into its own `probe:<name>` cell, observed and pinned once
 per pass, exactly the cell treatment this law asked for. So a node reading
 it re-forces only when the probe's value actually changes, and its
 instability never re-keys or invalidates anything beyond that one cell edge.
-Probe results are never written to `~/.pp/store` at all — `Runtime.probe_values`
+Probe results are never written to `~/.pp/store` at all — the session's probe cache
 is in-memory and cleared every pass — which is stronger than merely being
 excluded from shared caches, since there is no cache to exclude them from.
 
@@ -1467,7 +1466,7 @@ must never find secret plaintext; and `string_of_value` and every printer
 redact to `#<sealed>`, since a print that leaked the bytes would defeat the
 feature. `VSealed` joins the node-boundary ban exactly like `VCapability` —
 the free-variable ban and the result ban, both directions —
-and `cell_authorized_for` requires a covering `CapSecret` grant to serve a
+and `Observation.authorized` requires a covering `CapSecret` grant to serve a
 hit on a `sealed:` cell. LAW 23's transitive-closure and
 introspection-filtering clauses fall out unchanged: a narrow caller cannot
 launder a cached secret read through an aggregator, and `pp why` redacts it.
@@ -1519,11 +1518,11 @@ migration.
 | LAW 7 | demand-pruning at node granularity | partial | reverse-edge dirty-propagation graph exists for push `stabilize` (`pp --watch --stabilize`, `tests/032`); a root desired-state formula and an explicit wanted-set are still absent |
 | LAW 8 | `delay` ephemeral vs `node` persistent | partial | the split exists (`node` persists to `~/.pp/store`; `delay` never persists); residual: the in-memory dedup table is not mirrored across runs, separate from the persistent node cache |
 | LAW 11 | stack-safe non-tail recursion | unimplemented | the named stack-safe-evaluator workstream; fuzz `exitdiff:tw-err: Out_of_memory`, `crash:bc:timeout` |
-| LAW 12 | total quotation, quasiquote | holds | `tests/007-phase0-laws.pp`; `defmacro` is built on this base — `Types.value_to_expr` completes the round trip, `tests/041-defmacro.pp` |
-| LAW 15 | ordering never from capabilities | partial | negative half holds; a first version of the filesystem-domain reconciler exists (`tests/018`), the process domain is absent |
+| LAW 12 | total quotation, quasiquote | holds | `tests/007-phase0-laws.pp`; `defmacro` is built on this base — `Quotation.value_to_expr` completes the round trip, `tests/041-defmacro.pp` |
+| LAW 15 | ordering never from capabilities | partial | authority and ordering are separate; filesystem and process domains use the generic domain pipeline (`tests/018`, `tests/033`); the remaining gap is the broader law definition |
 | LAW 16 | opt-in per-node caching | partial | `node { e }` cached persistently across runs ; scripting-tier expressions uncached; node writes sandbox-scratch-only (LAW 18, `tests/017`); `tests/010`, `tests/014` |
 | LAW 17 | hit is not effect replay | holds (node tier) | a `node { e }` hit does not replay in-node `log`/stdout (`tests/010`, `tests/014`) |
-| LAW 18 | sandbox-scratch writes | partial | per-node scratch sandbox real: relative node writes/reads are scratch-local, absolute node writes error, `run`'s working directory is the scratch dir (`tests/017`); reconciled domains absent |
+| LAW 18 | sandbox-scratch writes | partial | per-node scratch sandbox is real: relative node writes/reads are scratch-local, absolute node writes error, and `run` uses the scratch directory (`tests/017`); domain writes use the reconciliation pipeline |
 | LAW 19 | sound content hashing | partial | hash is SHA-256; closure-environment and handler gaps closed, so in-memory dedup is sound; store objects are content-addressed by result hash, shared across runs; the tree-walker's in-memory dedup table is not mirrored across runs |
 | LAW 20 | key = code plus argument values | partial | persistent `node { e }` key = code plus free-variable value hashes; capabilities, the whole environment, config, and handlers are all excluded (`tests/011`, `tests/015`); binding order is not canonicalised (LAW 3); the node boundary is now symmetric: a capability-containing free variable is `Capability_error` at the key, a capability-containing result is rejected before storage (`tests/capability-adversarial.sh`); `defmacro` expands before the evaluator's `hash_expr`/compiler ever sees a form, so the key is always over the expanded code with no change to this law — a macro-only edit re-keys its call sites (`tests/042-defmacro-rekey.sh`) |
 | LAW 21 | cutoff via traces | partial | validity via verifying trace is real (key maps to a set of traces, cells re-checked on hit; `tests/010`, `tests/015`); hash-equality cutoff proven at scale — a comment-only header edit on a 101 translation-unit C build, and on Lua 5.4.7, recompiles dependents and cuts off the link (`tests/016`, `tests/024`, `scripts/build-lua.sh`); the reverse-edge dirty-propagation graph is now used by push `stabilize` (`pp --watch --stabilize`, `tests/032`); inline-nested cutoff is still absent |
@@ -1532,15 +1531,15 @@ migration.
 | LAW 23 | component/full-path plus transitive hit check | holds (one residual gap) | component-aware, canonicalised (realpath, no trailing slash) paths at every cell/grant/loader-bound site (`tests/036`); hits gated on the caller's capabilities covering the trace's transitive read closure in  capability denials not memoized (`tests/013`, `tests/014`) — "the caller's capabilities" is now the forcing thunk's captured `node_caps`, collapsing to the earlier per-process grant when `with-caps` is unused; capability-filtered `pp why` real (`tests/019`); Unicode normalisation (NFC) not implemented |
 | LAW 24 | loader is runtime authority | holds | loader bounded to source roots plus `~/.pp`, reads traced as authority-exempt `runtime:file:` cells (`tests/020`); realpath-canonical (`tests/036`) |
 | LAW 25 | no unenforced authority surface | holds | `CapTime`/`CapMemory` removed from types and surface |
-| LAW 26 | two handler classes, synthetic trace cells | partial | semantic half real at node granularity: `handler:<effect>` trace cells in  mock and real coexist without cross-contamination (`tests/015`); cells coarser than the law's per-argument form; the result-transparent class awaits schedulers |
+| LAW 26 | two handler classes, synthetic trace cells | partial | semantic handler cells work at node granularity (`tests/015`); cells are coarser than the law's per-argument form, and result-transparent handler cells are not implemented |
 | LAW 27 | exception/tail-safe dynamic extent | holds | save-stack restore on every exit |
 | LAW 28 | failure traces, error memoization | partial | the engine memoizes `Failure` outcomes as failing traces, re-served until a recorded read changes; the earlier `Evaluating`-leak bug is fixed (`tests/012`, `tests/014`); non-`Failure` exceptions uncached |
 | LAW 29 | source locations in errors | holds | every top-level form's location is appended to unlocated runtime errors ; arity/capability errors name the callee/operation; `pp: error:` single-line reporting; a loaded file's own forms are individually located and decorated with that file's location before the error can unwind past the `load` (`tests/027`, including case (g)) |
-| LAW 30 | desired-state plus single writer | holds | `register-domain` (a probe is the bottom-write-authority case, one registry) plus generic orchestration (`src/domains.ml`) enforce plan/journal/atomic-apply/verify/stratification for any registered domain, not hardwired to the filesystem — the earlier `src/reconciler.ml`/`supervisor.ml` deleted; `stdlib/domain-fs.pp`/`domain-proc.pp` hold the filesystem/process policy as pp source (`tests/018`, `tests/023`, `tests/033` unchanged byte for byte); a from-scratch third-party domain proves genericity (`tests/046`); drives a real 101 translation-unit C build and Lua 5.4.7 end-to-end (`tests/024`); push `stabilize` live (`pp --watch --stabilize`, `tests/032`) |
+| LAW 30 | desired-state plus single writer | holds | `register-domain` and `src/runtime/domains.ml` enforce plan, journal, atomic apply, verify, and stratification for any registered domain; `stdlib/domain-fs.pp` and `stdlib/domain-proc.pp` hold filesystem and process policy (`tests/018`, `tests/023`, `tests/033`, `tests/046`) |
 | LAW 31 | fenced effects, intent journal | holds | scripting-tier `fenced(KIND, SPEC)`, `--fenced-policy retry|abort|ask`, intent/done journal, recovery without silent retry; `tests/034` |
 | LAW 32 | gradual types, strictest oracle | holds | the engine enforces; tests 004/005 restored; `tests/007-phase0-laws.pp` |
 | LAW 33 | config: computed keys, tail-safe scoping | holds | computed keys and tail-safe scoping ; config reads inside nodes are `config:<key>` trace cells, ambient config out of the node key (`tests/015`) |
-| LAW 34 | no location surface / scheduler exists | holds | negative half holds; scheduler half lands for local process-pool parallelism (`tests/024`/`038`) and remote cluster placement (`--schedule remote:<member>`, `tests/048`); host-qualified domain distribution plus garbage collection remain a later stage |
+| LAW 34 | no location surface / scheduler exists | holds | the language has no location form; local process-pool scheduling, remote placement, host-qualified domains, and explicit GC are implemented (`tests/024`, `tests/038`, `tests/048`, `tests/049`, `tests/050`) |
 | LAW 35 | run-on-N-take-first as handler | holds | `race:N` process-pool fan-out lands (`tests/038`); `remote:<member>` cluster dispatch lands (`tests/048`), gated to data-closed batches, over the threat-model-gated transport |
 | LAW 36 | evaluator correctness | partial | catalogued divergences closed; `core` and sampled `full` green; deep non-tail recursion and negative-literal lexing remain same-side issues; `defmacro` expands once, ahead of the evaluator (`macro.ml`), so it cannot itself become an evaluator-only feature — `stmt_defmacro` in `full` |
 | LAW 37 | declared nondeterminism | holds | `register-probe`/`probe` are the one sanctioned nondeterministic dependency, evaluated at most once per pass outside the reading node's trace stack, exposed only as a `probe:<name>` cell (`tests/043-probes.sh`) |
@@ -1566,15 +1565,15 @@ through the build-engine milestone's remaining work.
 > brace/infix surface and the exact s-expression form every brace construct
 > reads to. It defines no new semantics — every row lowers to a form the laws
 > above already govern, and those laws are stated against the AST
-> (`Types.expr`), never against a surface. The s-expression language is
+> (`Core_model.expr`), never against a surface. The s-expression language is
 > unchanged: it remains the AST's notation and the macro layer's data
 > language (`quote` yields sexpr data in both surfaces).
 >
 > The elegance criterion (frozen). Reading a brace file and reading its
-> s-expression transpilation must yield the identical `Types.expr`, and
+> s-expression transpilation must yield the identical `Core_model.expr`, and
 > therefore identical LAW 20 keys. No renames: kebab-case identifiers
 > (`string-index`, `nil?`, `proc-alive?`, `run!`) survive verbatim. Because
-> `hash_expr` covers `ELocated (file, line)`, "identical `Types.expr`" has
+> `hash_expr` covers `ELocated (file, line)`, "identical `Core_model.expr`" has
 > two load-bearing corollaries.
 >
 > 1. The brace reader must attach `ELocated` at exactly the sites the
@@ -1716,7 +1715,7 @@ Notes, each load-bearing for hash preservation:
 ### B.3 Lowering table
 
 Each row gives the s-expression text a brace form reads as; both readers
-must then agree at the `Types.expr` level. Where the sexpr reader applies a
+must then agree at the `Core_model.expr` level. Where the sexpr reader applies a
 reader-level desugar (`and`/`or` → `if`, `assert`, per-parameter type
 checks, the block rule), that desugar is a shared post-pass run identically
 downstream of both parsers, never duplicated. ⟦stmts⟧ denotes the block
@@ -2076,11 +2075,11 @@ recorded here because later stages implement exactly what this annex froze.
     as outside quasiquote (judgment call 2 above): expression-position
     `{…}` is map data, and sequencing must be spelled `do { … }`.
 
-### B.8 Surface tables (generated from `src/surface_tables.ml`)
+### B.8 Surface tables (generated from `src/frontend/surface_tables.ml`)
 
 The closed surface sets — the `$KIND` observation heads, the `with { }`
 clause keywords, and the `needs` grant-descriptor sugar — are one typed
-value each in `src/surface_tables.ml`. Every consumer (both readers, the
+value each in `src/frontend/surface_tables.ml`. Every consumer (both readers, the
 `needs` desugar, `lint`, error messages) derives from those tables; nothing
 hand-copies the list. This block is generated, not authored:
 `tests/067-surface-tables-drift.sh` regenerates it (`pp --dump-surface-tables`)

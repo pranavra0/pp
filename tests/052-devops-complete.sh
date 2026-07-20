@@ -34,7 +34,7 @@
 #
 # Then the demo's OWN diagonal oracle (needs no pinning — deploy.pp's
 # desired root is a pure function of file:/sealed: cells, whose hashes
-# Store.observe_cell computes from disk bytes alone): 6 pull-row hashes
+# Observation.observe computes from disk bytes alone): 6 pull-row hashes
 # (placement serial/parallel:N/remote:B) via
 # --publish-object, asserted string-equal; --schedule parallel:N/remote:B
 # --check, asserted green (the direct placement-transparency proof); 6
@@ -46,7 +46,7 @@
 #
 # A REAL BUG found building this test, documented rather than fixed here
 # (fixing it would need a src/*.ml change, which this test file avoids):
-# Blobref.blob_refs_in (src/blobref.ml) recognizes only bare
+# Blobref.blob_refs_in (src/kernel/blobref.ml) recognizes only bare
 # "blob:<64-hex>" strings (its is_hex64 check runs on the WHOLE tail
 # after "blob:") — stdlib/domain-fs.pp's OWN documented executable-blob
 # convention, "blob:<hash>:x" (fs-blob-ref-executable?), fails that check

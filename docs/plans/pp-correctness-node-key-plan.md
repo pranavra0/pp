@@ -66,17 +66,17 @@ Make `defnode f(x) { body }` evaluate/compile to a constructor that returns a pe
 
 In every place that builds a closure for `EDefNode`, use `ENode body` as the closure body instead of `body`:
 
-- `src/evaluator.ml` line 431 (`eval_tail` top-level case):
+- `src/runtime/evaluator.ml` line 431 (`eval_tail` top-level case):
   ```ocaml
   | EDefNode (name, params, body) ->
       k (make_closure ~name:(Some name) params (ENode body) (ref env))
   ```
-- `src/evaluator.ml` lines 455-457 (`EDo` block fold):
+- `src/runtime/evaluator.ml` lines 455-457 (`EDo` block fold):
   ```ocaml
   let closure = make_closure ~name:(Some name) params (ENode body) env_ref in
   ```
-- `src/evaluator.ml` lines 581-583 (`EModule` block fold): same change.
-- `src/evaluator.ml` lines 933-935 (`eval_expressions` top-level driver): same change.
+- `src/runtime/evaluator.ml` lines 581-583 (`EModule` block fold): same change.
+- `src/runtime/evaluator.ml` lines 933-935 (`eval_expressions` top-level driver): same change.
 
 Rationale: `apply_tail` extends the captured env with `params=args` and then evaluates `ENode body`. `ENode` creates a persistent thunk with `thunk_expr = body` and `thunk_env = env + params=args`. `node_key_of` hashes `body` plus the free variables of `body` forced in that env; since `body` references the parameters as free names, the argument value hashes become part of the node key.
 
@@ -127,9 +127,9 @@ A design review of the first abstract-machine pass found correctness gaps that m
 - Symbol lookup, `if` conditions, and function arguments must be **forced** before use, matching the current strict call-by-value evaluator.
 - `ELet` mutual bindings must **backpatch** each thunk's `thunk_env` to the mutual environment so each RHS can see the others.
 - `ELet*` must bind **content-addressed thunks**, not evaluated values, preserving the existing laziness and hashing contract.
-- `EPerform` must record the handler observation and use `Runtime.Lookup_handler`, not a symbol lookup.
+- `EPerform` must record the handler observation and use `Dynamic_scope.Lookup_handler`, not a symbol lookup.
 - `EWithHandler` must evaluate each handler expression to a closure and build a real handler table.
-- `EConfig` must carry the forced key through the continuation frame and call `Runtime.config_lookup` correctly.
+- `EConfig` must carry the forced key through the continuation frame and call `Dynamic_scope.config_lookup` correctly.
 
 These are all fixable, but they show that the abstract-machine design must be written form-by-form against the current `eval_tail` semantics rather than sketched at a high level. The risk of silently changing behavior is too high to include in this branch.
 
@@ -165,8 +165,8 @@ All four must eventually produce identical output in tree-walker and VM with no 
 | `src/vm.ml:310-500` | `WITH_CAPS`, `WITH_HANDLER`, `WITH_CONFIG`, `MAKE_MODULE`, `CALL` | D24 already fixed here; D23 needs `CALL_MODULE` near `CALL`. |
 | `src/compiler.ml:119-183` | `emit_node_region`, `emit_closure_region`, `resolve` | Node constructor emission reuses these helpers. |
 | `src/compiler.ml:200-473` | `ELet`, `EDefNode`, `EDo`, `EModule` | D23 leaks via `STORE_GLOBAL`; node keying changes the `EDefNode` arms. |
-| `src/evaluator.ml:419-460` | `EDefNode`, `EDo` fold | Tree-walker node constructor change is here. |
-| `src/evaluator.ml:670-763` | `apply_tail`, `trampoline_force` | Node constructor application flows through here. |
+| `src/runtime/evaluator.ml:419-460` | `EDefNode`, `EDo` fold | Tree-walker node constructor change is here. |
+| `src/runtime/evaluator.ml:670-763` | `apply_tail`, `trampoline_force` | Node constructor application flows through here. |
 
 ## Verification
 
