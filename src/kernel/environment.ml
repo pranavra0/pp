@@ -50,5 +50,8 @@ let lookup (env : env) (name : string) : value option =
 let make_closure ?(name=None) params body env_ref =
   VClosure { fn_name = name; params; body; env = env_ref }
 
-let make_thunk ?type_ann:(ta=None) ?thunk_loc:(tl=None) ?config_hash:(ch="") expr env =
-  VThunk { thunk_status = Unevaluated; thunk_hash = None; thunk_expr = expr; thunk_env = env; type_ann = ta; thunk_loc = tl; config_hash = ch; thunk_persist = false; node_caps = [] }
+let make_thunk ?type_ann:(ta=None) ?thunk_loc:(tl=None) ?thunk_name:(tn=None)
+    ?config_hash:(ch="") expr env =
+  VThunk { thunk_status = Unevaluated; thunk_hash = None; thunk_expr = expr;
+           thunk_env = env; thunk_name = tn; type_ann = ta; thunk_loc = tl;
+           config_hash = ch; thunk_persist = false; node_caps = [] }

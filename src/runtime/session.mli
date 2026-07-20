@@ -50,6 +50,8 @@ val force_depth : t -> int
 val set_force_depth : t -> int -> unit
 val incr_force_depth : t -> unit
 val decr_force_depth : t -> unit
+val force_path : t -> Core_model.thunk list
+val set_force_path : t -> Core_model.thunk list -> unit
 val next_cache_bust : t -> int
 val fenced_epoch : t -> string
 val start_fenced_epoch : t -> string -> unit

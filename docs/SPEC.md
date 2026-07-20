@@ -171,10 +171,9 @@ on-demand thunks regardless of the node tier's strictness (LAW 6). Node-level
 strictness exists to protect cached nodes; a local binding is not one. An
 unreferenced binding never runs.
 
-**Status: partial** — mutually recursive functions work; direct cycles are
-caught deterministically by the `Evaluating` marker in  but the
-reported error is the generic "infinite recursion detected" rather than a
-named cycle.
+**Status: holds** — force-time cycles are reported from the active force path,
+including the binding names (for example `a -> b -> a`). Function values still
+delay demand, so mutually recursive functions remain valid.
 
 Test: `let (even? = fn(n) { if n = 0 { true } else { odd?(n - 1) } }, odd? = fn(n) { if n = 0 { false } else { even?(n - 1) } }) { even?(10) }`
 evaluates to `true` . `let (a = b, b = a) { a }` gives a
@@ -191,9 +190,9 @@ independent bindings changed the hash, the cache would treat one computation
 as two. Position would have leaked into identity, which is precisely the
 failure content-addressing exists to prevent.
 
-**Status: unimplemented** — `hash_expr` hashes `let` bindings in source order
-today, so reordering independent bindings still changes the hash; LAW 20's
-value-hash keying is the fix.
+**Status: holds** — the expression hasher sorts the named bindings of a
+mutually visible `let`; `let*` and statement-bearing scopes retain source
+order.
 
 Test: the node keys (once nodes exist: LAW 15) of
 `let (a = 1, b = 2) { a + b }` and `let (b = 2, a = 1) { a + b }` are equal; a
@@ -223,15 +222,16 @@ however a surface spells it. Scope follows LAW 4, with statement timing as
 follows.
 
 - blocks (`do` bodies, multi-expression `fn`/`def` bodies, modules) are
-  letrec*: every def in the block, function or value, is visible to the
-  whole block. A reference that runs before the defining statement has
-  executed raises `<name>: referenced before its definition`; defining the
-  same name twice in one block is a read error (`duplicate definition in
-  block`).
-- the top level is processed form by form: a value def's right-hand side
-  referencing a name defined only by a later top-level form is an
-  unbound-symbol error. Function defs still late-bind, so top-level mutual
-  recursion between functions is unaffected.
+  letrec*: every def name, function or value, is visible to the whole block.
+  A value demand that runs before its defining statement has executed raises
+  `<name>: referenced before its definition`; function definitions are
+  callable throughout the block. Defining the same name twice in one block
+  is a read error (`duplicate definition in block`).
+- the top level is processed form by form: a value def's right-hand side is
+  still evaluated at its statement, but all names are already in scope. A
+  demand on a later value def therefore reports that named binding as
+  referenced before its definition. Function defs are available throughout
+  the scope, so top-level mutual recursion between functions is ordinary.
 
 Exception: `try {}` `<-` bindings are sequential, and rebinding shadows. A
 `try {}` block is not a letrec* scope. Its `<-` bindings execute top to
@@ -246,19 +246,11 @@ does not apply — `try` statements are sequential lets, not a letrec* block of
 and checks that later uses see the shadowing value 
 (`tests/065-try-rebind-shadow.sh`).
 
-**Status: partial** — top-level and `do`-block `def`s are mutually recursive
-(they share a mutable global scope), and value defs behave
-identically including the letrec* poison error
-(`tests/025-def-value.sh`, fuzzer `stmt_def_value`). The earlier
-tree-walker module-body divergence is now fixed: the evaluator resolves
-module-body sibling references — function defs, value defs, and bare
-statements — through local slots in the module's own fresh frame, matching
-the evaluator's own scope-building fold (`tests/039-global-scope.pp`,
-fuzzer `stmt_module_sibling`). A module is still its own fresh scope, not
-literally "a bigger `let`" nested in the surrounding scope, so
-"one scope model everywhere" does not yet hold in LAW 4's strong sense — only
-the earlier module-isolation-versus-`let`
-unification itself.
+**Status: holds** — top level, `do` blocks, and modules predeclare the same
+binding set before executing statements. Function bindings are available
+throughout that scope; value bindings retain statement timing and report a
+named "referenced before its definition" error when demanded early. Modules
+remain fresh scopes, while `let*` remains explicitly sequential.
 
 Test: a module whose first `def` calls its second behaves identically to
 the same two `def`s at top level, ; `load-module` without
@@ -1510,9 +1502,9 @@ migration.
 | Law | Area | Status | Evidence |
 |---|---|---|---|
 | LAW 1 | mutual `let` scope | holds | `tests/007-phase0-laws.pp`; fuzzer `full` grammar |
-| LAW 2 | dependency-derived order, cycle errors | partial | cycles caught via `Evaluating` marker; report is generic, not named |
-| LAW 3 | binding-order-free identity | unimplemented | `hash_expr` is order-sensitive: reordering changes the hash |
-| LAW 4 | one scope model | partial | value defs (`let x = v`) bind values with letrec* block scope, identical (`tests/025`); `do`-block and module-body scoping now matches: `do` defs are block-local, and module-body siblings resolve via local slots (`tests/039`); a module is still its own fresh, outer-scope-isolated environment rather than truly nested `let`-style, so full unification remains partial |
+| LAW 2 | dependency-derived order, cycle errors | holds | force paths report named cycles; `tests/095-scope-identity.sh` |
+| LAW 3 | binding-order-free identity | holds | mutual `let` bindings are sorted before hashing; `tests/095-scope-identity.sh` |
+| LAW 4 | one scope model | holds | top level, blocks, and modules prebind the same definitions while preserving value statement timing; `tests/025-def-value.sh`, `tests/039-global-scope.pp`, `tests/095-scope-identity.sh` |
 | LAW 5 | `let*` sequential sugar | holds | reader emits `ELetStar`; sequential; `tests/007-phase0-laws.pp` |
 | LAW 6 | node call-by-value plus memoization | partial | application is call-by-value; `node { e }` memoizes persistently, keyed on code plus free-variable value hashes (LAW 20; `tests/011`); `node x { e }` binds the node thunk (`tests/025`), but applied `defnode` is still a named closure, so keying an aggregator on child result hashes does not yet arise |
 | LAW 7 | demand-pruning at node granularity | partial | reverse-edge dirty-propagation graph exists for push `stabilize` (`pp --watch --stabilize`, `tests/032`); a root desired-state formula and an explicit wanted-set are still absent |
@@ -1524,7 +1516,7 @@ migration.
 | LAW 17 | hit is not effect replay | holds (node tier) | a `node { e }` hit does not replay in-node `log`/stdout (`tests/010`, `tests/014`) |
 | LAW 18 | sandbox-scratch writes | partial | per-node scratch sandbox is real: relative node writes/reads are scratch-local, absolute node writes error, and `run` uses the scratch directory (`tests/017`); domain writes use the reconciliation pipeline |
 | LAW 19 | sound content hashing | partial | hash is SHA-256; closure-environment and handler gaps closed, so in-memory dedup is sound; store objects are content-addressed by result hash, shared across runs; the tree-walker's in-memory dedup table is not mirrored across runs |
-| LAW 20 | key = code plus argument values | partial | persistent `node { e }` key = code plus free-variable value hashes; capabilities, the whole environment, config, and handlers are all excluded (`tests/011`, `tests/015`); binding order is not canonicalised (LAW 3); the node boundary is now symmetric: a capability-containing free variable is `Capability_error` at the key, a capability-containing result is rejected before storage (`tests/capability-adversarial.sh`); `defmacro` expands before the evaluator's `hash_expr`/compiler ever sees a form, so the key is always over the expanded code with no change to this law — a macro-only edit re-keys its call sites (`tests/042-defmacro-rekey.sh`) |
+| LAW 20 | key = code plus argument values | partial | persistent `node { e }` key = code plus free-variable value hashes; capabilities, the whole environment, config, and handlers are all excluded (`tests/011`, `tests/015`); the node boundary is now symmetric: a capability-containing free variable is `Capability_error` at the key, a capability-containing result is rejected before storage (`tests/capability-adversarial.sh`); `defmacro` expands before the evaluator's `hash_expr`/compiler ever sees a form, so the key is always over the expanded code with no change to this law — a macro-only edit re-keys its call sites (`tests/042-defmacro-rekey.sh`) |
 | LAW 21 | cutoff via traces | partial | validity via verifying trace is real (key maps to a set of traces, cells re-checked on hit; `tests/010`, `tests/015`); hash-equality cutoff proven at scale — a comment-only header edit on a 101 translation-unit C build, and on Lua 5.4.7, recompiles dependents and cuts off the link (`tests/016`, `tests/024`, `scripts/build-lua.sh`); the reverse-edge dirty-propagation graph is now used by push `stabilize` (`pp --watch --stabilize`, `tests/032`); inline-nested cutoff is still absent |
 | LAW 22 | unforgeable root-minted capabilities | holds | constructors removed; `tests/capability-adversarial.sh` |
 | LAW 22b | `with-caps` narrows a held value, never widens | holds | `current-capabilities`/`with-caps`/`cap-restrict`'s mode argument; the subset check runs against the current ambient; `effect` removed;  exception/tail-safe; `tests/capability-adversarial.sh` |

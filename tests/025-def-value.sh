@@ -10,7 +10,7 @@
 #       error naming the binding.
 #   (d) (defnode x e) binds the node thunk of e — forcing it hits the store.
 #   (e) A value def's RHS referencing a name defined by a LATER top-level form
-#       errors (top level is sequential for value defs).
+#       names that binding as referenced before its definition.
 # Isolated HOME.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
@@ -98,12 +98,12 @@ out=$("$PP" "$TMP/d.pp" 2>"$TMP/err")
 if [ "$out" = $'1\n42' ] && ! grep -q "COMPUTE" "$TMP/err"; then ok "defnode-run2-hits"
 else bad "defnode-run2-hits" "out: $out" "err: $(cat "$TMP/err")"; fi
 
-# ---- (e) top-level forward reference from a value def errors ----
+# ---- (e) top-level forward reference from a value def names the poison ----
 cat > "$TMP/e.pp" <<'EOF'
 let a = later + 1
 let later = 2
 EOF
-assert_err "toplevel-forward-ref" ""           "$TMP/e.pp" "unbound symbol: later"
+assert_err "toplevel-forward-ref" ""           "$TMP/e.pp" "later: referenced before its definition"
 
 rm -rf "$TMP"
 if [ "$fail" -eq 0 ]; then echo "=== DEF VALUE-BINDING TEST PASSED ==="; fi

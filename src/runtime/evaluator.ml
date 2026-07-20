@@ -27,6 +27,33 @@ let set_force_depth n = Session.set_force_depth (session ()) n
 let incr_force_depth () = Session.incr_force_depth (session ())
 let decr_force_depth () = Session.decr_force_depth (session ())
 
+let force_cycle (t : thunk) : 'a =
+  let rec suffix = function
+    | [] -> []
+    | current :: rest ->
+        if current == t then current :: rest else suffix rest
+  in
+  let active_forces = Session.force_path (session ()) in
+  let path = match suffix (List.rev active_forces) with
+    | [] -> [t]
+    | path -> path @ [t]
+  in
+  let name = function
+    | { thunk_name = Some name; _ } -> name
+    | _ -> "<anonymous binding>"
+  in
+  Source_error.eval
+    ("cyclic binding: " ^ String.concat " -> " (List.map name path))
+
+let with_force_frame (t : thunk) f =
+  let session = session () in
+  Session.set_force_path session (t :: Session.force_path session);
+  Fun.protect f ~finally:(fun () ->
+    match Session.force_path session with
+    | current :: rest when current == t -> Session.set_force_path session rest
+    | path -> Session.set_force_path session
+                 (List.filter (fun other -> other != t) path))
+
 
 
 (* Main force entry-point: uses native stack for shallow chains,
@@ -49,15 +76,16 @@ let rec force (v : value) : value =
            force result
        | Evaluating ->
            decr_force_depth ();
-           failwith "infinite recursion detected (forcing a thunk already being evaluated)"
+           force_cycle t
        | Unevaluated ->
            (* Persistent nodes route through the store. Identity is the
               node key (code + free-variable value hashes); the trace decides
               validity. A stale trace falls through to recompute. *)
            if t.thunk_persist then
-             let nk = node_key_of t in
-              let run () = eval t.thunk_expr t.thunk_env in
-             (match force_node ~key:nk ~run t with
+             (match with_force_frame t (fun () ->
+                let nk = node_key_of t in
+                let run () = eval t.thunk_expr t.thunk_env in
+                force_node ~key:nk ~run t) with
               | result -> decr_force_depth (); force result
               | exception e -> decr_force_depth (); raise e)
            else
@@ -68,16 +96,11 @@ let rec force (v : value) : value =
 
 and evaluate_and_store_no_key (t : thunk) : value =
   t.thunk_status <- Evaluating;
-  let result =
-    try
-          eval t.thunk_expr t.thunk_env
-    with e ->
-      (* An ephemeral thunk that raised must not be left `Evaluating`, or
-         the next force misreports "infinite recursion". Reset and re-raise the
-         real error (ephemeral thunks are not failure-cached). *)
+  let result = with_force_frame t (fun () ->
+    try eval t.thunk_expr t.thunk_env with e ->
       t.thunk_status <- Unevaluated;
       decr_force_depth ();
-      raise e
+      raise e)
   in
   (* enforce_type resets thunk_status on failure; also unwind force_depth,
      which is evaluator-local, so a failed check does not leak trampoline
@@ -175,7 +198,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
          Create thunks with outer env, build mutual env, then backpatch
          each thunk's env so they see each other when forced. *)
       let thunks = List.map (fun (name, binding_expr) ->
-        (name, make_thunk_ca binding_expr env)
+        (name, make_thunk_ca ~name binding_expr env)
       ) bindings in
       let env_mutual = List.fold_left (fun e (name, thunk) ->
         Environment.extend e name thunk
@@ -250,7 +273,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       let rec nest env' = function
         | [] -> eval_tail body env' k
         | (name, expr) :: rest ->
-            let thunk = make_thunk_ca expr env' in
+            let thunk = make_thunk_ca ~name expr env' in
             let env'' = Environment.extend env' name thunk in
             nest env'' rest
       in
@@ -321,7 +344,7 @@ and trampoline_force (v : value) : value =
         | VThunk t ->
             begin match t.thunk_status with
             | Evaluated result -> Queue.add result queue; loop ()
-            | Evaluating -> failwith "infinite recursion detected (trampoline)"
+            | Evaluating -> force_cycle t
             | Unevaluated ->
                 if t.thunk_persist then begin
                   let h = node_key_of t in
@@ -332,19 +355,19 @@ and trampoline_force (v : value) : value =
                     set_force_depth saved;
                     r
                   in
-                  let result = force_node ~key:h ~run t in
+                  let result = with_force_frame t (fun () -> force_node ~key:h ~run t) in
                   Queue.add result queue;
                   loop ()
                 end
                 else begin
                   (* ephemeral thunk — no store check *)
                   t.thunk_status <- Evaluating;
-                  let result =
+                  let result = with_force_frame t (fun () ->
                     let saved = force_depth () in
                     set_force_depth 0;
-                    let r = eval t.thunk_expr t.thunk_env in
-                    set_force_depth saved;
-                    r
+                    Fun.protect
+                      (fun () -> eval t.thunk_expr t.thunk_env)
+                      ~finally:(fun () -> set_force_depth saved))
                   in
                   (match t.type_ann with
                    | Some ty -> Node.check_type result ty t.thunk_loc
@@ -362,6 +385,9 @@ and trampoline_force (v : value) : value =
 
 let eval_expressions (exprs : expr list) (env : env ref) : value =
   Evaluator_forms.expressions { eval; eval_tail; force } exprs env
+
+let eval_expressions_list (exprs : expr list) (env : env ref) : value list =
+  Evaluator_forms.expressions_list { eval; eval_tail; force } exprs env
 
 let perform_effect name args =
   Evaluator_effects.perform ~application:apply name args

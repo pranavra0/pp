@@ -8,4 +8,5 @@ val make_closure :
 val make_thunk :
   ?type_ann:Core_model.expr option ->
   ?thunk_loc:(string * int) option ->
+  ?thunk_name:string option ->
   ?config_hash:string -> Core_model.expr -> Core_model.env -> Core_model.value
