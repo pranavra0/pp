@@ -65,8 +65,9 @@ name may shadow itself.
 
 #example("ref-letstar")
 
-At the top level, `let name = value` evaluates the value once and binds it;
-`def name(args…) { body }` defines a function.
+At the top level, names are predeclared across the scope. A function definition
+can refer to a later definition; a value definition still evaluates its value
+at its statement, so a later value is not available until that statement runs.
 
 #example("ref-def")
 

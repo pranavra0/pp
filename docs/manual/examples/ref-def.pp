@@ -1,6 +1,5 @@
-# At the top level, `let name = value` evaluates once and binds it;
-# `def name(args) { body }` defines a function. Top-level bindings are
-# sequential — each `def` sees only the ones before it.
+# At the top level, names are predeclared across the scope. Function definitions
+# can refer forward; value definitions still evaluate at their statement.
 let answer = 6 * 7
 print(answer)
 
