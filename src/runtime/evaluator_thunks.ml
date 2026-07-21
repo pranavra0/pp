@@ -28,23 +28,31 @@ let make_with_hash ?name ?(kind = Ephemeral) ~tag (expr : expr)
       (tag :: expr_hash :: type_hash @ arg_hashes @
        [env.env_hash; caps_hash; cfg_hash; handlers_hash])
   in
-  let session = Effect.perform Dynamic_scope.Get_session in
-  match Session.find_thunk session hash with
-  | Some existing -> VThunk existing
-  | None ->
-      let thunk = {
-        thunk_status = Unevaluated;
-        thunk_hash = Some hash;
-        thunk_expr = expr;
-        thunk_env = env;
-        thunk_name = name;
-        type_ann;
-        thunk_loc = loc;
-        config_hash = cfg_hash;
-        thunk_kind = kind;
-      } in
-      Session.add_thunk session hash thunk;
-      VThunk thunk
+  let make_fresh () =
+    VThunk {
+      thunk_status = Unevaluated;
+      thunk_hash = Some hash;
+      thunk_expr = expr;
+      thunk_env = env;
+      thunk_name = name;
+      type_ann;
+      thunk_loc = loc;
+      config_hash = cfg_hash;
+      thunk_kind = kind;
+    }
+  in
+  match kind with
+  | Ephemeral -> make_fresh ()
+  | Persistent _ ->
+      let session = Effect.perform Dynamic_scope.Get_session in
+      (match Session.find_thunk session hash with
+       | Some existing -> VThunk existing
+       | None ->
+           let thunk = make_fresh () in
+           (match thunk with
+            | VThunk thunk -> Session.add_thunk session hash thunk
+            | _ -> assert false);
+           thunk)
 
 let make ?name expr env = make_with_hash ?name ~tag:"thunk" expr None None env
 
