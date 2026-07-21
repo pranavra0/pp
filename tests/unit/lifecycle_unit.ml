@@ -34,4 +34,21 @@ let () =
   ignore (Session.next_gensym session);
   Session.begin_evaluation ~retain_thunks:false session;
   check (Session.next_gensym session = 1) "evaluation did not reset lifecycle counters";
+  let observe = Core_model.VBuiltin ("observe", fun _ _ -> Core_model.VNil) in
+  let domain_spec = Core_model.VMap [
+    Core_model.VKeyword "name", Core_model.VKeyword "files";
+    Core_model.VKeyword "namespace", Core_model.VVector [|Core_model.VString "file:"|];
+    Core_model.VKeyword "observe", observe;
+    Core_model.VKeyword "write-cap", Core_model.VCapability Capability.none;
+  ] in
+  (match Domain_config.decode_domain ~force:Fun.id domain_spec with
+   | Ok { Domain_config.name = "files";
+          entry = { Session.dm_namespace = ["file:"]; _ } } -> ()
+   | _ -> failwith "domain configuration did not decode to a typed registration");
+  (match Domain_config.decode_domain ~force:Fun.id Core_model.VNil with
+   | Error _ -> ()
+   | Ok _ -> failwith "invalid domain configuration was accepted");
+  (match Process.exec [] with
+   | _ -> failwith "empty process argv was accepted"
+   | exception Invalid_argument _ -> ());
   print_endline "lifecycle: ok"

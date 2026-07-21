@@ -188,7 +188,10 @@ let read_line_raw ~(prompt : string) : string option =
        let recall idx =
          (if !hist_idx = -1 then stash := Buffer.contents line);
          hist_idx := idx;
-         let s = if idx = -1 then !stash else List.nth !history idx in
+         let s =
+           if idx = -1 then !stash
+           else match List.nth_opt !history idx with Some s -> s | None -> ""
+         in
          set_line s;
          pos := String.length s
        in

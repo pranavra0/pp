@@ -285,36 +285,14 @@ let flags raw =
   ]
 
 let validated raw =
-  let policy =
-    match String.split_on_char ':' !(raw.schedule) with
-    | ["serial"] -> Scheduler.Serial
-    | ["parallel"; n] ->
-        (match int_of_string_opt n with Some n when n > 0 -> Scheduler.Parallel n
-         | _ -> command ("invalid --schedule parallel width: " ^ n))
-    | ["race"; n] ->
-        (match int_of_string_opt n with Some n when n > 0 -> Scheduler.Race n
-         | _ -> command ("invalid --schedule race width: " ^ n))
-    | ["remote"; member] when member <> "" -> Scheduler.Remote member
-    | ["remote"; _] -> command "invalid --schedule remote spec: empty member name"
-    | _ -> command ("invalid --schedule spec: " ^ !(raw.schedule))
-  in
-  let fenced_policy = match !(raw.fenced_policy) with
-    | "retry" -> Invocation.Retry | "abort" -> Invocation.Abort
-    | "ask" -> Invocation.Ask
-    | value -> command ("invalid --fenced-policy: " ^ value)
-  in
-  let interval = match float_of_string_opt !(raw.watch_interval) with
-    | Some value when value >= 0.0 -> value
-    | _ -> command ("invalid --watch-interval: " ^ !(raw.watch_interval))
-  in
-  let keep = match int_of_string_opt !(raw.gc_keep_epochs) with
-    | Some n when n > 0 -> n
-    | _ -> command ("invalid --gc-keep-epochs: " ^ !(raw.gc_keep_epochs))
-  in
-  let grace = match float_of_string_opt !(raw.gc_grace_seconds) with
-    | Some n when n >= 0.0 -> n
-    | _ -> command ("invalid --gc-grace-seconds: " ^ !(raw.gc_grace_seconds))
-  in
+  let policy = Cli_validation.schedule !(raw.schedule) in
+  let fenced_policy = Cli_validation.fenced_policy !(raw.fenced_policy) in
+  let interval = Cli_validation.nonnegative_float
+      ~option_name:"--watch-interval" !(raw.watch_interval) in
+  let keep = Cli_validation.positive_int
+      ~option_name:"--gc-keep-epochs" !(raw.gc_keep_epochs) in
+  let grace = Cli_validation.nonnegative_float
+      ~option_name:"--gc-grace-seconds" !(raw.gc_grace_seconds) in
   { command_argv = raw.command_argv; program_argv = !(raw.program_argv);
     files = List.rev !(raw.files); grants = List.rev !(raw.grants);
     eval_string = !(raw.eval_string); reconcile_root = !(raw.reconcile_root);

@@ -84,13 +84,18 @@ let read_all (path : string) : string =
    journaled — "null rebuild executes zero external processes" is proved by
    the journal, not asserted. *)
 let exec (argv : string list) : int * string * string =
+  let program =
+    match argv with
+    | program :: _ -> program
+    | [] -> invalid_arg "Process.exec: empty argv"
+  in
   (try Journal.append (Journal.Exec argv) with
    | Sys_error _ | Unix.Unix_error _ -> ());
   let out_f = Filename.temp_file "pp-run" ".out" in
   let err_f = Filename.temp_file "pp-run" ".err" in
   let cleanup () =
-    (try Sys.remove out_f with _ -> ());
-    (try Sys.remove err_f with _ -> ())
+    (try Sys.remove out_f with Sys_error _ -> ());
+    (try Sys.remove err_f with Sys_error _ -> ())
   in
   Fun.protect ~finally:cleanup (fun () ->
     let fd_out = Unix.openfile out_f [Unix.O_WRONLY; Unix.O_TRUNC] 0o600 in
@@ -114,7 +119,7 @@ let exec (argv : string list) : int * string * string =
                     ~finally:(fun () ->
                       try Unix.chdir saved_cwd with Unix.Unix_error _ -> ())
                     (fun () ->
-                       Unix.create_process (List.hd argv) (Array.of_list argv)
+                       Unix.create_process program (Array.of_list argv)
                          fd_in fd_out fd_err)
                 in
                 let (_, status) = Unix.waitpid [] pid in
@@ -201,7 +206,7 @@ let record_depfile_cells (deps : string list) : unit =
 
 let run_dep_effect (args : value list) : value =
   match args with
-  | VString depfile :: (VString _ :: _ as cmd_args) ->
+  | VString depfile :: (VString cmd :: _ as cmd_args) ->
       if not (has_process_cap ()) then
     capability "capability error: no process authority for run-dep!";
       let argv = List.map (function
@@ -209,7 +214,6 @@ let run_dep_effect (args : value list) : value =
         | v -> failwith ("run-dep! expects string arguments, got " ^ Presentation.string_of_value v))
         cmd_args
       in
-      let cmd = List.hd argv in
       let resolved = match resolve_cmd cmd with
         | Some p -> p
         | None -> failwith ("run-dep!: command not found: " ^ cmd)
@@ -222,7 +226,8 @@ let run_dep_effect (args : value list) : value =
         | Some p -> p
         | None -> depfile
       in
-      (match (try Some (read_all_exn dep_path) with _ -> None) with
+      (match (try Some (read_all_exn dep_path)
+              with Sys_error _ | Unix.Unix_error _ | End_of_file -> None) with
        | Some content -> record_depfile_cells (parse_depfile content)
        | None -> record_tree_cells ()  (* no depfile ⇒ coarse-but-sound *));
       VMap [ (VString "exit", VInt code);
@@ -403,7 +408,7 @@ let http_request ~(method_ : string) ~(url : string) ~(body : string option) : v
           ~finally:(fun () -> close_out_noerr oc)
           (fun () -> output_string oc content);
         (base_argv @ ["-X"; "POST"; "--data-binary"; "@" ^ tmp; url],
-         fun () -> (try Sys.remove tmp with _ -> ()))
+         fun () -> (try Sys.remove tmp with Sys_error _ -> ()))
   in
   Fun.protect ~finally:cleanup (fun () ->
     let (code, out, err) = exec argv in

@@ -367,16 +367,13 @@ let decide host ~(key : string) ~(token_text : string) : decision =
    code path that ever writes a remote-sourced artifact into a store,
    whether it arrived via a bulk sync or via serve-hit. *)
 
-let quote = Codec.quote_string
-
 let reply_of_decision (key : string) (d : decision) : string =
   match d with
-  | DDeny reason -> Printf.sprintf "(serve-hit-reply deny %s %s)\n" (quote key) (quote reason)
-  | DMiss -> Printf.sprintf "(serve-hit-reply miss %s)\n" (quote key)
+  | DDeny reason -> Remote_protocol.encode_reply (Remote_protocol.Deny (key, reason))
+  | DMiss -> Remote_protocol.encode_reply (Remote_protocol.Miss key)
   | DHit { result_hash; blob_hashes; _ } ->
-      Printf.sprintf "(serve-hit-reply hit %s %s (%s))\n"
-        (quote key) (quote result_hash)
-        (String.concat " " (List.map quote blob_hashes))
+      Remote_protocol.encode_reply
+        (Remote_protocol.Hit { key; result_hash; blob_hashes })
 
 (* The serving side: decide, then (only on a hit) push into [shared_root] —
    nothing is EVER written to [shared_root] on a miss or a deny (T5's "no
@@ -401,37 +398,12 @@ type reply_decision =
   | RDeny of string * string
 
 let parse_reply_text (text : string) : reply_decision option =
-  let text = String.trim text in
-  let len = String.length text in
-  expect_lit text 0 "(serve-hit-reply " >>= fun i ->
-  match String.index_from_opt text i ' ' with
-  | None -> None
-  | Some sp ->
-      let kind = String.sub text i (sp - i) in
-      let i = sp + 1 in
-      Codec.parse_quoted_string text i >>= fun (key, i) ->
-      (match kind with
-       | "miss" -> expect_char text i ')' >>= fun _ -> Some (RMiss key)
-       | "deny" ->
-           expect_char text i ' ' >>= fun i ->
-           Codec.parse_quoted_string text i >>= fun (reason, i) ->
-           expect_char text i ')' >>= fun _ -> Some (RDeny (key, reason))
-       | "hit" ->
-           expect_char text i ' ' >>= fun i ->
-           Codec.parse_quoted_string text i >>= fun (result_hash, i) ->
-           expect_char text i ' ' >>= fun i ->
-           expect_char text i '(' >>= fun i ->
-           let rec loop i acc =
-             if i < len && text.[i] = ')' then Some (List.rev acc, i + 1)
-             else
-               Codec.parse_quoted_string text i >>= fun (h, i) ->
-               let i = if i < len && text.[i] = ' ' then i + 1 else i in
-               loop i (h :: acc)
-           in
-           loop i [] >>= fun (hashes, i) ->
-           expect_char text i ')' >>= fun _ ->
-           Some (RHit { key; result_hash; blob_hashes = hashes })
-       | _ -> None)
+  match Remote_protocol.decode_reply text with
+  | Ok (Remote_protocol.Hit { key; result_hash; blob_hashes }) ->
+      Some (RHit { key; result_hash; blob_hashes })
+  | Ok (Remote_protocol.Miss key) -> Some (RMiss key)
+  | Ok (Remote_protocol.Deny (key, reason)) -> Some (RDeny (key, reason))
+  | Error _ -> None
 
 (* The requesting side: parse the reply, then (only on a hit) pull each
    named artifact from [shared_root] — every pull re-hash-verifies before

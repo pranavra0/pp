@@ -4,7 +4,8 @@ open Pp_kernel
 let () =
   try
     let host = App_context.production_host () in
-    let cli = Cli.parse (List.tl (Array.to_list Sys.argv)) in
+    let args = match Array.to_list Sys.argv with _program :: args -> args | [] -> [] in
+    let cli = Cli.parse args in
     Command_dispatch.run host cli
   with
   | Source_error.Pp_exit n -> exit n

@@ -10,8 +10,7 @@
 # dependency) both being present; skips cleanly otherwise — no real network
 # access, a loopback server on an ephemeral port only.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
+. "$(dirname "$0")/lib.sh"
 
 if ! command -v curl >/dev/null 2>&1; then
   echo "skip 045-network: curl not found on PATH"
@@ -22,9 +21,6 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 0
 fi
 
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
 SERVER_PID=""
 
 cleanup() {

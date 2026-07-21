@@ -78,47 +78,14 @@ let run_command (spec : value) : value =
         | VString s -> ["/bin/sh"; "-c"; s]
         | other -> failwith ("fenced: run must be a list/vector/string of strings, got " ^ Presentation.string_of_value other)
       in
-      if argv = [] then failwith "fenced: run argv is empty";
-      let cmd = List.hd argv in
-      let args = List.tl argv in
-      let resolved =
-        match Process.resolve_cmd cmd with
-        | Some p -> p
-        | None -> failwith ("fenced: command not found: " ^ cmd)
+      let exit_code, out, err =
+        match argv with
+        | [] -> failwith "fenced: run argv is empty"
+        | cmd :: args ->
+            (match Process.resolve_cmd cmd with
+             | Some resolved -> Process.exec (resolved :: args)
+             | None -> failwith ("fenced: command not found: " ^ cmd))
       in
-      let env = Array.to_list (Unix.environment ()) in
-      let tmp_out = Filename.temp_file "pp-fenced-out" "" in
-      let tmp_err = Filename.temp_file "pp-fenced-err" "" in
-      let pid =
-        let fd_out = Unix.openfile tmp_out [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o644 in
-        Fun.protect
-          ~finally:(fun () -> Unix.close fd_out)
-          (fun () ->
-            let fd_err = Unix.openfile tmp_err [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o644 in
-            Fun.protect
-              ~finally:(fun () -> Unix.close fd_err)
-              (fun () ->
-                Unix.create_process_env resolved (Array.of_list (resolved :: args))
-                  (Array.of_list env) Unix.stdin fd_out fd_err))
-      in
-      let (_, status) = Unix.waitpid [] pid in
-      let exit_code = match status with
-        | Unix.WEXITED n -> n
-        | Unix.WSIGNALED n -> 128 + n
-        | Unix.WSTOPPED n -> 128 + n
-      in
-      let read_file path =
-        try
-          let ic = open_in path in
-          let s = Fun.protect
-            ~finally:(fun () -> close_in_noerr ic)
-            (fun () -> really_input_string ic (in_channel_length ic)) in
-          (try Sys.remove path with Sys_error _ -> ()); s
-        with Sys_error _ | Unix.Unix_error _ | End_of_file ->
-          (try Sys.remove path with Sys_error _ -> ()); ""
-      in
-      let out = read_file tmp_out in
-      let err = read_file tmp_err in
       VMap [(VString "exit", VInt exit_code);
             (VString "out", VString out);
             (VString "err", VString err)]

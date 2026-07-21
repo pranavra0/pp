@@ -84,40 +84,10 @@ let name_ok (s : string) : bool =
 (* ---- literals (same spellings/round-trip requirements as printer_braces —
    both lexers share the same number grammar and string escapes) ---- *)
 
-let string_lit (s : string) : string =
-  let b = Buffer.create (String.length s + 2) in
-  Buffer.add_char b '"';
-  String.iter (fun c ->
-    match c with
-    | '\\' -> Buffer.add_string b "\\\\"
-    | '"' -> Buffer.add_string b "\\\""
-    | '\n' -> Buffer.add_string b "\\n"
-    | '\t' -> Buffer.add_string b "\\t"
-    | c -> Buffer.add_char b c) s;
-  Buffer.add_char b '"';
-  Buffer.contents b
-
-let float_lit (f : float) : string =
-  if f <> f || f = infinity || f = neg_infinity then
-    unpr "float %h has no surface literal" f;
-  let ensure_dot s =
-    if String.contains s '.' then s
-    else match String.index_opt s 'e' with
-      | Some i -> String.sub s 0 i ^ "." ^ String.sub s i (String.length s - i)
-      | None -> s ^ "."
-  in
-  let bits = Int64.bits_of_float f in
-  let try_s s =
-    match float_of_string_opt s with
-    | Some g when Int64.bits_of_float g = bits -> Some s
-    | _ -> None
-  in
-  match try_s (ensure_dot (string_of_float f)) with
-  | Some s -> s
-  | None ->
-      (match try_s (ensure_dot (Printf.sprintf "%.17g" f)) with
-       | Some s -> s
-       | None -> unpr "float %h does not round-trip through its literal" f)
+let string_lit = Printer_common.string_lit
+let float_lit f =
+  try Printer_common.float_lit f
+  with Printer_common.Error message -> raise (Unprintable message)
 
 let literal (v : value) : string =
   match v with
@@ -167,74 +137,20 @@ let check_file st (f : string) =
    precedent of independent surface-specific files over Desugar.ml's shared
    reader-facing pieces). *)
 
-type inverted = {
+type inverted = Printer_common.inverted = {
   i_loc : (string * int) option;
   i_annots : (string * expr) list;
   i_ret : expr option;
   i_body : expr;
 }
 
-let invert_fn_body (params : string list) (body' : expr) : inverted =
-  let split_last l =
-    match List.rev l with
-    | last :: rev_init -> (List.rev rev_init, last)
-    | [] -> unpr "empty desugared function body"
-  in
-  let tail_part e =
-    match e with
-    | ELocated (loc, ETyped (b, ty)) -> (loc, Some ty, b)
-    | ELocated (loc, b) -> (loc, None, b)
-    | _ -> unpr "function body is not in assemble_fn_body shape"
-  in
-  match body' with
-  | EDo items when items <> [] ->
-      let checks, last = split_last items in
-      if checks = [] then unpr "function body EDo without parameter checks";
-      let annots =
-        List.map (function
-          | ELocated (loc, ETyped (ESymbol p, ty)) -> (loc, p, ty)
-          | _ -> unpr "function body is not in assemble_fn_body shape")
-          checks
-      in
-      let loc, ret, body = tail_part last in
-      List.iter (fun (l, _, _) ->
-        if l <> loc then unpr "parameter checks carry inconsistent locations")
-        annots;
-      let annots = List.map (fun (_, p, ty) -> (p, ty)) annots in
-      let rec verify ps ans =
-        match ps, ans with
-        | _, [] -> ()
-        | p :: ps', (q, _) :: ans' when p = q -> verify ps' ans'
-        | _ :: ps', ans -> verify ps' ans
-        | [], _ :: _ -> unpr "parameter checks do not match the parameter list"
-      in
-      verify params annots;
-      { i_loc = Some loc; i_annots = annots; i_ret = ret; i_body = body }
-  | ELocated _ ->
-      let loc, ret, body = tail_part body' in
-      { i_loc = Some loc; i_annots = []; i_ret = ret; i_body = body }
-  | b -> { i_loc = None; i_annots = []; i_ret = None; i_body = b }
+let invert_fn_body params body =
+  match Printer_common.invert_fn_body params body with
+  | Ok inverted -> inverted
+  | Error message -> raise (Unprintable message)
 
-let block_stmts_of (body : expr) : expr list =
-  match body with
-  | EDo l when List.length l >= 2 -> l
-  | e -> [e]
-
-(* The line [e]'s printing will demand BEFORE emitting its first character
-   (mirrors print_expr below: ELocated wrappers, the def/fn/defnode family
-   via inversion, EDefValue's located rhs). Used to elide a separator space
-   when location padding is about to supply the newline anyway — otherwise
-   the separator trails at the end of the previous line. *)
-let leading_anchor (e : expr) : int option =
-  match e with
-  | ELocated ((_, l), _) -> Some l
-  | EDefValue (_, ELocated ((_, l), _)) -> Some l
-  | EFn (ps, b) | EDef (_, ps, b) | EDefNode (_, ps, b) ->
-      (try match (invert_fn_body ps b).i_loc with
-         | Some (_, l) -> Some l
-         | None -> None
-       with Unprintable _ -> None)
-  | _ -> None
+let block_stmts_of = Printer_common.block_stmts_of
+let leading_anchor = Printer_common.leading_anchor
 
 let sep_before st (s : string) (e : expr) =
   match leading_anchor e with

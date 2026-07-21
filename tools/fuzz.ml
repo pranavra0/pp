@@ -83,7 +83,7 @@ let parse_cli () =
     | ("--help" | "-h") :: _ -> usage ()
     | x :: _ -> prerr_endline ("unknown argument: " ^ x); usage ()
   in
-  go (List.tl (Array.to_list Sys.argv));
+  go (match Array.to_list Sys.argv with _program :: args -> args | [] -> []);
   if !stdlib_path = "" then
     stdlib_path := Filename.concat (Sys.getcwd ()) "stdlib/list.pp"
 

@@ -13,12 +13,7 @@
 # documented residual), so this suite's "never in store" checks are built
 # around programs that never unseal inside a node.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
+. "$(dirname "$0")/lib.sh"
 
 assert() {  # NAME PATTERN present|absent  [FILE]
   local name="$1" pat="$2" mode="$3" file="${4:-$TMP/out}"

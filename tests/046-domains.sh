@@ -20,10 +20,7 @@
 #
 # Runs under an isolated HOME.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-
-TMP=$(mktemp -d)
+. "$(dirname "$0")/lib.sh"
 # Resolve any symlinks in TMP itself (macOS: /var -> /private/var) up front —
 # this test builds a domain's :namespace prefix from the RAW shell path
 # (a third-party domain author's job to canonicalize, mirroring what
@@ -32,8 +29,6 @@ TMP=$(mktemp -d)
 # prefix would silently never match and the stratification check below
 # would be vacuous.
 TMP=$(cd "$TMP" && pwd -P)
-export HOME="$TMP"
-fail=0
 
 assert() {  # NAME PATTERN present|absent [FILE]
   local name="$1" pat="$2" mode="$3" file="${4:-$TMP/out}"

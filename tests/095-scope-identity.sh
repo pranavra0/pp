@@ -5,8 +5,6 @@
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 
-fail=0
-
 cat > "$TMP/let.pp" <<'EOF'
 print(let (right = left + 1, left = 1) { right })
 EOF

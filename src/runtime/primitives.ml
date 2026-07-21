@@ -4,6 +4,7 @@ open Pp_kernel
 
 open Core_model
 open Source_error
+open Primitive_catalog
 
 let session () = Effect.perform Dynamic_scope.Get_session
 let core_operations () = Session.core_operations (session ())
@@ -31,29 +32,11 @@ let force_args (args : value list) : value list = List.map force_val args
    so gensym is unforgeable by construction, not merely unlikely to
    collide. *)
 
-type shape = Any | Exact of int | Range of int * int option
-type category =
-  | Arithmetic | Collections | Strings | Capabilities | Observations
-  | Process | Domains | Diagnostics | Metaprogramming | Compiler | Other
-
-type descriptor = {
-  name : string;
-  shape : shape;
-  category : category;
-  implementation : value list -> env -> value;
-}
-
-let declarations : descriptor list ref = ref []
-let catalog_entries : descriptor list ref = ref []
-
-let register ?(shape = Any) ?(category = Other) name implementation =
-  declarations := { name; shape; category; implementation } :: !declarations
-
-let builtins : (string, value) Hashtbl.t = Hashtbl.create 64
-let aliases : (string * string) list ref = ref []
+let catalog = Primitive_catalog.create ()
+let register = Primitive_catalog.register catalog
 
 let lookup (name : string) : value option =
-  Hashtbl.find_opt builtins name
+  Primitive_catalog.lookup catalog name
 
 (* Variadic + and *: fold from the first arg with an identity for zero args;
    int/float mixing promotes to float. A single argument is returned as-is. *)
@@ -101,8 +84,7 @@ let predicate ~declare (name : string) (test : value -> bool) : unit =
     | _ -> failwith (name ^ " expects one arg"))
 
 let initial_env () : env =
-  let bindings = Hashtbl.fold (fun name v acc -> (name, v) :: acc) builtins [] in
-  Environment.of_bindings bindings
+  Primitive_catalog.initial_env catalog
 
 (* ---- Register all primitives ---- *)
 
@@ -754,58 +736,17 @@ let register_domains () =
      simpler entry point); `:namespace` is a list of cell-id string
      PREFIXES this domain owns (stratification);
      `:observe-cell` is optional. Returns nil. *)
-  let string_or_keyword where v =
-    match Presentation.string_like v with
-    | Some s -> s
-    | None -> failwith (where ^ ": expected a string or keyword, got "
-                         ^ Presentation.string_of_value v)
-  in
-  let find_kv = Force_deep.find_kv ~force:force_val in
   register "register-domain" (fun args _env ->
     if Effect.perform Dynamic_scope.In_node then
       failwith "register-domain: may not be called inside a node body (script-tier only, like fenced)";
-    let args = force_args args in
     match args with
     | [spec] ->
-        let kvs = match spec with
-          | VMap kvs -> kvs
-          | other -> failwith ("register-domain expects a map, got " ^ Presentation.string_of_value other)
-        in
-        let name = match find_kv kvs "name" with
-          | Some v -> string_or_keyword "register-domain :name" (force_val v)
-          | None -> failwith "register-domain: missing :name"
-        in
-        let namespace = match find_kv kvs "namespace" with
-          | Some v ->
-              (match force_val v with
-               | VVector arr -> Array.to_list (Array.map (fun p ->
-                   string_or_keyword "register-domain :namespace" (force_val p)) arr)
-               | VNil -> []
-               | other -> failwith ("register-domain :namespace must be a vector of strings, got "
-                                    ^ Presentation.string_of_value other))
-          | None -> []
-        in
-        let observe = match find_kv kvs "observe" with
-          | Some v -> force_val v
-          | None -> failwith "register-domain: missing :observe"
-        in
-        (match observe with VClosure _ | VBuiltin _ -> ()
-         | _ -> failwith "register-domain: :observe must be a function");
-        let diff = Option.map force_val (find_kv kvs "diff") in
-        let apply = Option.map force_val (find_kv kvs "apply") in
-        let observe_cell = Option.map force_val (find_kv kvs "observe-cell") in
-        let write_cap = match find_kv kvs "write-cap" with
-          | Some v -> (match force_val v with
-                       | VCapability c -> c
-                       | other -> failwith ("register-domain :write-cap must be a capability, got "
-                                            ^ Presentation.string_of_value other))
-          | None -> failwith "register-domain: missing :write-cap"
-        in
-        Session.register_domain (Effect.perform Dynamic_scope.Get_session) name
-          { Session.dm_namespace = namespace; dm_observe = observe;
-            dm_diff = diff; dm_apply = apply; dm_cap = write_cap;
-            dm_observe_cell = observe_cell };
-        VNil
+        (match Domain_config.decode_domain ~force:force_val spec with
+         | Ok registration ->
+             Session.register_domain (Effect.perform Dynamic_scope.Get_session)
+               registration.name registration.entry;
+             VNil
+         | Error message -> failwith message)
     | _ -> failwith "register-domain expects one map argument");
 
   (* `(register-probe name observe-fn read-cap)` — sugar over register-domain
@@ -815,24 +756,14 @@ let register_domains () =
   register "register-probe" (fun args _env ->
     if Effect.perform Dynamic_scope.In_node then
       failwith "register-probe: may not be called inside a node body (script-tier only, like fenced)";
-    let args = force_args args in
     match args with
-    | [VString name; observe_fn; VCapability read_cap]
-    | [VKeyword name; observe_fn; VCapability read_cap] ->
-        (match observe_fn with
-         | VClosure _ | VBuiltin _ -> ()
-         | _ -> failwith "register-probe: observe-fn must be a function");
-        let entry = {
-          Session.dm_namespace = [];
-          dm_observe = observe_fn;
-          dm_diff = None;
-          dm_apply = None;
-          dm_cap = read_cap;
-          dm_observe_cell = None;
-        } in
-        Session.register_probe (Effect.perform Dynamic_scope.Get_session) name entry;
-        let (_ : string) = name in (* suppress unused warning *)
-        VNil
+    | [name; observe; capability] ->
+        (match Domain_config.decode_probe ~force:force_val name observe capability with
+         | Ok registration ->
+             Session.register_probe (Effect.perform Dynamic_scope.Get_session)
+               registration.name registration.entry;
+             VNil
+         | Error message -> failwith message)
     | _ -> failwith "register-probe expects a name, an observe-fn, and a read capability");
   (* ---- `probe` primitive: one-time evaluated lazy read of a registered probe ----
      a pass evaluates observe-fn (via Observation.probe_value, above: OUTSIDE the
@@ -909,29 +840,6 @@ let register_collect_and_sealed () =
     | _ -> failwith "unseal expects one argument");
   ()
 
-let register_ppc () =
-  let register = register ~category:Compiler in
-  register "ppc-emit-opcode" (fun _args _env ->
-    failwith "ppc-emit-opcode: not yet implemented for self-hosting"
-  );
-
-  register "ppc-emit-constant" (fun _args _env ->
-    failwith "ppc-emit-constant: not yet implemented for self-hosting"
-  );
-
-  register "ppc-resolve-local" (fun args _env ->
-    failwith "ppc-resolve-local: not yet implemented for self-hosting"
-  );
-
-  register "ppc-push-cenv-frame" (fun args _env ->
-    failwith "ppc-push-cenv-frame: not yet implemented for self-hosting"
-  );
-
-  register "ppc-pop-cenv-frame" (fun args _env ->
-    failwith "ppc-pop-cenv-frame: not yet implemented for self-hosting"
-  );
-  ()
-
 let register_macros () =
   let register = register ~category:Metaprogramming in
   let rec quasiquote_walk v =
@@ -997,7 +905,8 @@ let register_match_aliases () =
      references the "\000"-prefixed name instead of the plain
      one, so it always reaches the true primitive regardless of
      shadowing. *)
-  List.iter (fun n -> aliases := ("\000" ^ n, n) :: !aliases)
+  List.iter (fun name ->
+    Primitive_catalog.alias catalog ~alias:("\000" ^ name) ~target:name)
     ["car"; "cdr"; "="; "nil?"; "not"; "error"; "pair?"]
 
   ;
@@ -1017,42 +926,9 @@ let () =
   register_stdlib ();
   register_domains ();
   register_collect_and_sealed ();
-  register_ppc ();
   register_macros ();
   register_match_aliases ();
-  catalog_entries := List.rev !declarations;
-  List.iter (fun d ->
-    Hashtbl.replace builtins d.name (VBuiltin (d.name, d.implementation))) !catalog_entries;
-  List.iter (fun (alias, target) ->
-    match Hashtbl.find_opt builtins target with
-    | Some value -> Hashtbl.replace builtins alias value
-    | None -> failwith ("A5: expected primitive " ^ target ^ " to already be registered"))
-    !aliases
-
-let catalog () = !catalog_entries
-
-let shape_string = function
-  | Any -> "any"
-  | Exact n -> string_of_int n
-  | Range (min, None) -> Printf.sprintf "%d+" min
-  | Range (min, Some max) -> Printf.sprintf "%d..%d" min max
-
-let category_string = function
-  | Arithmetic -> "arithmetic"
-  | Collections -> "collections"
-  | Strings -> "strings"
-  | Capabilities -> "capabilities"
-  | Observations -> "observations"
-  | Process -> "process"
-  | Domains -> "domains"
-  | Diagnostics -> "diagnostics"
-  | Metaprogramming -> "metaprogramming"
-  | Compiler -> "compiler"
-  | Other -> "other"
+  Primitive_catalog.finalize catalog
 
 let render_catalog () =
-  let row d = Printf.sprintf "| `%s` | %s | %s |"
-      d.name (shape_string d.shape) (category_string d.category)
-  in
-  String.concat "\n" ("| builtin | arity | category |" ::
-    "|---|---|---|" :: List.map row !catalog_entries) ^ "\n"
+  Primitive_catalog.render catalog

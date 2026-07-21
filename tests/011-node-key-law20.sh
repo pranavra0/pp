@@ -16,12 +16,7 @@
 # A node logs "COMPUTE" on the miss; per SPEC law 17 a hit does not replay it, so the
 # presence/absence of COMPUTE tells miss from hit.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
+. "$(dirname "$0")/lib.sh"
 
 assert() {  # NAME  FILE  present|absent
   local name="$1" file="$2" mode="$3"
