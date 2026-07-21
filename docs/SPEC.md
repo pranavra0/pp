@@ -343,10 +343,9 @@ Grounding: conflating the two is how the store fills with micro-entries.
 Excel draws the same distinction: a formula cell is recalculated and tracked,
 but a spilled intermediate value that nobody addresses is not.
 
-**Status: partial** — the persistent/ephemeral split exists in the evaluator:
-`node { e }` persists to `~/.pp/store` while `delay(e)` never does. Remaining wart: the
-tree-walker also routes ordinary `delay`/`let` thunks through its in-memory
-content-addressed dedup table rather than the persistent store, which does not affect the persistent node cache.
+**Status: holds** — `node { e }` persists to `~/.pp/store` while `delay` and
+local bindings are fresh, in-memory thunks. Only persistent node thunks use the
+session's content-addressed deduplication table.
 
 Test: `force(delay(42))` evaluates to `42`; `force(42)` evaluates to `42`;
 a delayed computation's effect fires at most once across two forces —
@@ -1502,7 +1501,7 @@ migration.
 | LAW 5 | `let*` sequential sugar | holds | reader emits `ELetStar`; sequential; `tests/007-phase0-laws.pp` |
 | LAW 6 | node call-by-value plus memoization | holds | application is call-by-value; `node { e }` and applied `defnode` memoize persistently, keyed on code, free-variable values, and argument value hashes (`tests/011`, `tests/097`) |
 | LAW 7 | demand-pruning at node granularity | partial | reverse-edge dirty-propagation graph exists for push `stabilize` (`pp --watch --stabilize`, `tests/032`); a root desired-state formula and an explicit wanted-set are still absent |
-| LAW 8 | `delay` ephemeral vs `node` persistent | partial | the split exists (`node` persists to `~/.pp/store`; `delay` never persists); residual: the in-memory dedup table is not mirrored across runs, separate from the persistent node cache |
+| LAW 8 | `delay` ephemeral vs `node` persistent | holds | `delay` and local bindings are fresh, in-memory thunks; only `node` thunks use in-process deduplication, and nodes persist across runs |
 | LAW 11 | stack-safe non-tail recursion | holds | heap continuation machine plus iterative builtin list traversal; regular deep regression (`tests/087-deep-recursion.pp`) and million-element acceptance fixture (`tests/fixtures/million-non-tail.pp`) |
 | LAW 12 | total quotation, quasiquote | holds | `tests/007-phase0-laws.pp`; `defmacro` is built on this base — `Quotation.value_to_expr` completes the round trip, `tests/041-defmacro.pp` |
 | LAW 15 | ordering never from capabilities | partial | authority and ordering are separate; filesystem and process domains use the generic domain pipeline (`tests/018`, `tests/033`); the remaining gap is the broader law definition |
