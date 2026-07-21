@@ -395,10 +395,10 @@ uses an explicit heap-allocated work stack.
 Grounding: the same operating-system argument applies. "Rewrite your fold" is
 not an acceptable answer from a substrate.
 
-**Status: unimplemented** — this is the named "stack-safe evaluator"
-workstream from the project's first build phase; the fuzzer's deep-recursion
-arm currently produces `exitdiff:tw-err: Out_of_memory` and
-`crash:bc:timeout` signatures.
+**Status: holds** — shallow evaluation keeps the direct tree-walker path;
+deep evaluation transfers to the same evaluator's heap-allocated continuation
+machine. Builtin list traversal is iterative, so evaluator and primitive
+frames both remain bounded.
 
 Test: `length(map(inc, range(0, 1000000)))` evaluates to `1000000`  (the same stack-safety requirement as LAW 10).
 
@@ -1362,8 +1362,7 @@ running tens of thousands of random programs every CI run.
 (`tools/fuzz.ml`; `dune exec ./tools/fuzz.exe`). Previously catalogued
 divergences are now closed; both `--grammar core` and `--grammar full` runs
 exit zero. The persistent node cache is verified across runs (`tests/014`).
-Deep non-tail recursion and the negative-literal reader bug (`-5` lexes as a
-symbol) remain open issues. The build-engine milestone requires the `full`
+The negative-literal reader bug (`-5` lexes as a symbol) remains open. The build-engine milestone requires the `full`
 grammar to stay green under extended CI runs. `defmacro` would be an
 evaluator-only feature the moment it exists to violate this law — expansion
 happening outside the shared `macro.ml` path would be exactly the kind of
@@ -1504,7 +1503,7 @@ migration.
 | LAW 6 | node call-by-value plus memoization | holds | application is call-by-value; `node { e }` and applied `defnode` memoize persistently, keyed on code, free-variable values, and argument value hashes (`tests/011`, `tests/097`) |
 | LAW 7 | demand-pruning at node granularity | partial | reverse-edge dirty-propagation graph exists for push `stabilize` (`pp --watch --stabilize`, `tests/032`); a root desired-state formula and an explicit wanted-set are still absent |
 | LAW 8 | `delay` ephemeral vs `node` persistent | partial | the split exists (`node` persists to `~/.pp/store`; `delay` never persists); residual: the in-memory dedup table is not mirrored across runs, separate from the persistent node cache |
-| LAW 11 | stack-safe non-tail recursion | unimplemented | the named stack-safe-evaluator workstream; fuzz `exitdiff:tw-err: Out_of_memory`, `crash:bc:timeout` |
+| LAW 11 | stack-safe non-tail recursion | holds | heap continuation machine plus iterative builtin list traversal; regular deep regression (`tests/087-deep-recursion.pp`) and million-element acceptance fixture (`tests/fixtures/million-non-tail.pp`) |
 | LAW 12 | total quotation, quasiquote | holds | `tests/007-phase0-laws.pp`; `defmacro` is built on this base — `Quotation.value_to_expr` completes the round trip, `tests/041-defmacro.pp` |
 | LAW 15 | ordering never from capabilities | partial | authority and ordering are separate; filesystem and process domains use the generic domain pipeline (`tests/018`, `tests/033`); the remaining gap is the broader law definition |
 | LAW 16 | opt-in per-node caching | partial | `node { e }` cached persistently across runs ; scripting-tier expressions uncached; node writes sandbox-scratch-only (LAW 18, `tests/017`); `tests/010`, `tests/014` |
@@ -1528,7 +1527,7 @@ migration.
 | LAW 33 | config: computed keys, tail-safe scoping | holds | computed keys and tail-safe scoping ; config reads inside nodes are `config:<key>` trace cells, ambient config out of the node key (`tests/015`) |
 | LAW 34 | no location surface / scheduler exists | holds | the language has no location form; local process-pool scheduling, remote placement, host-qualified domains, and explicit GC are implemented (`tests/024`, `tests/038`, `tests/048`, `tests/049`, `tests/050`) |
 | LAW 35 | run-on-N-take-first as handler | holds | `race:N` process-pool fan-out lands (`tests/038`); `remote:<member>` cluster dispatch lands (`tests/048`), gated to data-closed batches, over the threat-model-gated transport |
-| LAW 36 | evaluator correctness | partial | catalogued divergences closed; `core` and sampled `full` green; deep non-tail recursion and negative-literal lexing remain same-side issues; `defmacro` expands once, ahead of the evaluator (`macro.ml`), so it cannot itself become an evaluator-only feature — `stmt_defmacro` in `full` |
+| LAW 36 | evaluator correctness | partial | catalogued divergences and evaluator crash classes closed; `core` and sampled `full` green; negative-literal lexing remains a same-side issue; `defmacro` expands once, ahead of the evaluator (`macro.ml`), so it cannot itself become an evaluator-only feature — `stmt_defmacro` in `full` |
 | LAW 37 | declared nondeterminism | holds | `register-probe`/`probe` are the one sanctioned nondeterministic dependency, evaluated at most once per pass outside the reading node's trace stack, exposed only as a `probe:<name>` cell (`tests/043-probes.sh`) |
 | LAW 38 | volatile-node containment | holds | `--check` double-run detection unchanged (`tests/019`); containment is the same probe mechanism as LAW 37 — a volatile read wrapped as a probe is observed and pinned once per pass as its own cell, in-memory only, never written to `~/.pp/store` (`tests/043-probes.sh`) |
 | LAW 39 | sealed cells | holds | `CapSecret`/`VSealed`: confidential reads redact on print, exclude from the content-addressed store, ban at the node boundary both directions, gate hits on a covering grant; `unseal(v)` is the explicit boundary (`tests/044-sealed.sh`) |

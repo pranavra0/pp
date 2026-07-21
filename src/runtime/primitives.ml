@@ -215,13 +215,14 @@ let register_lists () =
         let apply1 (arg : value) : value =
           Session.call (session ()) ~env fn [arg]
         in
-        let rec go l =
+        let rec collect reversed l =
           match force_val l with
-          | VNil -> VNil
-          | VPair (car, cdr) -> VPair (apply1 car, go cdr)
+          | VNil -> reversed
+          | VPair (car, cdr) -> collect (car :: reversed) cdr
           | other -> failwith ("map expects a proper list, got " ^ Presentation.string_of_value other)
         in
-        go lst
+        List.fold_left (fun tail value -> VPair (apply1 value, tail)) VNil
+          (collect [] lst)
     | _ -> failwith "map expects a function and a list");
 
   register "nil?" (fun args _env ->

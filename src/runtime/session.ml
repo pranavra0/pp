@@ -12,6 +12,7 @@ type evaluation_state = {
   macros : (string, string list * Core_model.expr) Hashtbl.t;
   mutable gensym : int;
   node_thunks : (Identity_types.Node_key.t, Core_model.thunk) Hashtbl.t;
+  mutable eval_depth : int;
   mutable force_depth : int;
   mutable force_path : Core_model.thunk list;
   mutable cache_bust : int;
@@ -51,7 +52,8 @@ let create ~scheduler operations = {
   scheduler;
   evaluation = {
     thunks = Hashtbl.create 1024; macros = Hashtbl.create 16; gensym = 0;
-    node_thunks = Hashtbl.create 256; force_depth = 0; force_path = [];
+    node_thunks = Hashtbl.create 256; eval_depth = 0; force_depth = 0;
+    force_path = [];
     cache_bust = 0;
   };
   domains = {
@@ -98,7 +100,8 @@ let begin_evaluation ~retain_thunks t =
   end;
   Hashtbl.clear t.evaluation.macros; t.evaluation.gensym <- 0;
   Hashtbl.clear t.domains.domains;
-  t.evaluation.force_depth <- 0; t.evaluation.force_path <- [];
+  t.evaluation.eval_depth <- 0; t.evaluation.force_depth <- 0;
+  t.evaluation.force_path <- [];
   t.evaluation.cache_bust <- 0;
   reset_pass_state t;
   if t.fenced.fenced_epoch_recovered then t.fenced.fenced_epoch_recovered <- false
@@ -145,6 +148,10 @@ let force_depth t = t.evaluation.force_depth
 let set_force_depth t n = t.evaluation.force_depth <- n
 let incr_force_depth t = t.evaluation.force_depth <- t.evaluation.force_depth + 1
 let decr_force_depth t = t.evaluation.force_depth <- t.evaluation.force_depth - 1
+let eval_depth t = t.evaluation.eval_depth
+let set_eval_depth t n = t.evaluation.eval_depth <- n
+let incr_eval_depth t = t.evaluation.eval_depth <- t.evaluation.eval_depth + 1
+let decr_eval_depth t = t.evaluation.eval_depth <- t.evaluation.eval_depth - 1
 let force_path t = t.evaluation.force_path
 let set_force_path t path = t.evaluation.force_path <- path
 let next_cache_bust t =

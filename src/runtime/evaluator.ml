@@ -12,6 +12,15 @@ let force_node = Evaluator_node.force
 let make_thunk_ca = Evaluator_thunks.make
 let make_thunk_ca_typed = Evaluator_thunks.make_typed
 
+type continuation =
+  | Stop
+  | Force of continuation
+  | Branch of expr * expr * env * continuation
+  | Apply_function of expr list * env * continuation
+  | Apply_argument of value * expr list * value list * env * continuation
+
+let max_eval_depth = 2000
+
 (* ---- Force: evaluate a thunk on demand ---- *)
 
 (* Depth limit before switching to heap-allocated trampoline.
@@ -24,6 +33,10 @@ let force_depth () = Session.force_depth (session ())
 let set_force_depth n = Session.set_force_depth (session ()) n
 let incr_force_depth () = Session.incr_force_depth (session ())
 let decr_force_depth () = Session.decr_force_depth (session ())
+let eval_depth () = Session.eval_depth (session ())
+let set_eval_depth n = Session.set_eval_depth (session ()) n
+let incr_eval_depth () = Session.incr_eval_depth (session ())
+let decr_eval_depth () = Session.decr_eval_depth (session ())
 
 let force_cycle (t : thunk) : 'a =
   let rec suffix = function
@@ -164,7 +177,17 @@ and is_data_closed (t : thunk) : bool =
 (* ---- Main Evaluator (non-tail) ---- *)
 
 and eval (e : expr) (env : env) : value =
-  eval_tail e env (fun v -> v)
+  incr_eval_depth ();
+  if eval_depth () > max_eval_depth then begin
+    let saved = eval_depth () in
+    set_eval_depth 0;
+    Fun.protect
+      (fun () -> eval_machine e env Stop)
+      ~finally:(fun () -> set_eval_depth (saved - 1))
+  end else
+    match eval_tail e env (fun v -> decr_eval_depth (); v) with
+    | result -> result
+    | exception exn -> decr_eval_depth (); raise exn
 
 (* ---- Tail-position evaluator ---- *)
 (* eval_tail e env k: evaluates e in tail position with continuation k.
@@ -372,6 +395,142 @@ and trampoline_force (v : value) : value =
         end
   in
   loop ()
+
+and eval_machine (e : expr) (env : env) (k : continuation) : value =
+  match e with
+  | ELiteral value -> continue k value
+  | ESymbol name ->
+      (match Environment.lookup env name with
+       | Some value -> continue k (force value)
+       | None ->
+           (match Primitives.lookup name with
+            | Some value -> continue k value
+            | None -> failwith ("unbound symbol: " ^ name)))
+  | EIf (condition, yes, no) ->
+      eval_machine condition env (Force (Branch (yes, no, env, k)))
+  | ELet (bindings, body) ->
+      let thunks = List.map (fun (name, expression) ->
+        name, make_thunk_ca ~name expression env) bindings in
+      let mutual = List.fold_left (fun scope (name, thunk) ->
+        Environment.extend scope name thunk) env thunks in
+      List.iter (fun (_, thunk) -> match thunk with
+        | VThunk value -> value.thunk_env <- mutual
+        | _ -> ()) thunks;
+      eval_machine body mutual k
+  | EFn (params, body) ->
+      continue k (Environment.make_closure ~name:None params body (ref env))
+  | EApply (fn, arguments) ->
+      eval_machine fn env (Force (Apply_function (arguments, env, k)))
+  | EQuote expression -> continue k (Quotation.quote_to_value expression)
+  | EDelay expression -> continue k (make_thunk_ca expression env)
+  | EForce expression -> eval_machine expression env (Force k)
+  | ENode expression ->
+      continue k (Evaluator_thunks.make_node expression env ~arguments:[])
+  | (EDef _ | EDefNode _) as definition ->
+      (match Evaluator_forms.definition_of_expr definition with
+       | Some { name; params; body; kind } ->
+           continue k (Environment.make_definition ~name ~kind params body (ref env))
+       | None -> failwith "invalid definition")
+  | EDo expressions ->
+      Evaluator_forms.do_block
+        { eval; eval_tail = (fun e env next -> eval_machine e env Stop |> next);
+          force }
+        expressions env (continue k)
+  | EWithCaps (capability, body) ->
+      Evaluator_scope.with_caps
+        { eval; eval_tail = (fun e env next -> eval_machine e env Stop |> next);
+          force; apply }
+        capability body env (continue k)
+  | EPerform (name, arguments) ->
+      let values = List.map (fun argument -> make_thunk_ca argument env) arguments
+                   |> List.map force in
+      continue k (Evaluator_effects.perform ~application:apply name values)
+  | EWithHandler (handlers, body) ->
+      Evaluator_scope.with_handlers
+        { eval; eval_tail = (fun e env next -> eval_machine e env Stop |> next);
+          force; apply }
+        handlers body env (continue k)
+  | EDefValue (_, rhs) -> eval_machine rhs env k
+  | ELetStar (bindings, body) ->
+      let scope = List.fold_left (fun scope (name, expression) ->
+        Environment.extend scope name (make_thunk_ca ~name expression scope))
+        env bindings in
+      eval_machine body scope k
+  | EModule body ->
+      continue k (Evaluator_forms.module_expr { eval; eval_tail; force } body)
+  | EImport expression -> eval_machine expression env (Force k)
+  | ELoad path ->
+      continue k (Evaluator_forms.load { eval; eval_tail; force } path env)
+  | ELoadModule path ->
+      continue k (Evaluator_forms.module_file { eval; eval_tail; force } path)
+  | ELocated (location, ETyped (expression, ty)) ->
+      continue k (make_thunk_ca_typed expression ty (Some location) env)
+  | ELocated (_, expression) -> eval_machine expression env k
+  | ETyped (expression, ty) ->
+      continue k (make_thunk_ca_typed expression ty None env)
+  | EIsland (uri, pin) ->
+      let tree = Island.resolve ~uri ~pin in
+      continue k (Evaluator_forms.module_file { eval; eval_tail; force }
+                    (Island.entry_file tree))
+  | EWithConfig (config, body) ->
+      Evaluator_scope.with_config
+        { eval; eval_tail = (fun e env next -> eval_machine e env Stop |> next);
+          force; apply }
+        config body env (continue k)
+  | EConfig (key, default) ->
+      let key = force (eval_machine key env Stop) in
+      let name = match key with
+        | VString value | VKeyword value | VSymbol value -> value
+        | _ -> failwith "config key must be a string, keyword, or symbol" in
+      Evaluator_scope.read_config { eval; eval_tail; force; apply }
+        name default env (continue k)
+  | EMatch (scrutinee, arms) ->
+      let value = force (eval_machine scrutinee env Stop) in
+      Evaluator_match.eval ~force ~eval
+        ~eval_tail:(fun e env next -> eval_machine e env Stop |> next)
+        value arms env (continue k)
+
+and continue (k : continuation) (value : value) : value =
+  match k with
+  | Stop -> value
+  | Force rest -> continue rest (force value)
+  | Branch (yes, no, env, rest) ->
+      (match value with
+       | VBool false | VNil -> eval_machine no env rest
+       | _ -> eval_machine yes env rest)
+  | Apply_function (arguments, env, rest) ->
+      (match arguments with
+       | [] -> apply_machine value [] env rest
+       | argument :: remaining ->
+           eval_machine argument env
+             (Force (Apply_argument (value, remaining, [], env, rest))))
+  | Apply_argument (fn, [], reversed, env, rest) ->
+      apply_machine fn (List.rev (value :: reversed)) env rest
+  | Apply_argument (fn, argument :: remaining, reversed, env, rest) ->
+      eval_machine argument env
+        (Force (Apply_argument (fn, remaining, value :: reversed, env, rest)))
+
+and apply_machine (fn : value) (args : value list) (env : env)
+    (k : continuation) : value =
+  match fn with
+  | VClosure { fn_name; params; body; env = closure_env;
+               closure_kind = Function } ->
+      if List.length params <> List.length args then begin
+        let name = Option.value ~default:"#<fn>" fn_name in
+        failwith (Printf.sprintf "arity mismatch calling %s: expected %d args, got %d"
+                    name (List.length params) (List.length args))
+      end;
+      let body_env = List.fold_left2 (fun scope param argument ->
+        Environment.extend scope param argument) !closure_env params args in
+      eval_machine body body_env k
+  | VClosure { fn_name; params; body; env = closure_env;
+               closure_kind = Node } ->
+      Evaluator_node.apply ~force ~fn_name ~params ~body ~closure_env args
+        (continue k)
+  | VBuiltin (_, implementation) -> continue k (implementation args env)
+  | _ ->
+      failwith (Printf.sprintf "not a function: %s"
+                  (Presentation.string_of_value fn))
 (* ---- Public API ---- *)
 
 let eval_expressions (exprs : expr list) (env : env ref) : value =
