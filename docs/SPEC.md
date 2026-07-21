@@ -596,7 +596,8 @@ inputs same outputs" — is only as sound as this law.
 
 **Status: partial.** The tree-walker's in-memory dedup is now sound: the hash
 is SHA-256, closure captures are folded into the key so two closures over
-different captured values hash differently, and the ambient handler stack is
+different referenced captures hash differently while unrelated environment
+bindings are ignored, and the ambient handler stack is
 folded in too. A cross-run store now exists and its value blobs are
 content-addressed by result hash, shared across runs. Remaining gap: the
 tree-walker's in-memory dedup table is not mirrored across runs, but that is
@@ -635,9 +636,8 @@ two catastrophic leaks this law names are closed: rebinding an unreferenced
 global is a cache hit, and widening the grant does not invalidate anything
 (`tests/011`, `tests/014`, `tests/097`). Config and the handler stack are now fully out of
 the key: a config read or a perform inside a node records a `config:`/
-`handler:` trace cell instead (LAW 33/26, `tests/015`). Residuals:
-binding-order canonicalisation is not done (LAW 3), and closure-valued free
-variables key on captured frames and environment.
+`handler:` trace cell instead (LAW 33/26, `tests/015`). Residual:
+binding-order canonicalisation is not done (LAW 3).
 
 `defmacro` needed no change to this law, by construction. `hash_expr`
 (`node_key_of`) consumes an expression tree that has

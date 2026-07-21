@@ -66,7 +66,41 @@ EOF
 "$PP" "$TMP/c2.pp" > "$TMP/o" 2>&1; assert "freevar-x2-miss"      "$TMP/o" present
 "$PP" "$TMP/c1.pp" > "$TMP/o" 2>&1; assert "freevar-x1-revert-hit" "$TMP/o" absent
 
-# --- (c) widening the capability grant must NOT invalidate (caps ∉ key) ---
+# --- (c) closure identity covers only the values referenced by its body ---
+rm -rf "$TMP/.pp"
+cat > "$TMP/f.pp" <<'EOF'
+let unused = 1
+let (x = 1) {
+  let (f = fn() { x }) {
+    force(node { perform log("COMPUTE"); f() })
+  }
+}
+EOF
+cat > "$TMP/f1-noise.pp" <<'EOF'
+let unused = 99999
+let (x = 1) {
+  let (f = fn() { x }) {
+    force(node { perform log("COMPUTE"); f() })
+  }
+}
+EOF
+cat > "$TMP/f2.pp" <<'EOF'
+let unused = 1
+let (x = 2) {
+  let (f = fn() { x }) {
+    force(node { perform log("COMPUTE"); f() })
+  }
+}
+EOF
+"$PP" "$TMP/f.pp" > "$TMP/o" 2>&1; assert "closure-x1-miss" "$TMP/o" present
+cp "$TMP/f1-noise.pp" "$TMP/f.pp"
+"$PP" "$TMP/f.pp" > "$TMP/o" 2>&1; assert "closure-noise-hit" "$TMP/o" absent
+cp "$TMP/f2.pp" "$TMP/f.pp"
+"$PP" "$TMP/f.pp" > "$TMP/o" 2>&1; assert "closure-x2-miss" "$TMP/o" present
+sed -i 's/let (x = 2)/let (x = 1)/' "$TMP/f.pp"
+"$PP" "$TMP/f.pp" > "$TMP/o" 2>&1; assert "closure-x1-revert-hit" "$TMP/o" absent
+
+# --- (d) widening the capability grant must NOT invalidate (caps ∉ key) ---
 rm -rf "$TMP/.pp"
 printf 'DATA\n' > "$TMP/f.txt"
 cat > "$TMP/cap.pp" <<EOF

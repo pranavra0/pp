@@ -107,13 +107,43 @@ and hash_pattern (p : pattern) : string =
       Hasher.hash_concat ["p_tagged"; tag; ph]
 
 and hash_value (v : value) : string =
-  let rec hash_val v =
+  let rec lookup bindings name =
+    match bindings with
+    | [] -> None
+    | (candidate, value) :: rest ->
+        if candidate = name then Some value else lookup rest name
+  in
+  let rec active_index value index = function
+    | [] -> None
+    | active :: rest ->
+        if value == active then Some index
+        else active_index value (index + 1) rest
+  in
+  let rec hash_captures active expr env =
+    Free_vars.SS.elements (Free_vars.free_vars expr)
+    |> List.map (fun name ->
+         match lookup env.bindings name with
+         | None -> Hasher.hash_concat ["capture-unbound"; name]
+         | Some value -> Hasher.hash_concat ["capture"; name; hash_val active value])
+    |> fun captures -> Hasher.hash_concat ("captures" :: captures)
+  and hash_val active v =
+    match active_index v 0 active with
+    | Some index -> Hasher.hash_concat ["recursive-value"; string_of_int index]
+    | None -> hash_fresh (v :: active) v
+  and hash_fresh active v =
     match v with
     | VThunk t ->
-        (match t.thunk_hash with
-         | Some h -> h  (* O(1): use precomputed content-addressable hash *)
-         | None ->
-             Hasher.hash_concat ["thunk"; hash_expr t.thunk_expr; t.thunk_env.env_hash; t.config_hash])
+        let type_part = match t.type_ann with
+          | None -> "untyped"
+          | Some ty -> Hasher.hash_concat ["type"; hash_expr ty]
+        in
+        let arguments = match t.thunk_kind with
+          | Ephemeral -> []
+          | Persistent { argument_values; _ } ->
+              List.map (hash_val active) argument_values
+        in
+        Hasher.hash_concat ("thunk" :: hash_expr t.thunk_expr :: type_part ::
+          hash_captures active t.thunk_expr t.thunk_env :: arguments)
     | VNil -> Hasher.hash_string "nil"
     | VBool true -> Hasher.hash_string "bool:true"
     | VBool false -> Hasher.hash_string "bool:false"
@@ -123,18 +153,18 @@ and hash_value (v : value) : string =
     | VKeyword k -> Hasher.hash_concat ["keyword"; k]
     | VSymbol s -> Hasher.hash_concat ["symbol"; s]
     | VPair (car, cdr) ->
-        Hasher.hash_concat ["pair"; hash_val car; hash_val cdr]
+        Hasher.hash_concat ["pair"; hash_val active car; hash_val active cdr]
     | VVector vs ->
-        let parts = Array.to_list (Array.map hash_val vs) in
+        let parts = Array.to_list (Array.map (hash_val active) vs) in
         Hasher.hash_concat ("vector" :: parts)
     | VMap kvs ->
-        let hashed = List.map (fun (k, v) -> (hash_val k, hash_val v)) kvs in
+        let hashed = List.map (fun (k, v) -> (hash_val active k, hash_val active v)) kvs in
         let sorted = List.sort (fun (kh1,_) (kh2,_) ->
           String.compare kh1 kh2) hashed in
         let parts = List.map (fun (kh, vh) -> Hasher.hash_concat [kh; vh]) sorted in
         Hasher.hash_concat ("map" :: parts)
     | VSet vs ->
-        let sorted = List.sort String.compare (List.map hash_val vs) in
+        let sorted = List.sort String.compare (List.map (hash_val active) vs) in
         Hasher.hash_concat ("set" :: sorted)
     | VClosure { fn_name; params; body; env; closure_kind } ->
         let name_part = match fn_name with Some n -> n | None -> "anon" in
@@ -142,7 +172,7 @@ and hash_value (v : value) : string =
         Hasher.hash_concat [kind; name_part;
                      Hasher.hash_concat ("params" :: params);
                      hash_expr body;
-                     (!env).env_hash]
+                     hash_captures active body !env]
     | VBuiltin (name, _) ->
         Hasher.hash_concat ["builtin"; name]
     | VCapability cap ->
@@ -150,13 +180,13 @@ and hash_value (v : value) : string =
     | VEnvMap bindings ->
         let sorted = List.sort (fun (a,_) (b,_) -> String.compare a b) bindings in
         let parts = List.map (fun (name, v) ->
-          Hasher.hash_concat [name; hash_val v]
+          Hasher.hash_concat [name; hash_val active v]
         ) sorted in
         Hasher.hash_concat ("envmap" :: parts)
     | VSealed bytes ->
         Hasher.hash_concat ["sealed"; bytes]
   in
-  hash_val v
+  hash_val [] v
 
 let node_key ~(code : expr)
     ~(free_variables : (string * value option) list)
