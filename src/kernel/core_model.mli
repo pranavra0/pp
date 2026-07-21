@@ -65,6 +65,7 @@ and closure = {
   params : string list;
   body : expr;
   env : env ref;
+  is_node : bool;
 }
 
 and thunk = {
@@ -78,6 +79,7 @@ and thunk = {
   config_hash : string;
   mutable thunk_persist : bool;
   mutable node_caps : Capability.t list;
+  node_arg_hashes : string list;
 }
 
 and thunk_status = Unevaluated | Evaluating | Evaluated of value

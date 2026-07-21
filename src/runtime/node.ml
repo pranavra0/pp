@@ -12,7 +12,7 @@ let unbound_fv_hash ~(name : string) : string =
 
 let resolve_free_variables ~(expr : expr) ~(env : env)
     ~(force : value -> value) : (string * value option) list =
-  Free_vars.SS.elements (Free_vars.free_vars expr)
+  Free_vars.SS.elements (Free_vars.node_free_vars expr)
   |> List.map (fun name ->
        match Environment.lookup env name with
        | Some value ->
@@ -24,7 +24,7 @@ let resolve_free_variables ~(expr : expr) ~(env : env)
 let authorize_free_variables (free_variables : (string * value option) list) : unit =
   List.iter (fun (name, value) ->
     match value with
-    | Some value when Value_analysis.contains_authority value ->
+    | Some value when Value_analysis.contains_authority_in_referenced_values value ->
         authority_escape
           (Printf.sprintf
              "node: free variable '%s' may not be or contain a %s" name
@@ -33,8 +33,8 @@ let authorize_free_variables (free_variables : (string * value option) list) : u
     | Some _ | None -> ())
     free_variables
 
-let construct_key ~(expr : expr) ~(free_variables : (string * value option) list)
-    : Key.t =
+let construct_key ~(argument_hashes : string list) ~(expr : expr)
+    ~(free_variables : (string * value option) list) : Key.t =
   let fv_hashes = List.map (fun (name, value) ->
     match value with
     | None -> unbound_fv_hash ~name
@@ -42,12 +42,13 @@ let construct_key ~(expr : expr) ~(free_variables : (string * value option) list
     free_variables
   in
   Key.make ~code_hash:(Identity.hash_expr expr)
-    ~free_variable_hashes:fv_hashes
+    ~free_variable_hashes:fv_hashes ~argument_hashes
 
-let key_of ~(expr : expr) ~(env : env) ~(force : value -> value) : Key.t =
+let key_of ~(argument_hashes : string list) ~(expr : expr) ~(env : env)
+    ~(force : value -> value) : Key.t =
   let free_variables = resolve_free_variables ~expr ~env ~force in
   authorize_free_variables free_variables;
-  construct_key ~expr ~free_variables
+  construct_key ~expr ~free_variables ~argument_hashes
 
 
 (* ---- Runtime type check (shared by the evaluator) --------------------- *)

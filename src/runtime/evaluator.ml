@@ -14,6 +14,18 @@ let force_node = Evaluator_node.force
 let make_thunk_ca = Evaluator_thunks.make
 let make_thunk_ca_typed = Evaluator_thunks.make_typed
 
+let make_node_thunk ~(name : string option) (expr : expr) (env : env)
+    ~(argument_hashes : string list) : value =
+  let thunk_val =
+    Evaluator_thunks.make_node ?name expr env ~argument_hashes
+  in
+  (match thunk_val with
+   | VThunk t ->
+       t.thunk_persist <- true;
+       t.node_caps <- Effect.perform Dynamic_scope.Get_capabilities
+   | _ -> ());
+  thunk_val
+
 (* ---- Force: evaluate a thunk on demand ---- *)
 
 (* Depth limit before switching to heap-allocated trampoline.
@@ -120,6 +132,7 @@ and evaluate_and_store_no_key (t : thunk) : value =
    and governs validity, not identity. *)
 and node_key_of (t : thunk) : Identity_types.Node_key.t =
   Node.key_of ~expr:t.thunk_expr ~env:t.thunk_env ~force
+    ~argument_hashes:t.node_arg_hashes
 
 (* Remote placement: a
    node is data-closed iff every free var's FORCED value re-encodes under
@@ -219,7 +232,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       let fn_val = force (eval fn_expr env) in
       let arg_vals = List.map (fun arg_expr -> force (eval arg_expr env)) arg_exprs in
       Evaluator_application.apply_tail
-        { eval_tail }
+        { eval_tail; force; make_node = make_node_thunk }
         fn_val arg_vals env k
 
   | EQuote e ->
@@ -245,7 +258,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       k (Environment.make_closure ~name:(Some name) params body (ref env))
 
   | EDefNode (name, params, body) ->
-      k (Environment.make_closure ~name:(Some name) params body (ref env))
+      k (Environment.make_closure ~name:(Some name) ~is_node:true params body (ref env))
 
   | EDo exprs ->
       Evaluator_forms.do_block
@@ -325,7 +338,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
 
 and apply (fn : value) (args : value list) (env : env) : value =
   Evaluator_application.apply
-    { eval_tail }
+    { eval_tail; force; make_node = make_node_thunk }
     fn args env
 
 

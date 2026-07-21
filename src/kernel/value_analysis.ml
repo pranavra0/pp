@@ -41,3 +41,36 @@ let contains_authority (v : value) : bool =
 
 let contains_sealed (v : value) : bool =
   contains_value_kind (function VSealed _ -> true | _ -> false) v
+
+(* A closure captures an environment frame, but only the names referenced by
+   its body are inputs to the closure. This keeps a later ambient binding from
+   looking like authority captured by an earlier helper function while still
+   rejecting a closure whose body really reaches a capability. *)
+let contains_authority_in_referenced_values (v : value) : bool =
+  let visited_envs : (int, unit) Hashtbl.t = Hashtbl.create 16 in
+  let rec go = function
+    | VCapability _ | VSealed _ -> true
+    | VThunk t ->
+        (match t.thunk_status with
+         | Evaluated result -> go result
+         | Unevaluated | Evaluating -> false)
+    | VPair (a, b) -> go a || go b
+    | VVector vs -> Array.exists go vs
+    | VMap kvs -> List.exists (fun (k, v) -> go k || go v) kvs
+    | VSet vs -> List.exists go vs
+    | VClosure { body; env; _ } ->
+        let e = !env in
+        if Hashtbl.mem visited_envs e.env_id then false
+        else begin
+          Hashtbl.add visited_envs e.env_id ();
+          List.exists (fun name ->
+            match Environment.lookup e name with
+            | Some value -> go value
+            | None -> false)
+            (Free_vars.SS.elements (Free_vars.free_vars body))
+        end
+    | VEnvMap bindings -> List.exists (fun (_, value) -> go value) bindings
+    | VNil | VBool _ | VInt _ | VFloat _ | VString _ | VKeyword _
+    | VSymbol _ | VBuiltin _ -> false
+  in
+  go v

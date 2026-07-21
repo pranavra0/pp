@@ -136,9 +136,10 @@ and hash_value (v : value) : string =
     | VSet vs ->
         let sorted = List.sort String.compare (List.map hash_val vs) in
         Hasher.hash_concat ("set" :: sorted)
-    | VClosure { fn_name; params; body; env; _ } ->
+    | VClosure { fn_name; params; body; env; is_node } ->
         let name_part = match fn_name with Some n -> n | None -> "anon" in
-        Hasher.hash_concat ["closure"; name_part;
+        let kind = if is_node then "node-closure" else "closure" in
+        Hasher.hash_concat [kind; name_part;
                      Hasher.hash_concat ("params" :: params);
                      hash_expr body;
                      (!env).env_hash]

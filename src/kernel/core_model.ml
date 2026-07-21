@@ -74,6 +74,7 @@ and closure = {
   params : string list;
   body : expr;
   env : env ref;            (* captured environment *)
+  is_node : bool;           (* node application returns a persistent thunk *)
 }
 
 and thunk = {
@@ -87,6 +88,7 @@ and thunk = {
   config_hash : string;                (* ReaderT config snapshot identity *)
   mutable thunk_persist : bool;         (* persist across runs? true for node, false for delay/let *)
   mutable node_caps : Capability.t list; (* capabilities captured by a persistent node *)
+  node_arg_hashes : string list;         (* forced argument hashes for applied nodes *)
 }
 and thunk_status =
   | Unevaluated

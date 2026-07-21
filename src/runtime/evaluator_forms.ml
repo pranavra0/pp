@@ -32,8 +32,13 @@ let prebind (env : env ref) (exprs : expr list) : scope =
   let value_defs = Hashtbl.create 8 in
   List.iter (fun expr ->
     match unwrap expr with
-    | EDef (name, params, body) | EDefNode (name, params, body) ->
+    | EDef (name, params, body) ->
         let closure = Environment.make_closure ~name:(Some name) params body env in
+        env := Environment.extend !env name closure
+    | EDefNode (name, params, body) ->
+        let closure =
+          Environment.make_closure ~name:(Some name) ~is_node:true params body env
+        in
         env := Environment.extend !env name closure
     | EDefValue (name, _) ->
         let poison = Evaluator_thunks.poison name !env in

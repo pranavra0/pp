@@ -10,7 +10,8 @@ let () =
   let reified = Quotation.value_to_expr quoted in
   check (Identity.hash_expr one = Identity.hash_expr reified) "quote conversion drifted";
   let key = Identity_types.Node_key.make
-      ~code_hash:(Identity.hash_expr one) ~free_variable_hashes:["free"] in
+      ~argument_hashes:[] ~code_hash:(Identity.hash_expr one)
+      ~free_variable_hashes:["free"] in
   check (Identity_types.Node_key.to_string key =
          Identity_types.Node_key.to_string
            (Identity_types.Node_key.of_string (Identity_types.Node_key.to_string key)))

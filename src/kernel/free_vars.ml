@@ -8,7 +8,7 @@ open Core_model
    conservatively. *)
 module SS = Set.Make(String)
 
-let free_vars (e : expr) : SS.t =
+let free_vars_with_capabilities ~(include_capabilities : bool) (e : expr) : SS.t =
   let add_all names b = List.fold_left (fun acc n -> SS.add n acc) b names in
   (* names a `do`/`module` block binds for its siblings (defs, incl. located) *)
   let block_binders exprs =
@@ -30,7 +30,10 @@ let free_vars (e : expr) : SS.t =
     | EApply (f, args) ->
         List.fold_left (fun a e -> SS.union a (fv bound e)) (fv bound f) args
     | EForce e | EDelay e | ENode e -> fv bound e
-    | EWithCaps (caps, body) -> SS.union (fv bound caps) (fv bound body)
+    | EWithCaps (caps, body) ->
+        let body_vars = fv bound body in
+        if include_capabilities then SS.union (fv bound caps) body_vars
+        else body_vars
     | EPerform (_, args) ->
         List.fold_left (fun a e -> SS.union a (fv bound e)) SS.empty args
     | EWithHandler (handlers, body) ->
@@ -72,3 +75,9 @@ let free_vars (e : expr) : SS.t =
         SS.union scrut_fv arms_fv
   in
   fv SS.empty e
+
+let free_vars (e : expr) : SS.t =
+  free_vars_with_capabilities ~include_capabilities:true e
+
+let node_free_vars (e : expr) : SS.t =
+  free_vars_with_capabilities ~include_capabilities:false e
