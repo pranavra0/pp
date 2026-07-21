@@ -17,9 +17,11 @@ let run ctx cli files =
     snapshot_cell_hashes
       (List.sort_uniq compare (List.map fst (Session.observations session)))
   in
-  let observe_stabilized ~previous changed_cells =
+  let observe_changed ~previous changed_cells =
     let reverse = Store_index.reverse () in
-    let dirty = Store_index.dirty_keys changed_cells reverse in
+    Stabilize.add_runtime_edges reverse;
+    let dirty = Store_index.dirty_keys ~dependency_cell:Stabilize.dependency_cell
+      changed_cells reverse in
     Stabilize.reset_dirty (List.map Identity_types.Node_key.of_string dirty);
     Session.begin_pass session;
     let last = Command_run.run_files ~retain_thunks:true ctx cli files in
@@ -42,7 +44,7 @@ let run ctx cli files =
     if changed <> [] then
       if Cli.stabilize cli then begin
         Printf.eprintf "[watch] %d cell(s) changed — stabilizing\n%!" (List.length changed);
-        loop (observe_stabilized ~previous:snapshot changed)
+        loop (observe_changed ~previous:snapshot changed)
       end else begin
         Printf.eprintf "[watch] cell(s) changed — re-evaluating\n%!";
         loop (observe ())

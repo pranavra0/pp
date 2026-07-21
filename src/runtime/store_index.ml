@@ -16,11 +16,16 @@ let reverse () =
     (List.sort compare (Trace_repository.keys Trace_repository.default));
   result
 
-let dirty_keys changed reverse =
-  changed
-  |> List.concat_map (fun cell ->
-       Option.value ~default:[] (Hashtbl.find_opt reverse cell))
-  |> List.sort_uniq compare
+let dirty_keys ~dependency_cell changed reverse =
+  let rec visit_cells seen_keys = function
+    | [] -> seen_keys
+    | cell :: cells ->
+        let keys = Option.value ~default:[] (Hashtbl.find_opt reverse cell) in
+        let fresh = List.filter (fun key -> not (List.mem key seen_keys)) keys in
+        visit_cells (fresh @ seen_keys)
+          (List.rev_append (List.filter_map dependency_cell fresh) cells)
+  in
+  List.sort_uniq compare (visit_cells [] changed)
 
 let short = Cache_policy.short_key
 

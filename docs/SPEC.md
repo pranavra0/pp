@@ -324,10 +324,11 @@ a language whose graph expands under evaluation gets it natively. Demand
 pruning is Excel not recalculating sheets nobody looks at.
 
 **Status: partial** — `node { e }` and the store exist, and the reverse-edge
-dirty-propagation graph now exists for push `stabilize` (`pp --watch --stabilize`,
-`tests/032`). Still missing: a formal root desired-state formula and an
-explicit wanted-set, so demand-pruning remains pull-mode "re-force from root"
-rather than a declared target set.
+dirty-propagation graph follows explicit child-result edges for push
+`stabilize`. Pull watch resets the whole reachable graph while push watch
+resets only the affected closure. They produce the same results, while push
+also cuts off an unchanged inline intermediate (`tests/032`, `tests/101`). Still missing:
+a formal root desired-state formula and an explicit wanted-set.
 
 Test: a root demanding 1 of a manifest's 3 children executes exactly 1
 child (journal/trace proves it), .
@@ -520,7 +521,9 @@ feature.
 **Status: partial** — `node { e }` is opt-in and cached persistently: the same
 node forced in two processes runs once, the store serves
 the second, and a scripting-tier expression is never cached (`tests/010`,
-`tests/014`). The purity half of the bargain is now partly enforced: node
+`tests/014`). `$glob` records the tree snapshot it returns, and `run` records
+the resolved tool plus a coarse hash for every readable input tree
+(`tests/100`). The purity half of the bargain is now partly enforced: node
 writes are confined to per-node sandbox scratch and absolute node writes error
 (LAW 18, `tests/017`), and a tool run inside a node executes in the scratch
 dir. A tool's own absolute-path writes are not fail-closed — traces, not the
@@ -704,13 +707,14 @@ keying: a downstream node whose free variable is an upstream node's value
 re-keys identically when a recompute produces a byte-identical result — the
 comment-only-header-edit story holds today when the build threads values
 through free variables, so the compile re-runs but the link hits
-(`tests/016`). Not implemented: cutoff for a node inline-nested in its
-dependent's body, where the parent's trace subsumes the child's reads, so the
-parent re-runs regardless. The reverse-edge dirty-propagation graph now
-exists and is used by push-mode `stabilize` (`Store_index.reverse`,
-`Stabilize.reset_dirty`; `pp --watch --stabilize`; `tests/032`); pull-mode
-re-verification still walks from the root when `--stabilize` is not used.
-Glob and toolchain-closure cells are not yet recorded.
+(`tests/016`). Nested traces now contain child-result cells instead of copying
+the child's world reads. Push watch recomputes a stale inline child and cuts
+off its parent when the result hash is unchanged; pull watch reaches the same
+result by rebuilding from the root (`tests/032`, `tests/101`). `$glob` records an exact tree cell, and `run`
+records the resolved tool binary plus coarse readable-tree cells; changes and
+reverts are covered by `tests/100`. A fresh process cannot rebuild an inline
+child solely from a stored parent trace because executable node closures are
+not durable data, and dynamic-library closure tracking remains coarse.
 
 Test: editing a file read by a node re-runs it; an unchanged read hits;
 reverting the file hits the original trace in the set (`tests/010`); a
@@ -1500,17 +1504,17 @@ migration.
 | LAW 4 | one scope model | holds | top level, blocks, and modules prebind the same definitions while preserving value statement timing; `tests/025-def-value.sh`, `tests/039-global-scope.pp`, `tests/095-scope-identity.sh` |
 | LAW 5 | `let*` sequential sugar | holds | reader emits `ELetStar`; sequential; `tests/007-phase0-laws.pp` |
 | LAW 6 | node call-by-value plus memoization | holds | application is call-by-value; `node { e }` and applied `defnode` memoize persistently, keyed on code, free-variable values, and argument value hashes (`tests/011`, `tests/097`) |
-| LAW 7 | demand-pruning at node granularity | partial | reverse-edge dirty-propagation graph exists for push `stabilize` (`pp --watch --stabilize`, `tests/032`); a root desired-state formula and an explicit wanted-set are still absent |
+| LAW 7 | demand-pruning at node granularity | partial | push watch selects affected work through child-result edges while pull watch returns the same result from a fresh graph (`tests/032`, `tests/101`); a root desired-state formula and an explicit wanted-set are still absent |
 | LAW 8 | `delay` ephemeral vs `node` persistent | holds | `delay` and local bindings are fresh, in-memory thunks; only `node` thunks use in-process deduplication, and nodes persist across runs |
 | LAW 11 | stack-safe non-tail recursion | holds | heap continuation machine plus iterative builtin list traversal; regular deep regression (`tests/087-deep-recursion.pp`) and million-element acceptance fixture (`tests/fixtures/million-non-tail.pp`) |
 | LAW 12 | total quotation, quasiquote | holds | `tests/007-phase0-laws.pp`; `defmacro` is built on this base — `Quotation.value_to_expr` completes the round trip, `tests/041-defmacro.pp` |
 | LAW 15 | ordering never from capabilities | partial | authority and ordering are separate; filesystem and process domains use the generic domain pipeline (`tests/018`, `tests/033`); the remaining gap is the broader law definition |
-| LAW 16 | opt-in per-node caching | partial | `node { e }` cached persistently across runs ; scripting-tier expressions uncached; node writes sandbox-scratch-only (LAW 18, `tests/017`); `tests/010`, `tests/014` |
+| LAW 16 | opt-in per-node caching | partial | `node { e }` cached persistently across runs; scripting-tier expressions uncached; glob and tool inputs recorded (`tests/100`); node writes sandbox-scratch-only (LAW 18, `tests/017`) |
 | LAW 17 | hit is not effect replay | holds (node tier) | a `node { e }` hit does not replay in-node `log`/stdout (`tests/010`, `tests/014`) |
 | LAW 18 | sandbox-scratch writes | partial | per-node scratch sandbox is real: relative node writes/reads are scratch-local, absolute node writes error, and `run` uses the scratch directory (`tests/017`); domain writes use the reconciliation pipeline |
 | LAW 19 | sound content hashing | partial | hash is SHA-256; closure-environment and handler gaps closed, so in-memory dedup is sound; store objects are content-addressed by result hash, shared across runs; the tree-walker's in-memory dedup table is not mirrored across runs |
 | LAW 20 | key = code plus argument values | partial | persistent node keys = expanded code plus free-variable value hashes plus applied argument value hashes; capabilities, the whole environment, config, and handlers are all excluded (`tests/011`, `tests/015`, `tests/097`); the node boundary is symmetric: a capability-containing free variable is `Capability_error` at the key, a capability-containing result is rejected before storage (`tests/capability-adversarial.sh`); `defmacro` expands before `Identity.node_key` sees a form, so a macro-only edit re-keys its call sites (`tests/042-defmacro-rekey.sh`) |
-| LAW 21 | cutoff via traces | partial | validity via verifying trace is real (key maps to a set of traces, cells re-checked on hit; `tests/010`, `tests/015`); hash-equality cutoff proven at scale — a comment-only header edit on a 101 translation-unit C build, and on Lua 5.4.7, recompiles dependents and cuts off the link (`tests/016`, `tests/024`, `scripts/build-lua.sh`); the reverse-edge dirty-propagation graph is now used by push `stabilize` (`pp --watch --stabilize`, `tests/032`); inline-nested cutoff is still absent |
+| LAW 21 | cutoff via traces | partial | trace sets, revert hits, glob/tool invalidation, and push inline-node cutoff are real, with pull/push result parity (`tests/010`, `tests/016`, `tests/032`, `tests/100`, `tests/101`); fresh-process inline rebuilding and precise dynamic-library closure tracking remain absent |
 | LAW 22 | unforgeable root-minted capabilities | holds | constructors removed; `tests/capability-adversarial.sh` |
 | LAW 22b | `with-caps` narrows a held value, never widens | holds | `current-capabilities`/`with-caps`/`cap-restrict`'s mode argument; the subset check runs against the current ambient; `effect` removed;  exception/tail-safe; `tests/capability-adversarial.sh` |
 | LAW 23 | component/full-path plus transitive hit check | holds (one residual gap) | component-aware, canonicalised (realpath, no trailing slash) paths at every cell/grant/loader-bound site (`tests/036`); hits gated on the caller's capabilities covering the trace's transitive read closure; capability denials not memoized (`tests/013`, `tests/014`) — the check uses the forcing thunk's captured capabilities, collapsing to the earlier per-process grant when `with-caps` is unused; capability-filtered `pp why` real (`tests/019`); Unicode normalisation (NFC) not implemented |

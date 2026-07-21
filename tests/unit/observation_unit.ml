@@ -4,7 +4,8 @@ open Pp_runtime
 let check condition message = if not condition then failwith message
 
 let () =
-  let ids = [Cell.File "p"; Cell.Env "HOME"; Cell.Argv; Cell.Domain {name="d"; sub="x"}] in
+  let ids = [Cell.File "p"; Cell.Env "HOME"; Cell.Argv; Cell.Node "key";
+    Cell.Domain {name="d"; sub="x"}] in
   List.iter (fun cell ->
     let text = Cell.serialize cell in
     check (Cell.serialize (Cell.parse text) = text) "cell identity did not round-trip") ids;

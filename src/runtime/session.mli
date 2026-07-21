@@ -46,6 +46,11 @@ val remove_run_pin : t -> string -> unit
 val iter_run_pins : t -> (string -> string -> unit) -> unit
 val set_node_thunk : t -> Identity_types.Node_key.t -> Core_model.thunk -> unit
 val find_node_thunk : t -> Identity_types.Node_key.t -> Core_model.thunk option
+val node_key : t -> Core_model.thunk -> Identity_types.Node_key.t option
+val node_key_by_id : t -> string -> Identity_types.Node_key.t option
+val add_node_dependent : t -> string -> Identity_types.Node_key.t -> unit
+val iter_node_dependents : t ->
+  (string -> Identity_types.Node_key.t list -> unit) -> unit
 val eval_depth : t -> int
 val set_eval_depth : t -> int -> unit
 val incr_eval_depth : t -> unit

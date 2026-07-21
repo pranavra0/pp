@@ -79,6 +79,7 @@ let with_top_level (session : Session.t) (invocation : Invocation.t) ~f x =
   | effect Get_handlers, k -> Effect.Deep.continue k []
   | effect (Lookup_handler _), k -> Effect.Deep.continue k None
   | effect (Record_read _), k -> Effect.Deep.continue k ()
+  | effect (Record_node_force _), k -> Effect.Deep.continue k ()
   | effect In_node, k -> Effect.Deep.continue k false
   | effect Current_sandbox, k -> Effect.Deep.continue k None
   | effect Get_domain, k -> Effect.Deep.continue k None

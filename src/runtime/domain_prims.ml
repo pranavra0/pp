@@ -68,16 +68,10 @@ let tree_observe (root : string) : value =
      authority a write-only domain was never meant to need. *)
   if not (has_fs_read root || has_fs_write root) then
     capability ("tree-observe: capability error: no read or write access for " ^ root);
-  let acc = ref [] in
-  if Sys.file_exists root && Sys.is_directory root then
-    Fswalk.walk ~root ~cb:(fun ~rel ~path visit ->
-      match visit with
-      | Fswalk.Entry { Unix.st_kind = Unix.S_REG; _ } ->
-          (match Observation.hash_file path with
-           | Some h -> acc := (VString rel, VString h) :: !acc
-           | None -> ())
-      | _ -> ());
-  VMap !acc
+  let hash, files = Observation.tree_snapshot root in
+  Observation.record (Cell.Tree root) hash;
+  VMap (List.map (fun (rel, file_hash) ->
+    VString rel, VString file_hash) files)
 
 let rec mkdir_p dir =
   if not (Sys.file_exists dir) then begin

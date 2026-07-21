@@ -956,7 +956,7 @@ let extracted_model_property () =
 let observation_boundary_property () =
   let cells =
     [ Cell.File "/x"; RuntimeFile "/x"; Tool "/x"; Tree "/x"; Stat "/x";
-      Env "X"; Argv; Config "k"; Handler "h"; Probe "p"; Sealed "/x";
+      Env "X"; Argv; Config "k"; Handler "h"; Probe "p"; Sealed "/x"; Node "n";
       Domain { name = "d"; sub = "s" }; Unknown "future:x" ]
   in
   List.iter (fun cell ->

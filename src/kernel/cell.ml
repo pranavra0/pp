@@ -39,6 +39,7 @@ type t =
                                path>" — hash of the secret bytes only; the bytes
                                themselves never enter the CAS (session-only pins,
                                in-memory-only) *)
+  | Node of string         (* child node key, observed as its current result hash *)
   | Domain of { name : string; sub : string }
                            (* registered domain sub-cell; [sub] is opaque *)
   | Unknown of string      (* unrecognized kind: can never re-verify *)
@@ -55,6 +56,7 @@ let serialize = function
   | Handler name -> "handler:" ^ name
   | Probe name -> "probe:" ^ name
   | Sealed path -> "sealed:" ^ path
+  | Node key -> "node:" ^ key
   | Domain { name; sub } -> "domain:" ^ name ^ ":" ^ sub
   | Unknown s -> s
 
@@ -77,6 +79,7 @@ let string_kinds : (string * (string -> t)) list = [
   "handler:",      (fun p -> Handler p);
   "probe:",        (fun p -> Probe p);
   "sealed:",       (fun p -> Sealed p);
+  "node:",         (fun key -> Node key);
 ]
 
 let parse (s : string) : t =
@@ -108,11 +111,11 @@ let parse (s : string) : t =
 let () =
   let _cover : t -> unit = function
     | File _ | RuntimeFile _ | Tool _ | Tree _ | Stat _ | Env _ | Argv
-    | Config _ | Handler _ | Probe _ | Sealed _ | Domain _
+    | Config _ | Handler _ | Probe _ | Sealed _ | Node _ | Domain _
     | Unknown _ -> ()
   in
   List.iter (fun t -> assert (parse (serialize t) = t))
     [ File "/x"; RuntimeFile "/x"; Tool "/x"; Tree "/x"; Stat "/x"; Env "X";
-      Argv; Config "k"; Handler "h"; Probe "p"; Sealed "/x";
+      Argv; Config "k"; Handler "h"; Probe "p"; Sealed "/x"; Node "abc";
       Domain { name = "d"; sub = "s" }; Domain { name = "d"; sub = "" };
       Unknown "zzz:unrecognized" ]

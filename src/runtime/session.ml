@@ -12,6 +12,8 @@ type evaluation_state = {
   macros : (string, string list * Core_model.expr) Hashtbl.t;
   mutable gensym : int;
   node_thunks : (Identity_types.Node_key.t, Core_model.thunk) Hashtbl.t;
+  node_keys : (string, Identity_types.Node_key.t) Hashtbl.t;
+  node_dependents : (string, Identity_types.Node_key.t list) Hashtbl.t;
   mutable eval_depth : int;
   mutable force_depth : int;
   mutable force_path : Core_model.thunk list;
@@ -52,7 +54,9 @@ let create ~scheduler operations = {
   scheduler;
   evaluation = {
     thunks = Hashtbl.create 1024; macros = Hashtbl.create 16; gensym = 0;
-    node_thunks = Hashtbl.create 256; eval_depth = 0; force_depth = 0;
+    node_thunks = Hashtbl.create 256; node_keys = Hashtbl.create 256;
+    node_dependents = Hashtbl.create 256;
+    eval_depth = 0; force_depth = 0;
     force_path = [];
     cache_bust = 0;
   };
@@ -96,7 +100,9 @@ let begin_pass t =
 let begin_evaluation ~retain_thunks t =
   if not retain_thunks then begin
     Hashtbl.clear t.evaluation.thunks;
-    Hashtbl.clear t.evaluation.node_thunks
+    Hashtbl.clear t.evaluation.node_thunks;
+    Hashtbl.clear t.evaluation.node_keys;
+    Hashtbl.clear t.evaluation.node_dependents
   end;
   Hashtbl.clear t.evaluation.macros; t.evaluation.gensym <- 0;
   Hashtbl.clear t.domains.domains;
@@ -106,7 +112,10 @@ let begin_evaluation ~retain_thunks t =
   reset_pass_state t;
   if t.fenced.fenced_epoch_recovered then t.fenced.fenced_epoch_recovered <- false
   else t.fenced.fenced_epoch <- ""
-let begin_watch t = Hashtbl.clear t.evaluation.node_thunks
+let begin_watch t =
+  Hashtbl.clear t.evaluation.node_thunks;
+  Hashtbl.clear t.evaluation.node_keys;
+  Hashtbl.clear t.evaluation.node_dependents
 let find_thunk t = Hashtbl.find_opt t.evaluation.thunks
 let add_thunk t = Hashtbl.replace t.evaluation.thunks
 let find_macro t = Hashtbl.find_opt t.evaluation.macros
@@ -142,8 +151,21 @@ let preseed_run_pin t cell hash =
   Hashtbl.replace t.run.run_pins cell hash
 let remove_run_pin t = Hashtbl.remove t.run.run_pins
 let iter_run_pins t f = Hashtbl.iter f t.run.run_pins
-let set_node_thunk t = Hashtbl.replace t.evaluation.node_thunks
+let set_node_thunk t key thunk =
+  Hashtbl.replace t.evaluation.node_thunks key thunk;
+  Option.iter (fun hash -> Hashtbl.replace t.evaluation.node_keys hash key)
+    thunk.Core_model.thunk_hash
 let find_node_thunk t = Hashtbl.find_opt t.evaluation.node_thunks
+let node_key t thunk =
+  Option.bind thunk.Core_model.thunk_hash
+    (Hashtbl.find_opt t.evaluation.node_keys)
+let node_key_by_id t = Hashtbl.find_opt t.evaluation.node_keys
+let add_node_dependent t id key =
+  let existing = Option.value ~default:[]
+    (Hashtbl.find_opt t.evaluation.node_dependents id) in
+  if not (List.mem key existing) then
+    Hashtbl.replace t.evaluation.node_dependents id (key :: existing)
+let iter_node_dependents t f = Hashtbl.iter f t.evaluation.node_dependents
 let force_depth t = t.evaluation.force_depth
 let set_force_depth t n = t.evaluation.force_depth <- n
 let incr_force_depth t = t.evaluation.force_depth <- t.evaluation.force_depth + 1

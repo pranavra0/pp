@@ -46,10 +46,3 @@ val is_data_closed : Core_model.thunk -> bool
 val perform_effect : string -> Core_model.value list -> Core_model.value
 (** Dispatch a named effect with its (already-forced) argument list.
     Shared by the evaluator's effect paths so they cannot drift. *)
-
-val replay_node_reads : Core_model.thunk ->
-  (Core_model.thunk -> Identity_types.Node_key.t) -> unit
-(** Trace replay for an already-Evaluated persistent node: replay its
-    stored trace reads into the active trace frames so the caller's trace
-    transitively captures this node's world-reads. [key_of] is the
-    backend's node-key function. *)

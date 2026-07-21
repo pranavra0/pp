@@ -1,8 +1,6 @@
 open Pp_kernel
 open Core_model
 
-let replay_reads = Node.replay_node_reads
-
 let apply ~force ~fn_name ~params ~body ~closure_env args k =
   let args = List.map force args in
   let env = List.fold_left2 (fun env param arg ->
