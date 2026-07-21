@@ -1,26 +1,13 @@
-# pp example: build system as a Lisp expression
-# Demonstrates: the DAG emerges from evaluation — no separate build system
-
-# A "build step" is just a function
-def compile-file(source, target) {
-  effect(print("compiling", source, "→", target), string-append("object-", source, ".o"))
-}
-# In a real build, this would call gcc/clang
-# For now, just return a string identifier
-
-
-def link-objects(objects, target) {
-  effect(print("linking", objects, "→", target), string-append("binary-", target))
+# A build graph is ordinary evaluation: nodes cache work and dependencies are
+# established by forcing their results.
+def compile(source) {
+  node { print("compile", source); string-append(source, ".o") }
 }
 
-
-# The build is just an expression
-def build-project(src-dir, build-dir) {
-  let (obj1 = delay(compile-file("main.c", "main.o")),
-       obj2 = delay(compile-file("utils.c", "utils.o")),
-       binary = delay(link-objects(list(force(obj1), force(obj2)), "myapp"))) {
-    force(binary)
-  }
+def link(left, right) {
+  node { print("link", left, right); string-append(left, "+", right) }
 }
-# Run the build
-build-project("./src", "./build")
+
+let main = compile("main.c")
+let util = compile("util.c")
+print(force(link(force(main), force(util))))

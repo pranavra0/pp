@@ -1,0 +1,4 @@
+"compile""main.c"
+"compile""util.c"
+"link""main.c.o""util.c.o"
+"main.c.o+util.c.o"

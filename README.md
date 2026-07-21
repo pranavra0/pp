@@ -65,8 +65,8 @@ let (m = module { def double(x) { x * 2 } }) {
 - `tools/` — the metamorphic fuzzer
 - `scripts/` — build and test entry points: `run-tests.sh`, `build-self.sh`,
   `build-lua.sh`, `build-manual.sh`
-- `examples/` — small standalone pp programs, also swept by the reader and
-  `pp fmt` round-trip tests
+- `examples/` — small standalone pp programs, executed by the suite and swept
+  by the reader and `pp fmt` round-trip tests
 - `demo/` — larger worked examples (deploy, agent) with their fixtures
 - `docs/` — the specification, design rationale, and reference manual
 - `.github/` — CI workflows
