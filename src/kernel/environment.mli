@@ -3,7 +3,10 @@ val extend : Core_model.env -> string -> Core_model.value -> Core_model.env
 val of_bindings : (string * Core_model.value) list -> Core_model.env
 val lookup : Core_model.env -> string -> Core_model.value option
 val make_closure :
-  ?name:string option -> ?is_node:bool -> string list -> Core_model.expr ->
+  ?name:string option -> ?kind:Core_model.closure_kind -> string list -> Core_model.expr ->
+  Core_model.env ref -> Core_model.value
+val make_definition :
+  name:string -> kind:Core_model.closure_kind -> string list -> Core_model.expr ->
   Core_model.env ref -> Core_model.value
 val make_thunk :
   ?type_ann:Core_model.expr option ->

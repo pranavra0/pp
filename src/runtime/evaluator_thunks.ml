@@ -1,7 +1,7 @@
 open Pp_kernel
 open Core_model
 
-let make_with_hash ?name ?(node_arg_hashes = []) ~tag (expr : expr)
+let make_with_hash ?name ?(kind = Ephemeral) ~tag (expr : expr)
     (type_ann : expr option) (loc : (string * int) option) (env : env) : value =
   let caps = Effect.perform Dynamic_scope.Get_capabilities in
   let cfg = Effect.perform Dynamic_scope.Get_config in
@@ -17,7 +17,13 @@ let make_with_hash ?name ?(node_arg_hashes = []) ~tag (expr : expr)
     | None -> []
     | Some ty -> [Identity.hash_expr ty]
   in
-  let arg_hashes = List.map (fun h -> Hasher.hash_concat ["arg"; h]) node_arg_hashes in
+  let argument_values = match kind with
+    | Ephemeral -> []
+    | Persistent { argument_values; _ } -> argument_values
+  in
+  let arg_hashes = List.map (fun value -> Hasher.hash_concat ["arg"; Identity.hash_value value])
+      argument_values
+  in
   let hash = Hasher.hash_concat
       (tag :: expr_hash :: type_hash @ arg_hashes @
        [env.env_hash; caps_hash; cfg_hash; handlers_hash])
@@ -35,17 +41,17 @@ let make_with_hash ?name ?(node_arg_hashes = []) ~tag (expr : expr)
         type_ann;
         thunk_loc = loc;
         config_hash = cfg_hash;
-        thunk_persist = false;
-        node_caps = [];
-        node_arg_hashes;
+        thunk_kind = kind;
       } in
       Session.add_thunk session hash thunk;
       VThunk thunk
 
 let make ?name expr env = make_with_hash ?name ~tag:"thunk" expr None None env
 
-let make_node ?name expr env ~argument_hashes =
-  make_with_hash ?name ~node_arg_hashes:argument_hashes
+let make_node ?name expr env ~arguments =
+  let captured_caps = Effect.perform Dynamic_scope.Get_capabilities in
+  make_with_hash ?name
+    ~kind:(Persistent { captured_caps; argument_values = arguments })
     ~tag:"node-thunk" expr None None env
 
 let make_typed expr ty loc env =

@@ -7,14 +7,6 @@
 module Node_key = struct
   type t = string
 
-  let make ~(argument_hashes : string list) ~(code_hash : string)
-      ~(free_variable_hashes : string list) : t =
-    let argument_parts =
-      List.map (fun hash -> Hasher.hash_concat ["arg"; hash]) argument_hashes
-    in
-    Hasher.node_key_skeleton ~expr_hash:code_hash
-      (free_variable_hashes @ argument_parts)
-
   let of_string (value : string) : t = value
   let to_string (value : t) : string = value
 end

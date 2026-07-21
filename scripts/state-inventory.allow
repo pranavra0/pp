@@ -19,15 +19,11 @@ mutable-field|src/frontend/reader_braces.ml|pos|pass
 mutable-field|src/runtime/scheduler.ml|policy|command
 mutable-field|src/runtime/scheduler.ml|signal_handler|process-service
 mutable-field|src/runtime/scheduler.ml|fork_count|process-service
-mutable-field|src/kernel/core_model.ml|node_caps|node
 mutable-field|src/kernel/core_model.ml|thunk_env|node
 mutable-field|src/kernel/core_model.ml|thunk_hash|node
-mutable-field|src/kernel/core_model.ml|thunk_persist|node
 mutable-field|src/kernel/core_model.ml|thunk_status|node
-mutable-field|src/kernel/core_model.mli|node_caps|node
 mutable-field|src/kernel/core_model.mli|thunk_env|node
 mutable-field|src/kernel/core_model.mli|thunk_hash|node
-mutable-field|src/kernel/core_model.mli|thunk_persist|node
 mutable-field|src/kernel/core_model.mli|thunk_status|node
 signal-handler|src/runtime/scheduler.ml|sigint|process-service
 top-ref|src/runtime/island.ml|update_mode|command

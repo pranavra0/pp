@@ -101,14 +101,12 @@ this spec are the terms of a bargain the programmer opts into, not a
 language-wide prohibition.
 
 Status of the tier split itself: partial. The `node`/`defnode` reader forms
-exist, and `node { e }` is a real persistence boundary: the tree-walker
-routes it through `~/.pp/store` with verifying traces, so a node caches
-across runs while a scripting-tier expression does not. They
-share the same store. Still missing before the split is fully realised:
-`node f(x) { body }` is only a named closure, so node application is not yet
-keyed on argument-value hashes (LAW 6/20), though `node x { e }` now binds
-the node thunk of `e` (LAW 4 value defs). The node tier's write discipline
-now exists: node writes are sandbox-scratch only (LAW 18, `tests/017`).
+exist, and both inline and applied nodes are real persistence boundaries: the
+tree-walker routes them through `~/.pp/store` with verifying traces, so a node
+caches across runs while a scripting-tier expression does not. They share the
+same store. The remaining gap is the broader tier specification, not applied
+node identity. The node tier's write discipline now exists: node writes are
+sandbox-scratch only (LAW 18, `tests/017`).
 
 ---
 
@@ -305,15 +303,12 @@ result hashes forces its children first, by construction. Haskell's laziness
 is not the model here; Nix's rule that a derivation's inputs are realised
 before it builds is.
 
-**Status: partial** — `node { e }` exists and memoizes persistently under the
-LAW 20 key and `node x { e }` binds its node thunk; but
-`node f(x) { body }` is still only a named closure, so node application
-keyed on argument value hashes, the aggregator-forces-children construction,
-does not yet arise.
+**Status: holds** — `node { e }` and applied `defnode` computations memoize
+persistently under the LAW 20 key. Node arguments are forced before the body,
+and equal applications share one computation across processes.
 
-Test: once applied `defnode` lands: a `defnode` whose argument expression
-logs, called once, logs exactly once before the body's first effect, in
-the engine.
+Test: `tests/097-node-application.sh` proves argument forcing, equal-argument
+reuse, distinct argument keys, free-variable invalidation, and scheduler use.
 
 ### [LAW 7] Laziness is demand-pruning at node granularity
 
@@ -628,21 +623,21 @@ catastrophically: touch one standard-library binding and every key in the
 program changes, or widen a capability and the whole world rebuilds.
 Authority may gate access to a result; it must never rename the result.
 
-**Status: partial** — the persistent `node { e }` key is now
-`H(code-structure ‖ free-var value-hashes)` . The free
+**Status: partial** — the persistent node key is
+`H(code-structure ‖ free-var value-hashes ‖ argument-value-hashes)`. The free
 variables the node references are resolved, forced, call-by-value, to their
 value hashes and folded in, excluding the whole-environment hash and the
 capability set. The tree-walker resolves them from its environment
-(`node_key_of`); the evaluator resolves them from the captured frames and globals
+(`Identity.node_key`); the evaluator resolves them from the captured frames and globals
 producing a stable key for data-valued free variables so store entries are
 shared across runs. The
 two catastrophic leaks this law names are closed: rebinding an unreferenced
 global is a cache hit, and widening the grant does not invalidate anything
-(`tests/011`, `tests/014`). Config and the handler stack are now fully out of
+(`tests/011`, `tests/014`, `tests/097`). Config and the handler stack are now fully out of
 the key: a config read or a perform inside a node records a `config:`/
 `handler:` trace cell instead (LAW 33/26, `tests/015`). Residuals:
-binding-order canonicalisation is not done (LAW 3), applied `defnode` is a
-named closure (LAW 6), and closure-valued free variables key on captured frames and environment.
+binding-order canonicalisation is not done (LAW 3), and closure-valued free
+variables key on captured frames and environment.
 
 `defmacro` needed no change to this law, by construction. `hash_expr`
 (`node_key_of`) consumes an expression tree that has
@@ -1506,7 +1501,7 @@ migration.
 | LAW 3 | binding-order-free identity | holds | mutual `let` bindings are sorted before hashing; `tests/095-scope-identity.sh` |
 | LAW 4 | one scope model | holds | top level, blocks, and modules prebind the same definitions while preserving value statement timing; `tests/025-def-value.sh`, `tests/039-global-scope.pp`, `tests/095-scope-identity.sh` |
 | LAW 5 | `let*` sequential sugar | holds | reader emits `ELetStar`; sequential; `tests/007-phase0-laws.pp` |
-| LAW 6 | node call-by-value plus memoization | partial | application is call-by-value; `node { e }` memoizes persistently, keyed on code plus free-variable value hashes (LAW 20; `tests/011`); `node x { e }` binds the node thunk (`tests/025`), but applied `defnode` is still a named closure, so keying an aggregator on child result hashes does not yet arise |
+| LAW 6 | node call-by-value plus memoization | holds | application is call-by-value; `node { e }` and applied `defnode` memoize persistently, keyed on code, free-variable values, and argument value hashes (`tests/011`, `tests/097`) |
 | LAW 7 | demand-pruning at node granularity | partial | reverse-edge dirty-propagation graph exists for push `stabilize` (`pp --watch --stabilize`, `tests/032`); a root desired-state formula and an explicit wanted-set are still absent |
 | LAW 8 | `delay` ephemeral vs `node` persistent | partial | the split exists (`node` persists to `~/.pp/store`; `delay` never persists); residual: the in-memory dedup table is not mirrored across runs, separate from the persistent node cache |
 | LAW 11 | stack-safe non-tail recursion | unimplemented | the named stack-safe-evaluator workstream; fuzz `exitdiff:tw-err: Out_of_memory`, `crash:bc:timeout` |
@@ -1516,11 +1511,11 @@ migration.
 | LAW 17 | hit is not effect replay | holds (node tier) | a `node { e }` hit does not replay in-node `log`/stdout (`tests/010`, `tests/014`) |
 | LAW 18 | sandbox-scratch writes | partial | per-node scratch sandbox is real: relative node writes/reads are scratch-local, absolute node writes error, and `run` uses the scratch directory (`tests/017`); domain writes use the reconciliation pipeline |
 | LAW 19 | sound content hashing | partial | hash is SHA-256; closure-environment and handler gaps closed, so in-memory dedup is sound; store objects are content-addressed by result hash, shared across runs; the tree-walker's in-memory dedup table is not mirrored across runs |
-| LAW 20 | key = code plus argument values | partial | persistent `node { e }` key = code plus free-variable value hashes; capabilities, the whole environment, config, and handlers are all excluded (`tests/011`, `tests/015`); the node boundary is now symmetric: a capability-containing free variable is `Capability_error` at the key, a capability-containing result is rejected before storage (`tests/capability-adversarial.sh`); `defmacro` expands before the evaluator's `hash_expr`/compiler ever sees a form, so the key is always over the expanded code with no change to this law — a macro-only edit re-keys its call sites (`tests/042-defmacro-rekey.sh`) |
+| LAW 20 | key = code plus argument values | partial | persistent node keys = expanded code plus free-variable value hashes plus applied argument value hashes; capabilities, the whole environment, config, and handlers are all excluded (`tests/011`, `tests/015`, `tests/097`); the node boundary is symmetric: a capability-containing free variable is `Capability_error` at the key, a capability-containing result is rejected before storage (`tests/capability-adversarial.sh`); `defmacro` expands before `Identity.node_key` sees a form, so a macro-only edit re-keys its call sites (`tests/042-defmacro-rekey.sh`) |
 | LAW 21 | cutoff via traces | partial | validity via verifying trace is real (key maps to a set of traces, cells re-checked on hit; `tests/010`, `tests/015`); hash-equality cutoff proven at scale — a comment-only header edit on a 101 translation-unit C build, and on Lua 5.4.7, recompiles dependents and cuts off the link (`tests/016`, `tests/024`, `scripts/build-lua.sh`); the reverse-edge dirty-propagation graph is now used by push `stabilize` (`pp --watch --stabilize`, `tests/032`); inline-nested cutoff is still absent |
 | LAW 22 | unforgeable root-minted capabilities | holds | constructors removed; `tests/capability-adversarial.sh` |
 | LAW 22b | `with-caps` narrows a held value, never widens | holds | `current-capabilities`/`with-caps`/`cap-restrict`'s mode argument; the subset check runs against the current ambient; `effect` removed;  exception/tail-safe; `tests/capability-adversarial.sh` |
-| LAW 23 | component/full-path plus transitive hit check | holds (one residual gap) | component-aware, canonicalised (realpath, no trailing slash) paths at every cell/grant/loader-bound site (`tests/036`); hits gated on the caller's capabilities covering the trace's transitive read closure in  capability denials not memoized (`tests/013`, `tests/014`) — "the caller's capabilities" is now the forcing thunk's captured `node_caps`, collapsing to the earlier per-process grant when `with-caps` is unused; capability-filtered `pp why` real (`tests/019`); Unicode normalisation (NFC) not implemented |
+| LAW 23 | component/full-path plus transitive hit check | holds (one residual gap) | component-aware, canonicalised (realpath, no trailing slash) paths at every cell/grant/loader-bound site (`tests/036`); hits gated on the caller's capabilities covering the trace's transitive read closure; capability denials not memoized (`tests/013`, `tests/014`) — the check uses the forcing thunk's captured capabilities, collapsing to the earlier per-process grant when `with-caps` is unused; capability-filtered `pp why` real (`tests/019`); Unicode normalisation (NFC) not implemented |
 | LAW 24 | loader is runtime authority | holds | loader bounded to source roots plus `~/.pp`, reads traced as authority-exempt `runtime:file:` cells (`tests/020`); realpath-canonical (`tests/036`) |
 | LAW 25 | no unenforced authority surface | holds | `CapTime`/`CapMemory` removed from types and surface |
 | LAW 26 | two handler classes, synthetic trace cells | partial | semantic handler cells work at node granularity (`tests/015`); cells are coarser than the law's per-argument form, and result-transparent handler cells are not implemented |

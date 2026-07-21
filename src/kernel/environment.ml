@@ -47,12 +47,14 @@ let lookup (env : env) (name : string) : value option =
   in
   walk env.bindings
 
-let make_closure ?(name=None) ?(is_node=false) params body env_ref =
-  VClosure { fn_name = name; params; body; env = env_ref; is_node }
+let make_closure ?(name=None) ?(kind=Function) params body env_ref =
+  VClosure { fn_name = name; params; body; env = env_ref; closure_kind = kind }
+
+let make_definition ~name ~kind params body env_ref =
+  make_closure ~name:(Some name) ~kind params body env_ref
 
 let make_thunk ?type_ann:(ta=None) ?thunk_loc:(tl=None) ?thunk_name:(tn=None)
     ?config_hash:(ch="") expr env =
   VThunk { thunk_status = Unevaluated; thunk_hash = None; thunk_expr = expr;
            thunk_env = env; thunk_name = tn; type_ann = ta; thunk_loc = tl;
-           config_hash = ch; thunk_persist = false; node_caps = [];
-           node_arg_hashes = [] }
+           config_hash = ch; thunk_kind = Ephemeral }

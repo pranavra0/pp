@@ -31,6 +31,25 @@ The application creates the services for one command. It creates one session,
 one scheduler, and one evaluator operation value. The session owns mutable
 run state. Dynamic scope carries values that must follow the current call.
 
+The semantic spine for a persistent computation is:
+
+```text
+surface syntax
+    -> reader AST
+    -> macro-expanded expression
+    -> evaluator dispatch
+    -> node closure application (force arguments)
+    -> persistent thunk
+    -> Identity.node_key (code + free-variable values + argument hashes)
+    -> Node.force
+       -> cache policy / verified trace hit
+       -> scheduler -> Node.rebuild -> store result + trace
+```
+
+There is one evaluator and one node rebuild operation along this path. The
+scheduler changes placement and timing, while the key separates computation
+identity from trace validity and hit authority.
+
 ## Library boundaries
 
 The four wrapped libraries and their Dune dependencies are:

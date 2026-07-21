@@ -5,7 +5,7 @@ val make_node :
   ?name:string ->
   Core_model.expr ->
   Core_model.env ->
-  argument_hashes:string list ->
+  arguments:Core_model.value list ->
   Core_model.value
 
 val make_typed :

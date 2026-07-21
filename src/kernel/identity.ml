@@ -136,9 +136,9 @@ and hash_value (v : value) : string =
     | VSet vs ->
         let sorted = List.sort String.compare (List.map hash_val vs) in
         Hasher.hash_concat ("set" :: sorted)
-    | VClosure { fn_name; params; body; env; is_node } ->
+    | VClosure { fn_name; params; body; env; closure_kind } ->
         let name_part = match fn_name with Some n -> n | None -> "anon" in
-        let kind = if is_node then "node-closure" else "closure" in
+        let kind = match closure_kind with Node -> "node-closure" | Function -> "closure" in
         Hasher.hash_concat [kind; name_part;
                      Hasher.hash_concat ("params" :: params);
                      hash_expr body;
@@ -157,3 +157,19 @@ and hash_value (v : value) : string =
         Hasher.hash_concat ["sealed"; bytes]
   in
   hash_val v
+
+let node_key ~(code : expr)
+    ~(free_variables : (string * value option) list)
+    ~(argument_values : value list) : Identity_types.Node_key.t =
+  let free_variable_parts = List.map (fun (name, value) ->
+    match value with
+    | None -> Hasher.hash_concat ["fv-unbound"; name]
+    | Some value -> Hasher.hash_concat ["fv"; name; hash_value value])
+    free_variables
+  in
+  let argument_parts = List.map (fun value ->
+    Hasher.hash_concat ["arg"; hash_value value]) argument_values
+  in
+  Identity_types.Node_key.of_string
+    (Hasher.node_key_skeleton ~expr_hash:(hash_expr code)
+       (free_variable_parts @ argument_parts))

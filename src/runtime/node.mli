@@ -1,17 +1,11 @@
 open Pp_kernel
 (* node — the typed identity and rebuilding boundary. *)
-val unbound_fv_hash : name:string -> string
 val resolve_free_variables : expr:Core_model.expr -> env:Core_model.env ->
   force:(Core_model.value -> Core_model.value) ->
   (string * Core_model.value option) list
 val authorize_free_variables : (string * Core_model.value option) list -> unit
-val construct_key :
-  argument_hashes:string list ->
-  expr:Core_model.expr ->
-  free_variables:(string * Core_model.value option) list ->
-  Identity_types.Node_key.t
 val key_of :
-  argument_hashes:string list ->
+  argument_values:Core_model.value list ->
   expr:Core_model.expr -> env:Core_model.env ->
   force:(Core_model.value -> Core_model.value) -> Identity_types.Node_key.t
 

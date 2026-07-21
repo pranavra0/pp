@@ -419,7 +419,7 @@ let register_metaeval () =
               else VEnvMap (List.rev !new_defs)
           | [ELocated (_, inner)] -> go [inner]
           | [EDef (name, params, body)] ->
-              let closure = Environment.make_closure ~name:(Some name) params body local_env in
+              let closure = Environment.make_definition ~name ~kind:Function params body local_env in
               local_env := Environment.extend !local_env name closure;
               new_defs := (name, closure) :: !new_defs;
               if !new_defs = [] then VNil else VEnvMap (List.rev !new_defs)
@@ -433,7 +433,7 @@ let register_metaeval () =
               force_val (core.eval last !local_env)
           | (ELocated (_, inner)) :: rest -> go (inner :: rest)
           | (EDef (name, params, body)) :: rest ->
-              let closure = Environment.make_closure ~name:(Some name) params body local_env in
+              let closure = Environment.make_definition ~name ~kind:Function params body local_env in
               local_env := Environment.extend !local_env name closure;
               new_defs := (name, closure) :: !new_defs;
               go rest
