@@ -54,6 +54,21 @@ let make_node ?name expr env ~arguments =
     ~kind:(Persistent { captured_caps; argument_values = arguments })
     ~tag:"node-thunk" expr None None env
 
+let is_persistent (t : thunk) =
+  match t.thunk_kind with
+  | Persistent _ -> true
+  | Ephemeral -> false
+
+let captured_capabilities (t : thunk) =
+  match t.thunk_kind with
+  | Persistent { captured_caps; _ } -> captured_caps
+  | Ephemeral -> []
+
+let argument_values (t : thunk) =
+  match t.thunk_kind with
+  | Persistent { argument_values; _ } -> argument_values
+  | Ephemeral -> []
+
 let make_typed expr ty loc env =
   make_with_hash ~tag:"thunk-typed" expr (Some ty) loc env
 

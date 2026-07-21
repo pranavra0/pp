@@ -85,13 +85,10 @@ let enforce_type (t : thunk) (result : value) : unit =
 (* ---- Trace replay ----------------------------------------------------- *)
 
 let replay_node_reads (t : thunk) (key_of : thunk -> Key.t) : unit =
-  (match t.thunk_kind with
-   | Ephemeral -> ()
-   | Persistent _ when not (Effect.perform Dynamic_scope.In_node) -> ()
-   | Persistent _ ->
+  if Evaluator_thunks.is_persistent t && Effect.perform Dynamic_scope.In_node then
     let traces = Trace_repository.load Trace_repository.default
       ~key:(Identity_types.Cache_key.of_node_key (key_of t)) in
-    List.iter (fun tr -> Observation.replay tr.Trace_repository.reads) traces)
+    List.iter (fun tr -> Observation.replay tr.Trace_repository.reads) traces
 
 
 (* ---- Serve hit / run node body (the rebuilder) ------------------------ *)
@@ -145,6 +142,7 @@ let persist_success ~(key : Key.t) ~(reads : (string * string) list)
 
 let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
   t.thunk_status <- Evaluating;
+  let captured_caps = Evaluator_thunks.captured_capabilities t in
   let frame : (string * string) list ref = ref [] in
   let sandbox_slot = ref None in
   Fun.protect
@@ -154,11 +152,7 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
         try run ()
         with
         | effect Dynamic_scope.Get_capabilities, k ->
-            let caps = match t.thunk_kind with
-              | Persistent { captured_caps; _ } -> captured_caps
-              | Ephemeral -> []
-            in
-            Effect.Deep.continue k caps
+            Effect.Deep.continue k captured_caps
         | effect (Dynamic_scope.Record_read (c, h)), k ->
             if not (List.mem (c, h) !frame) then frame := (c, h) :: !frame;
             Effect.Deep.continue k (Effect.perform (Dynamic_scope.Record_read (c, h)))
@@ -197,11 +191,7 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
               Effect.Deep.continue k (Effect.perform (Dynamic_scope.Record_read (c, h)))
           | effect Dynamic_scope.In_node, k -> Effect.Deep.continue k true
           | effect Dynamic_scope.Get_capabilities, k ->
-              let caps = match t.thunk_kind with
-                | Persistent { captured_caps; _ } -> captured_caps
-                | Ephemeral -> []
-              in
-              Effect.Deep.continue k caps
+              Effect.Deep.continue k captured_caps
           | effect Dynamic_scope.Current_sandbox, k -> Effect.Deep.continue k (Some sandbox_slot)
           | e -> raise e
         in

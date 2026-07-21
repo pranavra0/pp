@@ -5,8 +5,6 @@ open Pp_kernel
 
 open Core_model
 
-let cell_authorized_for = Observation.authorized_id
-
 let replay_node_reads = Evaluator_node.replay_reads
 
 let force_node = Evaluator_node.force
@@ -79,17 +77,17 @@ let rec force (v : value) : value =
            force_cycle t
        | Unevaluated ->
            (* Persistent nodes route through the store. Identity is the
-              node key (code + free-variable value hashes); the trace decides
-              validity. A stale trace falls through to recompute. *)
-           (match t.thunk_kind with
-            | Persistent _ ->
+              node key (code + free-variable and argument value hashes); the
+              trace decides validity. A stale trace falls through to recompute. *)
+           if Evaluator_thunks.is_persistent t then
              (match with_force_frame t (fun () ->
                 let nk = node_key_of t in
                 let run () = eval t.thunk_expr t.thunk_env in
                 force_node ~key:nk ~run t) with
               | result -> decr_force_depth (); force result
               | exception e -> decr_force_depth (); raise e)
-            | Ephemeral -> evaluate_and_store_no_key t))
+           else
+             evaluate_and_store_no_key t)
   | _ ->
       decr_force_depth ();
       v
@@ -110,20 +108,16 @@ and evaluate_and_store_no_key (t : thunk) : value =
   decr_force_depth ();
   force result
 
-(* A node's persistent key is its code structure plus the *value* hashes
-   of the free variables it references (forced, call-by-value — the key cannot
-   exist before its inputs' values do). This deliberately omits the whole-env
-   hash (so rebinding an unrelated global does not re-key the node), the
-   capability set (authority gates access to a hit, never identity),
-   and the ambient config/handler stacks: a config value or handler the node
-   actually observed is recorded in its trace as a `config:`/`handler:` cell
-   and governs validity, not identity. *)
+(* A node's persistent key is its code structure plus the *value* hashes of
+   its free variables and applied arguments. Free variables are forced
+   call-by-value because the key cannot exist before their values do. The
+   whole environment hash, capability set, and ambient config/handler stacks
+   are excluded: config values and handlers observed by the node are recorded
+   in its trace as `config:`/`handler:` cells, which govern validity rather
+   than identity. *)
 and node_key_of (t : thunk) : Identity_types.Node_key.t =
-  let argument_values = match t.thunk_kind with
-    | Ephemeral -> []
-    | Persistent { argument_values; _ } -> argument_values
-  in
-  Node.key_of ~expr:t.thunk_expr ~env:t.thunk_env ~force ~argument_values
+  Node.key_of ~expr:t.thunk_expr ~env:t.thunk_env ~force
+    ~argument_values:(Evaluator_thunks.argument_values t)
 
 (* Remote placement: a
    node is data-closed iff every free var's FORCED value re-encodes under
@@ -344,8 +338,7 @@ and trampoline_force (v : value) : value =
             | Evaluated result -> Queue.add result queue; loop ()
             | Evaluating -> force_cycle t
             | Unevaluated ->
-                match t.thunk_kind with
-                | Persistent _ -> begin
+                if Evaluator_thunks.is_persistent t then begin
                   let h = node_key_of t in
                   let run () =
                     let saved = force_depth () in
@@ -357,8 +350,7 @@ and trampoline_force (v : value) : value =
                   let result = with_force_frame t (fun () -> force_node ~key:h ~run t) in
                   Queue.add result queue;
                   loop ()
-                end
-                | Ephemeral -> begin
+                end else begin
                   (* ephemeral thunk — no store check *)
                   t.thunk_status <- Evaluating;
                   let result = with_force_frame t (fun () ->
@@ -409,11 +401,9 @@ let eval_and_force (e : expr) : value =
 
 (* Initialize the evaluator state *)
 let resolve_if_hit t key =
-  let captured_caps = match t.thunk_kind with
-    | Persistent { captured_caps; _ } -> captured_caps
-    | Ephemeral -> []
-  in
-  match Node.lookup_hit ~key ~authorized:(cell_authorized_for captured_caps) t with
+  match Node.lookup_hit ~key
+          ~authorized:(Observation.authorized_id
+                         (Evaluator_thunks.captured_capabilities t)) t with
   | Some _ -> true
   | None -> false
 

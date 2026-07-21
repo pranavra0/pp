@@ -11,8 +11,7 @@ let apply ~force ~fn_name ~params ~body ~closure_env args k =
   k (Evaluator_thunks.make_node ?name:fn_name body env ~arguments:args)
 
 let force ~key ~run thunk =
-  let captured_caps = match thunk.thunk_kind with
-    | Persistent { captured_caps; _ } -> captured_caps
-    | Ephemeral -> []
-  in
-  Node.force ~key ~authorized:(Observation.authorized_id captured_caps) ~run thunk
+  Node.force ~key
+    ~authorized:(Observation.authorized_id
+                   (Evaluator_thunks.captured_capabilities thunk))
+    ~run thunk

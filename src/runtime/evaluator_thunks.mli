@@ -8,6 +8,10 @@ val make_node :
   arguments:Core_model.value list ->
   Core_model.value
 
+val is_persistent : Core_model.thunk -> bool
+val captured_capabilities : Core_model.thunk -> Capability.t list
+val argument_values : Core_model.thunk -> Core_model.value list
+
 val make_typed :
   Core_model.expr ->
   Core_model.expr ->
