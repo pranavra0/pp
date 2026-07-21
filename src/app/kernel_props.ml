@@ -940,7 +940,18 @@ let extracted_model_property () =
   if Free_vars.SS.elements
        (Free_vars.free_vars (EFn (["x"], EApply (ESymbol "f", [ESymbol "x"]))))
      <> ["f"] then
-    fail "free-vars:binding" "function parameter escaped as a free variable"
+    fail "free-vars:binding" "function parameter escaped as a free variable";
+  let closure_with bindings =
+    let captured = ref (Environment.of_bindings bindings) in
+    Environment.make_closure [] (ESymbol "x") captured
+  in
+  let one = closure_with [("x", VInt 1)] in
+  let one_with_noise = closure_with [("unused", VInt 99); ("x", VInt 1)] in
+  let two = closure_with [("x", VInt 2)] in
+  if Identity.hash_value one <> Identity.hash_value one_with_noise then
+    fail "identity:closure-captures" "unreferenced environment binding changed closure identity";
+  if Identity.hash_value one = Identity.hash_value two then
+    fail "identity:closure-captures" "referenced capture was absent from closure identity"
 
 let observation_boundary_property () =
   let cells =
