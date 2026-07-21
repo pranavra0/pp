@@ -6,16 +6,11 @@
 # only narrow what's already held, never widen or invent authority.
 # Runs the tree-walker on every case.
 set -euo pipefail
-PP=${PP:-bin/pp}
-TMP=$(mktemp -d)
+. "$(dirname "$0")/lib.sh"
 trap 'rm -rf "$TMP"' EXIT
 # The node-boundary cases below use (node ...); isolate the store like
 # tests/011/013/017 do. Harmless for the pre-existing scripting-tier cases
 # above, which never touch ~/.pp/store.
-export HOME="$TMP"
-fail=0
-ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1"; shift; for m in "$@"; do echo "     $m"; done; fail=1; }
 
 run_case() {
   local name="$1"; shift

@@ -34,14 +34,13 @@ top-ref|src/app/kernel_props.ml|fresh_counter|test-diagnostic
 top-ref|src/app/kernel_props.ml|print_checks|test-diagnostic
 top-ref|src/app/kernel_props.ml|print_skips|test-diagnostic
 top-ref|src/frontend/lint.ml|warnings|test-diagnostic
-top-ref|src/runtime/primitives.ml|aliases|builtin-catalog
-top-ref|src/runtime/primitives.ml|catalog_entries|builtin-catalog
-top-ref|src/runtime/primitives.ml|declarations|builtin-catalog
+mutable-field|src/runtime/primitive_catalog.ml|aliases|builtin-catalog
+mutable-field|src/runtime/primitive_catalog.ml|declarations|builtin-catalog
+mutable-field|src/runtime/primitive_catalog.ml|entries|builtin-catalog
 top-ref|src/runtime/repl.ml|global_env|command
 top-ref|src/runtime/repl.ml|history|command
 top-ref|src/runtime/sandbox.ml|counter|node
 top-ref|src/kernel/environment.ml|env_counter|process-service
-top-table|src/runtime/primitives.ml|builtins|process-service
 mutable-field|src/runtime/session.ml|fenced_actions|pass
 mutable-field|src/runtime/session.ml|gensym|evaluation-session
 mutable-field|src/runtime/session.ml|observations|pass

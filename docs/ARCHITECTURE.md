@@ -93,7 +93,8 @@ conversion to durable text.
 
 `reader.ml` reads the s-expression surface. `reader_braces.ml` reads the
 brace surface. `desugar.ml` lowers shared reader forms. The printers emit
-either surface from the same AST. `surface_tables.ml` defines closed surface
+either surface from the same AST; `printer_common.ml` owns shared literal
+formatting and inversion of desugared function bodies. `surface_tables.ml` defines closed surface
 sets and generates the matching SPEC table.
 
 The default file surface is braces (`.pp`). The s-expression surface uses
@@ -104,6 +105,11 @@ the fuzzer check this boundary.
 `macro.ml` expands top-level `defmacro` forms before ordinary evaluation.
 Macros receive quoted syntax values and return syntax values. The evaluator
 does not need a macro-specific expression path.
+
+`primitive_catalog.ml` owns builtin descriptors, aliases, lookup, and catalog
+rendering. `primitives.ml` contains the builtin implementations grouped by
+semantic family; it cannot mutate the runtime table except through that
+catalog boundary.
 
 ## Evaluation and dynamic scope
 
@@ -125,10 +131,10 @@ mutable evaluator callback.
 handlers, trace frames, nodes, domains, and observation collection. It owns
 no registry or mutable table. `effects.ml` declares the effect operations.
 
-`session.ml` owns evaluation state. This includes thunk and macro tables,
-gensym state, domains, probes, observations, pins, fenced actions, node
-thunks, and the scheduler handle. `begin_evaluation`, `begin_pass`, and
-`begin_watch` define the reset and retention rules.
+`session.ml` coordinates four private state groups: evaluation, domains, run
+observations and pins, and fenced recovery. `begin_evaluation`, `begin_pass`,
+and `begin_watch` are the only reset boundaries; callers see one abstract
+session rather than its mutable records.
 
 ## Effects and authority
 
@@ -185,7 +191,8 @@ The repository layer is:
 | `trace_repository.ml` | Locked trace sets and trace encoding |
 | `cell_repository.ml` | File and sealed pins and snapshot reads |
 | `repository_inventory.ml`, `store_gc.ml`, `gcroots.ml` | Explicit mark-by-replay GC |
-| `transport.ml`, `remote.ml` | Hash-checked local sync and remote placement |
+| `remote_protocol.ml` | Typed pin and serve-hit messages plus their canonical codec |
+| `transport.ml`, `remote.ml` | Hash-checked artifact movement and remote placement behind minimal interfaces |
 
 `codec.ml` defines the canonical durable encoding. The store does not use
 OCaml `Marshal`. Every durable write uses the atomic replacement boundary.
@@ -193,6 +200,7 @@ OCaml `Marshal`. Every durable write uses the atomic replacement boundary.
 ## Domains and scheduling
 
 `domains.ml` is the generic observe, diff, apply, verify, and epoch pipeline.
+`domain_config.ml` is the typed decoder for registered domains and probes;
 `domain_prims.ml` provides trusted file and process operations. The policy for
 the filesystem and process domains is in `stdlib/domain-fs.pp` and
 `stdlib/domain-proc.pp`.
@@ -209,8 +217,9 @@ same node rebuild operation.
 ## Application and commands
 
 `main.ml` starts the process, parses the CLI, builds production services, and
-converts uncaught errors to exit status. `cli.ml` owns typed option parsing
-and help rows. `app_context.ml` constructs host services, stores, schedulers,
+converts uncaught errors to exit status. `cli.ml` owns option parsing and help
+rows; `cli_validation.ml` converts raw strings into scheduler, recovery, and
+numeric runtime policy. `app_context.ml` constructs host services, stores, schedulers,
 sessions, evaluators, and reconciliation services.
 
 Command ownership is split as follows:

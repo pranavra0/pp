@@ -63,7 +63,8 @@ done
 builtins=$($PP --dump-builtins)
 if grep -q '^| builtin | arity | category |$' <<<"$builtins" \
     && [ "$(grep -c '^| `map` |' <<<"$builtins")" = 1 ] \
-    && grep -q '^| `map` | 2 | collections |$' <<<"$builtins"; then
+    && grep -q '^| `map` | 2 | collections |$' <<<"$builtins" \
+    && ! grep -q 'ppc-' <<<"$builtins"; then
   ok "builtin-catalog-renders"
 else
   bad "builtin-catalog-renders" "--dump-builtins did not match the descriptor catalog"

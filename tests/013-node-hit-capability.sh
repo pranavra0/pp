@@ -17,14 +17,10 @@
 #
 # Tree-walker only, isolated HOME. "SECRET" leaking to stdout is the failure.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
+. "$(dirname "$0")/lib.sh"
 mkdir -p "$TMP/secret" "$TMP/other"
 printf 'SECRETDATA\n' > "$TMP/secret/data.txt"
 printf 'ok\n' > "$TMP/other/x.txt"
-fail=0
 
 # out contains SECRETDATA?  denied?  (permission-denied error)
 assert() {  # NAME  secret=leaked|safe  access=ok|denied

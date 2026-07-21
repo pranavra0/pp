@@ -20,8 +20,7 @@
 # reads are ordinary session observations, so generic watch-loop polling picks up a
 # changed probe cell with NO special-cased wiring.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
+. "$(dirname "$0")/lib.sh"
 
 # Portable `timeout` (macOS ships without coreutils) — same shim as
 # tests/031-watch-once.sh.
@@ -32,10 +31,7 @@ if ! command -v timeout >/dev/null 2>&1; then
   PATH="$SHIM_DIR:$PATH"
 fi
 
-TMP=$(mktemp -d)
-export HOME="$TMP"
 COUNTER="$TMP/counter.txt"
-fail=0
 
 assert() {  # NAME PATTERN present|absent  [FILE]
   local name="$1" pat="$2" mode="$3" file="${4:-$TMP/out}"

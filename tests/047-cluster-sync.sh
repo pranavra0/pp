@@ -33,11 +33,7 @@
 #     and (b) the node key is the same filename in both members' traces/
 #     directories (case T6 below, partial).
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-
-TMP=$(mktemp -d)
-fail=0
+. "$(dirname "$0")/lib.sh"
 
 assert() {  # NAME PATTERN present|absent [FILE]
   local name="$1" pat="$2" mode="$3" file="${4:-$TMP/out}"

@@ -194,9 +194,12 @@ let rec expand_expr services session expansion_count (loc : (string * int) optio
   let expand_expr = expand_expr services session expansion_count in
   match e with
   | ELocated (l, inner) -> ELocated (l, expand_expr (Some l) inner)
-  | EApply (ESymbol name, args) when Session.find_macro session name <> None ->
-      let (params, body) = Option.get (Session.find_macro session name) in
-      expand_expr loc (apply_macro services expansion_count ~name ~params ~body ~args ~loc)
+  | EApply (ESymbol name, args) ->
+      (match Session.find_macro session name with
+       | Some (params, body) ->
+           expand_expr loc
+             (apply_macro services expansion_count ~name ~params ~body ~args ~loc)
+       | None -> EApply (ESymbol name, List.map (expand_expr loc) args))
   | EApply (fn, args) -> EApply (expand_expr loc fn, List.map (expand_expr loc) args)
   | EQuote _ -> e
   | ELiteral _ | ESymbol _ -> e

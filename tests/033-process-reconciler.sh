@@ -14,8 +14,7 @@
 #
 # Runs under an isolated HOME; single engine.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
+. "$(dirname "$0")/lib.sh"
 
 # Portable `timeout`: macOS ships without coreutils. Must be a real executable,
 # not a shell function — `timeout N cmd &` has to put cmd's own pid in $! so
@@ -27,9 +26,6 @@ if ! command -v timeout >/dev/null 2>&1; then
   PATH="$SHIM_DIR:$PATH"
 fi
 
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
 
 assert() {  # NAME PATTERN present|absent [FILE]
   local name="$1" pat="$2" mode="$3" file="${4:-$TMP/out}"

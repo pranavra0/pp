@@ -118,7 +118,7 @@ let () =
   List.iter (fun h ->
     let hi = if h.max_args = max_int then h.min_args + 2 else h.max_args in
     for n = h.min_args to hi do
-      match (try Some (h.tmpl n) with _ -> None) with
+      match (try Some (h.tmpl n) with Match_failure _ -> None) with
       | Some _ -> ()
       | None ->
           failwith (Printf.sprintf

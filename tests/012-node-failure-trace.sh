@@ -13,11 +13,7 @@
 # logs "ATTEMPT" before failing, so ATTEMPT present ⇒ the body ran (miss),
 # ATTEMPT absent ⇒ the failure was re-served (hit).
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
+. "$(dirname "$0")/lib.sh"
 
 check() {  # NAME  FILE  attempt=present|absent  errsubstr
   local name="$1" file="$2" amode="$3" errsub="$4"

@@ -11,15 +11,16 @@ let tree path = Cell.Tree (canonical path)
 let hash_file path =
   try
     let ic = open_in_bin path in
-    let content = really_input_string ic (in_channel_length ic) in
-    close_in ic;
-    Some (Hasher.hash_string content)
-  with _ -> None
+    Fun.protect
+      ~finally:(fun () -> close_in_noerr ic)
+      (fun () -> Some (Hasher.hash_string
+        (really_input_string ic (in_channel_length ic))))
+  with Sys_error _ | Unix.Unix_error _ | End_of_file -> None
 
 let stat_kind path =
   match Unix.lstat path with
   | { Unix.st_kind = Unix.S_DIR; _ } -> "dir"
-  | exception _ -> "absent"
+  | exception (Sys_error _ | Unix.Unix_error _) -> "absent"
   | _ -> "file"
 
 let stat_hash kind = Hasher.hash_string ("stat:" ^ kind)
@@ -44,7 +45,10 @@ let tree_hash root =
           match st.Unix.st_kind with
           | Unix.S_DIR -> ()
           | Unix.S_REG -> add rel (Option.value ~default:"unreadable" (hash_file path))
-          | Unix.S_LNK -> add rel ("link->" ^ (try Unix.readlink path with _ -> "?"))
+          | Unix.S_LNK ->
+              add rel ("link->" ^
+                (try Unix.readlink path
+                 with Sys_error _ | Unix.Unix_error _ -> "?"))
           | _ -> add rel "special");
   Hasher.hash_concat ("tree" :: List.sort compare !entries)
 
@@ -92,17 +96,19 @@ let observe cell =
       (match Session.find_run_pin session (Cell.serialize cell) with
        | Some hash -> Some hash | None -> hash_file path)
   | Cell.RuntimeFile path | Cell.Tool path -> hash_file path
-  | Cell.Tree root -> (try Some (tree_hash root) with _ -> None)
+  | Cell.Tree root ->
+      (try Some (tree_hash root)
+       with Sys_error _ | Unix.Unix_error _ -> None)
   | Cell.Stat path -> Some (stat_hash (stat_kind path))
   | Cell.Env name -> Some (env_hash (Sys.getenv_opt name))
   | Cell.Argv -> Some (argv_hash (Invocation.program_argv (Effect.perform Dynamic_scope.Get_invocation)))
-  | Cell.Config key -> (try Some (Dynamic_scope.observe_config key) with _ -> None)
-  | Cell.Handler name -> (try Some (Dynamic_scope.observe_handler name) with _ -> None)
+  | Cell.Config key -> Some (Dynamic_scope.observe_config key)
+  | Cell.Handler name -> Some (Dynamic_scope.observe_handler name)
   | Cell.Probe name -> Option.map Identity.hash_value (probe_value name)
   | Cell.Sealed path ->
       (match Session.find_sealed_pin session (Cell.serialize cell) with
        | Some bytes -> Some (Hasher.hash_string bytes) | None -> hash_file path)
-  | Cell.Domain { name; sub } -> (try observe_domain name sub with _ -> None)
+  | Cell.Domain { name; sub } -> observe_domain name sub
   | Cell.Unknown _ -> None
 
 let observe_id (id : Identity_types.Cell_id.t) =

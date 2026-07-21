@@ -132,14 +132,20 @@ let rec encode (v : value) : string option =
       let encoded =
         List.map (fun (k, v) -> (encode k, encode v)) kvs
       in
-      if List.exists (fun (k, v) -> k = None || v = None) encoded then None
-      else
-        let pairs = List.map (fun (k, v) -> (Option.get k, Option.get v)) encoded in
+      let pairs =
+        List.fold_right (fun pair acc ->
+          match pair, acc with
+          | (Some k, Some v), Some pairs -> Some ((k, v) :: pairs)
+          | _ -> None) encoded (Some [])
+      in
+      (match pairs with
+       | None -> None
+       | Some pairs ->
         (* stable_sort: VMap is an assoc list that tolerates duplicate keys;
            stability makes the duplicate-key entry order deterministic across
            OCaml stdlib versions (List.sort's tie-breaking is unspecified). *)
         let sorted = List.stable_sort (fun (k1, _) (k2, _) -> String.compare k1 k2) pairs in
-        Some (wrap "m" (List.map (fun (k, v) -> "(" ^ k ^ " " ^ v ^ ")") sorted))
+        Some (wrap "m" (List.map (fun (k, v) -> "(" ^ k ^ " " ^ v ^ ")") sorted)))
   | VSet vs ->
       (match encode_list_opt vs with
        | None -> None

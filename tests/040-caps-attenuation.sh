@@ -24,15 +24,10 @@
 # secret) pass through transparently via the check_*/CapRestrict unwrap).
 # Tree-walker, isolated HOME (a fresh ~/.pp/store per case, like tests/011/013).
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-
-TMP=$(mktemp -d)
-export HOME="$TMP"
+. "$(dirname "$0")/lib.sh"
 mkdir -p "$TMP/secret" "$TMP/other"
 printf 'SECRETDATA\n' > "$TMP/secret/data.txt"
 printf 'OK-OTHER\n' > "$TMP/other/x.txt"
-fail=0
 
 assert() {  # NAME  secret=leaked|safe  access=ok|denied
   local name="$1" smode="$2" amode="$3"

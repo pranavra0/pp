@@ -83,10 +83,8 @@ Conventions:
   this is the only place that information lives
 - add a `# pins: LAW-<n>` line when the test pins a SPEC law; the marker
   is machine-parsed by tests/072-law-pins.sh, so keep the exact format
-- use the `PP` variable for the interpreter (`PP=${PP:-bin/pp}`) and
-  resolve it to an absolute path before changing directories
-- isolate the store: `TMP=$(mktemp -d); export HOME="$TMP"` keeps
-  `~/.pp/store` inside the sandbox and off the developer's real store
+- source `tests/lib.sh` after the shell options; it resolves `PP`, creates
+  the temporary directory, isolates `HOME`, and initializes shared assertions
 
 ## Standing gates
 

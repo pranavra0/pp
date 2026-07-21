@@ -101,8 +101,11 @@ let compute_plan ~(domain_name : string) ~(diff_closure : value)
       in
       let result_hash = Identity_types.Object_hash.of_digest (Identity.hash_value plan) in
       (try Object_repository.put Object_repository.default
-             ~key:(Identity_types.Object_hash.to_string result_hash) ~value:plan with _ -> ());
-      (try Trace_repository.put Trace_repository.default ~key ~outcome:Trace_repository.Ok ~result_hash ~reads:[] with _ -> ());
+             ~key:(Identity_types.Object_hash.to_string result_hash) ~value:plan
+       with Sys_error _ | Unix.Unix_error _ -> ());
+      (try Trace_repository.put Trace_repository.default ~key
+             ~outcome:Trace_repository.Ok ~result_hash ~reads:[]
+       with Sys_error _ | Unix.Unix_error _ -> ());
       plan
 
 (* ---- Stratification ----
@@ -273,7 +276,8 @@ let prepare_pass invocation (all_desired : value) : pass =
 let record_epoch invocation (forced : value) : unit =
   try
     let hash = Identity.hash_value forced in
-    (try Object_repository.put Object_repository.default ~key:hash ~value:forced with _ -> ());
+    (try Object_repository.put Object_repository.default ~key:hash ~value:forced
+     with Sys_error _ | Unix.Unix_error _ -> ());
     Journal.append (Journal.Epoch { hash });
     Gcroots.record ~keep:(Invocation.gc_keep_epochs invocation)
       { Gcroots.gr_hash = hash;
@@ -283,7 +287,7 @@ let record_epoch invocation (forced : value) : unit =
         gr_supervise = Invocation.program_supervise invocation;
         gr_member_name = Invocation.program_member_name invocation;
         gr_desired_object = Invocation.program_desired_object invocation }
-  with _ -> ()
+  with Sys_error _ | Unix.Unix_error _ -> ()
 
 let run_pass (pass : pass) : unit =
   List.iter run_target pass.targets;

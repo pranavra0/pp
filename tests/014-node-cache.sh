@@ -5,11 +5,7 @@
 # "COMPUTE" present => body ran (miss); absent => hit (SPEC law 17).
 # Isolated HOME.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
+. "$(dirname "$0")/lib.sh"
 
 assert() {  # NAME  file  present|absent
   local name="$1" f="$2" mode="$3" hit

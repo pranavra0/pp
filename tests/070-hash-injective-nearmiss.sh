@@ -19,12 +19,7 @@
 # COMPUTE in output = the node body ran (miss); a hit does not replay it
 # (SPEC law 17). Runs under an isolated HOME.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-
-TMP=$(mktemp -d)
-export HOME="$TMP"
-fail=0
+. "$(dirname "$0")/lib.sh"
 
 assert() {  # NAME want(miss|hit)
   local name="$1" want="$2"

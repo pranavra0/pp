@@ -12,9 +12,8 @@ let dump_pins ctx path =
   Session.iter_run_pins session (fun cell hash ->
     Buffer.add_string buffer (Remote.pin_line cell hash));
   Session.iter_probes session (fun name value ->
-    match Codec.encode_value value with
-    | Some text -> Buffer.add_string buffer (Remote.pin_probe_line name text)
-    | None -> Printf.eprintf
+    try Buffer.add_string buffer (Remote.pin_probe_line name value)
+    with Failure _ -> Printf.eprintf
       "[dump-pins] skipping non-data probe value for %s (code/handle/sealed)\n%!" name);
   Store_layout.atomic_replace path (Buffer.contents buffer)
 

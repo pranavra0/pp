@@ -4,7 +4,6 @@ open Pp_kernel
    return through the same hash-checking path as other transported data. *)
 
 open Core_model
-open Codec
 
 (* ---- Members file: ambient config, never --grant. An address is not an
    authority ceiling. One member per
@@ -54,47 +53,12 @@ let member_home_of_root (root : string) : (string, string) result =
       "member store root %s does not end in /%s — cannot derive its $HOME"
       root store_suffix)
 
-(* ---- Wire format for the pre-seed pin list ----
-   "(pin \"CELL-ID\" \"BLOB-HASH\")" per line — the same hand-rolled,
-   quoted-string style token.ml/transport.ml already use for their own
-   bespoke line formats (Codec.quote_string/parse_quoted_string reused,
-   not a new escaping dialect). *)
+let pin_line cell hash = Remote_protocol.encode_file_pin ~cell ~hash
 
-let quote = Codec.quote_string
-
-let pin_line (cell : string) (hash : string) : string =
-  Printf.sprintf "(pin %s %s)\n" (quote cell) (quote hash)
-
-
-let parse_pin_line (line : string) : (string * string) option =
-  expect_lit line 0 "(pin " >>= fun i ->
-  Codec.parse_quoted_string line i >>= fun (cell, i) ->
-  expect_char line i ' ' >>= fun i ->
-  Codec.parse_quoted_string line i >>= fun (hash, i) ->
-  expect_char line i ')' >>= fun _ -> Some (cell, hash)
-
-(* ---- `(pin-probe "NAME" <codec-value>)` ----
-   Generalizes the pin file
-   to cover a probe's OWN value directly (not a blob-backed cell), so a
-   program that folds `(probe NAME)` into its desired state can be pinned
-   too. The value half is not a quoted string — it is Codec.encode_value's
-   own grammar (e.g. "(i 42)", "(s \"x\")") embedded verbatim, since that
-   grammar is already a well-formed, self-delimiting parenthesized token
-   stream; wrapping it in ANOTHER quoted-string layer would just be a
-   second, redundant escaping dialect for the same bytes. [line] must have
-   already been trimmed (no trailing newline) by the caller, exactly like
-   [parse_pin_line] assumes. *)
-let pin_probe_line (name : string) (value_text : string) : string =
-  Printf.sprintf "(pin-probe %s %s)\n" (quote name) value_text
-
-let parse_pin_probe_line (line : string) : (string * string) option =
-  expect_lit line 0 "(pin-probe " >>= fun i ->
-  Codec.parse_quoted_string line i >>= fun (name, i) ->
-  expect_char line i ' ' >>= fun i ->
-  let n = String.length line in
-  if n > 0 && i <= n - 1 && line.[n - 1] = ')' then
-    Some (name, String.sub line i (n - 1 - i))
-  else None
+let pin_probe_line name value =
+  match Remote_protocol.encode_probe_pin ~name value with
+  | Ok line -> line
+  | Error message -> failwith message
 
 (* ---- Member side: pre-seed observation pins from the wire BEFORE anything
    runs — the soundness crux of remote placement ----
@@ -143,19 +107,11 @@ let preseed_pins_from_file session ~(pins_file : string) : unit =
     |> List.iter (fun line ->
          let line = String.trim line in
          if line <> "" then
-           if String.length line >= 11 && String.sub line 0 11 = "(pin-probe " then
-             match parse_pin_probe_line line with
-             | None -> failwith ("pp: --pin-file: unparseable pin-probe line: " ^ line)
-             | Some (name, value_text) ->
-                 (match Codec.decode_value value_text with
-                  | None ->
-                      failwith ("pp: --pin-file: pin-probe " ^ name
-                                ^ ": undecodable value: " ^ value_text)
-                  | Some v -> Session.preseed_probe session name v)
-           else
-             match parse_pin_line line with
-             | None -> failwith ("pp: --pin-file: unparseable pin line: " ^ line)
-             | Some (cell, hash) ->
+           match Remote_protocol.decode_pin line with
+           | Error message -> failwith ("pp: --pin-file: " ^ message)
+           | Ok (Remote_protocol.Probe_pin { name; value }) ->
+               Session.preseed_probe session name value
+           | Ok (Remote_protocol.File_pin { cell; hash }) ->
                  (match Blob_repository.get Blob_repository.default hash with
                   | None ->
                       failwith (Printf.sprintf

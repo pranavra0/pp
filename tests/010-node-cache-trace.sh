@@ -17,15 +17,9 @@
 # The store lives at $HOME/.pp/store, so this test runs under an isolated HOME
 # and never touches the developer's real store. It exercises only the
 # tree-walker (the sole backend wired to the store).
-PP=${PP:-bin/pp}
-# Resolve PP to an absolute path before we move cwd via HOME-isolated runs.
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-
-TMP=$(mktemp -d)
-export HOME="$TMP"          # isolate ~/.pp/store to the sandbox
+. "$(dirname "$0")/lib.sh"
 DATA="$TMP/data.txt"
 PROG="$TMP/prog.pp"
-fail=0
 
 # A node that logs "COMPUTE" (an ephemeral effect) then returns the file it
 # read. On a MISS the body runs, so stderr shows "COMPUTE"; on a HIT the body

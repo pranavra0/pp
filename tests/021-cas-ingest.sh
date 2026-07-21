@@ -14,13 +14,8 @@
 #
 # Runs under an isolated HOME; single engine.
 set -uo pipefail
-PP=${PP:-bin/pp}
-case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
-
-TMP=$(mktemp -d)
-export HOME="$TMP"
+. "$(dirname "$0")/lib.sh"
 F="$TMP/cell.txt"
-fail=0
 
 assert() {  # NAME PATTERN present|absent
   local name="$1" pat="$2" mode="$3"

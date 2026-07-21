@@ -22,7 +22,6 @@
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 trap 'rm -rf "$TMP"' EXIT
-export HOME="$TMP"          # isolate the store, like tests/011/013/017
 unset PP_CRASH_AT || true
 
 # A build that writes several store objects+traces: two persistent nodes, the
