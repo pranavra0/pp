@@ -38,7 +38,8 @@ run
   && ok "application-to-cache-hit-second-run" \
   || bad "application-to-cache-hit-second-run" "$(cat "$TMP/out")"
 
-sed -i 's/let base = 10/let base = 20/' "$TMP/spine.pp"
+sed 's/let base = 10/let base = 20/' "$TMP/spine.pp" >"$TMP/spine.pp.tmp"
+mv "$TMP/spine.pp.tmp" "$TMP/spine.pp"
 run
 [ "$(count BODY)" -eq 1 ] && grep -q '^21$' "$TMP/out" \
   && ok "identity-to-rebuild-on-free-value-change" \

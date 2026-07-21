@@ -61,7 +61,8 @@ run "$TMP/free-value.pp"
   && ok "first-free-value-build" \
   || bad "first-free-value-build" "$(cat "$TMP/out")"
 
-sed -i 's/let base = 10/let base = 20/' "$TMP/free-value.pp"
+sed 's/let base = 10/let base = 20/' "$TMP/free-value.pp" >"$TMP/free-value.pp.tmp"
+mv "$TMP/free-value.pp.tmp" "$TMP/free-value.pp"
 run "$TMP/free-value.pp"
 [ "$(count BODY)" -eq 1 ] && grep -q '^21$' "$TMP/out" \
   && ok "changed-free-value-rebuilds" \
