@@ -11,8 +11,7 @@ val key_of :
 
 val check_type : Core_model.value -> Core_model.expr -> (string * int) option -> unit
 val enforce_type : Core_model.thunk -> Core_model.value -> unit
-val replay_node_reads : Core_model.thunk ->
-  (Core_model.thunk -> Identity_types.Node_key.t) -> unit
+val record_node_dependency : Core_model.thunk -> unit
 val serve_hit : t:Core_model.thunk -> Cache_policy.result -> Core_model.value option
 val rebuild : key:Identity_types.Node_key.t ->
   run:(unit -> Core_model.value) -> Core_model.thunk -> Core_model.value

@@ -4,8 +4,10 @@ val stat : string -> Cell.t
 val sealed : string -> Cell.t
 val tool : string -> Cell.t
 val tree : string -> Cell.t
+val node : string -> Cell.t
 val hash_file : string -> string option
 val tree_hash : string -> string
+val tree_snapshot : string -> string * (string * string) list
 val stat_kind : string -> string
 val stat_hash : string -> string
 val env_hash : string option -> string

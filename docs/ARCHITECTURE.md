@@ -176,10 +176,14 @@ free-variable values. It does not contain the whole environment or the
 capability set. Config and handler reads are trace cells. A node key is not a
 result hash and is not a cell id.
 
-`observation.ml` constructs and checks cells. Reads propagate to enclosing
-node frames. `cache_policy.ml` verifies traces, checks hit authority, selects
-traces, reports misses, and marks data for GC. `stabilize.ml` uses the reverse
-trace index from `store_index.ml` to dirty only affected in-memory thunks.
+`observation.ml` constructs and checks cells. A nested node records one
+`node:<identity>` cell carrying its result hash; its world reads remain in the
+child trace instead of being duplicated into every ancestor. `cache_policy.ml`
+verifies traces, checks transitive hit authority, selects traces, reports
+misses, and marks data for GC. `stabilize.ml` follows the reverse trace index
+from `store_index.ml` through node cells and dirties only affected in-memory
+thunks. Ordinary watch rebuilds its in-memory graph and uses the same durable
+verifier, so pull and push differ in selection cost rather than results.
 
 The repository layer is:
 

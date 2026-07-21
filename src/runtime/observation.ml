@@ -7,6 +7,7 @@ let stat path = Cell.Stat (canonical path)
 let sealed path = Cell.Sealed (canonical path)
 let tool path = Cell.Tool (canonical path)
 let tree path = Cell.Tree (canonical path)
+let node id = Cell.Node id
 
 let hash_file path =
   try
@@ -29,8 +30,9 @@ let env_hash = function
   | None -> Hasher.hash_concat ["env-absent"]
 let argv_hash argv = Hasher.hash_concat ("argv" :: argv)
 
-let tree_hash root =
+let tree_snapshot root =
   let entries = ref [] in
+  let files = ref [] in
   let add rel part = entries := (rel ^ "=" ^ part) :: !entries in
   Fswalk.walk ~root ~cb:(fun ~rel ~path visit ->
     match visit with
@@ -44,13 +46,18 @@ let tree_hash root =
         else
           match st.Unix.st_kind with
           | Unix.S_DIR -> ()
-          | Unix.S_REG -> add rel (Option.value ~default:"unreadable" (hash_file path))
+          | Unix.S_REG ->
+              let hash = Option.value ~default:"unreadable" (hash_file path) in
+              add rel hash;
+              files := (rel, hash) :: !files
           | Unix.S_LNK ->
               add rel ("link->" ^
                 (try Unix.readlink path
                  with Sys_error _ | Unix.Unix_error _ -> "?"))
           | _ -> add rel "special");
-  Hasher.hash_concat ("tree" :: List.sort compare !entries)
+  Hasher.hash_concat ("tree" :: List.sort compare !entries), !files
+
+let tree_hash root = fst (tree_snapshot root)
 
 let call session fn args =
   match fn with
@@ -89,7 +96,42 @@ let observe_domain name sub =
       | VString hash -> Some hash
       | value -> Some (Identity.hash_value value)
 
-let observe cell =
+module KeySet = Set.Make (String)
+
+let rec current_node_trace seen key =
+  if KeySet.mem key seen then None
+  else
+    let session = Effect.perform Dynamic_scope.Get_session in
+    let current_key = Option.value ~default:key
+      (Option.map Identity_types.Node_key.to_string (Session.node_key_by_id session key)) in
+    let seen = KeySet.add current_key (KeySet.add key seen) in
+    let cache_key = Identity_types.Cache_key.of_string current_key in
+    let valid trace =
+      trace.Trace_repository.outcome = Trace_repository.Ok
+      && List.for_all (fun (cell, expected) ->
+           match observe_seen seen (Cell.parse (Identity_types.Cell_id.to_string cell)) with
+           | Some current ->
+               Identity_types.Observed_hash.of_digest current = expected
+           | None -> false)
+           trace.Trace_repository.reads
+    in
+    List.find_opt valid (Trace_repository.load Trace_repository.default ~key:cache_key)
+
+and current_node_hash seen key =
+  let session = Effect.perform Dynamic_scope.Get_session in
+  match Session.node_key_by_id session key with
+  | Some current_key ->
+      (match Session.find_node_thunk session current_key with
+       | Some thunk ->
+           (try Some (Identity.hash_value (Session.force session (VThunk thunk)))
+            with _ -> None)
+       | None -> None)
+  | None ->
+      Option.map (fun trace ->
+        Identity_types.Object_hash.to_string trace.Trace_repository.result_hash)
+        (current_node_trace seen key)
+
+and observe_seen seen cell =
   let session = Effect.perform Dynamic_scope.Get_session in
   match cell with
   | Cell.File path ->
@@ -108,8 +150,11 @@ let observe cell =
   | Cell.Sealed path ->
       (match Session.find_sealed_pin session (Cell.serialize cell) with
        | Some bytes -> Some (Hasher.hash_string bytes) | None -> hash_file path)
+  | Cell.Node key -> current_node_hash seen key
   | Cell.Domain { name; sub } -> observe_domain name sub
   | Cell.Unknown _ -> None
+
+let observe cell = observe_seen KeySet.empty cell
 
 let observe_id (id : Identity_types.Cell_id.t) =
   Option.map Identity_types.Observed_hash.of_digest
@@ -122,7 +167,7 @@ let replay reads =
     record (Cell.parse (Identity_types.Cell_id.to_string id))
       (Identity_types.Observed_hash.to_string hash)) reads
 
-let authorized caps cell =
+let rec authorized_seen seen caps cell =
   let has_fs path =
     List.exists (fun cap -> Capability.check_fs_read cap
       (Paths.canonicalize ~realpath:(fun x -> x) path)) caps
@@ -133,12 +178,25 @@ let authorized caps cell =
   | Cell.Sealed path ->
       List.exists (fun cap -> Capability.check_secret cap
         (Paths.canonicalize ~realpath:(fun x -> x) path)) caps
+  | Cell.Node key ->
+      if KeySet.mem key seen then false
+      else
+        (match current_node_trace seen key with
+         | None -> false
+         | Some trace ->
+             let seen = KeySet.add key seen in
+             List.for_all (fun (cell, _) ->
+               authorized_seen seen caps
+                 (Cell.parse (Identity_types.Cell_id.to_string cell)))
+               trace.Trace_repository.reads)
   | Cell.Domain { name; _ } ->
       (match Session.find_domain (Effect.perform Dynamic_scope.Get_session) name with
        | Some entry -> Capability.subseteq entry.Session.dm_cap caps | None -> false)
   | Cell.RuntimeFile _ | Cell.Env _ | Cell.Argv | Cell.Config _ | Cell.Handler _
   | Cell.Probe _ -> true
   | Cell.Unknown _ -> false
+
+let authorized caps cell = authorized_seen KeySet.empty caps cell
 
 let authorized_id caps (id : Identity_types.Cell_id.t) =
   authorized caps (Cell.parse (Identity_types.Cell_id.to_string id))

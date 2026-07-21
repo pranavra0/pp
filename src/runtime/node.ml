@@ -7,6 +7,13 @@ open Source_error
 module Key = Identity_types.Node_key
 module Object_hash = Identity_types.Object_hash
 
+let record_node_dependency (t : thunk) : unit =
+  if Evaluator_thunks.is_persistent t && Effect.perform Dynamic_scope.In_node then
+    match t.thunk_hash, t.thunk_status with
+    | Some id, Evaluated result ->
+        Observation.record (Observation.node id) (Identity.hash_value result)
+    | Some _, (Unevaluated | Evaluating) | None, _ -> ()
+
 let resolve_free_variables ~(expr : expr) ~(env : env)
     ~(force : value -> value) : (string * value option) list =
   Free_vars.SS.elements (Free_vars.node_free_vars expr)
@@ -80,15 +87,6 @@ let enforce_type (t : thunk) (result : value) : unit =
   | Some ty ->
       (try check_type result ty t.thunk_loc
        with e -> t.thunk_status <- Unevaluated; raise e)
-
-
-(* ---- Trace replay ----------------------------------------------------- *)
-
-let replay_node_reads (t : thunk) (key_of : thunk -> Key.t) : unit =
-  if Evaluator_thunks.is_persistent t && Effect.perform Dynamic_scope.In_node then
-    let traces = Trace_repository.load Trace_repository.default
-      ~key:(Identity_types.Cache_key.of_node_key (key_of t)) in
-    List.iter (fun tr -> Observation.replay tr.Trace_repository.reads) traces
 
 
 (* ---- Serve hit / run node body (the rebuilder) ------------------------ *)
@@ -212,21 +210,38 @@ let lookup_hit ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
 let force ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
     ~(run : unit -> value) (t : thunk) : value =
   Stabilize.register_node_key ~key ~thunk:t;
-  match lookup_hit ~key ~authorized t with
-  | Some value -> value
-  | None ->
-      let scheduler = Session.scheduler (Effect.perform Dynamic_scope.Get_session) in
-      (match Scheduler.policy scheduler with
-       | Scheduler.Race width when width > 1 ->
-           let job = {
-             Scheduler.j_key = key;
-             j_run = (fun () -> rebuild ~key ~run t);
-             j_width = width;
-             j_thunk = t;
-           } in
-           Scheduler.dispatch_batch scheduler [job];
-           (match lookup_hit ~key ~authorized t with
-            | Some value -> value
-            | None -> rebuild ~key ~run t)
-       | Scheduler.Serial | Scheduler.Parallel _ | Scheduler.Race _
-       | Scheduler.Remote _ -> rebuild ~key ~run t)
+  let nested = Effect.perform Dynamic_scope.In_node in
+  let run_force () =
+    match lookup_hit ~key ~authorized t with
+    | Some value -> value
+    | None ->
+        let scheduler = Session.scheduler (Effect.perform Dynamic_scope.Get_session) in
+        (match Scheduler.policy scheduler with
+         | Scheduler.Race width when width > 1 ->
+             let job = {
+               Scheduler.j_key = key;
+               j_run = (fun () -> rebuild ~key ~run t);
+               j_width = width;
+               j_thunk = t;
+             } in
+             Scheduler.dispatch_batch scheduler [job];
+             (match lookup_hit ~key ~authorized t with
+              | Some value -> value
+              | None -> rebuild ~key ~run t)
+         | Scheduler.Serial | Scheduler.Parallel _ | Scheduler.Race _
+         | Scheduler.Remote _ -> rebuild ~key ~run t)
+  in
+  let result =
+    if not nested then run_force ()
+    else
+      try run_force () with
+      | effect (Dynamic_scope.Record_read _), continuation ->
+          Effect.Deep.continue continuation ()
+  in
+  if nested then
+    Option.iter (fun id ->
+      Observation.record (Observation.node id) (Identity.hash_value result))
+      t.thunk_hash;
+  Option.iter (fun id ->
+    Effect.perform (Dynamic_scope.Record_node_force id)) t.thunk_hash;
+  result

@@ -298,5 +298,6 @@ let surface_decision : Cell.t -> surface_story = function
   | Cell.Tool _        -> RuntimeRecorded "the binary a run resolved to, recorded by run (D13)"
   | Cell.Argv          -> RuntimeRecorded "the program argument-list cell, read via argv"
   | Cell.Handler _     -> RuntimeRecorded "which handler intercepted an effect"
+  | Cell.Node _        -> RuntimeRecorded "a persistent child node's result hash"
   | Cell.Domain _      -> RuntimeRecorded "a registered third-party domain's sub-cell (register-domain)"
   | Cell.Unknown _     -> RuntimeRecorded "unrecognized kind; can never re-verify"

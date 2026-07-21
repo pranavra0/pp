@@ -5,8 +5,6 @@ open Pp_kernel
 
 open Core_model
 
-let replay_node_reads = Evaluator_node.replay_reads
-
 let force_node = Evaluator_node.force
 
 let make_thunk_ca = Evaluator_thunks.make
@@ -82,8 +80,11 @@ let rec force (v : value) : value =
   | VThunk t ->
       (match t.thunk_status with
        | Evaluated result ->
+           if Evaluator_thunks.is_persistent t then
+             Option.iter (fun id ->
+               Effect.perform (Dynamic_scope.Record_node_force id)) t.thunk_hash;
            decr_force_depth ();
-           Node.replay_node_reads t node_key_of;
+           Node.record_node_dependency t;
            force result
        | Evaluating ->
            decr_force_depth ();
@@ -129,8 +130,19 @@ and evaluate_and_store_no_key (t : thunk) : value =
    in its trace as `config:`/`handler:` cells, which govern validity rather
    than identity. *)
 and node_key_of (t : thunk) : Identity_types.Node_key.t =
-  Node.key_of ~expr:t.thunk_expr ~env:t.thunk_env ~force
-    ~argument_values:(Evaluator_thunks.argument_values t)
+  let dependencies = ref [] in
+  let key =
+    try
+      Node.key_of ~expr:t.thunk_expr ~env:t.thunk_env ~force
+        ~argument_values:(Evaluator_thunks.argument_values t)
+    with
+    | effect (Dynamic_scope.Record_node_force id), continuation ->
+        if not (List.mem id !dependencies) then dependencies := id :: !dependencies;
+        Effect.Deep.continue continuation ()
+  in
+  let session = session () in
+  List.iter (fun id -> Session.add_node_dependent session id key) !dependencies;
+  key
 
 (* Remote placement: a
    node is data-closed iff every free var's FORCED value re-encodes under

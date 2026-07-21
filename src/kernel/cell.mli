@@ -22,6 +22,7 @@ type t =
   | Handler of string
   | Probe of string
   | Sealed of string
+  | Node of string
   | Domain of { name : string; sub : string; }
   | Unknown of string
 

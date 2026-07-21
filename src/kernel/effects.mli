@@ -12,6 +12,7 @@ type _ Effect.t +=
   | Get_handlers : (string * string) list Effect.t
   | Lookup_handler : string -> ((Core_model.value list -> Core_model.value) * string) option Effect.t
   | Record_read : string * string -> unit Effect.t
+  | Record_node_force : string -> unit Effect.t
   | In_node : bool Effect.t
   | Current_sandbox : string option ref option Effect.t
   | Get_domain : string option Effect.t
