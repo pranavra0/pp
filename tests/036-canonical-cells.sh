@@ -23,7 +23,7 @@
 #         longest existing prefix and appending the rest lexically.
 #
 #   NFC Unicode normalization is NOT covered here — a documented residual
-#   (SPEC law 23; see docs/STATUS.md); this suite is realpath-only.
+#   (SPEC law 23); this suite is realpath-only.
 #
 # Runs under an isolated HOME; single engine.
 set -uo pipefail
