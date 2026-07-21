@@ -7,9 +7,6 @@
 module Node_key = struct
   type t = string
 
-  let make ~(code_hash : string) ~(free_variable_hashes : string list) : t =
-    Hasher.node_key_skeleton ~expr_hash:code_hash free_variable_hashes
-
   let of_string (value : string) : t = value
   let to_string (value : t) : string = value
 end

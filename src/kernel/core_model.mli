@@ -1,3 +1,5 @@
+type closure_kind = Function | Node
+
 type env = {
   env_id : int;
   env_hash : string;
@@ -60,11 +62,19 @@ and value =
   | VEnvMap of (string * value) list
   | VSealed of string
 
+and thunk_kind =
+  | Ephemeral
+  | Persistent of {
+      captured_caps : Capability.t list;
+      argument_values : value list;
+    }
+
 and closure = {
   fn_name : string option;
   params : string list;
   body : expr;
   env : env ref;
+  closure_kind : closure_kind;
 }
 
 and thunk = {
@@ -76,8 +86,7 @@ and thunk = {
   type_ann : expr option;
   thunk_loc : (string * int) option;
   config_hash : string;
-  mutable thunk_persist : bool;
-  mutable node_caps : Capability.t list;
+  thunk_kind : thunk_kind;
 }
 
 and thunk_status = Unevaluated | Evaluating | Evaluated of value

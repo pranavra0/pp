@@ -9,7 +9,8 @@
 #
 #   (a) a node CREATED under a NARROWED ambient, forced OUTSIDE that ambient
 #       (under the full grant), is STILL DENIED — the node's authority was
-#       fixed at creation ("node_caps"), not re-derived from whatever is live
+#       fixed at creation (the node's captured capabilities), not re-derived
+#       from whatever is live
 #       in current_capabilities at force time.
 #   (b) a node CREATED under the FULL ambient, forced INSIDE a narrower
 #       with-caps extent, STILL SUCCEEDS — fixed at creation, mirroring

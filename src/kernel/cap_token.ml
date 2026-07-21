@@ -147,8 +147,8 @@ let verify host ~(secret : string) ~(cluster_id : string) (token_text : string)
 
 (* Convenience for the wire path: verify against the LOCAL member's own
    secret/cluster id (~/.pp/cluster), returning a capability list ready to
-   feed straight into `cell_authorized_for` — the wire-verified equivalent
-   of `node_caps` locally. *)
+   feed straight into the cache-authority check — the wire-verified equivalent
+   of a node's captured capabilities locally. *)
 let token_to_caps host token_text =
   let secret = load_secret host in
   let cluster_id = load_cluster_id host in

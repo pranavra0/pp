@@ -3,6 +3,7 @@ type continuation = Core_model.value -> Core_model.value
 
 type evaluator = {
   eval_tail : Core_model.expr -> Core_model.env -> continuation -> Core_model.value;
+  force : Core_model.value -> Core_model.value;
 }
 
 val apply_tail :

@@ -6,6 +6,15 @@ type operations = {
   force : Core_model.value -> Core_model.value;
 }
 
+type definition = {
+  name : string;
+  params : string list;
+  body : Core_model.expr;
+  kind : Core_model.closure_kind;
+}
+
+val definition_of_expr : Core_model.expr -> definition option
+
 val do_block :
   operations ->
   Core_model.expr list ->

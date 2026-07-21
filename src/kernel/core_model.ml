@@ -1,3 +1,5 @@
+type closure_kind = Function | Node
+
 type env = {
   env_id : int;
   env_hash : string;
@@ -68,12 +70,20 @@ and value =
   | VEnvMap of (string * value) list  (* module export: list of (name, thunk) pairs *)
   | VSealed of string  (* confidential bytes; presentation and codecs redact them *)
 
+and thunk_kind =
+  | Ephemeral
+  | Persistent of {
+      captured_caps : Capability.t list;
+      argument_values : value list;
+    }
+
 (* ---- Function closure ---- *)
 and closure = {
   fn_name : string option;  (* optional name for debugging *)
   params : string list;
   body : expr;
   env : env ref;            (* captured environment *)
+  closure_kind : closure_kind;
 }
 
 and thunk = {
@@ -85,8 +95,7 @@ and thunk = {
   type_ann : expr option;              (* lazy gradual type annotation *)
   thunk_loc : (string * int) option;   (* source location for error reporting *)
   config_hash : string;                (* ReaderT config snapshot identity *)
-  mutable thunk_persist : bool;         (* persist across runs? true for node, false for delay/let *)
-  mutable node_caps : Capability.t list; (* capabilities captured by a persistent node *)
+  thunk_kind : thunk_kind;
 }
 and thunk_status =
   | Unevaluated

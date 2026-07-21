@@ -1,8 +1,8 @@
 open Pp_kernel
 open Core_model
 
-let make_with_hash ?name ~tag (expr : expr) (type_ann : expr option)
-    (loc : (string * int) option) (env : env) : value =
+let make_with_hash ?name ?(kind = Ephemeral) ~tag (expr : expr)
+    (type_ann : expr option) (loc : (string * int) option) (env : env) : value =
   let caps = Effect.perform Dynamic_scope.Get_capabilities in
   let cfg = Effect.perform Dynamic_scope.Get_config in
   let handlers = Effect.perform Dynamic_scope.Get_handlers in
@@ -17,8 +17,16 @@ let make_with_hash ?name ~tag (expr : expr) (type_ann : expr option)
     | None -> []
     | Some ty -> [Identity.hash_expr ty]
   in
+  let argument_values = match kind with
+    | Ephemeral -> []
+    | Persistent { argument_values; _ } -> argument_values
+  in
+  let arg_hashes = List.map (fun value -> Hasher.hash_concat ["arg"; Identity.hash_value value])
+      argument_values
+  in
   let hash = Hasher.hash_concat
-      (tag :: expr_hash :: type_hash @ [env.env_hash; caps_hash; cfg_hash; handlers_hash])
+      (tag :: expr_hash :: type_hash @ arg_hashes @
+       [env.env_hash; caps_hash; cfg_hash; handlers_hash])
   in
   let session = Effect.perform Dynamic_scope.Get_session in
   match Session.find_thunk session hash with
@@ -33,13 +41,33 @@ let make_with_hash ?name ~tag (expr : expr) (type_ann : expr option)
         type_ann;
         thunk_loc = loc;
         config_hash = cfg_hash;
-        thunk_persist = false;
-        node_caps = [];
+        thunk_kind = kind;
       } in
       Session.add_thunk session hash thunk;
       VThunk thunk
 
 let make ?name expr env = make_with_hash ?name ~tag:"thunk" expr None None env
+
+let make_node ?name expr env ~arguments =
+  let captured_caps = Effect.perform Dynamic_scope.Get_capabilities in
+  make_with_hash ?name
+    ~kind:(Persistent { captured_caps; argument_values = arguments })
+    ~tag:"node-thunk" expr None None env
+
+let is_persistent (t : thunk) =
+  match t.thunk_kind with
+  | Persistent _ -> true
+  | Ephemeral -> false
+
+let captured_capabilities (t : thunk) =
+  match t.thunk_kind with
+  | Persistent { captured_caps; _ } -> captured_caps
+  | Ephemeral -> []
+
+let argument_values (t : thunk) =
+  match t.thunk_kind with
+  | Persistent { argument_values; _ } -> argument_values
+  | Ephemeral -> []
 
 let make_typed expr ty loc env =
   make_with_hash ~tag:"thunk-typed" expr (Some ty) loc env

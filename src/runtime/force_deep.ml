@@ -39,7 +39,7 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
         (match t.thunk_status with
          | Evaluated result -> walk result
          | Evaluating -> ()
-         | Unevaluated when t.thunk_persist ->
+         | Unevaluated when Evaluator_thunks.is_persistent t ->
              let key = node.key_of t in
              if not (Hashtbl.mem seen_keys key) then begin
                Hashtbl.add seen_keys key ();

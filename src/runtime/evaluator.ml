@@ -5,8 +5,6 @@ open Pp_kernel
 
 open Core_model
 
-let cell_authorized_for = Observation.authorized_id
-
 let replay_node_reads = Evaluator_node.replay_reads
 
 let force_node = Evaluator_node.force
@@ -79,9 +77,9 @@ let rec force (v : value) : value =
            force_cycle t
        | Unevaluated ->
            (* Persistent nodes route through the store. Identity is the
-              node key (code + free-variable value hashes); the trace decides
-              validity. A stale trace falls through to recompute. *)
-           if t.thunk_persist then
+              node key (code + free-variable and argument value hashes); the
+              trace decides validity. A stale trace falls through to recompute. *)
+           if Evaluator_thunks.is_persistent t then
              (match with_force_frame t (fun () ->
                 let nk = node_key_of t in
                 let run () = eval t.thunk_expr t.thunk_env in
@@ -110,16 +108,16 @@ and evaluate_and_store_no_key (t : thunk) : value =
   decr_force_depth ();
   force result
 
-(* A node's persistent key is its code structure plus the *value* hashes
-   of the free variables it references (forced, call-by-value — the key cannot
-   exist before its inputs' values do). This deliberately omits the whole-env
-   hash (so rebinding an unrelated global does not re-key the node), the
-   capability set (authority gates access to a hit, never identity),
-   and the ambient config/handler stacks: a config value or handler the node
-   actually observed is recorded in its trace as a `config:`/`handler:` cell
-   and governs validity, not identity. *)
+(* A node's persistent key is its code structure plus the *value* hashes of
+   its free variables and applied arguments. Free variables are forced
+   call-by-value because the key cannot exist before their values do. The
+   whole environment hash, capability set, and ambient config/handler stacks
+   are excluded: config values and handlers observed by the node are recorded
+   in its trace as `config:`/`handler:` cells, which govern validity rather
+   than identity. *)
 and node_key_of (t : thunk) : Identity_types.Node_key.t =
   Node.key_of ~expr:t.thunk_expr ~env:t.thunk_env ~force
+    ~argument_values:(Evaluator_thunks.argument_values t)
 
 (* Remote placement: a
    node is data-closed iff every free var's FORCED value re-encodes under
@@ -219,7 +217,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       let fn_val = force (eval fn_expr env) in
       let arg_vals = List.map (fun arg_expr -> force (eval arg_expr env)) arg_exprs in
       Evaluator_application.apply_tail
-        { eval_tail }
+        { eval_tail; force }
         fn_val arg_vals env k
 
   | EQuote e ->
@@ -233,19 +231,13 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
          then force the result and pass to k *)
       k (force (eval e env))
   | ENode e ->
-      let thunk_val = make_thunk_ca e env in
-      (match thunk_val with
-       | VThunk t ->
-           t.thunk_persist <- true;
-           t.node_caps <- Effect.perform Dynamic_scope.Get_capabilities
-       | _ -> ());
-      k thunk_val
+      k (Evaluator_thunks.make_node e env ~arguments:[])
 
-  | EDef (name, params, body) ->
-      k (Environment.make_closure ~name:(Some name) params body (ref env))
-
-  | EDefNode (name, params, body) ->
-      k (Environment.make_closure ~name:(Some name) params body (ref env))
+  | (EDef _ | EDefNode _) as definition ->
+      (match Evaluator_forms.definition_of_expr definition with
+       | Some { name; params; body; kind } ->
+           k (Environment.make_definition ~name ~kind params body (ref env))
+       | None -> failwith "invalid definition")
 
   | EDo exprs ->
       Evaluator_forms.do_block
@@ -325,7 +317,7 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
 
 and apply (fn : value) (args : value list) (env : env) : value =
   Evaluator_application.apply
-    { eval_tail }
+    { eval_tail; force }
     fn args env
 
 
@@ -346,7 +338,7 @@ and trampoline_force (v : value) : value =
             | Evaluated result -> Queue.add result queue; loop ()
             | Evaluating -> force_cycle t
             | Unevaluated ->
-                if t.thunk_persist then begin
+                if Evaluator_thunks.is_persistent t then begin
                   let h = node_key_of t in
                   let run () =
                     let saved = force_depth () in
@@ -358,8 +350,7 @@ and trampoline_force (v : value) : value =
                   let result = with_force_frame t (fun () -> force_node ~key:h ~run t) in
                   Queue.add result queue;
                   loop ()
-                end
-                else begin
+                end else begin
                   (* ephemeral thunk — no store check *)
                   t.thunk_status <- Evaluating;
                   let result = with_force_frame t (fun () ->
@@ -410,7 +401,9 @@ let eval_and_force (e : expr) : value =
 
 (* Initialize the evaluator state *)
 let resolve_if_hit t key =
-  match Node.lookup_hit ~key ~authorized:(cell_authorized_for t.node_caps) t with
+  match Node.lookup_hit ~key
+          ~authorized:(Observation.authorized_id
+                         (Evaluator_thunks.captured_capabilities t)) t with
   | Some _ -> true
   | None -> false
 

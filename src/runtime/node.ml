@@ -7,12 +7,9 @@ open Source_error
 module Key = Identity_types.Node_key
 module Object_hash = Identity_types.Object_hash
 
-let unbound_fv_hash ~(name : string) : string =
-  Hasher.hash_concat ["fv-unbound"; name]
-
 let resolve_free_variables ~(expr : expr) ~(env : env)
     ~(force : value -> value) : (string * value option) list =
-  Free_vars.SS.elements (Free_vars.free_vars expr)
+  Free_vars.SS.elements (Free_vars.node_free_vars expr)
   |> List.map (fun name ->
        match Environment.lookup env name with
        | Some value ->
@@ -24,7 +21,7 @@ let resolve_free_variables ~(expr : expr) ~(env : env)
 let authorize_free_variables (free_variables : (string * value option) list) : unit =
   List.iter (fun (name, value) ->
     match value with
-    | Some value when Value_analysis.contains_authority value ->
+    | Some value when Value_analysis.contains_authority_in_referenced_values value ->
         authority_escape
           (Printf.sprintf
              "node: free variable '%s' may not be or contain a %s" name
@@ -33,21 +30,11 @@ let authorize_free_variables (free_variables : (string * value option) list) : u
     | Some _ | None -> ())
     free_variables
 
-let construct_key ~(expr : expr) ~(free_variables : (string * value option) list)
-    : Key.t =
-  let fv_hashes = List.map (fun (name, value) ->
-    match value with
-    | None -> unbound_fv_hash ~name
-    | Some value -> Hasher.hash_concat ["fv"; name; Identity.hash_value value])
-    free_variables
-  in
-  Key.make ~code_hash:(Identity.hash_expr expr)
-    ~free_variable_hashes:fv_hashes
-
-let key_of ~(expr : expr) ~(env : env) ~(force : value -> value) : Key.t =
+let key_of ~(argument_values : value list) ~(expr : expr) ~(env : env)
+    ~(force : value -> value) : Key.t =
   let free_variables = resolve_free_variables ~expr ~env ~force in
   authorize_free_variables free_variables;
-  construct_key ~expr ~free_variables
+  Identity.node_key ~code:expr ~free_variables ~argument_values
 
 
 (* ---- Runtime type check (shared by the evaluator) --------------------- *)
@@ -98,7 +85,7 @@ let enforce_type (t : thunk) (result : value) : unit =
 (* ---- Trace replay ----------------------------------------------------- *)
 
 let replay_node_reads (t : thunk) (key_of : thunk -> Key.t) : unit =
-  if t.thunk_persist && Effect.perform Dynamic_scope.In_node then
+  if Evaluator_thunks.is_persistent t && Effect.perform Dynamic_scope.In_node then
     let traces = Trace_repository.load Trace_repository.default
       ~key:(Identity_types.Cache_key.of_node_key (key_of t)) in
     List.iter (fun tr -> Observation.replay tr.Trace_repository.reads) traces
@@ -155,6 +142,7 @@ let persist_success ~(key : Key.t) ~(reads : (string * string) list)
 
 let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
   t.thunk_status <- Evaluating;
+  let captured_caps = Evaluator_thunks.captured_capabilities t in
   let frame : (string * string) list ref = ref [] in
   let sandbox_slot = ref None in
   Fun.protect
@@ -163,7 +151,8 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
       let result =
         try run ()
         with
-        | effect Dynamic_scope.Get_capabilities, k -> Effect.Deep.continue k t.node_caps
+        | effect Dynamic_scope.Get_capabilities, k ->
+            Effect.Deep.continue k captured_caps
         | effect (Dynamic_scope.Record_read (c, h)), k ->
             if not (List.mem (c, h) !frame) then frame := (c, h) :: !frame;
             Effect.Deep.continue k (Effect.perform (Dynamic_scope.Record_read (c, h)))
@@ -201,7 +190,8 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
               if not (List.mem (c, h) !frame2) then frame2 := (c, h) :: !frame2;
               Effect.Deep.continue k (Effect.perform (Dynamic_scope.Record_read (c, h)))
           | effect Dynamic_scope.In_node, k -> Effect.Deep.continue k true
-          | effect Dynamic_scope.Get_capabilities, k -> Effect.Deep.continue k t.node_caps
+          | effect Dynamic_scope.Get_capabilities, k ->
+              Effect.Deep.continue k captured_caps
           | effect Dynamic_scope.Current_sandbox, k -> Effect.Deep.continue k (Some sandbox_slot)
           | e -> raise e
         in

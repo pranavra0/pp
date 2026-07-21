@@ -13,9 +13,24 @@ type scope = {
   value_defs : (string, value) Hashtbl.t;
 }
 
+type definition = {
+  name : string;
+  params : string list;
+  body : expr;
+  kind : closure_kind;
+}
+
 let unwrap = function
   | ELocated (_, inner) -> inner
   | expr -> expr
+
+let definition_of_expr expr =
+  match unwrap expr with
+  | EDef (name, params, body) ->
+      Some { name; params; body; kind = Function }
+  | EDefNode (name, params, body) ->
+      Some { name; params; body; kind = Node }
+  | _ -> None
 
 let expand_toplevel operations exprs =
   Macro.expand_toplevel_list
@@ -31,15 +46,17 @@ let read_forms operations path contents =
 let prebind (env : env ref) (exprs : expr list) : scope =
   let value_defs = Hashtbl.create 8 in
   List.iter (fun expr ->
-    match unwrap expr with
-    | EDef (name, params, body) | EDefNode (name, params, body) ->
-        let closure = Environment.make_closure ~name:(Some name) params body env in
+    match definition_of_expr expr with
+    | Some { name; params; body; kind } ->
+        let closure = Environment.make_definition ~name ~kind params body env in
         env := Environment.extend !env name closure
-    | EDefValue (name, _) ->
-        let poison = Evaluator_thunks.poison name !env in
-        Hashtbl.replace value_defs name poison;
-        env := Environment.extend !env name poison
-    | _ -> ()) exprs;
+    | None ->
+        (match unwrap expr with
+         | EDefValue (name, _) ->
+             let poison = Evaluator_thunks.poison name !env in
+             Hashtbl.replace value_defs name poison;
+             env := Environment.extend !env name poison
+         | _ -> ())) exprs;
   { env; value_defs }
 
 let activate_value scope name value =

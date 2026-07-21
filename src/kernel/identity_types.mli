@@ -3,7 +3,6 @@
 module Node_key : sig
   type t
 
-  val make : code_hash:string -> free_variable_hashes:string list -> t
   val of_string : string -> t
   val to_string : t -> string
 end
