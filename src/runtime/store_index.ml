@@ -1,4 +1,8 @@
 open Pp_kernel
+type graph = {
+  forward : (string * string list) list;
+  reverse : (string * string list) list;
+}
 let reverse () =
   let result = Hashtbl.create 64 in
   List.iter (fun key ->
@@ -29,28 +33,33 @@ let dirty_keys ~dependency_cell changed reverse =
 
 let short = Cache_policy.short_key
 
-let print_graph ?(verbose=false) () =
+let graph ?(verbose=false) () =
   let reverse = reverse () in
   let forward = Hashtbl.create 64 in
   Hashtbl.iter (fun cell keys -> if verbose || cell <> "handler:log" then
     List.iter (fun key -> Hashtbl.replace forward key
       (cell :: Option.value ~default:[] (Hashtbl.find_opt forward key))) keys)
     reverse;
-  if Hashtbl.length forward = 0 then
-    Printf.printf "(no traces in store — run a program first)\n"
-  else begin
-    Printf.printf
+  let entries table = Hashtbl.to_seq table |> List.of_seq |> List.sort compare
+    |> List.map (fun (key, values) -> (key, List.sort_uniq compare values)) in
+  { forward = entries forward;
+    reverse = entries reverse |> List.filter (fun (cell, _) -> verbose || cell <> "handler:log") }
+
+let format_graph graph =
+  if graph.forward = [] then "(no traces in store — run a program first)\n"
+  else
+    let buffer = Buffer.create 1024 in
+    Buffer.add_string buffer
       "pp graph — dependency graph from ~/.pp/store/traces\n\nNodes → Cells (forward edges):\n";
-    Hashtbl.to_seq forward |> List.of_seq |> List.sort compare
-    |> List.iter (fun (key, cells) ->
-      Printf.printf "  node %s\n    reads: %s\n" (short key)
-        (String.concat ", " (List.sort compare cells)));
-    Printf.printf "\nCells → Nodes (reverse edges):\n";
-    Hashtbl.to_seq reverse |> List.of_seq |> List.sort compare
-    |> List.iter (fun (cell, keys) ->
-      if verbose || cell <> "handler:log" then
-        Printf.printf "  %s\n    used by: %s\n" cell
-          (String.concat ", " (List.sort compare (List.map short keys))));
-    Printf.printf "\n%d node(s), %d unique cell(s)\n"
-      (Hashtbl.length forward) (Hashtbl.length reverse)
-  end
+    List.iter (fun (key, cells) ->
+      Printf.bprintf buffer "  node %s\n    reads: %s\n" (short key)
+        (String.concat ", " cells)) graph.forward;
+    Buffer.add_string buffer "\nCells → Nodes (reverse edges):\n";
+    List.iter (fun (cell, keys) ->
+      Printf.bprintf buffer "  %s\n    used by: %s\n" cell
+        (String.concat ", " (List.map short keys))) graph.reverse;
+    Printf.bprintf buffer "\n%d node(s), %d unique cell(s)\n"
+      (List.length graph.forward) (List.length graph.reverse);
+    Buffer.contents buffer
+
+let print_graph ?(verbose=false) () = print_string (format_graph (graph ~verbose ()))

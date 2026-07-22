@@ -2,6 +2,22 @@ open Pp_kernel
 open Core_model
 
 type result = HitOk of value | HitFailed of value | Miss
+type trace_status = Usable | Stale of Identity_types.Cell_id.t |
+  Unauthorized of Identity_types.Cell_id.t
+type miss_reason = Cache_reads_disabled | No_stored_trace |
+  No_usable_trace | Result_object_missing
+type decision =
+  | Cache_hit of {
+      outcome : Trace_repository.outcome;
+      result_hash : Identity_types.Object_hash.t;
+      cell_count : int;
+    }
+  | Cache_miss of miss_reason
+type lookup_report = {
+  key : Identity_types.Cache_key.t;
+  traces : (int * int * trace_status) list;
+  decision : decision;
+}
 type t = {
   mutable no_cache : bool;
   mutable why_enabled : bool;
@@ -31,50 +47,66 @@ let short_key key = if String.length key > 12 then String.sub key 0 12 else key
 let diagnose t fmt =
   if t.why_enabled then Printf.eprintf ("[why] " ^^ fmt ^^ "\n%!")
   else Printf.ifprintf stderr fmt
-let lookup t ~(key : Identity_types.Cache_key.t)
-    ~(authorized : Identity_types.Cell_id.t -> bool) : result =
+
+let format_report ~authorized report =
+  let key = short_key (Identity_types.Cache_key.to_string report.key) in
+  let describe cell =
+    if authorized cell then Identity_types.Cell_id.to_string cell
+    else "<redacted unauthorized cell>"
+  in
+  let trace_lines = List.filter_map (fun (index, count, status) ->
+    match status with
+    | Stale cell -> Some (Printf.sprintf
+        "node %s: trace %d/%d stale — %s changed"
+        key index count (describe cell))
+    | Unauthorized cell -> Some (Printf.sprintf
+        "node %s: trace %d/%d unauthorized — caller lacks authority over %s"
+        key index count (describe cell))
+    | Usable -> None) report.traces
+  in
+  let decision_line = match report.decision with
+    | Cache_miss Cache_reads_disabled ->
+        Printf.sprintf "node %s: miss — cache reads disabled (--no-cache)" key
+    | Cache_miss No_stored_trace ->
+        Printf.sprintf "node %s: miss — no stored trace (first build)" key
+    | Cache_miss No_usable_trace ->
+        Printf.sprintf "node %s: miss — no stored trace usable" key
+    | Cache_miss Result_object_missing ->
+        Printf.sprintf "node %s: miss — result object missing from store" key
+    | Cache_hit { outcome; cell_count; _ } ->
+        Printf.sprintf "node %s: hit — %s trace verified (%d cells)" key
+          (match outcome with Trace_repository.Ok -> "ok" | Trace_repository.Failed -> "failing")
+          cell_count
+  in
+  trace_lines @ [decision_line]
+
+let lookup_with_report t ~(key : Identity_types.Cache_key.t)
+    ~(authorized : Identity_types.Cell_id.t -> bool) : result * lookup_report =
   if t.no_cache then begin
-    diagnose t "node %s: miss — cache reads disabled (--no-cache)"
-      (short_key (Identity_types.Cache_key.to_string key));
-    Miss
+    let report = { key; traces = []; decision = Cache_miss Cache_reads_disabled } in
+    (Miss, report)
   end else begin
     let traces = Trace_repository.load Trace_repository.default ~key in
-    let describe c =
-      if authorized c then Identity_types.Cell_id.to_string c
-      else "<redacted unauthorized cell>"
-    in
-    (* Why a trace is unusable: the first stale cell, else the first
-       unauthorized one; `Usable otherwise. *)
-    let classify t =
+    (* Report only the first stale or unauthorized cell so diagnostics do not
+       disclose or traverse more trace data than the cache decision needs. *)
+    let classify trace =
       match
         List.find_opt (fun (c, h) ->
           match Observation.observe_id c with
           | Some cur -> cur <> h
           | None -> true)
-          t.Trace_repository.reads
+          trace.Trace_repository.reads
       with
-      | Some (c, _) -> `Stale c
+      | Some (c, _) -> Stale c
       | None ->
-           (match List.find_opt (fun (c, _) -> not (authorized c)) t.Trace_repository.reads with
-           | Some (c, _) -> `Unauthorized c
-           | None -> `Usable)
+           (match List.find_opt (fun (c, _) -> not (authorized c)) trace.Trace_repository.reads with
+           | Some (c, _) -> Unauthorized c
+           | None -> Usable)
     in
     let classified = List.mapi (fun i t -> (i + 1, t, classify t)) traces in
-    if t.why_enabled then
-      List.iter (fun (i, _, cls) ->
-        match cls with
-        | `Stale c ->
-            diagnose t "node %s: trace %d/%d stale — %s changed"
-              (short_key (Identity_types.Cache_key.to_string key)) i
-              (List.length traces) (describe c)
-        | `Unauthorized c ->
-            diagnose t "node %s: trace %d/%d unauthorized — caller lacks authority over %s"
-              (short_key (Identity_types.Cache_key.to_string key)) i
-              (List.length traces) (describe c)
-        | `Usable -> ())
-        classified;
     let usable_traces =
-      List.filter_map (fun (_, t, cls) -> if cls = `Usable then Some t else None)
+      List.filter_map (fun (_, trace, status) ->
+        if status = Usable then Some trace else None)
         classified
     in
     let chosen =
@@ -84,26 +116,19 @@ let lookup t ~(key : Identity_types.Cache_key.t)
     in
     match chosen with
     | None ->
-        (if traces = [] then
-           diagnose t "node %s: miss — no stored trace (first build)"
-             (short_key (Identity_types.Cache_key.to_string key))
-         else
-           diagnose t "node %s: miss — no stored trace usable"
-             (short_key (Identity_types.Cache_key.to_string key)));
-        Miss
+        let reason = if traces = [] then No_stored_trace else No_usable_trace in
+        (Miss, { key;
+          traces = List.map (fun (i, _, status) -> (i, List.length traces, status)) classified;
+          decision = Cache_miss reason })
     | Some tr ->
         (match Object_repository.get Object_repository.default
                  ~key:(Identity_types.Object_hash.to_string
                          tr.Trace_repository.result_hash) with
          | None ->
-             diagnose t "node %s: miss — result object missing from store"
-               (short_key (Identity_types.Cache_key.to_string key));
-             Miss  (* object gone → recompute *)
+             (Miss, { key;
+               traces = List.map (fun (i, _, status) -> (i, List.length traces, status)) classified;
+               decision = Cache_miss Result_object_missing })
          | Some v ->
-             diagnose t "node %s: hit — %s trace verified (%d cells)"
-               (short_key (Identity_types.Cache_key.to_string key))
-               (match tr.Trace_repository.outcome with Trace_repository.Ok -> "ok" | Trace_repository.Failed -> "failing")
-               (List.length tr.Trace_repository.reads);
              Observation.replay tr.Trace_repository.reads;
              (* GC mark (see [gc_marking]'s header comment above):
                 a verified hit means this trace/object/blob(s) are LIVE for
@@ -118,5 +143,21 @@ let lookup t ~(key : Identity_types.Cache_key.t)
                | _ -> ())
                tr.Trace_repository.reads;
              List.iter (fun h -> mark t ("blob:" ^ h)) (Blobref.blob_refs_in v);
-             (match tr.Trace_repository.outcome with Trace_repository.Ok -> HitOk v | Trace_repository.Failed -> HitFailed v))
+             let result = match tr.Trace_repository.outcome with
+               | Trace_repository.Ok -> HitOk v
+               | Trace_repository.Failed -> HitFailed v
+             in
+             (result, { key;
+               traces = List.map (fun (i, _, status) -> (i, List.length traces, status)) classified;
+               decision = Cache_hit {
+                 outcome = tr.Trace_repository.outcome;
+                 result_hash = tr.Trace_repository.result_hash;
+                 cell_count = List.length tr.Trace_repository.reads;
+               } }))
   end
+
+let lookup t ~key ~authorized =
+  let result, report = lookup_with_report t ~key ~authorized in
+  if t.why_enabled then
+    List.iter (fun line -> diagnose t "%s" line) (format_report ~authorized report);
+  result
