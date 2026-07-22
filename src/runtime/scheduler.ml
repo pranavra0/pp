@@ -37,26 +37,33 @@ type job = {
      scope; the narrow remote dispatcher uses it to test data-closedness. *)
   j_thunk : Core_model.thunk;
 }
-type t = {
-  mutable policy : policy;
-  remote_dispatch : member:string -> job list -> unit;
+type handler = {
+  h_name : string;
+  h_redundancy : int;
+  h_dispatch : t -> job list -> unit;
+  h_cancel : unit -> unit;
+}
+and t = {
+  mutable handler : handler;
   live_children : (int, Identity_types.Node_key.t) Hashtbl.t;
   mutable signal_handler : Sys.signal_behavior option;
   mutable fork_count : int;
   fork_log_path : string option;
 }
 
-let create ~policy ~remote_dispatch = {
-  policy;
-  remote_dispatch;
-  live_children = Hashtbl.create 16;
-  signal_handler = None;
-  fork_count = 0;
-  fork_log_path = Sys.getenv_opt "PP_FORK_LOG";
+let handler ~name ~redundancy ~dispatch ~cancel = {
+  h_name = name;
+  h_redundancy = max 1 redundancy;
+  h_dispatch = (fun _ jobs -> dispatch jobs);
+  h_cancel = cancel;
 }
 
-let policy t = t.policy
-let set_policy t policy = t.policy <- policy
+let handler_name handler = handler.h_name
+
+let serial_handler = handler ~name:"serial" ~redundancy:1
+    ~dispatch:(fun jobs -> List.iter (fun j -> ignore (j.j_run ())) jobs)
+    ~cancel:ignore
+let serial = serial_handler
 
 (* ---- Live-child bookkeeping (for SIGINT and race-loser kills) ---- *)
 
@@ -107,6 +114,7 @@ let reap_and_cleanup (scheduler : t) (pid : int) : unit =
   cleanup_child_sandboxes pid
 
 let kill_all_live (scheduler : t) =
+  scheduler.handler.h_cancel ();
   let pids = Hashtbl.fold (fun pid _ acc -> pid :: acc)
       scheduler.live_children [] in
   List.iter (fun pid -> terminate_pid pid; reap_and_cleanup scheduler pid) pids
@@ -180,15 +188,6 @@ let fork_job (scheduler : t) (j : job) : int =
        | None -> ());
       Hashtbl.replace scheduler.live_children pid j.j_key; pid
 
-(* ---- dispatch_batch ---- *)
-
-(* [Serial]: in-process, in order — byte-identical to calling every job's
-   [j_run] directly (callers of dispatch_batch already special-case
-   Serial to skip collection/forking entirely, but
-   dispatch_batch itself also degrades safely if ever called under Serial). *)
-let run_serial (jobs : job list) : unit =
-  List.iter (fun j -> ignore (j.j_run ())) jobs
-
 (* [Parallel n] / [Race n]: a wave loop. Each job is expanded into
    [j_width] fork slots (>1 only for a singleton race — all such forks
    share [j_key]). Concurrency is capped at [n]; a completed slot frees room
@@ -249,8 +248,31 @@ let run_concurrent (scheduler : t) (limit : int) (jobs : job list) : unit =
     if !live_count > 0 then reap_one ()
   done
 
+let builtin ~remote_dispatch = function
+  | Serial -> serial_handler
+  | Parallel n -> { serial_handler with
+      h_name = Printf.sprintf "parallel:%d" n;
+      h_dispatch = (fun scheduler jobs -> run_concurrent scheduler n jobs) }
+  | Race n -> { serial_handler with
+      h_name = Printf.sprintf "race:%d" n;
+      h_redundancy = max 1 n;
+      h_dispatch = (fun scheduler jobs -> run_concurrent scheduler n jobs) }
+  | Remote member -> { serial_handler with
+      h_name = Printf.sprintf "remote:%s" member;
+      h_dispatch = (fun _ jobs -> remote_dispatch ~member jobs) }
+
+let create ~handler = {
+  handler;
+  live_children = Hashtbl.create 16;
+  signal_handler = None;
+  fork_count = 0;
+  fork_log_path = Sys.getenv_opt "PP_FORK_LOG";
+}
+
+let current_handler t = t.handler
+let install t handler = t.handler <- handler
+let schedules_batches t = t.handler != serial_handler
+let redundancy t = t.handler.h_redundancy
+
 let dispatch_batch (scheduler : t) (jobs : job list) : unit =
-  match scheduler.policy with
-  | Serial -> run_serial jobs
-  | Parallel n | Race n -> run_concurrent scheduler n jobs
-  | Remote member -> scheduler.remote_dispatch ~member jobs
+  scheduler.handler.h_dispatch scheduler jobs

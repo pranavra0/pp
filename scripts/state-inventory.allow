@@ -16,7 +16,7 @@ mutable-field|src/frontend/printer_braces.ml|line|pass
 mutable-field|src/frontend/printer_sexpr.ml|line|pass
 mutable-field|src/frontend/reader.ml|pos|pass
 mutable-field|src/frontend/reader_braces.ml|pos|pass
-mutable-field|src/runtime/scheduler.ml|policy|command
+mutable-field|src/runtime/scheduler.ml|handler|command
 mutable-field|src/runtime/scheduler.ml|signal_handler|process-service
 mutable-field|src/runtime/scheduler.ml|fork_count|process-service
 mutable-field|src/kernel/core_model.ml|thunk_env|node

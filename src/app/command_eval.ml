@@ -1,11 +1,5 @@
 open Pp_runtime
 open Pp_kernel
-let policy_name = function
-  | Scheduler.Serial -> "serial"
-  | Scheduler.Parallel n -> Printf.sprintf "parallel:%d" n
-  | Scheduler.Race n -> Printf.sprintf "race:%d" n
-  | Scheduler.Remote member -> Printf.sprintf "remote:%s" member
-
 let dump_pins ctx path =
   let session = App_context.session ctx in
   let buffer = Buffer.create 256 in
@@ -20,15 +14,15 @@ let dump_pins ctx path =
 let schedule_audit ctx cli files last =
   let scheduler = App_context.scheduler ctx in
   if Cache_policy.check_enabled Cache_policy.default &&
-     Scheduler.policy scheduler <> Scheduler.Serial then
+     Scheduler.schedules_batches scheduler then
     match last with
     | None -> ()
     | Some scheduled ->
         let scheduled_hash = Identity.hash_value scheduled in
-        let saved = Scheduler.policy scheduler in
-        Scheduler.set_policy scheduler Scheduler.Serial;
+        let saved = Scheduler.current_handler scheduler in
+        Scheduler.install scheduler Scheduler.serial;
         let serial = Fun.protect
-          ~finally:(fun () -> Scheduler.set_policy scheduler saved)
+          ~finally:(fun () -> Scheduler.install scheduler saved)
           (fun () ->
             Session.begin_pass (App_context.session ctx);
             Command_run.run_files ctx cli files) in
@@ -37,7 +31,7 @@ let schedule_audit ctx cli files last =
              Cache_policy.note_volatile Cache_policy.default;
              Printf.eprintf
                "[check] schedule non-transparent: %s and serial re-runs produced different desired-state hashes\n%!"
-               (policy_name saved)
+               (Scheduler.handler_name saved)
          | _ -> ())
 
 let run ctx cli =

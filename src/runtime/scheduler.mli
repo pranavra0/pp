@@ -9,12 +9,23 @@ type job = {
 }
 
 type t
+type handler
 
-val create :
-  policy:policy ->
-  remote_dispatch:(member:string -> job list -> unit) -> t
+val handler :
+  name:string ->
+  redundancy:int ->
+  dispatch:(job list -> unit) ->
+  cancel:(unit -> unit) -> handler
+val handler_name : handler -> string
+val serial : handler
+val builtin :
+  remote_dispatch:(member:string -> job list -> unit) -> policy -> handler
 
-val policy : t -> policy
-val set_policy : t -> policy -> unit
+val create : handler:handler -> t
+
+val current_handler : t -> handler
+val install : t -> handler -> unit
+val schedules_batches : t -> bool
+val redundancy : t -> int
 val dispatch_batch : t -> job list -> unit
 val with_signal_handler : t -> f:('a -> 'b) -> 'a -> 'b

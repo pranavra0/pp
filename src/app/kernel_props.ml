@@ -629,18 +629,31 @@ let host_services_property () =
 let session_property () =
   let calls_a = ref 0 and calls_b = ref 0 in
   let scheduler_a =
-    Scheduler.create ~policy:Scheduler.Serial
-      ~remote_dispatch:(fun ~member:_ _ -> incr calls_a)
+    Scheduler.create ~handler:(Scheduler.builtin Scheduler.Serial
+      ~remote_dispatch:(fun ~member:_ _ -> incr calls_a))
   in
   let scheduler_b =
-    Scheduler.create ~policy:Scheduler.Serial
-      ~remote_dispatch:(fun ~member:_ _ -> incr calls_b)
+    Scheduler.create ~handler:(Scheduler.builtin Scheduler.Serial
+      ~remote_dispatch:(fun ~member:_ _ -> incr calls_b))
   in
-  Scheduler.set_policy scheduler_a (Scheduler.Remote "a");
+  Scheduler.install scheduler_a (Scheduler.builtin (Scheduler.Remote "a")
+    ~remote_dispatch:(fun ~member:_ _ -> incr calls_a));
   Scheduler.dispatch_batch scheduler_a [];
-  if Scheduler.policy scheduler_b <> Scheduler.Serial
+  if Scheduler.handler_name (Scheduler.current_handler scheduler_b) <> "serial"
      || !calls_a <> 1 || !calls_b <> 0 then
     fail "scheduler-isolation" "scheduler handles shared policy or dispatch state";
+  let dispatched = ref 0 and cancelled = ref 0 in
+  let custom = Scheduler.handler ~name:"test-redundant" ~redundancy:3
+      ~dispatch:(fun jobs -> dispatched := !dispatched + List.length jobs)
+      ~cancel:(fun () -> incr cancelled) in
+  Scheduler.install scheduler_a custom;
+  Scheduler.dispatch_batch scheduler_a [];
+  Scheduler.with_signal_handler scheduler_a ~f:(fun () -> ()) ();
+  if Scheduler.handler_name (Scheduler.current_handler scheduler_a) <> "test-redundant"
+     || Scheduler.redundancy scheduler_a <> 3
+     || !dispatched <> 0 || !cancelled <> 1
+     || Scheduler.handler_name (Scheduler.current_handler scheduler_b) <> "serial" then
+    fail "scheduler-service" "custom handler contract or session isolation failed";
   let a = Session.create ~scheduler:scheduler_a Evaluator.operations
   and b = Session.create ~scheduler:scheduler_b Evaluator.operations in
   let invocation =

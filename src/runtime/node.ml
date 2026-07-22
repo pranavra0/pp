@@ -216,8 +216,8 @@ let force ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
     | Some value -> value
     | None ->
         let scheduler = Session.scheduler (Effect.perform Dynamic_scope.Get_session) in
-        (match Scheduler.policy scheduler with
-         | Scheduler.Race width when width > 1 ->
+        (match Scheduler.redundancy scheduler with
+         | width when width > 1 ->
              let job = {
                Scheduler.j_key = key;
                j_run = (fun () -> rebuild ~key ~run t);
@@ -228,8 +228,7 @@ let force ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
              (match lookup_hit ~key ~authorized t with
               | Some value -> value
               | None -> rebuild ~key ~run t)
-         | Scheduler.Serial | Scheduler.Parallel _ | Scheduler.Race _
-         | Scheduler.Remote _ -> rebuild ~key ~run t)
+         | _ -> rebuild ~key ~run t)
   in
   let result =
     if not nested then run_force ()

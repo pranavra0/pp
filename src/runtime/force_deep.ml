@@ -28,9 +28,6 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
   let scheduler = Session.scheduler session in
   let node = Session.node_operations session in
   let core = Session.core_operations session in
-  let race_width () =
-    match Scheduler.policy scheduler with Scheduler.Race n -> n | _ -> 1
-  in
   let job_run (t : thunk) (key : Identity_types.Node_key.t) () : value =
     node.run_body ~key ~run:(fun () -> core.eval t.thunk_expr t.thunk_env) t
   in
@@ -45,7 +42,7 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
                Hashtbl.add seen_keys key ();
                if not (node.resolve_hit t key) then
                  jobs := { Scheduler.j_key = key; j_run = job_run t key;
-                           j_width = race_width (); j_thunk = t } :: !jobs
+                           j_width = Scheduler.redundancy scheduler; j_thunk = t } :: !jobs
              end
          | Unevaluated -> ())
     | VPair _ as pair ->
@@ -64,10 +61,8 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
 let force_deep (v : value) : value =
   let session = Effect.perform Dynamic_scope.Get_session in
   let scheduler = Session.scheduler session in
-  (match Scheduler.policy scheduler with
-   | Scheduler.Serial -> ()
-   | Scheduler.Parallel _ | Scheduler.Race _ | Scheduler.Remote _ ->
-       (match collect_unevaluated_nodes v with
-        | [] -> ()
-        | jobs -> Scheduler.dispatch_batch scheduler jobs));
+  if Scheduler.schedules_batches scheduler then
+    (match collect_unevaluated_nodes v with
+     | [] -> ()
+     | jobs -> Scheduler.dispatch_batch scheduler jobs);
   force_deep_plain ~force:(Session.force session) v

@@ -928,9 +928,14 @@ cross-contaminate (`tests/015`). The recorded cell is coarser than the law's
 `handler:<code>:<effect>:<arg-hash> → result-hash` form, with no per-argument
 or per-result refinement yet, and the handler stack is still folded
 conservatively into the in-memory thunk key. The result-transparent class is
-implemented by the serial/parallel/race/remote scheduler handlers, which are
-excluded from node identity and traces; differential scheduling tests cover
-their result transparency (`tests/024`, `tests/038`, `tests/048`).
+implemented by the scheduler's opaque handler service. A handler supplies
+only a name, redundant width, best-effort miss dispatch, and cancellation; it
+cannot replace key construction, hit authorization, or rebuilding. The
+host-provided serial/parallel/race/remote handlers are excluded from node
+identity and traces; differential scheduling tests cover their result
+transparency (`tests/024`, `tests/038`, `tests/048`), and the kernel property
+suite checks installation, cancellation, redundant width, and session
+isolation.
 `http-get`/`http-post` are newer builtin, semantic-class effects, dispatched
 through the same `perform_effect`/`handler:<effect>` machinery as
 `read-file`/`run` — no new handler category. They are banned inside node
@@ -1328,7 +1333,11 @@ Grounding: this sentence is pp's founding demand, restated as an acceptance
 test. If shipping it requires new syntax, LAW 34 has been violated
 somewhere.
 
-**Status: holds** for local process-pool fan-out: `race:N` forks N
+**Status: holds** at the runtime boundary. Schedule handlers are ordinary
+opaque service values rather than branches in the evaluator or force path.
+The current host installs the built-in CLI handlers; exposing safe composition
+to pp libraries remains unimplemented. For local process-pool fan-out,
+`race:N` forks N
 redundant workers for one singleton node miss. This is homogeneous
 redundancy only — LAW 37 nodes are deterministic, so racing identical
 `(key, run)` jobs is sound, while heterogeneous racing of different
