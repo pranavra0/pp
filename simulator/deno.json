@@ -1,0 +1,16 @@
+{
+  "tasks": {
+    "generate": "deno run --allow-read=../src/runtime/event.ml --allow-write=src/events.generated.ts scripts/generate_events.ts",
+    "test": "deno task generate && deno test --allow-read=fixtures src",
+    "build": "deno task generate && deno check src/app.ts && deno run --allow-read=src,fixtures --allow-write=site --allow-env --allow-run scripts/build.ts",
+    "check": "deno task test && deno task build"
+  },
+  "imports": {
+    "immutable": "npm:immutable@5.1.9"
+  },
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable", "deno.ns"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true
+  }
+}

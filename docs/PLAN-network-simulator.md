@@ -551,7 +551,7 @@ Current primary graph reference:
 
 Keep the generated manual and simulator application as separate build
 artifacts under one site shell. The manual build should not acquire the UI's
-npm/OCaml-browser dependency graph. Add a visible “Simulator” link to the
+Deno/OCaml-browser dependency graph. Add a visible “Simulator” link to the
 manual and a “Manual” link to the app.
 
 Decision: deploy the manual and an executable browser playground with GitHub
@@ -761,32 +761,10 @@ network, cluster, and reconciliation behavior.
 
 ## 13. Delivery sequence and exit gates
 
-Milestones 1–6 collectively define public v1. Development previews may deploy
+Milestones 3–6 complete public v1. Development previews may deploy
 earlier but are visibly marked and carry no v1 compatibility promise.
 Milestone 7 is post-v1: remote multi-machine transport and trustworthy live
 network performance work do not block the accepted single-machine release.
-
-### Milestone 1: typed observability, no web UI
-
-- event type, sink, levels, redaction, JSONL codec;
-- structured cache decisions and graph query;
-- semantic events for one local cold/warm/invalidate build;
-- `pp simulate --record` (working name) or equivalent headless command;
-- parity and overhead tests.
-
-Exit: the recording alone explains every hit/miss/rebuild in the slice;
-`pp why` and `pp graph` use the shared structured source; normal execution is
-unchanged.
-
-### Milestone 2: deterministic replay UI
-
-- pure reducer, checkpoints, playback, seek, filters, inspector;
-- topology canvas with the recorded local build;
-- TypeScript frontend with generated event types and decoders;
-- GNS3-style shell built as static GitHub Pages assets.
-
-Exit: the frontend meets agreed performance and testability budgets without
-duplicating the semantic model.
 
 ### Milestone 3: executable browser playground
 

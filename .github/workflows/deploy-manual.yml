@@ -51,6 +51,17 @@ jobs:
       - name: Build manual
         run: opam exec -- bash scripts/build-manual.sh
 
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.8.1
+
+      - name: Build simulator replay UI
+        working-directory: simulator
+        run: deno task build
+
+      - name: Add simulator to Pages artifact
+        run: cp -R simulator/site docs/manual/site/simulator
+
       - name: Deploy to GitHub Pages (gh-pages branch)
         uses: peaceiris/actions-gh-pages@v4
         with:

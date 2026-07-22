@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>pp simulator replay</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>pp simulator</h1>
+    <nav><a href="../">Manual</a></nav>
+  </header>
+  <div class="toolbar" aria-label="Replay controls">
+    <label class="file">Open JSONL <input id="recording" type="file" accept=".jsonl,application/jsonl"></label>
+    <button id="step-back" title="Previous event">◀ Step</button>
+    <button id="play">Play</button>
+    <button id="step">Step ▶</button>
+    <input id="seek" type="range" min="0" value="0" aria-label="Event cursor">
+    <output id="status">Loading recording…</output>
+  </div>
+  <main>
+    <section class="canvas panel" aria-labelledby="topology-title">
+      <h2 id="topology-title">Topology</h2>
+      <svg id="topology" viewBox="0 0 900 340" role="img" aria-label="Recorded hosts and nodes"></svg>
+    </section>
+    <section class="timeline panel" aria-labelledby="events-title">
+      <h2 id="events-title">Events</h2>
+      <div id="filters" class="filters"></div>
+      <input id="query" type="search" placeholder="Filter event text" aria-label="Filter events">
+      <ol id="events"></ol>
+    </section>
+    <aside class="inspector panel" aria-labelledby="inspector-title">
+      <h2 id="inspector-title">Inspector</h2>
+      <div id="inspector"></div>
+    </aside>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

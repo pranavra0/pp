@@ -26,6 +26,14 @@ jobs:
       - name: Build
         run: opam exec -- dune build
 
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.8.1
+
+      - name: Simulator replay UI
+        working-directory: simulator
+        run: deno task check
+
       - name: Architecture gates
         run: opam exec -- dune build @architecture
 

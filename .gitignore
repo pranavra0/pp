@@ -25,3 +25,6 @@ scripts/.cache/
 # manual, kept in sync by hand after chapter edits; only the intermediate
 # capture cache stays ignored.
 docs/manual/captured/
+
+# simulator build artifacts
+simulator/site/

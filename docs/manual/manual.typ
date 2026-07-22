@@ -28,6 +28,7 @@
     })
     html.elem("script", read("dark-mode.js"))
     html.elem("h1", "pp reference manual")
+    html.elem("p", html.elem("a", attrs: (href: "simulator/"), "Open simulator replay"))
   }
 }
 

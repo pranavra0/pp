@@ -43,6 +43,14 @@ and backpressures the producer with constant retained memory; it does not drop
 events. Its canonical envelope carries logical time and a nullable monotonic
 wall timestamp.
 
+`simulator/` is a static TypeScript replay client for those recordings. Its
+generated event-kind type comes from `src/runtime/event.ml`; its runtime
+decoder rejects unknown schemas and kinds. A pure reducer owns semantic replay
+state, persistent data structures make checkpoints cheap, and seeking restores
+a checkpoint before replaying forward. The topology, timeline, filters, and
+inspector are projections of that state. The client does not evaluate pp or
+infer runtime semantics from display text.
+
 The semantic spine for a persistent computation is:
 
 ```text
