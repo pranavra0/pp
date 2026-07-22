@@ -31,6 +31,11 @@ The application creates the services for one command. It creates one session,
 one scheduler, and one evaluator operation value. The session owns mutable
 run state. Dynamic scope carries values that must follow the current call.
 
+The session also owns an `Event_sink`. Ordinary commands receive the no-op
+sink. `pp simulate --record` installs a streaming JSON Lines sink and runtime
+boundaries emit the same typed `Event` values consumed by recording tests.
+Event producers do not encode JSON or retain recordings.
+
 The semantic spine for a persistent computation is:
 
 ```text
@@ -184,6 +189,11 @@ misses, and marks data for GC. `stabilize.ml` follows the reverse trace index
 from `store_index.ml` through node cells and dirties only affected in-memory
 thunks. Ordinary watch rebuilds its in-memory graph and uses the same durable
 verifier, so pull and push differ in selection cost rather than results.
+
+`Cache_policy.lookup_with_report` exposes the typed trace classifications and
+hit or miss decision used by both event recording and the `pp why` formatter.
+`Store_index.graph` likewise supplies the typed dependency query rendered by
+`pp graph`; neither CLI derives structure by parsing diagnostic text.
 
 The repository layer is:
 
