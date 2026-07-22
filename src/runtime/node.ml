@@ -228,7 +228,7 @@ let lookup_hit ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
   ignore (Event_sink.emit sink (match report.Cache_policy.decision with
     | Cache_policy.Cache_hit { outcome; result_hash; cell_count } ->
         let outcome = match outcome with
-          | Trace_repository.Ok -> Event.Ok
+          | Trace_repository.Ok -> Event.Succeeded
           | Trace_repository.Failed -> Event.Failed_outcome
         in
         Event.Cache_hit { key = cache_key; outcome; result_hash; cell_count }

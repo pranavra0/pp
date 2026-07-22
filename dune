@@ -36,6 +36,7 @@
   tools/fuzz.exe
   tests/unit/kernel_unit.exe
   tests/unit/repository_unit.exe
+  tests/unit/event_unit.exe
   tests/unit/observation_unit.exe
   tests/unit/lifecycle_unit.exe
   tests/unit/parser_unit.exe)
@@ -45,6 +46,7 @@
   (run bash scripts/run-focused-tests.sh
     %{dep:tests/unit/kernel_unit.exe}
     %{dep:tests/unit/repository_unit.exe}
+    %{dep:tests/unit/event_unit.exe}
     %{dep:tests/unit/observation_unit.exe}
     %{dep:tests/unit/lifecycle_unit.exe}
     %{dep:tests/unit/parser_unit.exe})
@@ -71,11 +73,13 @@
  (alias unit)
  (deps scripts/run-focused-tests.sh
    tests/unit/kernel_unit.exe tests/unit/repository_unit.exe
+   tests/unit/event_unit.exe
    tests/unit/observation_unit.exe tests/unit/lifecycle_unit.exe
    tests/unit/parser_unit.exe)
  (action (run bash scripts/run-focused-tests.sh
    %{dep:tests/unit/kernel_unit.exe}
    %{dep:tests/unit/repository_unit.exe}
+   %{dep:tests/unit/event_unit.exe}
    %{dep:tests/unit/observation_unit.exe}
    %{dep:tests/unit/lifecycle_unit.exe}
    %{dep:tests/unit/parser_unit.exe})))

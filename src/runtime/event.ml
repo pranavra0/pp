@@ -4,7 +4,7 @@ type level = Summary | Semantic | Evaluation | Transport
 type visibility = Public | Redacted
 type phase = Instant | Started | Finished | Failed
 type cache_trace_status = Usable | Stale | Unauthorized
-type cache_outcome = Ok | Failed_outcome
+type cache_outcome = Succeeded | Failed_outcome
 type cache_miss_reason = Cache_reads_disabled | No_stored_trace |
   No_usable_trace | Result_object_missing
 type payload =
@@ -119,7 +119,7 @@ let option f = function None -> "null" | Some value -> f value
 let phase_name = function
   | Instant -> "instant" | Started -> "started" | Finished -> "finished" | Failed -> "failed"
 let visibility_name = function Public -> "public" | Redacted -> "redacted"
-let outcome_name = function Ok -> "ok" | Failed_outcome -> "failed"
+let outcome_name = function Succeeded -> "ok" | Failed_outcome -> "failed"
 let status_name = function
   | Usable -> "usable"
   | Stale -> "stale"
@@ -177,3 +177,137 @@ let to_json event =
       field "payload" ("{" ^ String.concat "," (payload_fields event.payload) ^ "}") ]
   in
   "{" ^ String.concat "," fields ^ "}"
+
+type json = JObject of (string * json) list | JString of string | JInt of int | JNull
+
+let of_json text =
+  let length = String.length text in
+  let error message = Error message in
+  let rec value i =
+    if i >= length then error "unexpected end of event JSON"
+    else match text.[i] with
+      | '{' -> object_fields (i + 1) []
+      | '"' -> quoted (i + 1) (Buffer.create 16)
+      | 'n' when i + 4 <= length && String.sub text i 4 = "null" -> Ok (JNull, i + 4)
+      | '0' .. '9' -> integer i
+      | _ -> error "invalid event JSON value"
+  and object_fields i fields =
+    if i < length && text.[i] = '}' then Ok (JObject (List.rev fields), i + 1)
+    else
+      match quoted_key i with
+      | Error _ as e -> e
+      | Ok (name, j) when j < length && text.[j] = ':' ->
+          (match value (j + 1) with
+           | Error _ as e -> e
+           | Ok (item, k) ->
+               if k < length && text.[k] = ',' then object_fields (k + 1) ((name, item) :: fields)
+               else if k < length && text.[k] = '}' then Ok (JObject (List.rev ((name, item) :: fields)), k + 1)
+               else error "invalid event JSON object")
+      | Ok _ -> error "invalid event JSON field"
+  and quoted_key i =
+    if i < length && text.[i] = '"' then
+      match quoted (i + 1) (Buffer.create 16) with
+      | Ok (JString name, j) -> Ok (name, j)
+      | Ok _ -> assert false
+      | Error _ as e -> e
+    else error "event JSON field name must be a string"
+  and quoted i buffer =
+    if i >= length then error "unterminated event JSON string"
+    else match text.[i] with
+      | '"' -> Ok (JString (Buffer.contents buffer), i + 1)
+      | '\\' when i + 1 < length ->
+          let escaped = match text.[i + 1] with
+            | '"' -> Some '"' | '\\' -> Some '\\' | '/' -> Some '/'
+            | 'b' -> Some '\b' | 'f' -> Some '\012' | 'n' -> Some '\n'
+            | 'r' -> Some '\r' | 't' -> Some '\t' | _ -> None
+          in
+          (match escaped with
+           | Some c -> Buffer.add_char buffer c; quoted (i + 2) buffer
+           | None -> error "unsupported event JSON escape")
+      | c when Char.code c < 0x20 -> error "control byte in event JSON string"
+      | c -> Buffer.add_char buffer c; quoted (i + 1) buffer
+  and integer i =
+    let rec finish j =
+      if j < length then match text.[j] with '0' .. '9' -> finish (j + 1) | _ -> j else j
+    in
+    let j = finish i in
+    try Ok (JInt (int_of_string (String.sub text i (j - i))), j)
+    with Failure _ -> error "invalid event JSON integer"
+  in
+  let field name fields = List.assoc_opt name fields in
+  let exact names fields = List.map fst fields = names in
+  let string_field name fields = match field name fields with Some (JString s) -> Some s | _ -> None in
+  let int_field name fields = match field name fields with Some (JInt n) -> Some n | _ -> None in
+  let option_int_field name fields = match field name fields with Some JNull -> Some None | Some (JInt n) -> Some (Some n) | _ -> None in
+  let payload kind phase fields =
+    let no_fields constructor = if fields = [] then Ok constructor else error "unexpected event payload fields" in
+    let one_int name constructor = match fields with [(n, JInt value)] when n = name -> Ok (constructor value) | _ -> error "invalid event payload" in
+    match kind, phase with
+    | "run.created", "instant" -> no_fields Run_created
+    | "run.started", "started" -> no_fields Run_started
+    | "run.finished", "finished" -> no_fields Run_finished
+    | "run.failed", "failed" -> no_fields Run_failed
+    | "source.read", "instant" ->
+        (match fields with
+         | [("content_hash", JString content_hash); ("bytes", JInt bytes)] -> Ok (Source_read { content_hash; bytes })
+         | _ -> error "invalid source.read payload")
+    | "source.parsed", "instant" -> one_int "form_count" (fun form_count -> Source_parsed { form_count })
+    | "source.macro_expanded", "instant" -> one_int "form_count" (fun form_count -> Source_macro_expanded { form_count })
+    | "source.error", "failed" ->
+        (match fields with [("stage", JString stage)] -> Ok (Source_error { stage }) | _ -> error "invalid source.error payload")
+    | "cache.trace.considered", "instant" ->
+        (match fields with
+         | [("cache_key", JString key); ("trace_index", JInt index); ("trace_count", JInt count); ("status", JString status); ("cell_id", cell)] ->
+             let status = match status with "usable" -> Some Usable | "stale" -> Some Stale | "unauthorized" -> Some Unauthorized | _ -> None in
+             let cell = match cell with JNull -> Some None | JString id -> Some (Some (Identity_types.Cell_id.of_string id)) | _ -> None in
+             (match status, cell with Some status, Some cell -> Ok (Cache_trace { key = Identity_types.Cache_key.of_string key; index; count; status; cell }) | _ -> error "invalid cache trace payload")
+         | _ -> error "invalid cache trace payload")
+    | "cache.hit", "instant" ->
+        (match fields with
+         | [("cache_key", JString key); ("outcome", JString outcome); ("result_hash", JString result_hash); ("cell_count", JInt cell_count)] ->
+             let outcome = match outcome with "ok" -> Some Succeeded | "failed" -> Some Failed_outcome | _ -> None in
+             (match outcome with Some outcome -> Ok (Cache_hit { key = Identity_types.Cache_key.of_string key; outcome; result_hash = Identity_types.Object_hash.of_digest result_hash; cell_count }) | None -> error "invalid cache hit outcome")
+         | _ -> error "invalid cache hit payload")
+    | "cache.miss", "instant" ->
+        (match fields with
+         | [("cache_key", JString key); ("reason", JString reason)] ->
+             let reason = match reason with "cache_reads_disabled" -> Some Cache_reads_disabled | "no_stored_trace" -> Some No_stored_trace | "no_usable_trace" -> Some No_usable_trace | "result_object_missing" -> Some Result_object_missing | _ -> None in
+             (match reason with Some reason -> Ok (Cache_miss { key = Identity_types.Cache_key.of_string key; reason }) | None -> error "invalid cache miss reason")
+         | _ -> error "invalid cache miss payload")
+    | "node.rebuild", "started" ->
+        (match fields with [("node_key", JString key)] -> Ok (Node_rebuild_started (Identity_types.Node_key.of_string key)) | _ -> error "invalid node rebuild payload")
+    | "node.rebuild", "finished" ->
+        (match fields with [("node_key", JString key); ("result_hash", JString result_hash)] -> Ok (Node_rebuild_finished { key = Identity_types.Node_key.of_string key; result_hash = Identity_types.Object_hash.of_digest result_hash }) | _ -> error "invalid node rebuild payload")
+    | "node.rebuild", "failed" ->
+        (match fields with [("node_key", JString key)] -> Ok (Node_rebuild_failed { key = Identity_types.Node_key.of_string key }) | _ -> error "invalid node rebuild payload")
+    | _ -> error "unknown event kind or phase"
+  in
+  match value 0 with
+  | Error _ as e -> e
+  | Ok (_, consumed) when consumed <> length -> error "trailing event JSON data"
+  | Ok (JObject fields, _) ->
+      let envelope = ["schema_version"; "run_id"; "event_id"; "parent_event_id"; "host_id"; "logical_time"; "category"; "kind"; "phase"; "visibility"; "payload"] in
+      if not (exact envelope fields) then error "event envelope is not canonical"
+      else
+        (match int_field "schema_version" fields, string_field "run_id" fields,
+               int_field "event_id" fields, option_int_field "parent_event_id" fields,
+               string_field "host_id" fields, int_field "logical_time" fields,
+               string_field "category" fields, string_field "kind" fields,
+               string_field "phase" fields, string_field "visibility" fields,
+               field "payload" fields with
+         | Some 1, Some run_id, Some event_id, Some parent_event_id, Some host_id,
+           Some logical_time, Some category_name, Some kind_name, Some phase_text,
+           Some visibility_text, Some (JObject payload_fields) ->
+             (match payload kind_name phase_text payload_fields with
+              | Error _ as e -> e
+              | Ok payload_value ->
+                  let expected_visibility = visibility_name (visibility payload_value) in
+                  if category_name <> category payload_value || kind_name <> kind payload_value ||
+                     phase_text <> phase_name (phase payload_value) || visibility_text <> expected_visibility
+                  then error "event envelope disagrees with typed payload"
+                  else
+                    let event = { schema_version = 1; run_id; event_id; parent_event_id; host_id; logical_time; category = category_name; kind = kind_name; phase = phase payload_value; visibility = visibility payload_value; payload = payload_value } in
+                    if to_json event = text then Ok event else error "event JSON is not canonical")
+         | Some _, _, _, _, _, _, _, _, _, _, _ -> error "unsupported event schema version"
+         | _ -> error "invalid event envelope")
+  | Ok _ -> error "event JSON must be an object"

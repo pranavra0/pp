@@ -7,6 +7,10 @@
  (libraries pp.kernel pp.runtime unix))
 
 (executable
+ (name event_unit)
+ (libraries pp.kernel pp.runtime))
+
+(executable
  (name observation_unit)
  (libraries pp.kernel pp.runtime unix))
 

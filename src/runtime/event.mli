@@ -4,7 +4,7 @@ type level = Summary | Semantic | Evaluation | Transport
 type visibility = Public | Redacted
 type phase = Instant | Started | Finished | Failed
 type cache_trace_status = Usable | Stale | Unauthorized
-type cache_outcome = Ok | Failed_outcome
+type cache_outcome = Succeeded | Failed_outcome
 type cache_miss_reason = Cache_reads_disabled | No_stored_trace |
   No_usable_trace | Result_object_missing
 type payload =
@@ -62,3 +62,4 @@ val kind : payload -> string
 val phase : payload -> phase
 val visibility : payload -> visibility
 val to_json : t -> string
+val of_json : string -> (t, string) result
