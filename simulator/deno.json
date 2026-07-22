@@ -2,7 +2,7 @@
   "tasks": {
     "generate": "deno run --allow-read=../src/runtime/event.ml --allow-write=src/events.generated.ts scripts/generate_events.ts",
     "test": "deno task generate && deno test --allow-read=fixtures src",
-    "build": "deno task generate && deno check src/app.ts && deno run --allow-read=src,fixtures --allow-write=site --allow-env --allow-run scripts/build.ts",
+    "build": "deno task generate && deno check src/app.ts && deno run --allow-read=src,fixtures --allow-write=site scripts/build.ts && deno bundle --platform=browser --minify --sourcemap -o site/app.js src/app.ts",
     "check": "deno task test && deno task build"
   },
   "imports": {
