@@ -34,7 +34,11 @@ run state. Dynamic scope carries values that must follow the current call.
 The session also owns an `Event_sink`. Ordinary commands receive the no-op
 sink. `pp simulate --record` installs a streaming JSON Lines sink and runtime
 boundaries emit the same typed `Event` values consumed by recording tests.
-Event producers do not encode JSON or retain recordings.
+Event producers do not encode JSON or retain recordings. The event codec
+accepts only its canonical field order and schema version. Redaction happens
+before `Event_sink.emit`; unauthorized cell identities are replaced rather
+than passed to the sink, and event payloads contain hashes and counts instead
+of source paths, capability tokens, or stored bytes.
 
 The semantic spine for a persistent computation is:
 
@@ -268,8 +272,8 @@ dune exec ./tools/fuzz.exe -- --grammar full --count 2000
 dune runtest
 ```
 
-The focused executables cover kernel, repositories, observations, lifecycle,
-and parsers. The shell tests cover process, filesystem, store, watch,
+The focused executables cover kernel, repositories, events, observations,
+lifecycle, and parsers. The shell tests cover process, filesystem, store, watch,
 reconciliation, cluster, and crash behavior. See [TESTING.md](TESTING.md) for
 the test machinery.
 

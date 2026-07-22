@@ -16,7 +16,7 @@ dune runtest          # runs scripts/run-tests.sh
 dune runtest --force  # re-run even if dune's cache says nothing changed
 ```
 
-`dune runtest` first runs the architecture gates and five focused OCaml test
+`dune runtest` first runs the architecture gates and six focused OCaml test
 executables, then `scripts/run-tests.sh` does two things:
 
 - runs every `tests/NNN-*.pp` and diffs its stdout against
@@ -29,7 +29,7 @@ multi-process store scenarios (mutating files, grants or globals between
 cluster members.
 
 The category counts are printed by `scripts/test-categories.sh`. The focused
-executables are deliberately small and use real kernel, repository,
+executables are deliberately small and use real kernel, repository, event,
 observation, lifecycle, and reader implementations; they do not replace the
 process and filesystem integration tests.
 
