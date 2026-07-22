@@ -33,16 +33,18 @@ and every event level. It compares status, stdout, stderr, and a content
 manifest of all durable store files; a repeated 64-node cold build bounds
 recording size and runtime overhead.
 
-The replay client has a separate gate:
+The simulator client and shared browser runtime have a separate gate:
 
 ```sh
 cd simulator && deno task check
 ```
 
-It regenerates browser event kinds from the OCaml event module, type-checks
-and bundles the static application, tests reducer/decoder/causal behavior, and
-seeks through a generated million-event recording. Cached seek near the end
-must remain below 250 ms.
+It builds the evaluator with js_of_ocaml, regenerates browser event kinds from
+the OCaml event module, type-checks and bundles the static application, tests
+reducer/decoder/causal behavior, and seeks through a generated million-event
+recording. Runtime smoke cases cover both readers, functions, macros, effects,
+persistent-node cold/warm parity, diagnostics, and unavailable host services.
+Cached seek near the end must remain below 250 ms.
 
 The category counts are printed by `scripts/test-categories.sh`. The focused
 executables are deliberately small and use real kernel, repository, event,

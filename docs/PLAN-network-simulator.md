@@ -761,22 +761,10 @@ network, cluster, and reconciliation behavior.
 
 ## 13. Delivery sequence and exit gates
 
-Milestones 3–6 complete public v1. Development previews may deploy
+Milestones 4–6 complete public v1. Development previews may deploy
 earlier but are visibly marked and carry no v1 compatibility promise.
 Milestone 7 is post-v1: remote multi-machine transport and trustworthy live
 network performance work do not block the accepted single-machine release.
-
-### Milestone 3: executable browser playground
-
-- portable runtime boundary and browser host-service implementations;
-- js_of_ocaml build of the shared frontend/evaluator;
-- source/scenario editor, diagnostics, examples, and in-browser execution;
-- native/browser parity matrix and unavailable-host-service tests;
-- GitHub Pages artifact and deployment smoke test.
-
-Exit: the public site runs the initial vertical slice through the actual pp
-semantic implementation using virtual services, and every language form has
-a native/browser parity case.
 
 ### Milestone 4: controller and live local execution
 

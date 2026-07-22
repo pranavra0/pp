@@ -55,7 +55,7 @@ jobs:
         with:
           deno-version: v2.8.1
 
-      - name: Build simulator replay UI
+      - name: Build simulator playground
         working-directory: simulator
         run: deno task build
 

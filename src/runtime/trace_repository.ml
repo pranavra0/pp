@@ -116,17 +116,17 @@ let with_trace_lock t (key : Identity_types.Cache_key.t) (f : unit -> unit) : un
     let lock_path = Store_layout.path t.layout Store_layout.Locks
       (Identity_types.Cache_key.to_string key) in
     match (try Some (Unix.openfile lock_path [Unix.O_CREAT; Unix.O_WRONLY] 0o644)
-           with Unix.Unix_error _ -> None) with
+           with _ -> None) with
     | None -> f ()  (* lock acquisition is best-effort; correctness is atomic replace *)
     | Some fd ->
         Fun.protect
           ~finally:(fun () ->
-            try Unix.close fd with Unix.Unix_error _ -> ())
+            try Unix.close fd with _ -> ())
           (fun () ->
-            (try Unix.lockf fd Unix.F_LOCK 0 with Unix.Unix_error _ -> ());
+            (try Unix.lockf fd Unix.F_LOCK 0 with _ -> ());
             Fun.protect
               ~finally:(fun () ->
-                try Unix.lockf fd Unix.F_ULOCK 0 with Unix.Unix_error _ -> ())
+                try Unix.lockf fd Unix.F_ULOCK 0 with _ -> ())
               f)
   end
 

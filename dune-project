@@ -12,4 +12,8 @@
  (depends
   (ocaml (>= 5.1))
   dune-build-info
-  cryptokit))
+  cryptokit
+  digestif
+  js_of_ocaml
+  js_of_ocaml-ppx
+  zarith_stubs_js))

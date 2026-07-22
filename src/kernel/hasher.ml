@@ -18,7 +18,9 @@ let hex_encode (s : string) : string =
     chars.[nibble])
 
 let hash_string (s : string) : string =
-  hex_encode (Cryptokit.hash_string (Cryptokit.Hash.sha256 ()) s)
+  match Sys.backend_type with
+  | Sys.Other "js_of_ocaml" -> Digestif.SHA256.(to_hex (digest_string s))
+  | _ -> hex_encode (Cryptokit.hash_string (Cryptokit.Hash.sha256 ()) s)
 
 (* Injective framing.  Each part is emitted as its byte length in decimal, a
    ':', then the part's bytes — so the pre-hash string can be parsed back to

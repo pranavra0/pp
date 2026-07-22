@@ -1,5 +1,5 @@
 # layer: the only libraries this layer may link
-kernel: cryptokit dune-build-info
+kernel: cryptokit digestif.ocaml dune-build-info
 frontend: pp.kernel
 runtime: pp.kernel pp.frontend unix
 app: pp.kernel pp.frontend pp.runtime cryptokit unix

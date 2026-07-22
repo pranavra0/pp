@@ -53,7 +53,8 @@ let maybe_crash boundary = match Lazy.force crash_spec with
   | _ -> ()
 let atomic_replace_raw path content =
   incr write_count; maybe_crash "before";
-  let tmp = path ^ ".tmp." ^ string_of_int (Unix.getpid ()) in
+  let process_id = try Unix.getpid () with _ -> 0 in
+  let tmp = path ^ ".tmp." ^ string_of_int process_id ^ "." ^ string_of_int !write_count in
   let oc = open_out_bin tmp in
   let renamed = ref false in
   Fun.protect
@@ -65,7 +66,7 @@ let atomic_replace_raw path content =
       maybe_crash "mid";
       close_out oc;
       maybe_crash "pre-rename";
-      Unix.rename tmp path;
+      Sys.rename tmp path;
       renamed := true;
       maybe_crash "post-rename")
 

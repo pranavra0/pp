@@ -43,13 +43,18 @@ and backpressures the producer with constant retained memory; it does not drop
 events. Its canonical envelope carries logical time and a nullable monotonic
 wall timestamp.
 
-`simulator/` is a static TypeScript replay client for those recordings. Its
+`simulator/` is a static TypeScript replay client and browser playground for
+those recordings. Its
 generated event-kind type comes from `src/runtime/event.ml`; its runtime
 decoder rejects unknown schemas and kinds. A pure reducer owns semantic replay
 state, persistent data structures make checkpoints cheap, and seeking restores
 a checkpoint before replaying forward. The topology, timeline, filters, and
-inspector are projections of that state. The client does not evaluate pp or
-infer runtime semantics from display text.
+inspector are projections of that state. A js_of_ocaml entrypoint links the
+same kernel, frontend, runtime, evaluator operation graph, and event sink as
+native commands. Browser execution supplies a virtual filesystem and serial
+scheduler; native process and network services are explicitly unavailable.
+TypeScript calls this entrypoint and does not evaluate pp or infer runtime
+semantics from display text.
 
 The semantic spine for a persistent computation is:
 
@@ -76,10 +81,14 @@ The four wrapped libraries and their Dune dependencies are:
 
 | Library | Directory | Dependencies | Owns |
 |---|---|---|---|
-| `pp.kernel` | `src/kernel/` | `cryptokit`, `dune-build-info` | Core types, identity, capabilities, codecs, cells, effects, and pure operations |
+| `pp.kernel` | `src/kernel/` | `cryptokit`, `digestif.ocaml`, `dune-build-info` | Core types, identity, capabilities, codecs, cells, effects, and pure operations |
 | `pp.frontend` | `src/frontend/` | `pp.kernel` | Readers, printers, desugaring, surface tables, comments, and lint |
 | `pp.runtime` | `src/runtime/` | `pp.kernel`, `pp.frontend`, `unix` | Evaluator, sessions, dynamic scopes, stores, cache policy, observations, worlds, domains, and scheduling |
 | `pp.app` | `src/app/` | `pp.kernel`, `pp.frontend`, `pp.runtime`, `cryptokit`, `unix` | CLI validation, production service construction, command dispatch, and properties |
+
+`src/browser/` is an application adapter, not a semantic library. It exports
+source execution and canonical events to JavaScript. The pure OCaml SHA-256
+implementation preserves native content hashes without browser C stubs.
 
 The dependency checks are in `tools/check-dependencies.sh` and
 `tools/dependency-manifest`. `dune build @architecture` runs them with the

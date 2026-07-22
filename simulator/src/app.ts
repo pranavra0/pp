@@ -1,6 +1,17 @@
 import { decodeJsonl, type EventCategory, type PpEvent } from "./event.ts";
 import { filterEvents, Replay, type ReplayState } from "./reducer.ts";
 
+declare global {
+  var ppBrowser: { run(sourceName: string, source: string): string };
+}
+
+const examples = {
+  "Cold and warm node": "let answer = force(node { 40 + 2 })\nprint(answer)",
+  "Functions and collections": "let twice = fn(x) { x * 2 }\n[twice(2), twice(3), {answer: twice(21)}]",
+  "Effects and handlers": "with { handlers: { :ask -> fn(question) { string-append(question, \" 42\") } } } { perform ask(\"answer:\") }",
+  "Macro expansion": "defmacro unless(test, body) { quasiquote { if unquote(test) { nil } else { unquote(body) } } }\nunless(false, 42)"
+} as const;
+
 const categories: readonly EventCategory[] = ["run", "source", "identity", "cache", "node", "store"];
 const get = <T extends Element>(selector: string): T => {
   const element = document.querySelector<T>(selector);
@@ -19,6 +30,11 @@ const inspector = get<HTMLElement>("#inspector");
 const topology = get<SVGSVGElement>("#topology");
 const status = get<HTMLElement>("#status");
 const filterRoot = get<HTMLElement>("#filters");
+const runSource = get<HTMLButtonElement>("#run");
+const example = get<HTMLSelectElement>("#example");
+const surface = get<HTMLSelectElement>("#surface");
+const source = get<HTMLTextAreaElement>("#source");
+const diagnostics = get<HTMLElement>("#diagnostics");
 
 let events: readonly PpEvent[] = [];
 let replay = new Replay(events);
@@ -31,6 +47,12 @@ for (const category of categories) {
   label.innerHTML = `<input type="checkbox" value="${category}" checked> ${category}`;
   filterRoot.append(label);
 }
+
+for (const [name, text] of Object.entries(examples)) {
+  const option = document.createElement("option");
+  option.value = text; option.textContent = name; example.append(option);
+}
+source.value = example.value;
 
 const activeCategories = (): ReadonlySet<string> => new Set(
   [...filterRoot.querySelectorAll<HTMLInputElement>("input:checked")].map((input) => input.value)
@@ -114,6 +136,16 @@ stepBack.addEventListener("click", () => { stop(); cursor = Math.max(0, cursor -
 seek.addEventListener("input", () => { stop(); cursor = Number(seek.value); render(); });
 query.addEventListener("input", render);
 filterRoot.addEventListener("change", render);
+example.addEventListener("change", () => { source.value = example.value; });
+runSource.addEventListener("click", async () => {
+  stop(); diagnostics.textContent = "Running shared pp runtime…";
+  await new Promise((resolve) => window.setTimeout(resolve, 0));
+  const result = JSON.parse(globalThis.ppBrowser.run(surface.value, source.value)) as
+    { ok: boolean; output?: string; error?: string; events: string };
+  diagnostics.textContent = result.ok ? (result.output || "(no output)") : (result.error || "Evaluation failed");
+  await load(result.events);
+  cursor = events.length; render();
+});
 document.addEventListener("keydown", (event) => { if (event.code === "Space" && event.target === document.body) { event.preventDefault(); togglePlay(); } });
 
 try { await load(await (await fetch("local-build.jsonl")).text()); }

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>pp simulator replay</title>
+  <title>pp simulator playground</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -12,6 +12,8 @@
     <nav><a href="../">Manual</a></nav>
   </header>
   <div class="toolbar" aria-label="Replay controls">
+    <button id="run">Run source</button>
+    <select id="example" aria-label="Example"></select>
     <label class="file">Open JSONL <input id="recording" type="file" accept=".jsonl,application/jsonl"></label>
     <button id="step-back" title="Previous event">◀ Step</button>
     <button id="play">Play</button>
@@ -20,9 +22,15 @@
     <output id="status">Loading recording…</output>
   </div>
   <main>
-    <section class="canvas panel" aria-labelledby="topology-title">
-      <h2 id="topology-title">Topology</h2>
-      <svg id="topology" viewBox="0 0 900 340" role="img" aria-label="Recorded hosts and nodes"></svg>
+    <section class="workspace panel" aria-labelledby="source-title">
+      <h2 id="source-title">Source and scenario</h2>
+      <div class="editors">
+        <label>Program <select id="surface"><option value="playground.pp">.pp</option><option value="playground.ppl">.ppl</option></select>
+          <textarea id="source" spellcheck="false"></textarea></label>
+        <label>Scenario (.ppsim)<textarea id="scenario" spellcheck="false">scenario v1 { hosts: { browser: { store: "memory" } } }</textarea></label>
+      </div>
+      <pre id="diagnostics" aria-live="polite">Ready. Browser mode uses virtual host services.</pre>
+      <svg id="topology" viewBox="0 0 900 240" role="img" aria-label="Recorded hosts and nodes"></svg>
     </section>
     <section class="timeline panel" aria-labelledby="events-title">
       <h2 id="events-title">Events</h2>
@@ -35,6 +43,7 @@
       <div id="inspector"></div>
     </aside>
   </main>
+  <script src="pp-browser.js"></script>
   <script type="module" src="app.js"></script>
 </body>
 </html>

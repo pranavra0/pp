@@ -1,0 +1,9 @@
+(executable
+ (name pp_browser)
+ (modes js)
+ (modules pp_browser)
+ (libraries pp.kernel pp.frontend pp.runtime js_of_ocaml zarith_stubs_js)
+ (preprocess (pps js_of_ocaml-ppx))
+ (js_of_ocaml
+  (flags (:standard --enable effects))
+  (javascript_files cryptokit_rng_stubs.js)))
