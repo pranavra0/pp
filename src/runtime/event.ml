@@ -12,6 +12,10 @@ type payload =
   | Run_started
   | Run_finished
   | Run_failed
+  | Source_read of { content_hash : string; bytes : int }
+  | Source_parsed of { form_count : int }
+  | Source_macro_expanded of { form_count : int }
+  | Source_error of { stage : string }
   | Cache_trace of {
       key : Identity_types.Cache_key.t;
       index : int;
@@ -54,12 +58,16 @@ type t = {
 
 let level = function
   | Run_created | Run_started | Run_finished | Run_failed -> Summary
+  | Source_read _ | Source_parsed _ | Source_macro_expanded _ | Source_error _ ->
+      Semantic
   | Cache_trace _ | Cache_hit _ | Cache_miss _
   | Node_rebuild_started _ | Node_rebuild_finished _ | Node_rebuild_failed _ ->
       Semantic
 
 let category = function
   | Run_created | Run_started | Run_finished | Run_failed -> "run"
+  | Source_read _ | Source_parsed _ | Source_macro_expanded _ | Source_error _ ->
+      "source"
   | Cache_trace _ | Cache_hit _ | Cache_miss _ -> "cache"
   | Node_rebuild_started _ | Node_rebuild_finished _ | Node_rebuild_failed _ -> "node"
 
@@ -68,6 +76,10 @@ let kind = function
   | Run_started -> "run.started"
   | Run_finished -> "run.finished"
   | Run_failed -> "run.failed"
+  | Source_read _ -> "source.read"
+  | Source_parsed _ -> "source.parsed"
+  | Source_macro_expanded _ -> "source.macro_expanded"
+  | Source_error _ -> "source.error"
   | Cache_trace _ -> "cache.trace.considered"
   | Cache_hit _ -> "cache.hit"
   | Cache_miss _ -> "cache.miss"
@@ -78,8 +90,9 @@ let kind = function
 let phase = function
   | Run_started | Node_rebuild_started _ -> Started
   | Run_finished | Node_rebuild_finished _ -> Finished
-  | Run_failed | Node_rebuild_failed _ -> Failed
-  | Run_created | Cache_trace _ | Cache_hit _ | Cache_miss _ -> Instant
+  | Run_failed | Source_error _ | Node_rebuild_failed _ -> Failed
+  | Run_created | Source_read _ | Source_parsed _ | Source_macro_expanded _
+  | Cache_trace _ | Cache_hit _ | Cache_miss _ -> Instant
 
 let visibility = function
   | Cache_trace { cell = None; status = (Stale | Unauthorized); _ } ->
@@ -120,6 +133,12 @@ let miss_name = function
 let payload_fields = function
   | Run_created | Run_started | Run_finished -> []
   | Run_failed -> []
+  | Source_read { content_hash; bytes } ->
+      [ field "content_hash" (string content_hash);
+        field "bytes" (string_of_int bytes) ]
+  | Source_parsed { form_count } | Source_macro_expanded { form_count } ->
+      [field "form_count" (string_of_int form_count)]
+  | Source_error { stage } -> [field "stage" (string stage)]
   | Cache_trace { key; index; count; status; cell } ->
       [ field "cache_key" (string (Identity_types.Cache_key.to_string key));
         field "trace_index" (string_of_int index);

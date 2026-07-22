@@ -33,6 +33,31 @@ let macro_services () =
     force_deep = Force_deep.force_deep;
     initial_env = Primitives.initial_env }
 
+let emit payload =
+  let session = Effect.perform Dynamic_scope.Get_session in
+  ignore (Event_sink.emit (Session.event_sink session) payload)
+
+let read_and_expand ~source input =
+  emit (Event.Source_read {
+    content_hash = Hasher.hash_string input;
+    bytes = String.length input;
+  });
+  let exprs =
+    try Reader_braces.read_dispatch ~source ~path:source input
+    with error ->
+      emit (Event.Source_error { stage = "parse" });
+      raise error
+  in
+  emit (Event.Source_parsed { form_count = List.length exprs });
+  let expanded =
+    try Macro.expand_toplevel_list (macro_services ()) exprs
+    with error ->
+      emit (Event.Source_error { stage = "macro_expand" });
+      raise error
+  in
+  emit (Event.Source_macro_expanded { form_count = List.length expanded });
+  expanded
+
 (* A runtime error escaping a top-level form reports that
    form's source location — unless its message already carries one (a
    " at …:<line>" suffix), so located errors are never double-located.
@@ -67,9 +92,7 @@ let execute_string ?(retain_thunks = false) ?(source : string = "<?>") (input : 
   (* `.ppb` sources read with the brace reader (Reader_braces
      dispatches on the extension; every other source uses the
      sexpr reader). *)
-  let exprs =
-    Macro.expand_toplevel_list (macro_services ())
-      (Reader_braces.read_dispatch ~source ~path:source input) in
+  let exprs = read_and_expand ~source input in
   process_exprs exprs
 
 (* Tree-walker: execute a source file *)
@@ -98,9 +121,7 @@ let execute_file ?(retain_thunks = false) (path : string) : value list =
 let execute_sources ?(retain_thunks = false) (sources : (string * string) list) : value list =
   init ~retain_thunks (Effect.perform Dynamic_scope.Get_session);
   List.concat_map (fun (source, input) ->
-    let exprs =
-      Macro.expand_toplevel_list (macro_services ())
-        (Reader_braces.read_dispatch ~source ~path:source input) in
+    let exprs = read_and_expand ~source input in
     process_exprs exprs)
     sources
 

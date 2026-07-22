@@ -12,6 +12,10 @@ type payload =
   | Run_started
   | Run_finished
   | Run_failed
+  | Source_read of { content_hash : string; bytes : int }
+  | Source_parsed of { form_count : int }
+  | Source_macro_expanded of { form_count : int }
+  | Source_error of { stage : string }
   | Cache_trace of {
       key : Identity_types.Cache_key.t;
       index : int;
