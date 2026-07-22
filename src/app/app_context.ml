@@ -74,6 +74,7 @@ let create host cli =
         let digest = Hasher.hash_concat (Cli.command_argv cli) in
         let run_id = "run-" ^ String.sub digest 0 16 in
         Event_sink.jsonl ~path ~run_id ~host_id:"local"
+          ~level:(Cli.event_level cli)
   in
   let session = Session.create ~event_sink ~scheduler Evaluator.operations in
   let reconciliation = Reconciliation.create ~session ~invocation in

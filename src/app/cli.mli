@@ -40,6 +40,7 @@ val no_cache : t -> bool
 val check : t -> bool
 val graph : t -> bool
 val record_file : t -> string option
+val event_level : t -> Event.level
 val lint_file : t -> string option
 val island_pins : t -> string option
 val cluster_init : t -> bool

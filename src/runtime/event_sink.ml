@@ -3,27 +3,37 @@ type t = {
   destination : destination;
   run_id : string;
   host_id : string;
+  level : Event.level;
   mutable next_id : int;
   mutable closed : bool;
 }
 
 let noop = {
-  destination = Noop; run_id = ""; host_id = ""; next_id = 1; closed = false;
+  destination = Noop; run_id = ""; host_id = ""; level = Event.Summary;
+  next_id = 1; closed = false;
 }
 
-let jsonl ~path ~run_id ~host_id = {
+let jsonl ~path ~run_id ~host_id ~level = {
   destination = Jsonl (open_out_bin path);
   run_id;
   host_id;
+  level;
   next_id = 1;
   closed = false;
 }
 
 let enabled t = match t.destination with Noop -> false | Jsonl _ -> true
 
+let rank = function
+  | Event.Summary -> 0
+  | Event.Semantic -> 1
+  | Event.Evaluation -> 2
+  | Event.Transport -> 3
+
 let emit t ?parent_event_id payload =
   match t.destination with
   | Noop -> None
+  | Jsonl _ when rank (Event.level payload) > rank t.level -> None
   | Jsonl channel ->
       if t.closed then invalid_arg "event sink is closed";
       let event_id = t.next_id in

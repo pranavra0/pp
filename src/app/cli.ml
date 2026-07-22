@@ -37,6 +37,7 @@ type t = {
   check : bool;
   graph : bool;
   record_file : string option;
+  event_level : Event.level;
   lint_file : string option;
   island_pins : string option;
   cluster_init : bool;
@@ -94,6 +95,7 @@ type raw = {
   check : bool ref;
   graph : bool ref;
   record_file : string option ref;
+  event_level : string ref;
   lint_file : string option ref;
   island_pins : string option ref;
   cluster_init : bool ref;
@@ -123,7 +125,8 @@ let new_raw command_argv = {
   dump_pins_file = ref None; emit_braces_file = ref None;
   roundtrip_braces_file = ref None; fmt = ref None; compare_hash = ref None;
   list_comments = ref None; why = ref false; no_cache = ref false;
-  check = ref false; graph = ref false; record_file = ref None; lint_file = ref None;
+  check = ref false; graph = ref false; record_file = ref None;
+  event_level = ref "semantic"; lint_file = ref None;
   island_pins = ref None; cluster_init = ref false; mint_token = ref None;
   transport_push = ref None; transport_pull = ref None; serve_hit = ref None;
   recv_hit = ref None; remote_node = ref None;
@@ -283,6 +286,8 @@ let flags raw =
     doc_of "  pp simulate --record <events.jsonl> <file.pp>  Run with semantic JSONL recording\n"
       (flag "simulate" (fun () -> ()));
     opt1 "--record" (fun path -> raw.record_file := Some path);
+    doc_of "  pp --event-level summary|semantic|evaluation|transport  Recording detail (default: semantic)\n"
+      (opt1 "--event-level" (fun level -> raw.event_level := level));
     doc_of "  pp lint <file.pp>         Check source file for naming/style convention violations\n"
       (opt1 "lint" (fun f -> raw.lint_file := Some f));
     doc_of "  pp run <file>            Run a pp source file\n"
@@ -298,6 +303,12 @@ let validated raw =
       ~option_name:"--gc-keep-epochs" !(raw.gc_keep_epochs) in
   let grace = Cli_validation.nonnegative_float
       ~option_name:"--gc-grace-seconds" !(raw.gc_grace_seconds) in
+  let event_level = match !(raw.event_level) with
+    | "summary" -> Event.Summary
+    | "semantic" -> Event.Semantic
+    | "evaluation" -> Event.Evaluation
+    | "transport" -> Event.Transport
+    | value -> command ("invalid --event-level: " ^ value) in
   { command_argv = raw.command_argv; program_argv = !(raw.program_argv);
     files = List.rev !(raw.files); grants = List.rev !(raw.grants);
     eval_string = !(raw.eval_string); reconcile_root = !(raw.reconcile_root);
@@ -312,7 +323,7 @@ let validated raw =
     roundtrip_braces_file = !(raw.roundtrip_braces_file); fmt = !(raw.fmt);
     compare_hash = !(raw.compare_hash); list_comments = !(raw.list_comments);
     why = !(raw.why); no_cache = !(raw.no_cache); check = !(raw.check);
-    graph = !(raw.graph); record_file = !(raw.record_file);
+    graph = !(raw.graph); record_file = !(raw.record_file); event_level;
     lint_file = !(raw.lint_file);
     island_pins = !(raw.island_pins); cluster_init = !(raw.cluster_init);
     mint_token = !(raw.mint_token); transport_push = !(raw.transport_push);
@@ -372,6 +383,7 @@ let no_cache (t : t) = t.no_cache
 let check (t : t) = t.check
 let graph (t : t) = t.graph
 let record_file (t : t) = t.record_file
+let event_level (t : t) = t.event_level
 let lint_file (t : t) = t.lint_file
 let island_pins (t : t) = t.island_pins
 let cluster_init (t : t) = t.cluster_init
