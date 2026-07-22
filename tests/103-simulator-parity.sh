@@ -44,6 +44,13 @@ for level in summary semantic evaluation transport; do
   fi
 done
 
+if ! grep -q '"category":"evaluation"' "$TMP/semantic.jsonl" &&
+   grep -q '"category":"evaluation"' "$TMP/evaluation.jsonl"; then
+  ok "evaluation-detail-selection"
+else
+  bad "evaluation-detail-selection" "evaluation events were missing or leaked into semantic detail"
+fi
+
 printf 'unknown-name\n' > "$TMP/work/error.pp"
 mkdir -p "$TMP/error-plain-home"
 set +e
@@ -105,7 +112,7 @@ done
 
 events=$(wc -l < "$TMP/bench-1.jsonl")
 bytes=$(wc -c < "$TMP/bench-1.jsonl")
-if [ "$events" -le 800 ] && [ "$bytes" -le $((events * 1024)) ]; then
+if [ "$events" -le 1200 ] && [ "$bytes" -le $((events * 1024)) ]; then
   ok "bounded-recording" "($events events, $bytes bytes)"
 else
   bad "bounded-recording" "$events events, $bytes bytes"

@@ -64,5 +64,12 @@ let force_deep (v : value) : value =
   if Scheduler.schedules_batches scheduler then
     (match collect_unevaluated_nodes v with
      | [] -> ()
-     | jobs -> Scheduler.dispatch_batch scheduler jobs);
+     | jobs ->
+         ignore (Event_sink.emit (Session.event_sink session)
+           (Event.Runtime_boundary {
+              boundary = Event.Scheduler_dispatch;
+              subject = Scheduler.handler_name (Scheduler.current_handler scheduler);
+              count = List.length jobs;
+            }));
+         Scheduler.dispatch_batch scheduler jobs);
   force_deep_plain ~force:(Session.force session) v

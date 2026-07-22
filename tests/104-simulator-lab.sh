@@ -70,5 +70,15 @@ if (!started.url.startsWith("http://127.0.0.1:") || !started.url.includes("#toke
   if (!recording.ok) process.exit(1);
   const bundle = await fetch(`${url.origin}/bundle`, { headers: { authorization: `Bearer ${session}` } }).then((response) => response.json());
   if (bundle.bundle_version !== 1 || !bundle.events_jsonl.includes('"kind":"network.response"')) process.exit(1);
+  for (let iteration = 0; iteration < 8; iteration += 1) {
+    const response = await fetch(`${url.origin}/run`, { method: "POST", headers, body: scenario });
+    const accepted = await response.json(); if (!accepted.running) process.exit(1);
+    let state;
+    do {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      state = await fetch(`${url.origin}/recording?from=1`, { headers: { authorization: `Bearer ${session}` } });
+    } while (state.status === 202);
+    if (!state.ok) process.exit(1);
+  }
 })().catch((error) => { console.error(error); process.exit(1); });
 NODE

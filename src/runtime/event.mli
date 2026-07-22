@@ -11,6 +11,11 @@ type cache_miss_reason = Cache_reads_disabled | No_stored_trace |
 type network_operation = Request | Response | Drop | Retry | Unreachable |
   Corruption_detected
 type fault_operation = Partition | Heal | Crash | Restart
+type boundary = Evaluation_enter | Evaluation_exit | Evaluation_fail |
+  Scheduler_dispatch | Process_spawn | Process_exit |
+  Capability_allowed | Capability_denied |
+  Domain_observe | Domain_diff | Domain_apply | Domain_verify |
+  Reconcile_start | Reconcile_finish | Watch_poll | Watch_changed
 type payload =
   | Run_created
   | Run_configured of { event_level : level }
@@ -66,6 +71,7 @@ type payload =
   | Fault_injected of { operation : fault_operation; target : string }
   | Scheduler_fallback of { link_id : string }
   | Metric_summary of { requests : int; retries : int; bytes : int }
+  | Runtime_boundary of { boundary : boundary; subject : string; count : int }
 
 type t = private {
   schema_version : int;

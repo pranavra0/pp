@@ -136,6 +136,11 @@ type pass = {
   targets : target list;
 }
 
+let emit boundary subject count =
+  ignore (Event_sink.emit
+    (Session.event_sink (Effect.perform Dynamic_scope.Get_session))
+    (Event.Runtime_boundary { boundary; subject; count }))
+
 let stratification_check session (write_domains : target list) : unit =
   List.iter (fun (cell, _) ->
     List.iter (fun target ->
@@ -189,10 +194,12 @@ let verify_failed_msg (name : string) : string =
   "reconcile: verify-after-write failed for domain " ^ name
 
 let observe_target (target : target) : observed =
+  emit Event.Domain_observe target.name 1;
   { target; state = observe_domain target.entry target.name }
 
 let diff_target (observed : observed) : planned =
   let target = observed.target in
+  emit Event.Domain_diff target.name 1;
   let diff_closure = match target.entry.Session.dm_diff with
     | Some d -> d
     | None -> assert false (* filtered out when the pass is prepared *)
@@ -203,6 +210,7 @@ let diff_target (observed : observed) : planned =
 
 let apply_target (planned : planned) : unit =
   let target = planned.observed.target in
+  emit Event.Domain_apply target.name (List.length planned.summary);
   let apply_closure = match target.entry.Session.dm_apply with
     | Some a -> a
     | None -> assert false (* filtered out when the pass is prepared *)
@@ -219,6 +227,7 @@ let apply_target (planned : planned) : unit =
 
 let verify_target (planned : planned) : unit =
   let target = planned.observed.target in
+  emit Event.Domain_verify target.name 1;
   let observed2 = observe_target target in
   let planned2 = diff_target observed2 in
   if not (plan_items_empty planned2.plan) then

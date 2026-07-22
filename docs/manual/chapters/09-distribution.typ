@@ -112,8 +112,8 @@ Scenarios are finite `.ppsim` data. Hosts, directed links, seeded loss and
 corruption, partitions, crashes, and assertions are explicit; unknown fields
 are errors. The controller binds only to `127.0.0.1`, uses a one-time bootstrap
 token, and rejects program paths outside its fixed workspace. Exported bundles
-contain canonical `.ppsim`, canonical event JSON Lines, modeled protocol
-events, assertion results, and aggregate metrics, but no store objects,
+contain canonical `.ppsim`, canonical event JSON Lines including protocol and
+fault events, assertion results, and aggregate metrics, but no store objects,
 capability tokens, or artifact bytes.
 
 The checked `simulator/fixtures/network.ppsim` example runs an ordinary node
@@ -121,4 +121,7 @@ program through native pp, transfers a modeled artifact over a bandwidth- and
 latency-limited link, and asserts both `run.finished` and `network.response`.
 `deno task lab bundle fixtures/network.ppsim run.bundle.json` reproduces it
 headlessly from the `simulator` directory. The deterministic network tests also
-pin partition/heal, retry after loss, corruption detection, and fallback.
+pin partition/heal, retry after loss, corruption detection, and fallback. A
+virtual-link delivery enables the native remote scheduler and its typed cache
+protocol; an unavailable virtual link leaves the same node to the native local
+fallback path.

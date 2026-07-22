@@ -761,43 +761,8 @@ network, cluster, and reconciliation behavior.
 
 ## 13. Delivery sequence and exit gates
 
-Milestones 4–6 complete public v1. Development previews may deploy
-earlier but are visibly marked and carry no v1 compatibility promise.
 Milestone 7 is post-v1: remote multi-machine transport and trustworthy live
 network performance work do not block the accepted single-machine release.
-
-### Milestone 4: controller and live local execution
-
-- loopback controller, command acknowledgements, streaming/backpressure,
-  reconnect, portable run bundle;
-- source/scenario diagnostics and run controls;
-- end-to-end browser and CLI tests.
-
-Exit: the same local build passes headless, replay, and live UI modes.
-
-### Milestone 5: deterministic network lab
-
-- `.ppsim` schema, virtual clock, virtual hosts/links, fault actions;
-- remote protocol over the virtual transport;
-- seeded assertions and golden network scenarios;
-- aggregate metrics and headless workload generation.
-
-Exit: partition/heal, loss/retry, corruption detection, remote fallback, and
-cross-member cache hits are deterministic and replay identically. Each case
-has both a plain-language causal explanation and inspectable protocol events;
-the exported run bundle can become a headless regression fixture.
-
-### Milestone 6: full coverage and v1 release hardening
-
-- generated language/law coverage matrix is complete;
-- all golden scenarios and UI accessibility/performance gates pass;
-- simulator artifact integrated with the deployed site;
-- manual teaches one verified scenario and links to the lab;
-- remove prototypes, compatibility adapters, completed plan material, and
-  obsolete observability paths.
-
-Exit: clean build, architecture gates, 2,000-case full fuzzer, full suite,
-browser suite, loopback stress smoke, and deployment smoke all pass.
 
 ### Milestone 7: post-v1 remote transport and stress
 

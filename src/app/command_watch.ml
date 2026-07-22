@@ -37,18 +37,24 @@ let run ctx cli files =
   let rec loop snapshot =
     (try Unix.sleepf (Cli.watch_interval cli) with _ -> Unix.sleep 1);
     Session.begin_pass session;
+    ignore (Event_sink.emit (Session.event_sink session) (Event.Runtime_boundary {
+      boundary = Event.Watch_poll; subject = "cells"; count = List.length snapshot;
+    }));
     let changed = List.filter_map (fun (cell, recorded) ->
       match Observation.observe_id (Identity_types.Cell_id.of_string cell) with
       | Some current when Identity_types.Observed_hash.to_string current <> recorded -> Some cell
       | _ -> None) snapshot in
     if changed <> [] then
+      (ignore (Event_sink.emit (Session.event_sink session) (Event.Runtime_boundary {
+         boundary = Event.Watch_changed; subject = "cells"; count = List.length changed;
+       }));
       if Cli.stabilize cli then begin
         Printf.eprintf "[watch] %d cell(s) changed — stabilizing\n%!" (List.length changed);
         loop (observe_changed ~previous:snapshot changed)
       end else begin
         Printf.eprintf "[watch] cell(s) changed — re-evaluating\n%!";
         loop (observe ())
-      end
+      end)
     else begin
       (match !last_desired with
        | Some value -> Command_reconcile.run_pass ctx cli (Some value)

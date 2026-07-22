@@ -54,6 +54,22 @@ let payloads = [
   Event.Fault_injected { operation = Event.Restart; target = "worker" };
   Event.Scheduler_fallback { link_id = "a-b" };
   Event.Metric_summary { requests = 3; retries = 2; bytes = 12 };
+  Event.Runtime_boundary { boundary = Event.Evaluation_enter; subject = "expression"; count = 1 };
+  Event.Runtime_boundary { boundary = Event.Evaluation_exit; subject = "expression"; count = 1 };
+  Event.Runtime_boundary { boundary = Event.Evaluation_fail; subject = "expression"; count = 1 };
+  Event.Runtime_boundary { boundary = Event.Scheduler_dispatch; subject = "remote:worker"; count = 2 };
+  Event.Runtime_boundary { boundary = Event.Process_spawn; subject = "cc"; count = 3 };
+  Event.Runtime_boundary { boundary = Event.Process_exit; subject = "cc"; count = 0 };
+  Event.Runtime_boundary { boundary = Event.Capability_allowed; subject = "process"; count = 1 };
+  Event.Runtime_boundary { boundary = Event.Capability_denied; subject = "process"; count = 0 };
+  Event.Runtime_boundary { boundary = Event.Domain_observe; subject = "fs"; count = 1 };
+  Event.Runtime_boundary { boundary = Event.Domain_diff; subject = "fs"; count = 1 };
+  Event.Runtime_boundary { boundary = Event.Domain_apply; subject = "fs"; count = 1 };
+  Event.Runtime_boundary { boundary = Event.Domain_verify; subject = "fs"; count = 1 };
+  Event.Runtime_boundary { boundary = Event.Reconcile_start; subject = "pass"; count = 1 };
+  Event.Runtime_boundary { boundary = Event.Reconcile_finish; subject = "pass"; count = 1 };
+  Event.Runtime_boundary { boundary = Event.Watch_poll; subject = "cells"; count = 2 };
+  Event.Runtime_boundary { boundary = Event.Watch_changed; subject = "cells"; count = 1 };
 ]
 
 let replace_once source before after =

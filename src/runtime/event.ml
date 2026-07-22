@@ -11,6 +11,11 @@ type cache_miss_reason = Cache_reads_disabled | No_stored_trace |
 type network_operation = Request | Response | Drop | Retry | Unreachable |
   Corruption_detected
 type fault_operation = Partition | Heal | Crash | Restart
+type boundary = Evaluation_enter | Evaluation_exit | Evaluation_fail |
+  Scheduler_dispatch | Process_spawn | Process_exit |
+  Capability_allowed | Capability_denied |
+  Domain_observe | Domain_diff | Domain_apply | Domain_verify |
+  Reconcile_start | Reconcile_finish | Watch_poll | Watch_changed
 type payload =
   | Run_created
   | Run_configured of { event_level : level }
@@ -66,6 +71,7 @@ type payload =
   | Fault_injected of { operation : fault_operation; target : string }
   | Scheduler_fallback of { link_id : string }
   | Metric_summary of { requests : int; retries : int; bytes : int }
+  | Runtime_boundary of { boundary : boundary; subject : string; count : int }
 
 type t = {
   schema_version : int;
@@ -93,6 +99,9 @@ let level = function
       Semantic
   | Network_operation _ | Fault_injected _ | Scheduler_fallback _ -> Semantic
   | Metric_summary _ -> Summary
+  | Runtime_boundary { boundary = Evaluation_enter | Evaluation_exit |
+      Evaluation_fail; _ } -> Evaluation
+  | Runtime_boundary _ -> Semantic
 
 let category = function
   | Run_created | Run_configured _ | Run_started | Run_finished | Run_failed -> "run"
@@ -106,6 +115,15 @@ let category = function
   | Fault_injected _ -> "fault"
   | Scheduler_fallback _ -> "scheduler"
   | Metric_summary _ -> "metric"
+  | Runtime_boundary { boundary; _ } ->
+      (match boundary with
+       | Evaluation_enter | Evaluation_exit | Evaluation_fail -> "evaluation"
+       | Scheduler_dispatch -> "scheduler"
+       | Process_spawn | Process_exit -> "process"
+       | Capability_allowed | Capability_denied -> "capability"
+       | Domain_observe | Domain_diff | Domain_apply | Domain_verify -> "domain"
+       | Reconcile_start | Reconcile_finish -> "reconcile"
+       | Watch_poll | Watch_changed -> "watch")
 
 let kind = function
   | Run_created -> "run.created"
@@ -139,6 +157,17 @@ let kind = function
        | Crash -> "fault.crash" | Restart -> "fault.restart")
   | Scheduler_fallback _ -> "scheduler.fallback"
   | Metric_summary _ -> "metric.summary"
+  | Runtime_boundary { boundary; _ } ->
+      (match boundary with
+       | Evaluation_enter | Evaluation_exit | Evaluation_fail -> "evaluation.expression"
+       | Scheduler_dispatch -> "scheduler.dispatch"
+       | Process_spawn -> "process.spawn" | Process_exit -> "process.exit"
+       | Capability_allowed -> "capability.check.allowed"
+       | Capability_denied -> "capability.check.denied"
+       | Domain_observe -> "domain.observe" | Domain_diff -> "domain.diff"
+       | Domain_apply -> "domain.apply" | Domain_verify -> "domain.verify"
+       | Reconcile_start | Reconcile_finish -> "reconcile.pass"
+       | Watch_poll -> "watch.poll" | Watch_changed -> "watch.changed")
 
 let phase = function
   | Run_started | Node_rebuild_started _ -> Started
@@ -151,6 +180,12 @@ let phase = function
   | Store_object_persisted _ | Store_trace_persisted _ -> Instant
   | Network_operation _ | Fault_injected _ | Scheduler_fallback _
   | Metric_summary _ -> Instant
+  | Runtime_boundary { boundary = Evaluation_enter | Process_spawn |
+      Reconcile_start; _ } -> Started
+  | Runtime_boundary { boundary = Evaluation_exit | Process_exit |
+      Reconcile_finish; _ } -> Finished
+  | Runtime_boundary { boundary = Evaluation_fail; _ } -> Failed
+  | Runtime_boundary _ -> Instant
 
 let visibility = function
   | Cache_trace { status = Stale None | Unauthorized; _ } -> Redacted
@@ -264,6 +299,8 @@ let payload_fields = function
       [ field "requests" (string_of_int requests);
         field "retries" (string_of_int retries);
         field "bytes" (string_of_int bytes) ]
+  | Runtime_boundary { subject; count; _ } ->
+      [field "subject" (string subject); field "count" (string_of_int count)]
 
 let to_json event =
   let fields =
@@ -455,6 +492,35 @@ let of_json text =
             ("bytes", JInt bytes)] ->
              Ok (Metric_summary { requests; retries; bytes })
          | _ -> error "invalid metric summary payload")
+    | ("evaluation.expression" | "scheduler.dispatch" | "process.spawn" |
+       "process.exit" | "capability.check.allowed" |
+       "capability.check.denied" | "domain.observe" | "domain.diff" |
+       "domain.apply" | "domain.verify" | "reconcile.pass" |
+       "watch.poll" | "watch.changed"), _ ->
+        (match fields with
+         | [("subject", JString subject); ("count", JInt count)] ->
+             let boundary = match kind, phase with
+               | "evaluation.expression", "started" -> Some Evaluation_enter
+               | "evaluation.expression", "finished" -> Some Evaluation_exit
+               | "evaluation.expression", "failed" -> Some Evaluation_fail
+               | "scheduler.dispatch", "instant" -> Some Scheduler_dispatch
+               | "process.spawn", "started" -> Some Process_spawn
+               | "process.exit", "finished" -> Some Process_exit
+               | "capability.check.allowed", "instant" -> Some Capability_allowed
+               | "capability.check.denied", "instant" -> Some Capability_denied
+               | "domain.observe", "instant" -> Some Domain_observe
+               | "domain.diff", "instant" -> Some Domain_diff
+               | "domain.apply", "instant" -> Some Domain_apply
+               | "domain.verify", "instant" -> Some Domain_verify
+               | "reconcile.pass", "started" -> Some Reconcile_start
+               | "reconcile.pass", "finished" -> Some Reconcile_finish
+               | "watch.poll", "instant" -> Some Watch_poll
+               | "watch.changed", "instant" -> Some Watch_changed
+               | _ -> None in
+             (match boundary with
+              | Some boundary -> Ok (Runtime_boundary { boundary; subject; count })
+              | None -> error "invalid runtime boundary phase")
+         | _ -> error "invalid runtime boundary payload")
     | _ -> error "unknown event kind or phase"
   in
   match value 0 with

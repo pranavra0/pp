@@ -12,7 +12,7 @@ const examples = {
   "Macro expansion": "defmacro unless(test, body) { quasiquote { if unquote(test) { nil } else { unquote(body) } } }\nunless(false, 42)"
 } as const;
 
-const categories: readonly EventCategory[] = ["run", "source", "identity", "cache", "node", "store", "scheduler", "network", "fault", "metric"];
+const categories: readonly EventCategory[] = ["run", "source", "evaluation", "identity", "cache", "node", "scheduler", "store", "capability", "network", "process", "domain", "reconcile", "watch", "fault", "metric"];
 const get = <T extends Element>(selector: string): T => {
   const element = document.querySelector<T>(selector);
   if (!element) throw new Error(`missing ${selector}`);

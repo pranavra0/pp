@@ -295,6 +295,11 @@ let force ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
                j_width = width;
                j_thunk = t;
              } in
+             ignore (Event_sink.emit sink (Event.Runtime_boundary {
+               boundary = Event.Scheduler_dispatch;
+               subject = Scheduler.handler_name (Scheduler.current_handler scheduler);
+               count = 1;
+             }));
              Scheduler.dispatch_batch scheduler [job];
              (match lookup_hit ~key ~authorized t with
               | Some value -> value

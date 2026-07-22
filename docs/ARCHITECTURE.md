@@ -43,6 +43,12 @@ and backpressures the producer with constant retained memory; it does not drop
 events. Its canonical envelope carries logical time and a nullable monotonic
 wall timestamp.
 
+The schema covers source, evaluation, identity, cache, node, scheduler, store,
+capability, network, process, domain, reconciliation, watch, fault, and metric
+boundaries. Evaluation events are allocated only at evaluation or transport
+detail. Runtime-boundary payloads retain a redacted subject and count; process
+arguments, output bytes, capability tokens, and paths do not enter them.
+
 `simulator/` is a static TypeScript replay client and browser playground for
 those recordings. Its
 generated event-kind type comes from `src/runtime/event.ml`; its runtime

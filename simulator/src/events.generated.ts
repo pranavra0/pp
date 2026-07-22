@@ -1,19 +1,32 @@
 // Generated from src/runtime/event.ml by deno task generate. Do not edit.
 export type EventCategory =
   | "cache"
+  | "capability"
+  | "domain"
+  | "evaluation"
   | "fault"
   | "identity"
   | "metric"
   | "network"
   | "node"
+  | "process"
+  | "reconcile"
   | "run"
   | "scheduler"
   | "source"
-  | "store";
+  | "store"
+  | "watch";
 export type EventKind =
   | "cache.hit"
   | "cache.miss"
   | "cache.trace.considered"
+  | "capability.check.allowed"
+  | "capability.check.denied"
+  | "domain.apply"
+  | "domain.diff"
+  | "domain.observe"
+  | "domain.verify"
+  | "evaluation.expression"
   | "fault.crash"
   | "fault.heal"
   | "fault.partition"
@@ -28,18 +41,24 @@ export type EventKind =
   | "network.retry"
   | "network.unreachable"
   | "node.rebuild"
+  | "process.exit"
+  | "process.spawn"
+  | "reconcile.pass"
   | "run.configured"
   | "run.created"
   | "run.failed"
   | "run.finished"
   | "run.started"
+  | "scheduler.dispatch"
   | "scheduler.fallback"
   | "source.error"
   | "source.macro_expanded"
   | "source.parsed"
   | "source.read"
   | "store.object.persisted"
-  | "store.trace.persisted";
+  | "store.trace.persisted"
+  | "watch.changed"
+  | "watch.poll";
 
-export const eventCategories = new Set<string>(["cache","fault","identity","metric","network","node","run","scheduler","source","store"]);
-export const eventKinds = new Set<string>(["cache.hit","cache.miss","cache.trace.considered","fault.crash","fault.heal","fault.partition","fault.restart","identity.node_key.computed","identity.result_hash.computed","metric.summary","network.corruption_detected","network.drop","network.request","network.response","network.retry","network.unreachable","node.rebuild","run.configured","run.created","run.failed","run.finished","run.started","scheduler.fallback","source.error","source.macro_expanded","source.parsed","source.read","store.object.persisted","store.trace.persisted"]);
+export const eventCategories = new Set<string>(["cache","capability","domain","evaluation","fault","identity","metric","network","node","process","reconcile","run","scheduler","source","store","watch"]);
+export const eventKinds = new Set<string>(["cache.hit","cache.miss","cache.trace.considered","capability.check.allowed","capability.check.denied","domain.apply","domain.diff","domain.observe","domain.verify","evaluation.expression","fault.crash","fault.heal","fault.partition","fault.restart","identity.node_key.computed","identity.result_hash.computed","metric.summary","network.corruption_detected","network.drop","network.request","network.response","network.retry","network.unreachable","node.rebuild","process.exit","process.spawn","reconcile.pass","run.configured","run.created","run.failed","run.finished","run.started","scheduler.dispatch","scheduler.fallback","source.error","source.macro_expanded","source.parsed","source.read","store.object.persisted","store.trace.persisted","watch.changed","watch.poll"]);

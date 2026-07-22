@@ -191,6 +191,27 @@ and is_data_closed (t : thunk) : bool =
 (* ---- Main Evaluator (non-tail) ---- *)
 
 and eval (e : expr) (env : env) : value =
+  let sink = Session.event_sink (session ()) in
+  let depth = eval_depth () + 1 in
+  let parent_event_id = Event_sink.emit sink
+    (Event.Runtime_boundary {
+       boundary = Event.Evaluation_enter; subject = "expression"; count = depth;
+     }) in
+  match eval_inner e env with
+  | result ->
+      ignore (Event_sink.emit sink ?parent_event_id
+        (Event.Runtime_boundary {
+           boundary = Event.Evaluation_exit; subject = "expression"; count = depth;
+         }));
+      result
+  | exception error ->
+      ignore (Event_sink.emit sink ?parent_event_id
+        (Event.Runtime_boundary {
+           boundary = Event.Evaluation_fail; subject = "expression"; count = depth;
+         }));
+      raise error
+
+and eval_inner (e : expr) (env : env) : value =
   incr_eval_depth ();
   if eval_depth () > max_eval_depth then begin
     let saved = eval_depth () in

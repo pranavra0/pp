@@ -53,6 +53,14 @@ session-authenticated loopback controller. TypeScript unit cases pin virtual
 latency/bandwidth, partition/heal, loss/retry, corruption verification, and
 fallback using seeded logical time.
 
+`tests/105-simulator-language-coverage.sh` generates a matrix over every
+committed language-corpus source and compares ordinary and instrumented
+execution. `tests/106-simulator-event-families.sh` executes the evaluation,
+scheduler, process, capability, domain, reconciliation, and watch seams.
+`tests/107-simulator-golden-coverage.sh` ratchets the thirteen v1 scenario
+classes to executable suite evidence; the suite runs that evidence rather than
+trusting the matrix itself.
+
 The category counts are printed by `scripts/test-categories.sh`. The focused
 executables are deliberately small and use real kernel, repository, event,
 observation, lifecycle, and reader implementations; they do not replace the

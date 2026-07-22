@@ -89,6 +89,10 @@ let exec (argv : string list) : int * string * string =
     | program :: _ -> program
     | [] -> invalid_arg "Process.exec: empty argv"
   in
+  let sink = Session.event_sink (Effect.perform Dynamic_scope.Get_session) in
+  let parent_event_id = Event_sink.emit sink (Event.Runtime_boundary {
+    boundary = Event.Process_spawn; subject = program; count = List.length argv;
+  }) in
   (try Journal.append (Journal.Exec argv) with
    | Sys_error _ | Unix.Unix_error _ -> ());
   let out_f = Filename.temp_file "pp-run" ".out" in
@@ -127,10 +131,21 @@ let exec (argv : string list) : int * string * string =
                   | Unix.WEXITED n -> n
                   | Unix.WSIGNALED s | Unix.WSTOPPED s -> 128 + s
                 in
+                ignore (Event_sink.emit sink ?parent_event_id
+                  (Event.Runtime_boundary {
+                     boundary = Event.Process_exit; subject = program; count = code;
+                   }));
                 (code, read_all out_f, read_all err_f)))))
 
 let run_effect (args : value list) : value =
-  if not (has_process_cap ()) then
+  let allowed = has_process_cap () in
+  ignore (Event_sink.emit
+    (Session.event_sink (Effect.perform Dynamic_scope.Get_session))
+    (Event.Runtime_boundary {
+       boundary = (if allowed then Event.Capability_allowed else Event.Capability_denied);
+       subject = "process"; count = List.length args;
+     }));
+  if not allowed then
     capability "capability error: no process authority for run";
   let argv = List.map (function
     | VString s -> s
@@ -207,7 +222,14 @@ let record_depfile_cells (deps : string list) : unit =
 let run_dep_effect (args : value list) : value =
   match args with
   | VString depfile :: (VString cmd :: _ as cmd_args) ->
-      if not (has_process_cap ()) then
+      let allowed = has_process_cap () in
+      ignore (Event_sink.emit
+        (Session.event_sink (Effect.perform Dynamic_scope.Get_session))
+        (Event.Runtime_boundary {
+           boundary = (if allowed then Event.Capability_allowed else Event.Capability_denied);
+           subject = "process"; count = List.length cmd_args;
+         }));
+      if not allowed then
     capability "capability error: no process authority for run-dep!";
       let argv = List.map (function
         | VString s -> s

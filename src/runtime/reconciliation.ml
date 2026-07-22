@@ -16,6 +16,13 @@ let should_run t =
 let recover t ~decide = Fenced.recover_unknown ~decide
 
 let run t desired =
+  let sink = Session.event_sink t.session in
+  let parent_event_id = Event_sink.emit sink (Event.Runtime_boundary {
+    boundary = Event.Reconcile_start; subject = "pass"; count = 1;
+  }) in
   let pass = Domains.prepare_pass t.invocation desired in
   Domains.run_pass pass;
-  Fenced.drain ()
+  Fenced.drain ();
+  ignore (Event_sink.emit sink ?parent_event_id (Event.Runtime_boundary {
+    boundary = Event.Reconcile_finish; subject = "pass"; count = 1;
+  }))

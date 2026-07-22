@@ -1,7 +1,7 @@
 {
   "tasks": {
     "generate": "deno run --allow-read=../src/runtime/event.ml --allow-write=src/events.generated.ts scripts/generate_events.ts",
-    "test": "deno task runtime && deno task generate && deno check controller.ts lab.ts generate.ts && deno test --allow-read=fixtures src && node scripts/runtime_smoke.js",
+    "test": "deno task runtime && deno task generate && deno check controller.ts lab.ts generate.ts && deno test --allow-read=fixtures,src src && node scripts/runtime_smoke.js",
     "runtime": "cd .. && dune build src/browser/pp_browser.bc.js",
     "build": "deno task runtime && deno task generate && deno check src/app.ts && deno run --allow-read=src,fixtures,../_build/default/src/browser/pp_browser.bc.js --allow-write=site scripts/build.ts && deno bundle --platform=browser --minify --sourcemap -o site/app.js src/app.ts",
     "check": "deno task test && deno task build && deno run --allow-read=site scripts/deployment_smoke.ts",
