@@ -51,3 +51,5 @@ mutable-field|src/runtime/session.ml|force_path|evaluation-session
 mutable-field|src/runtime/session.ml|fenced_epoch|pass
 mutable-field|src/runtime/session.ml|fenced_epoch_nonce|evaluation-session
 mutable-field|src/runtime/session.ml|fenced_epoch_recovered|pass
+mutable-field|src/runtime/event_sink.ml|closed|observation
+mutable-field|src/runtime/event_sink.ml|next_id|observation

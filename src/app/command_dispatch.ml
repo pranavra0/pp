@@ -3,7 +3,10 @@ let run host cli =
   if Command_developer.run_early cli then exit 0;
   if Command_frontend.run cli then exit 0;
   let ctx = App_context.create host cli in
+  let sink = App_context.event_sink ctx in
+  ignore (Event_sink.emit sink Event.Run_created);
   let dispatch () =
+    ignore (Event_sink.emit sink Event.Run_started);
     Command_cluster.prepare ctx cli;
     Command_reconcile.recover ctx cli;
     if Command_developer.run_runtime ctx cli then exit 0;
@@ -22,6 +25,15 @@ let run host cli =
       Printf.eprintf "[check] FAIL: %d volatile node(s) flagged\n%!"
         (Cache_policy.volatile_count Cache_policy.default);
       exit 1
-    end
+    end;
+    ignore (Event_sink.emit sink Event.Run_finished)
   in
-  Scheduler.with_signal_handler (App_context.scheduler ctx) ~f:(fun () -> dispatch ()) ()
+  Fun.protect
+    ~finally:(fun () -> App_context.close ctx)
+    (fun () ->
+      try
+        Scheduler.with_signal_handler (App_context.scheduler ctx)
+          ~f:(fun () -> dispatch ()) ()
+      with error ->
+        ignore (Event_sink.emit sink Event.Run_failed);
+        raise error)

@@ -7,6 +7,7 @@ type t = {
   scheduler : Scheduler.t;
   session : Session.t;
   reconciliation : Reconciliation.t;
+  event_sink : Event_sink.t;
 }
 
 let read_secret path =
@@ -67,7 +68,14 @@ let create host cli =
       (Cli.schedule_policy cli) in
   let scheduler = Scheduler.create ~handler
   in
-  let session = Session.create ~scheduler Evaluator.operations in
+  let event_sink = match Cli.record_file cli with
+    | None -> Event_sink.noop
+    | Some path ->
+        let digest = Hasher.hash_concat (Cli.command_argv cli) in
+        let run_id = "run-" ^ String.sub digest 0 16 in
+        Event_sink.jsonl ~path ~run_id ~host_id:"local"
+  in
+  let session = Session.create ~event_sink ~scheduler Evaluator.operations in
   let reconciliation = Reconciliation.create ~session ~invocation in
   Store_layout.init Store_layout.default;
   Cache_policy.configure Cache_policy.default
@@ -75,10 +83,12 @@ let create host cli =
   Cache_policy.reset_volatile Cache_policy.default;
   Island.fetch_enabled := Cli.fetch_islands cli;
   Island.update_mode := Cli.update_islands cli;
-  { host; invocation; scheduler; session; reconciliation }
+  { host; invocation; scheduler; session; reconciliation; event_sink }
 
 let host t = t.host
 let invocation t = t.invocation
 let scheduler t = t.scheduler
 let session t = t.session
 let reconciliation t = t.reconciliation
+let event_sink t = t.event_sink
+let close t = Event_sink.close t.event_sink

@@ -205,7 +205,42 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
 let lookup_hit ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
     (t : thunk) : value option =
   let cache_key = Identity_types.Cache_key.of_node_key key in
-  serve_hit ~t (Cache_policy.lookup Cache_policy.default ~key:cache_key ~authorized)
+  let result, report =
+    Cache_policy.lookup_with_report Cache_policy.default ~key:cache_key ~authorized
+  in
+  if Cache_policy.why_enabled Cache_policy.default then
+    List.iter (fun line -> Cache_policy.diagnose Cache_policy.default "%s" line)
+      (Cache_policy.format_report ~authorized report);
+  let sink = Session.event_sink (Effect.perform Dynamic_scope.Get_session) in
+  List.iter (fun (index, count, status) ->
+    let raw_cell, event_status = match status with
+      | Cache_policy.Usable -> (None, Event.Usable)
+      | Cache_policy.Stale cell -> (Some cell, Event.Stale)
+      | Cache_policy.Unauthorized cell -> (Some cell, Event.Unauthorized)
+    in
+    let cell = match raw_cell with
+      | Some value when authorized value -> Some value
+      | Some _ | None -> None
+    in
+    ignore (Event_sink.emit sink (Event.Cache_trace {
+      key = cache_key; index; count; status = event_status; cell;
+    }))) report.Cache_policy.traces;
+  ignore (Event_sink.emit sink (match report.Cache_policy.decision with
+    | Cache_policy.Cache_hit { outcome; result_hash; cell_count } ->
+        let outcome = match outcome with
+          | Trace_repository.Ok -> Event.Ok
+          | Trace_repository.Failed -> Event.Failed_outcome
+        in
+        Event.Cache_hit { key = cache_key; outcome; result_hash; cell_count }
+    | Cache_policy.Cache_miss reason ->
+        let reason = match reason with
+          | Cache_policy.Cache_reads_disabled -> Event.Cache_reads_disabled
+          | Cache_policy.No_stored_trace -> Event.No_stored_trace
+          | Cache_policy.No_usable_trace -> Event.No_usable_trace
+          | Cache_policy.Result_object_missing -> Event.Result_object_missing
+        in
+        Event.Cache_miss { key = cache_key; reason }));
+  serve_hit ~t result
 
 let force ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
     ~(run : unit -> value) (t : thunk) : value =
@@ -215,20 +250,36 @@ let force ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
     match lookup_hit ~key ~authorized t with
     | Some value -> value
     | None ->
+        let sink = Session.event_sink (Effect.perform Dynamic_scope.Get_session) in
+        let parent_event_id = Event_sink.emit sink (Event.Node_rebuild_started key) in
+        let rebuild () =
+          try
+            let result = rebuild ~key ~run t in
+            let result_hash =
+              Object_hash.of_digest (Identity.hash_value result)
+            in
+            ignore (Event_sink.emit sink ?parent_event_id
+              (Event.Node_rebuild_finished { key; result_hash }));
+            result
+          with error ->
+            ignore (Event_sink.emit sink ?parent_event_id
+              (Event.Node_rebuild_failed { key }));
+            raise error
+        in
         let scheduler = Session.scheduler (Effect.perform Dynamic_scope.Get_session) in
         (match Scheduler.redundancy scheduler with
          | width when width > 1 ->
              let job = {
                Scheduler.j_key = key;
-               j_run = (fun () -> rebuild ~key ~run t);
+               j_run = rebuild;
                j_width = width;
                j_thunk = t;
              } in
              Scheduler.dispatch_batch scheduler [job];
              (match lookup_hit ~key ~authorized t with
               | Some value -> value
-              | None -> rebuild ~key ~run t)
-         | _ -> rebuild ~key ~run t)
+              | None -> rebuild ())
+         | _ -> rebuild ())
   in
   let result =
     if not nested then run_force ()

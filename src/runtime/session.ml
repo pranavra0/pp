@@ -43,15 +43,17 @@ type fenced_state = {
 type t = {
   operations : Evaluator_ops.t;
   scheduler : Scheduler.t;
+  event_sink : Event_sink.t;
   evaluation : evaluation_state;
   domains : domain_state;
   run : run_state;
   fenced : fenced_state;
 }
 
-let create ~scheduler operations = {
+let create ?(event_sink = Event_sink.noop) ~scheduler operations = {
   operations;
   scheduler;
+  event_sink;
   evaluation = {
     thunks = Hashtbl.create 1024; macros = Hashtbl.create 16; gensym = 0;
     node_thunks = Hashtbl.create 256; node_keys = Hashtbl.create 256;
@@ -77,6 +79,7 @@ let force t = t.operations.core.force
 let core_operations t = t.operations.core
 let node_operations t = t.operations.node
 let scheduler t = t.scheduler
+let event_sink t = t.event_sink
 let call t ~env fn args =
   match fn with
   | Core_model.VClosure c ->
