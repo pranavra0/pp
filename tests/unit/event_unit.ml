@@ -7,19 +7,8 @@ let cache_key = Identity_types.Cache_key.of_string "cache-key"
 let result_hash = Identity_types.Object_hash.of_digest "result-hash"
 let cell_id = Identity_types.Cell_id.of_string "file:/approved/input"
 
-let event payload = {
-  Event.schema_version = 1;
-  run_id = "run-\"one";
-  event_id = 7;
-  parent_event_id = Some 3;
-  host_id = "local";
-  logical_time = 7;
-  category = Event.category payload;
-  kind = Event.kind payload;
-  phase = Event.phase payload;
-  visibility = Event.visibility payload;
-  payload;
-}
+let event payload = Event.make ~run_id:"run-\"one" ~event_id:7
+  ~parent_event_id:3 ~host_id:"local" ~logical_time:7 payload
 
 let payloads = [
   Event.Run_created;
@@ -29,12 +18,14 @@ let payloads = [
   Event.Source_read { content_hash = "source-hash"; bytes = 12 };
   Event.Source_parsed { form_count = 2 };
   Event.Source_macro_expanded { form_count = 3 };
-  Event.Source_error { stage = "parse" };
+  Event.Source_error Event.Parse;
+  Event.Source_error Event.Macro_expand;
   Event.Identity_node_key_computed node_key;
   Event.Identity_result_hash_computed { key = node_key; result_hash };
-  Event.Cache_trace { key = cache_key; index = 1; count = 3; status = Event.Usable; cell = None };
-  Event.Cache_trace { key = cache_key; index = 2; count = 3; status = Event.Stale; cell = Some cell_id };
-  Event.Cache_trace { key = cache_key; index = 3; count = 3; status = Event.Unauthorized; cell = None };
+  Event.Cache_trace { key = cache_key; index = 1; count = 3; status = Event.Usable };
+  Event.Cache_trace { key = cache_key; index = 2; count = 3; status = Event.Stale (Some cell_id) };
+  Event.Cache_trace { key = cache_key; index = 2; count = 3; status = Event.Stale None };
+  Event.Cache_trace { key = cache_key; index = 3; count = 3; status = Event.Unauthorized };
   Event.Cache_hit { key = cache_key; outcome = Event.Succeeded; result_hash; cell_count = 2 };
   Event.Cache_hit { key = cache_key; outcome = Event.Failed_outcome; result_hash; cell_count = 1 };
   Event.Cache_miss { key = cache_key; reason = Event.Cache_reads_disabled };
@@ -60,6 +51,19 @@ let replace_once source before after =
   String.sub source (start + String.length before)
     (String.length source - start - String.length before)
 
+let contains source fragment =
+  try ignore (replace_once source fragment fragment); true with Not_found -> false
+
+let read_lines path =
+  let channel = open_in_bin path in
+  Fun.protect ~finally:(fun () -> close_in_noerr channel) (fun () ->
+    let rec loop lines =
+      match input_line channel with
+      | line -> loop (line :: lines)
+      | exception End_of_file -> List.rev lines
+    in
+    loop [])
+
 let () =
   List.iter (fun payload ->
     let encoded = Event.to_json (event payload) in
@@ -75,7 +79,29 @@ let () =
   check (Result.is_error (Event.of_json wrong_category)) "inconsistent envelope was accepted";
   let spaced = replace_once golden "{\"schema_version\"" "{ \"schema_version\"" in
   check (Result.is_error (Event.of_json spaced)) "noncanonical JSON was accepted";
-  let escaped = Event.to_json (event (Event.Source_error { stage = "parse\001" })) in
+  let escaped = Event.to_json (Event.make ~run_id:"run\001" ~event_id:1
+    ~host_id:"local" ~logical_time:1 Event.Run_created) in
   check (match Event.of_json escaped with Ok decoded -> Event.to_json decoded = escaped | Error _ -> false)
     "canonical control escape did not round-trip";
+  let leaked = Event.to_json (event (Event.Cache_trace {
+    key = cache_key; index = 1; count = 1; status = Event.Unauthorized;
+  })) in
+  check (contains leaked "\"visibility\":\"redacted\"") "redacted visibility did not encode";
+  check (contains leaked "\"cell_id\":null") "unauthorized cell identity was not erased";
+  check (not (contains leaked "approved/input")) "unauthorized cell identity entered an event";
+  check (not (Event_sink.accepts Event_sink.noop Event.Summary)) "no-op sink accepted events";
+  check (Event_sink.emit Event_sink.noop Event.Run_created = None) "no-op sink allocated an id";
+  let path = Filename.temp_file "pp-event-unit" ".jsonl" in
+  let sink = Event_sink.jsonl ~path ~run_id:"run" ~host_id:"host" ~level:Event.Summary in
+  check (Event_sink.accepts sink Event.Summary) "summary sink rejected summary event";
+  check (not (Event_sink.accepts sink Event.Semantic)) "summary sink accepted semantic event";
+  check (Event_sink.emit sink (Event.Source_parsed { form_count = 1 }) = None)
+    "filtered event allocated an id";
+  check (Event_sink.emit sink Event.Run_created = Some 1) "first emitted id was not one";
+  check (Event_sink.emit sink Event.Run_finished = Some 2) "filtered event left an id gap";
+  Event_sink.close sink;
+  let lines = read_lines path in
+  Sys.remove path;
+  check (List.length lines = 2) "summary sink wrote a filtered event";
+  List.iter (fun line -> check (Result.is_ok (Event.of_json line)) "sink wrote invalid JSON") lines;
   print_endline "event: ok"

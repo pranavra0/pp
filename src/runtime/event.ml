@@ -3,7 +3,8 @@ open Pp_kernel
 type level = Summary | Semantic | Evaluation | Transport
 type visibility = Public | Redacted
 type phase = Instant | Started | Finished | Failed
-type cache_trace_status = Usable | Stale | Unauthorized
+type source_stage = Parse | Macro_expand
+type cache_trace_status = Usable | Stale of Identity_types.Cell_id.t option | Unauthorized
 type cache_outcome = Succeeded | Failed_outcome
 type cache_miss_reason = Cache_reads_disabled | No_stored_trace |
   No_usable_trace | Result_object_missing
@@ -15,7 +16,7 @@ type payload =
   | Source_read of { content_hash : string; bytes : int }
   | Source_parsed of { form_count : int }
   | Source_macro_expanded of { form_count : int }
-  | Source_error of { stage : string }
+  | Source_error of source_stage
   | Identity_node_key_computed of Identity_types.Node_key.t
   | Identity_result_hash_computed of {
       key : Identity_types.Node_key.t;
@@ -26,7 +27,6 @@ type payload =
       index : int;
       count : int;
       status : cache_trace_status;
-      cell : Identity_types.Cell_id.t option;
     }
   | Cache_hit of {
       key : Identity_types.Cache_key.t;
@@ -117,9 +117,22 @@ let phase = function
   | Store_object_persisted _ | Store_trace_persisted _ -> Instant
 
 let visibility = function
-  | Cache_trace { cell = None; status = (Stale | Unauthorized); _ } ->
-      Redacted
+  | Cache_trace { status = Stale None | Unauthorized; _ } -> Redacted
   | _ -> Public
+
+let make ~run_id ~event_id ?parent_event_id ~host_id ~logical_time payload = {
+  schema_version = 1;
+  run_id;
+  event_id;
+  parent_event_id;
+  host_id;
+  logical_time;
+  category = category payload;
+  kind = kind payload;
+  phase = phase payload;
+  visibility = visibility payload;
+  payload;
+}
 
 let escape value =
   let buffer = Buffer.create (String.length value + 8) in
@@ -142,9 +155,10 @@ let phase_name = function
   | Instant -> "instant" | Started -> "started" | Finished -> "finished" | Failed -> "failed"
 let visibility_name = function Public -> "public" | Redacted -> "redacted"
 let outcome_name = function Succeeded -> "ok" | Failed_outcome -> "failed"
+let stage_name = function Parse -> "parse" | Macro_expand -> "macro_expand"
 let status_name = function
   | Usable -> "usable"
-  | Stale -> "stale"
+  | Stale _ -> "stale"
   | Unauthorized -> "unauthorized"
 let miss_name = function
   | Cache_reads_disabled -> "cache_reads_disabled"
@@ -160,13 +174,14 @@ let payload_fields = function
         field "bytes" (string_of_int bytes) ]
   | Source_parsed { form_count } | Source_macro_expanded { form_count } ->
       [field "form_count" (string_of_int form_count)]
-  | Source_error { stage } -> [field "stage" (string stage)]
+  | Source_error stage -> [field "stage" (string (stage_name stage))]
   | Identity_node_key_computed key ->
       [field "node_key" (string (Identity_types.Node_key.to_string key))]
   | Identity_result_hash_computed { key; result_hash } ->
       [ field "node_key" (string (Identity_types.Node_key.to_string key));
         field "result_hash" (string (Identity_types.Object_hash.to_string result_hash)) ]
-  | Cache_trace { key; index; count; status; cell } ->
+  | Cache_trace { key; index; count; status } ->
+      let cell = match status with Stale cell -> cell | Usable | Unauthorized -> None in
       [ field "cache_key" (string (Identity_types.Cache_key.to_string key));
         field "trace_index" (string_of_int index);
         field "trace_count" (string_of_int count);
@@ -294,7 +309,10 @@ let of_json text =
     | "source.parsed", "instant" -> one_int "form_count" (fun form_count -> Source_parsed { form_count })
     | "source.macro_expanded", "instant" -> one_int "form_count" (fun form_count -> Source_macro_expanded { form_count })
     | "source.error", "failed" ->
-        (match fields with [("stage", JString stage)] -> Ok (Source_error { stage }) | _ -> error "invalid source.error payload")
+        (match fields with
+         | [("stage", JString "parse")] -> Ok (Source_error Parse)
+         | [("stage", JString "macro_expand")] -> Ok (Source_error Macro_expand)
+         | _ -> error "invalid source.error payload")
     | "identity.node_key.computed", "instant" ->
         (match fields with [("node_key", JString key)] -> Ok (Identity_node_key_computed (Identity_types.Node_key.of_string key)) | _ -> error "invalid node identity payload")
     | "identity.result_hash.computed", "instant" ->
@@ -302,9 +320,15 @@ let of_json text =
     | "cache.trace.considered", "instant" ->
         (match fields with
          | [("cache_key", JString key); ("trace_index", JInt index); ("trace_count", JInt count); ("status", JString status); ("cell_id", cell)] ->
-             let status = match status with "usable" -> Some Usable | "stale" -> Some Stale | "unauthorized" -> Some Unauthorized | _ -> None in
+             let status = match status, cell with
+               | "usable", JNull -> Some Usable
+               | "stale", JNull -> Some (Stale None)
+               | "stale", JString id -> Some (Stale (Some (Identity_types.Cell_id.of_string id)))
+               | "unauthorized", JNull -> Some Unauthorized
+               | _ -> None
+             in
              let cell = match cell with JNull -> Some None | JString id -> Some (Some (Identity_types.Cell_id.of_string id)) | _ -> None in
-             (match status, cell with Some status, Some cell -> Ok (Cache_trace { key = Identity_types.Cache_key.of_string key; index; count; status; cell }) | _ -> error "invalid cache trace payload")
+             (match status, cell with Some status, Some _ -> Ok (Cache_trace { key = Identity_types.Cache_key.of_string key; index; count; status }) | _ -> error "invalid cache trace payload")
          | _ -> error "invalid cache trace payload")
     | "cache.hit", "instant" ->
         (match fields with
@@ -358,7 +382,7 @@ let of_json text =
                      phase_text <> phase_name (phase payload_value) || visibility_text <> expected_visibility
                   then error "event envelope disagrees with typed payload"
                   else
-                    let event = { schema_version = 1; run_id; event_id; parent_event_id; host_id; logical_time; category = category_name; kind = kind_name; phase = phase payload_value; visibility = visibility payload_value; payload = payload_value } in
+                    let event = make ~run_id ~event_id ?parent_event_id ~host_id ~logical_time payload_value in
                     if to_json event = text then Ok event else error "event JSON is not canonical")
          | Some _, _, _, _, _, _, _, _, _, _, _ -> error "unsupported event schema version"
          | _ -> error "invalid event envelope")

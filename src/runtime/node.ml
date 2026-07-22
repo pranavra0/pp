@@ -236,17 +236,14 @@ let lookup_hit ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
       (Cache_policy.format_report ~authorized report);
   let sink = Session.event_sink (Effect.perform Dynamic_scope.Get_session) in
   List.iter (fun (index, count, status) ->
-    let raw_cell, event_status = match status with
-      | Cache_policy.Usable -> (None, Event.Usable)
-      | Cache_policy.Stale cell -> (Some cell, Event.Stale)
-      | Cache_policy.Unauthorized cell -> (Some cell, Event.Unauthorized)
-    in
-    let cell = match raw_cell with
-      | Some value when authorized value -> Some value
-      | Some _ | None -> None
+    let event_status = match status with
+      | Cache_policy.Usable -> Event.Usable
+      | Cache_policy.Stale cell ->
+          Event.Stale (if authorized cell then Some cell else None)
+      | Cache_policy.Unauthorized _ -> Event.Unauthorized
     in
     ignore (Event_sink.emit sink (Event.Cache_trace {
-      key = cache_key; index; count; status = event_status; cell;
+      key = cache_key; index; count; status = event_status;
     }))) report.Cache_policy.traces;
   ignore (Event_sink.emit sink (match report.Cache_policy.decision with
     | Cache_policy.Cache_hit { outcome; result_hash; cell_count } ->

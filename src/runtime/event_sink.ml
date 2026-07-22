@@ -42,19 +42,8 @@ let emit t ?parent_event_id payload =
       if t.closed then invalid_arg "event sink is closed";
       let event_id = t.next_id in
       t.next_id <- event_id + 1;
-      let event = {
-        Event.schema_version = 1;
-        run_id = t.run_id;
-        event_id;
-        parent_event_id;
-        host_id = t.host_id;
-        logical_time = event_id;
-        category = Event.category payload;
-        kind = Event.kind payload;
-        phase = Event.phase payload;
-        visibility = Event.visibility payload;
-        payload;
-      } in
+      let event = Event.make ~run_id:t.run_id ~event_id ?parent_event_id
+        ~host_id:t.host_id ~logical_time:event_id payload in
       output_string channel (Event.to_json event);
       output_char channel '\n';
       flush channel;

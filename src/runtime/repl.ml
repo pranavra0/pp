@@ -47,14 +47,14 @@ let read_and_expand ~source input =
   let exprs =
     try Reader_braces.read_dispatch ~source ~path:source input
     with error ->
-      emit (Event.Source_error { stage = "parse" });
+      emit (Event.Source_error Event.Parse);
       raise error
   in
   emit (Event.Source_parsed { form_count = List.length exprs });
   let expanded =
     try Macro.expand_toplevel_list (macro_services ()) exprs
     with error ->
-      emit (Event.Source_error { stage = "macro_expand" });
+      emit (Event.Source_error Event.Macro_expand);
       raise error
   in
   emit (Event.Source_macro_expanded { form_count = List.length expanded });
