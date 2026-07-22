@@ -10,6 +10,7 @@ type cache_miss_reason = Cache_reads_disabled | No_stored_trace |
   No_usable_trace | Result_object_missing
 type payload =
   | Run_created
+  | Run_configured of { event_level : level }
   | Run_started
   | Run_finished
   | Run_failed
@@ -61,6 +62,7 @@ type t = {
   parent_event_id : int option;
   host_id : string;
   logical_time : int;
+  wall_time_ns : int option;
   category : string;
   kind : string;
   phase : phase;
@@ -69,7 +71,7 @@ type t = {
 }
 
 let level = function
-  | Run_created | Run_started | Run_finished | Run_failed -> Summary
+  | Run_created | Run_configured _ | Run_started | Run_finished | Run_failed -> Summary
   | Source_read _ | Source_parsed _ | Source_macro_expanded _ | Source_error _ ->
       Semantic
   | Identity_node_key_computed _ | Identity_result_hash_computed _ -> Semantic
@@ -79,7 +81,7 @@ let level = function
       Semantic
 
 let category = function
-  | Run_created | Run_started | Run_finished | Run_failed -> "run"
+  | Run_created | Run_configured _ | Run_started | Run_finished | Run_failed -> "run"
   | Source_read _ | Source_parsed _ | Source_macro_expanded _ | Source_error _ ->
       "source"
   | Identity_node_key_computed _ | Identity_result_hash_computed _ -> "identity"
@@ -89,6 +91,7 @@ let category = function
 
 let kind = function
   | Run_created -> "run.created"
+  | Run_configured _ -> "run.configured"
   | Run_started -> "run.started"
   | Run_finished -> "run.finished"
   | Run_failed -> "run.failed"
@@ -111,7 +114,8 @@ let phase = function
   | Run_started | Node_rebuild_started _ -> Started
   | Run_finished | Node_rebuild_finished _ -> Finished
   | Run_failed | Source_error _ | Node_rebuild_failed _ -> Failed
-  | Run_created | Source_read _ | Source_parsed _ | Source_macro_expanded _
+  | Run_created | Run_configured _
+  | Source_read _ | Source_parsed _ | Source_macro_expanded _
   | Identity_node_key_computed _ | Identity_result_hash_computed _
   | Cache_trace _ | Cache_hit _ | Cache_miss _
   | Store_object_persisted _ | Store_trace_persisted _ -> Instant
@@ -120,13 +124,15 @@ let visibility = function
   | Cache_trace { status = Stale None | Unauthorized; _ } -> Redacted
   | _ -> Public
 
-let make ~run_id ~event_id ?parent_event_id ~host_id ~logical_time payload = {
+let make ~run_id ~event_id ?parent_event_id ~host_id ~logical_time
+    ?wall_time_ns payload = {
   schema_version = 1;
   run_id;
   event_id;
   parent_event_id;
   host_id;
   logical_time;
+  wall_time_ns;
   category = category payload;
   kind = kind payload;
   phase = phase payload;
@@ -165,9 +171,16 @@ let miss_name = function
   | No_stored_trace -> "no_stored_trace"
   | No_usable_trace -> "no_usable_trace"
   | Result_object_missing -> "result_object_missing"
+let level_name = function
+  | Summary -> "summary"
+  | Semantic -> "semantic"
+  | Evaluation -> "evaluation"
+  | Transport -> "transport"
 
 let payload_fields = function
   | Run_created | Run_started | Run_finished -> []
+  | Run_configured { event_level } ->
+      [field "event_level" (string (level_name event_level))]
   | Run_failed -> []
   | Source_read { content_hash; bytes } ->
       [ field "content_hash" (string content_hash);
@@ -219,6 +232,7 @@ let to_json event =
       field "parent_event_id" (option string_of_int event.parent_event_id);
       field "host_id" (string event.host_id);
       field "logical_time" (string_of_int event.logical_time);
+      field "wall_time_ns" (option string_of_int event.wall_time_ns);
       field "category" (string event.category);
       field "kind" (string event.kind);
       field "phase" (string (phase_name event.phase));
@@ -299,6 +313,16 @@ let of_json text =
     let one_int name constructor = match fields with [(n, JInt value)] when n = name -> Ok (constructor value) | _ -> error "invalid event payload" in
     match kind, phase with
     | "run.created", "instant" -> no_fields Run_created
+    | "run.configured", "instant" ->
+        (match fields with
+         | [("event_level", JString level)] ->
+             let level = match level with
+               | "summary" -> Some Summary | "semantic" -> Some Semantic
+               | "evaluation" -> Some Evaluation | "transport" -> Some Transport
+               | _ -> None
+             in
+             (match level with Some event_level -> Ok (Run_configured { event_level }) | None -> error "invalid event level")
+         | _ -> error "invalid run.configured payload")
     | "run.started", "started" -> no_fields Run_started
     | "run.finished", "finished" -> no_fields Run_finished
     | "run.failed", "failed" -> no_fields Run_failed
@@ -362,17 +386,18 @@ let of_json text =
   | Error _ as e -> e
   | Ok (_, consumed) when consumed <> length -> error "trailing event JSON data"
   | Ok (JObject fields, _) ->
-      let envelope = ["schema_version"; "run_id"; "event_id"; "parent_event_id"; "host_id"; "logical_time"; "category"; "kind"; "phase"; "visibility"; "payload"] in
+      let envelope = ["schema_version"; "run_id"; "event_id"; "parent_event_id"; "host_id"; "logical_time"; "wall_time_ns"; "category"; "kind"; "phase"; "visibility"; "payload"] in
       if not (exact envelope fields) then error "event envelope is not canonical"
       else
         (match int_field "schema_version" fields, string_field "run_id" fields,
                int_field "event_id" fields, option_int_field "parent_event_id" fields,
                string_field "host_id" fields, int_field "logical_time" fields,
+               option_int_field "wall_time_ns" fields,
                string_field "category" fields, string_field "kind" fields,
                string_field "phase" fields, string_field "visibility" fields,
                field "payload" fields with
          | Some 1, Some run_id, Some event_id, Some parent_event_id, Some host_id,
-           Some logical_time, Some category_name, Some kind_name, Some phase_text,
+           Some logical_time, Some wall_time_ns, Some category_name, Some kind_name, Some phase_text,
            Some visibility_text, Some (JObject payload_fields) ->
              (match payload kind_name phase_text payload_fields with
               | Error _ as e -> e
@@ -382,8 +407,9 @@ let of_json text =
                      phase_text <> phase_name (phase payload_value) || visibility_text <> expected_visibility
                   then error "event envelope disagrees with typed payload"
                   else
-                    let event = make ~run_id ~event_id ?parent_event_id ~host_id ~logical_time payload_value in
+                    let event = make ~run_id ~event_id ?parent_event_id ~host_id
+                      ~logical_time ?wall_time_ns payload_value in
                     if to_json event = text then Ok event else error "event JSON is not canonical")
-         | Some _, _, _, _, _, _, _, _, _, _, _ -> error "unsupported event schema version"
+         | Some _, _, _, _, _, _, _, _, _, _, _, _ -> error "unsupported event schema version"
          | _ -> error "invalid event envelope")
   | Ok _ -> error "event JSON must be an object"

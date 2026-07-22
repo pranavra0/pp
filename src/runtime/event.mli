@@ -10,6 +10,7 @@ type cache_miss_reason = Cache_reads_disabled | No_stored_trace |
   No_usable_trace | Result_object_missing
 type payload =
   | Run_created
+  | Run_configured of { event_level : level }
   | Run_started
   | Run_finished
   | Run_failed
@@ -61,6 +62,7 @@ type t = private {
   parent_event_id : int option;
   host_id : string;
   logical_time : int;
+  wall_time_ns : int option;
   category : string;
   kind : string;
   phase : phase;
@@ -69,7 +71,7 @@ type t = private {
 }
 
 val make : run_id:string -> event_id:int -> ?parent_event_id:int ->
-  host_id:string -> logical_time:int -> payload -> t
+  host_id:string -> logical_time:int -> ?wall_time_ns:int -> payload -> t
 val level : payload -> level
 val category : payload -> string
 val kind : payload -> string

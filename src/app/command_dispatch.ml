@@ -5,6 +5,8 @@ let run host cli =
   let ctx = App_context.create host cli in
   let sink = App_context.event_sink ctx in
   ignore (Event_sink.emit sink Event.Run_created);
+  ignore (Event_sink.emit sink
+    (Event.Run_configured { event_level = Cli.event_level cli }));
   let dispatch () =
     ignore (Event_sink.emit sink Event.Run_started);
     Command_cluster.prepare ctx cli;

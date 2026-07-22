@@ -12,6 +12,10 @@ let event payload = Event.make ~run_id:"run-\"one" ~event_id:7
 
 let payloads = [
   Event.Run_created;
+  Event.Run_configured { event_level = Event.Summary };
+  Event.Run_configured { event_level = Event.Semantic };
+  Event.Run_configured { event_level = Event.Evaluation };
+  Event.Run_configured { event_level = Event.Transport };
   Event.Run_started;
   Event.Run_finished;
   Event.Run_failed;
@@ -71,7 +75,7 @@ let () =
     | Ok decoded -> check (Event.to_json decoded = encoded) ("event golden drift: " ^ encoded)
     | Error message -> failwith (message ^ ": " ^ encoded)) payloads;
   let golden = Event.to_json (event Event.Run_created) in
-  check (golden = "{\"schema_version\":1,\"run_id\":\"run-\\\"one\",\"event_id\":7,\"parent_event_id\":3,\"host_id\":\"local\",\"logical_time\":7,\"category\":\"run\",\"kind\":\"run.created\",\"phase\":\"instant\",\"visibility\":\"public\",\"payload\":{}}")
+  check (golden = "{\"schema_version\":1,\"run_id\":\"run-\\\"one\",\"event_id\":7,\"parent_event_id\":3,\"host_id\":\"local\",\"logical_time\":7,\"wall_time_ns\":null,\"category\":\"run\",\"kind\":\"run.created\",\"phase\":\"instant\",\"visibility\":\"public\",\"payload\":{}}")
     "canonical event envelope changed";
   let version_two = replace_once golden "\"schema_version\":1" "\"schema_version\":2" in
   check (Result.is_error (Event.of_json version_two)) "unknown schema version was accepted";
@@ -83,12 +87,20 @@ let () =
     ~host_id:"local" ~logical_time:1 Event.Run_created) in
   check (match Event.of_json escaped with Ok decoded -> Event.to_json decoded = escaped | Error _ -> false)
     "canonical control escape did not round-trip";
+  let live = Event.to_json (Event.make ~run_id:"run" ~event_id:1
+    ~host_id:"local" ~logical_time:1 ~wall_time_ns:42 Event.Run_created) in
+  check (match Event.of_json live with Ok decoded -> Event.to_json decoded = live | Error _ -> false)
+    "optional wall timestamp did not round-trip";
   let leaked = Event.to_json (event (Event.Cache_trace {
     key = cache_key; index = 1; count = 1; status = Event.Unauthorized;
   })) in
   check (contains leaked "\"visibility\":\"redacted\"") "redacted visibility did not encode";
   check (contains leaked "\"cell_id\":null") "unauthorized cell identity was not erased";
   check (not (contains leaked "approved/input")) "unauthorized cell identity entered an event";
+  let injected = replace_once leaked "\"cell_id\":null"
+    "\"cell_id\":\"file:/approved/input\"" in
+  check (Result.is_error (Event.of_json injected))
+    "decoder admitted an unauthorized cell identity";
   check (not (Event_sink.accepts Event_sink.noop Event.Summary)) "no-op sink accepted events";
   check (Event_sink.emit Event_sink.noop Event.Run_created = None) "no-op sink allocated an id";
   let path = Filename.temp_file "pp-event-unit" ".jsonl" in
