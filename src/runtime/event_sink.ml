@@ -30,10 +30,14 @@ let rank = function
   | Event.Evaluation -> 2
   | Event.Transport -> 3
 
+let accepts t level = match t.destination with
+  | Noop -> false
+  | Jsonl _ -> rank level <= rank t.level
+
 let emit t ?parent_event_id payload =
   match t.destination with
   | Noop -> None
-  | Jsonl _ when rank (Event.level payload) > rank t.level -> None
+  | Jsonl _ when not (accepts t (Event.level payload)) -> None
   | Jsonl channel ->
       if t.closed then invalid_arg "event sink is closed";
       let event_id = t.next_id in

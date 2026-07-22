@@ -16,6 +16,11 @@ type payload =
   | Source_parsed of { form_count : int }
   | Source_macro_expanded of { form_count : int }
   | Source_error of { stage : string }
+  | Identity_node_key_computed of Identity_types.Node_key.t
+  | Identity_result_hash_computed of {
+      key : Identity_types.Node_key.t;
+      result_hash : Identity_types.Object_hash.t;
+    }
   | Cache_trace of {
       key : Identity_types.Cache_key.t;
       index : int;
@@ -41,6 +46,13 @@ type payload =
   | Node_rebuild_failed of {
       key : Identity_types.Node_key.t;
     }
+  | Store_object_persisted of Identity_types.Object_hash.t
+  | Store_trace_persisted of {
+      key : Identity_types.Cache_key.t;
+      outcome : cache_outcome;
+      result_hash : Identity_types.Object_hash.t;
+      cell_count : int;
+    }
 
 type t = {
   schema_version : int;
@@ -60,16 +72,20 @@ let level = function
   | Run_created | Run_started | Run_finished | Run_failed -> Summary
   | Source_read _ | Source_parsed _ | Source_macro_expanded _ | Source_error _ ->
       Semantic
+  | Identity_node_key_computed _ | Identity_result_hash_computed _ -> Semantic
   | Cache_trace _ | Cache_hit _ | Cache_miss _
-  | Node_rebuild_started _ | Node_rebuild_finished _ | Node_rebuild_failed _ ->
+  | Node_rebuild_started _ | Node_rebuild_finished _ | Node_rebuild_failed _
+  | Store_object_persisted _ | Store_trace_persisted _ ->
       Semantic
 
 let category = function
   | Run_created | Run_started | Run_finished | Run_failed -> "run"
   | Source_read _ | Source_parsed _ | Source_macro_expanded _ | Source_error _ ->
       "source"
+  | Identity_node_key_computed _ | Identity_result_hash_computed _ -> "identity"
   | Cache_trace _ | Cache_hit _ | Cache_miss _ -> "cache"
   | Node_rebuild_started _ | Node_rebuild_finished _ | Node_rebuild_failed _ -> "node"
+  | Store_object_persisted _ | Store_trace_persisted _ -> "store"
 
 let kind = function
   | Run_created -> "run.created"
@@ -80,19 +96,25 @@ let kind = function
   | Source_parsed _ -> "source.parsed"
   | Source_macro_expanded _ -> "source.macro_expanded"
   | Source_error _ -> "source.error"
+  | Identity_node_key_computed _ -> "identity.node_key.computed"
+  | Identity_result_hash_computed _ -> "identity.result_hash.computed"
   | Cache_trace _ -> "cache.trace.considered"
   | Cache_hit _ -> "cache.hit"
   | Cache_miss _ -> "cache.miss"
   | Node_rebuild_started _ -> "node.rebuild"
   | Node_rebuild_finished _ -> "node.rebuild"
   | Node_rebuild_failed _ -> "node.rebuild"
+  | Store_object_persisted _ -> "store.object.persisted"
+  | Store_trace_persisted _ -> "store.trace.persisted"
 
 let phase = function
   | Run_started | Node_rebuild_started _ -> Started
   | Run_finished | Node_rebuild_finished _ -> Finished
   | Run_failed | Source_error _ | Node_rebuild_failed _ -> Failed
   | Run_created | Source_read _ | Source_parsed _ | Source_macro_expanded _
-  | Cache_trace _ | Cache_hit _ | Cache_miss _ -> Instant
+  | Identity_node_key_computed _ | Identity_result_hash_computed _
+  | Cache_trace _ | Cache_hit _ | Cache_miss _
+  | Store_object_persisted _ | Store_trace_persisted _ -> Instant
 
 let visibility = function
   | Cache_trace { cell = None; status = (Stale | Unauthorized); _ } ->
@@ -139,6 +161,11 @@ let payload_fields = function
   | Source_parsed { form_count } | Source_macro_expanded { form_count } ->
       [field "form_count" (string_of_int form_count)]
   | Source_error { stage } -> [field "stage" (string stage)]
+  | Identity_node_key_computed key ->
+      [field "node_key" (string (Identity_types.Node_key.to_string key))]
+  | Identity_result_hash_computed { key; result_hash } ->
+      [ field "node_key" (string (Identity_types.Node_key.to_string key));
+        field "result_hash" (string (Identity_types.Object_hash.to_string result_hash)) ]
   | Cache_trace { key; index; count; status; cell } ->
       [ field "cache_key" (string (Identity_types.Cache_key.to_string key));
         field "trace_index" (string_of_int index);
@@ -161,6 +188,13 @@ let payload_fields = function
         field "result_hash" (string (Identity_types.Object_hash.to_string result_hash)) ]
   | Node_rebuild_failed { key } ->
       [field "node_key" (string (Identity_types.Node_key.to_string key))]
+  | Store_object_persisted result_hash ->
+      [field "result_hash" (string (Identity_types.Object_hash.to_string result_hash))]
+  | Store_trace_persisted { key; outcome; result_hash; cell_count } ->
+      [ field "cache_key" (string (Identity_types.Cache_key.to_string key));
+        field "outcome" (string (outcome_name outcome));
+        field "result_hash" (string (Identity_types.Object_hash.to_string result_hash));
+        field "cell_count" (string_of_int cell_count) ]
 
 let to_json event =
   let fields =
@@ -223,6 +257,12 @@ let of_json text =
           in
           (match escaped with
            | Some c -> Buffer.add_char buffer c; quoted (i + 2) buffer
+           | None when text.[i + 1] = 'u' && i + 6 <= length ->
+               (try
+                  let code = int_of_string ("0x" ^ String.sub text (i + 2) 4) in
+                  if code > 0x7f then error "non-ASCII event JSON escape"
+                  else (Buffer.add_char buffer (Char.chr code); quoted (i + 6) buffer)
+                with Failure _ -> error "invalid event JSON escape")
            | None -> error "unsupported event JSON escape")
       | c when Char.code c < 0x20 -> error "control byte in event JSON string"
       | c -> Buffer.add_char buffer c; quoted (i + 1) buffer
@@ -255,6 +295,10 @@ let of_json text =
     | "source.macro_expanded", "instant" -> one_int "form_count" (fun form_count -> Source_macro_expanded { form_count })
     | "source.error", "failed" ->
         (match fields with [("stage", JString stage)] -> Ok (Source_error { stage }) | _ -> error "invalid source.error payload")
+    | "identity.node_key.computed", "instant" ->
+        (match fields with [("node_key", JString key)] -> Ok (Identity_node_key_computed (Identity_types.Node_key.of_string key)) | _ -> error "invalid node identity payload")
+    | "identity.result_hash.computed", "instant" ->
+        (match fields with [("node_key", JString key); ("result_hash", JString result_hash)] -> Ok (Identity_result_hash_computed { key = Identity_types.Node_key.of_string key; result_hash = Identity_types.Object_hash.of_digest result_hash }) | _ -> error "invalid result identity payload")
     | "cache.trace.considered", "instant" ->
         (match fields with
          | [("cache_key", JString key); ("trace_index", JInt index); ("trace_count", JInt count); ("status", JString status); ("cell_id", cell)] ->
@@ -280,6 +324,14 @@ let of_json text =
         (match fields with [("node_key", JString key); ("result_hash", JString result_hash)] -> Ok (Node_rebuild_finished { key = Identity_types.Node_key.of_string key; result_hash = Identity_types.Object_hash.of_digest result_hash }) | _ -> error "invalid node rebuild payload")
     | "node.rebuild", "failed" ->
         (match fields with [("node_key", JString key)] -> Ok (Node_rebuild_failed { key = Identity_types.Node_key.of_string key }) | _ -> error "invalid node rebuild payload")
+    | "store.object.persisted", "instant" ->
+        (match fields with [("result_hash", JString result_hash)] -> Ok (Store_object_persisted (Identity_types.Object_hash.of_digest result_hash)) | _ -> error "invalid store object payload")
+    | "store.trace.persisted", "instant" ->
+        (match fields with
+         | [("cache_key", JString key); ("outcome", JString outcome); ("result_hash", JString result_hash); ("cell_count", JInt cell_count)] ->
+             let outcome = match outcome with "ok" -> Some Succeeded | "failed" -> Some Failed_outcome | _ -> None in
+             (match outcome with Some outcome -> Ok (Store_trace_persisted { key = Identity_types.Cache_key.of_string key; outcome; result_hash = Identity_types.Object_hash.of_digest result_hash; cell_count }) | None -> error "invalid store trace outcome")
+         | _ -> error "invalid store trace payload")
     | _ -> error "unknown event kind or phase"
   in
   match value 0 with

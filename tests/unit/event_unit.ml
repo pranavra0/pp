@@ -30,6 +30,8 @@ let payloads = [
   Event.Source_parsed { form_count = 2 };
   Event.Source_macro_expanded { form_count = 3 };
   Event.Source_error { stage = "parse" };
+  Event.Identity_node_key_computed node_key;
+  Event.Identity_result_hash_computed { key = node_key; result_hash };
   Event.Cache_trace { key = cache_key; index = 1; count = 3; status = Event.Usable; cell = None };
   Event.Cache_trace { key = cache_key; index = 2; count = 3; status = Event.Stale; cell = Some cell_id };
   Event.Cache_trace { key = cache_key; index = 3; count = 3; status = Event.Unauthorized; cell = None };
@@ -42,6 +44,9 @@ let payloads = [
   Event.Node_rebuild_started node_key;
   Event.Node_rebuild_finished { key = node_key; result_hash };
   Event.Node_rebuild_failed { key = node_key };
+  Event.Store_object_persisted result_hash;
+  Event.Store_trace_persisted { key = cache_key; outcome = Event.Succeeded; result_hash; cell_count = 2 };
+  Event.Store_trace_persisted { key = cache_key; outcome = Event.Failed_outcome; result_hash; cell_count = 1 };
 ]
 
 let replace_once source before after =
@@ -70,4 +75,7 @@ let () =
   check (Result.is_error (Event.of_json wrong_category)) "inconsistent envelope was accepted";
   let spaced = replace_once golden "{\"schema_version\"" "{ \"schema_version\"" in
   check (Result.is_error (Event.of_json spaced)) "noncanonical JSON was accepted";
+  let escaped = Event.to_json (event (Event.Source_error { stage = "parse\001" })) in
+  check (match Event.of_json escaped with Ok decoded -> Event.to_json decoded = escaped | Error _ -> false)
+    "canonical control escape did not round-trip";
   print_endline "event: ok"

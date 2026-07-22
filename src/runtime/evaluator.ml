@@ -142,6 +142,8 @@ and node_key_of (t : thunk) : Identity_types.Node_key.t =
   in
   let session = session () in
   List.iter (fun id -> Session.add_node_dependent session id key) !dependencies;
+  ignore (Event_sink.emit (Session.event_sink session)
+    (Event.Identity_node_key_computed key));
   key
 
 (* Remote placement: a

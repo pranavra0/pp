@@ -16,6 +16,11 @@ type payload =
   | Source_parsed of { form_count : int }
   | Source_macro_expanded of { form_count : int }
   | Source_error of { stage : string }
+  | Identity_node_key_computed of Identity_types.Node_key.t
+  | Identity_result_hash_computed of {
+      key : Identity_types.Node_key.t;
+      result_hash : Identity_types.Object_hash.t;
+    }
   | Cache_trace of {
       key : Identity_types.Cache_key.t;
       index : int;
@@ -40,6 +45,13 @@ type payload =
     }
   | Node_rebuild_failed of {
       key : Identity_types.Node_key.t;
+    }
+  | Store_object_persisted of Identity_types.Object_hash.t
+  | Store_trace_persisted of {
+      key : Identity_types.Cache_key.t;
+      outcome : cache_outcome;
+      result_hash : Identity_types.Object_hash.t;
+      cell_count : int;
     }
 
 type t = {

@@ -38,10 +38,12 @@ let emit payload =
   ignore (Event_sink.emit (Session.event_sink session) payload)
 
 let read_and_expand ~source input =
-  emit (Event.Source_read {
-    content_hash = Hasher.hash_string input;
-    bytes = String.length input;
-  });
+  let sink = Session.event_sink (Effect.perform Dynamic_scope.Get_session) in
+  if Event_sink.accepts sink Event.Semantic then
+    emit (Event.Source_read {
+      content_hash = Hasher.hash_string input;
+      bytes = String.length input;
+    });
   let exprs =
     try Reader_braces.read_dispatch ~source ~path:source input
     with error ->
