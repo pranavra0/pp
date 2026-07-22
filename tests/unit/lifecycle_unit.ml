@@ -3,9 +3,7 @@ open Pp_runtime
 
 let check condition message = if not condition then failwith message
 
-let scheduler =
-  Scheduler.create ~policy:Scheduler.Serial
-    ~remote_dispatch:(fun ~member:_ _jobs -> ())
+let scheduler = Scheduler.create ~handler:Scheduler.serial
 
 let operations = {
   Evaluator_ops.core = {

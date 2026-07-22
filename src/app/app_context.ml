@@ -63,9 +63,9 @@ let create host cli =
     | Ok value -> value
     | Error message -> command ("pp: " ^ message)
   in
-  let scheduler =
-    Scheduler.create ~policy:(Cli.schedule_policy cli)
-      ~remote_dispatch:(Remote.dispatcher host invocation)
+  let handler = Scheduler.builtin ~remote_dispatch:(Remote.dispatcher host invocation)
+      (Cli.schedule_policy cli) in
+  let scheduler = Scheduler.create ~handler
   in
   let session = Session.create ~scheduler Evaluator.operations in
   let reconciliation = Reconciliation.create ~session ~invocation in

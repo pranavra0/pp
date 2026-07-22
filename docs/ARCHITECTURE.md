@@ -213,10 +213,13 @@ the filesystem and process domains is in `stdlib/domain-fs.pp` and
 `fenced.ml` and `journal.ml` handle non-repeatable actions. A domain observes
 before a pass and verifies after apply.
 
-`scheduler.ml` dispatches node misses with `serial`, `parallel:N`, `race:N`,
-or `remote:MEMBER`. Local work uses child processes. Remote placement uses
-the transport boundary and signed capability tokens. All workers call the
-same node rebuild operation.
+`scheduler.ml` owns an installable result-transparent handler service. A
+handler names its policy, declares redundant width, dispatches node misses,
+and cancels outstanding work. The host installs `serial`, `parallel:N`,
+`race:N`, or `remote:MEMBER` from CLI configuration. Local work uses child
+processes. Remote placement uses the transport boundary and signed capability
+tokens. Every dispatch remains best-effort: the caller re-enters the same
+cache lookup and local node rebuild path when no worker produced a result.
 
 ## Application and commands
 
