@@ -13,8 +13,14 @@
   </header>
   <div class="toolbar" aria-label="Replay controls">
     <button id="run">Run source</button>
+    <button id="run-scenario" disabled>Run scenario</button>
+    <button id="pause-run" disabled>Pause run</button>
+    <button id="resume-run" disabled>Resume run</button>
+    <button id="step-run" disabled>Step run</button>
+    <button id="stop-run" disabled>Stop run</button>
+    <button id="export" disabled>Export run</button>
     <select id="example" aria-label="Example"></select>
-    <label class="file">Open JSONL <input id="recording" type="file" accept=".jsonl,application/jsonl"></label>
+    <label class="file">Open recording <input id="recording" type="file" accept=".jsonl,.json,application/jsonl,application/json"></label>
     <button id="step-back" title="Previous event">◀ Step</button>
     <button id="play">Play</button>
     <button id="step">Step ▶</button>
@@ -27,7 +33,13 @@
       <div class="editors">
         <label>Program <select id="surface"><option value="playground.pp">.pp</option><option value="playground.ppl">.ppl</option></select>
           <textarea id="source" spellcheck="false"></textarea></label>
-        <label>Scenario (.ppsim)<textarea id="scenario" spellcheck="false">scenario v1 { hosts: { browser: { store: "memory" } } }</textarea></label>
+        <label>Scenario (.ppsim)<textarea id="scenario" spellcheck="false">scenario v1 {
+  seed: 0,
+  program: { file: "playground.pp", argv: [] },
+  hosts: { browser: { cores: 1, store: cold } },
+  links: [], grants: [], actions: [],
+  expect: [{ eventually: { event: "run.finished" } }]
+}</textarea></label>
       </div>
       <pre id="diagnostics" aria-live="polite">Ready. Browser mode uses virtual host services.</pre>
       <svg id="topology" viewBox="0 0 900 240" role="img" aria-label="Recorded hosts and nodes"></svg>

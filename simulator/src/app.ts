@@ -31,10 +31,53 @@ const topology = get<SVGSVGElement>("#topology");
 const status = get<HTMLElement>("#status");
 const filterRoot = get<HTMLElement>("#filters");
 const runSource = get<HTMLButtonElement>("#run");
+const runScenario = get<HTMLButtonElement>("#run-scenario");
+const exportRun = get<HTMLButtonElement>("#export");
+const nativeControls = ["pause-run", "resume-run", "step-run", "stop-run"].map((id) => get<HTMLButtonElement>(`#${id}`));
 const example = get<HTMLSelectElement>("#example");
 const surface = get<HTMLSelectElement>("#surface");
 const source = get<HTMLTextAreaElement>("#source");
 const diagnostics = get<HTMLElement>("#diagnostics");
+const scenario = get<HTMLTextAreaElement>("#scenario");
+
+let controllerSession: string | undefined;
+let liveEvents: PpEvent[] = [];
+let liveSocket: WebSocket | undefined;
+let liveFrame: number | undefined;
+const controllerRequest = async (path: string, init: RequestInit = {}): Promise<Response> => {
+  if (!controllerSession) throw new Error("local controller is not connected");
+  const headers = new Headers(init.headers); headers.set("authorization", `Bearer ${controllerSession}`);
+  return fetch(path, { ...init, headers });
+};
+
+async function bootstrapController(): Promise<void> {
+  const token = new URLSearchParams(location.hash.slice(1)).get("token");
+  if (!token) return;
+  history.replaceState(null, "", location.pathname + location.search);
+  const response = await fetch("/bootstrap", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) });
+  if (!response.ok) throw new Error("controller bootstrap was rejected");
+  controllerSession = (await response.json() as { session: string }).session;
+  runScenario.disabled = false; exportRun.disabled = false; nativeControls.forEach((control) => { control.disabled = false; });
+  diagnostics.textContent = "Connected to loopback controller. Native scenario execution is available.";
+  connectEvents();
+}
+
+function connectEvents(): void {
+  if (!controllerSession) return;
+  const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+  liveSocket = new WebSocket(`${scheme}//${location.host}/events?session=${encodeURIComponent(controllerSession)}&from=${liveEvents.length + 1}`);
+  liveSocket.addEventListener("message", (message) => {
+    const data = JSON.parse(String(message.data)) as { type: string; event?: PpEvent; status?: number };
+    if (data.type === "command") liveEvents = [];
+    if (data.type === "event" && data.event) liveEvents.push(data.event);
+    if (data.type === "finished") diagnostics.textContent = data.status === 0 ? "Scenario finished." : `Scenario exited ${data.status}`;
+    if (liveFrame === undefined) liveFrame = requestAnimationFrame(() => {
+      liveFrame = undefined;
+      if (liveEvents.length) { events = liveEvents; replay = new Replay(events); cursor = events.length; render(); }
+    });
+  });
+  liveSocket.addEventListener("close", () => { window.setTimeout(connectEvents, 250); });
+}
 
 let events: readonly PpEvent[] = [];
 let replay = new Replay(events);
@@ -129,7 +172,19 @@ async function load(text: string): Promise<void> {
   stop(); events = decodeJsonl(text); replay = new Replay(events); cursor = 0; selected = null; render();
 }
 
-fileInput.addEventListener("change", async () => { const file = fileInput.files?.[0]; if (file) await load(await file.text()); });
+async function loadRecording(text: string): Promise<void> {
+  if (text.trimStart().startsWith("{")) {
+    const bundle = JSON.parse(text) as { bundle_version?: number; scenario?: string; events_jsonl?: string; source_snapshot?: { name: string; text: string }; assertions?: readonly { passed: boolean }[] };
+    if (bundle.bundle_version !== 1 || typeof bundle.scenario !== "string" || typeof bundle.events_jsonl !== "string") throw new Error("unsupported run bundle");
+    scenario.value = bundle.scenario;
+    if (bundle.source_snapshot) { source.value = bundle.source_snapshot.text; surface.value = bundle.source_snapshot.name.endsWith(".ppl") ? "playground.ppl" : "playground.pp"; }
+    diagnostics.textContent = `Imported bundle: ${bundle.assertions?.filter((assertion) => assertion.passed).length ?? 0}/${bundle.assertions?.length ?? 0} assertions passed.`;
+    await load(bundle.events_jsonl); return;
+  }
+  await load(text);
+}
+
+fileInput.addEventListener("change", async () => { const file = fileInput.files?.[0]; if (file) await loadRecording(await file.text()); });
 play.addEventListener("click", togglePlay);
 step.addEventListener("click", () => { stop(); cursor = Math.min(events.length, cursor + 1); render(); });
 stepBack.addEventListener("click", () => { stop(); cursor = Math.max(0, cursor - 1); render(); });
@@ -146,7 +201,35 @@ runSource.addEventListener("click", async () => {
   await load(result.events);
   cursor = events.length; render();
 });
+runScenario.addEventListener("click", async () => {
+  diagnostics.textContent = "Running native scenario…";
+  const requestId = crypto.randomUUID();
+  let response = await controllerRequest("/run", { method: "POST", headers: { "x-request-id": requestId }, body: scenario.value });
+  let result = await response.json() as { accepted: boolean; error?: string; status?: number; approval_required?: boolean; approval_token?: string; grants?: readonly string[] };
+  if (result.approval_required && result.approval_token) {
+    const description = result.grants?.length ? result.grants.join("\n") : "No capabilities";
+    if (!window.confirm(`Allow this scenario's native grants?\n\n${description}`)) { diagnostics.textContent = "Scenario grants were not approved."; return; }
+    response = await controllerRequest("/run", { method: "POST", headers: { "x-request-id": requestId, "x-grant-approval": result.approval_token }, body: scenario.value });
+    result = await response.json();
+  }
+  if (!result.accepted) { diagnostics.textContent = result.error ?? "Scenario rejected"; return; }
+  let recording = await controllerRequest("/recording");
+  while (recording.status === 202) { await new Promise((resolve) => window.setTimeout(resolve, 50)); recording = await controllerRequest("/recording"); }
+  const body = await recording.json() as { events: readonly PpEvent[] };
+  await load(body.events.map((event) => JSON.stringify(event)).join("\n")); cursor = events.length; render();
+  diagnostics.textContent = "Scenario finished.";
+});
+exportRun.addEventListener("click", async () => {
+  const response = await controllerRequest("/bundle"); if (!response.ok) throw new Error("run export failed");
+  const link = document.createElement("a"); link.href = URL.createObjectURL(await response.blob()); link.download = "run.ppsim-bundle.json"; link.click(); URL.revokeObjectURL(link.href);
+});
+nativeControls.forEach((control) => control.addEventListener("click", async () => {
+  const command = control.id.replace("-run", "");
+  const response = await controllerRequest(`/${command}`, { method: "POST" });
+  const result = await response.json() as { accepted: boolean };
+  diagnostics.textContent = result.accepted ? `Native run ${command} accepted.` : "No native run is active.";
+}));
 document.addEventListener("keydown", (event) => { if (event.code === "Space" && event.target === document.body) { event.preventDefault(); togglePlay(); } });
 
-try { await load(await (await fetch("local-build.jsonl")).text()); }
+try { await bootstrapController(); await load(await (await fetch("local-build.jsonl")).text()); }
 catch (error) { status.textContent = (error as Error).message; }

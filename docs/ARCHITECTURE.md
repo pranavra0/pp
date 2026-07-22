@@ -56,6 +56,14 @@ scheduler; native process and network services are explicitly unavailable.
 TypeScript calls this entrypoint and does not evaluate pp or infer runtime
 semantics from display text.
 
+The same application is served by `simulator/controller.ts` for local runs.
+The controller is a loopback-only, ephemeral-token application edge: it
+validates a closed `.ppsim` schema, confines entrypoints to one workspace,
+invokes native `pp simulate`, streams acknowledgements and events, and exports
+portable bundles. `scenario.ts` owns canonical scenario data;
+`network.ts` owns seeded virtual time, directed links, faults, retries, and
+transfer metrics. Neither module evaluates pp or computes content identities.
+
 The semantic spine for a persistent computation is:
 
 ```text

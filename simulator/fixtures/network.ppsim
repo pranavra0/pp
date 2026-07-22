@@ -1,0 +1,17 @@
+scenario v1 {
+  seed: 7,
+  program: { file: "../examples/nodes.pp", argv: [] },
+  hosts: {
+    control: { cores: 2, store: cold },
+    worker: { cores: 2, store: cold }
+  },
+  links: [
+    { id: worker-link, from: control, to: worker, latency: "20ms",
+      bandwidth: "100mbit", loss: "0%", corruption: "0%" }
+  ],
+  grants: [], actions: [],
+  expect: [
+    { eventually: { event: "run.finished" } },
+    { eventually: { event: "network.response" } }
+  ]
+}

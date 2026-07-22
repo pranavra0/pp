@@ -46,6 +46,13 @@ recording. Runtime smoke cases cover both readers, functions, macros, effects,
 persistent-node cold/warm parity, diagnostics, and unavailable host services.
 Cached seek near the end must remain below 250 ms.
 
+`tests/104-simulator-lab.sh` adds the application-edge contract when Deno is
+available: closed and canonical `.ppsim` decoding, deterministic workload
+generation, a native headless run, portable bundle assertions, and the
+session-authenticated loopback controller. TypeScript unit cases pin virtual
+latency/bandwidth, partition/heal, loss/retry, corruption verification, and
+fallback using seeded logical time.
+
 The category counts are printed by `scripts/test-categories.sh`. The focused
 executables are deliberately small and use real kernel, repository, event,
 observation, lifecycle, and reader implementations; they do not replace the
