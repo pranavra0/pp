@@ -38,7 +38,10 @@ Event producers do not encode JSON or retain recordings. The event codec
 accepts only its canonical field order and schema version. Redaction happens
 before `Event_sink.emit`; unauthorized cell identities are replaced rather
 than passed to the sink, and event payloads contain hashes and counts instead
-of source paths, capability tokens, or stored bytes.
+of source paths, capability tokens, or stored bytes. The JSONL sink streams
+and backpressures the producer with constant retained memory; it does not drop
+events. Its canonical envelope carries logical time and a nullable monotonic
+wall timestamp.
 
 The semantic spine for a persistent computation is:
 
@@ -287,6 +290,7 @@ Important test groups:
 | Domains and fenced actions | `033`, `034`, `046`, `049`, `052` |
 | Cluster and GC | `047` through `051` |
 | Crash and adversarial coverage | `073`, `074`, `075` |
+| Simulator events and parity | `102`, `103` |
 
 If a source change touches the evaluator, identity, or durable repository
 code, run the full fuzzer and suite. The architecture gate must remain green.

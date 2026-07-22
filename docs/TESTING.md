@@ -28,6 +28,11 @@ multi-process store scenarios (mutating files, grants or globals between
 `pp` invocations), expected-output oracles, watch loops, and simulated
 cluster members.
 
+Simulator parity uses separate cold stores for the uninstrumented baseline
+and every event level. It compares status, stdout, stderr, and a content
+manifest of all durable store files; a repeated 64-node cold build bounds
+recording size and runtime overhead.
+
 The category counts are printed by `scripts/test-categories.sh`. The focused
 executables are deliberately small and use real kernel, repository, event,
 observation, lifecycle, and reader implementations; they do not replace the
