@@ -1,0 +1,7 @@
+scenario v1 {
+  seed: 3, program: { file: "../examples/nodes.pp", argv: [] },
+  hosts: { control: { cores: 1, store: cold }, worker: { cores: 1, store: cold } },
+  links: [{ id: work, from: control, to: worker, latency: "1ms", bandwidth: "1gbit", loss: "0%", corruption: "100%" }],
+  grants: [], actions: [],
+  expect: [{ eventually: { event: "network.corruption_detected" } }, { eventually: { event: "scheduler.fallback" } }]
+}

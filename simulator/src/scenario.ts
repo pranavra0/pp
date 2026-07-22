@@ -168,7 +168,7 @@ export function decodeScenario(text: string): Scenario {
       return { atUs, kind, host };
     }
     throw new Error(`actions[${index}] requires exactly one fault`);
-  }).sort((a, b) => a.atUs - b.atUs || a.kind.localeCompare(b.kind));
+  }).sort((a, b) => a.atUs - b.atUs);
   const expect = array(root.expect ?? [], "expect").map((raw, index): ExpectSpec => {
     const item = object(raw, `expect[${index}]`); fields(item, ["eventually", "count"], `expect[${index}]`);
     if (item.eventually !== undefined) {

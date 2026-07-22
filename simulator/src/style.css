@@ -22,6 +22,9 @@ main { min-height: 0; display: grid; grid-template-columns: minmax(420px, 3fr) m
 #topology rect { fill: #292e33; stroke: #71808d; }
 #topology text { fill: #dce3e8; font-size: 10px; }
 #topology g > text { font-size: 12px; font-weight: 650; }
+#topology .link { stroke: #7f9bb2; stroke-width: 3; }
+#topology .link.dropped, #topology .link.partitioned { stroke: #b95a54; stroke-dasharray: 7 5; }
+#topology .link.corrupt { stroke: #c58b3b; stroke-dasharray: 2 4; }
 .node circle { fill: #79838c; stroke: #d5dce1; }
 .node.hit circle, .node.finished circle { fill: #438761; }
 .node.miss circle, .node.rebuilding circle { fill: #b07b35; }

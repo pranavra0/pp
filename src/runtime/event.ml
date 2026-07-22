@@ -8,6 +8,9 @@ type cache_trace_status = Usable | Stale of Identity_types.Cell_id.t option | Un
 type cache_outcome = Succeeded | Failed_outcome
 type cache_miss_reason = Cache_reads_disabled | No_stored_trace |
   No_usable_trace | Result_object_missing
+type network_operation = Request | Response | Drop | Retry | Unreachable |
+  Corruption_detected
+type fault_operation = Partition | Heal | Crash | Restart
 type payload =
   | Run_created
   | Run_configured of { event_level : level }
@@ -54,6 +57,15 @@ type payload =
       result_hash : Identity_types.Object_hash.t;
       cell_count : int;
     }
+  | Network_operation of {
+      operation : network_operation;
+      link_id : string;
+      bytes : int;
+      attempt : int;
+    }
+  | Fault_injected of { operation : fault_operation; target : string }
+  | Scheduler_fallback of { link_id : string }
+  | Metric_summary of { requests : int; retries : int; bytes : int }
 
 type t = {
   schema_version : int;
@@ -79,6 +91,8 @@ let level = function
   | Node_rebuild_started _ | Node_rebuild_finished _ | Node_rebuild_failed _
   | Store_object_persisted _ | Store_trace_persisted _ ->
       Semantic
+  | Network_operation _ | Fault_injected _ | Scheduler_fallback _ -> Semantic
+  | Metric_summary _ -> Summary
 
 let category = function
   | Run_created | Run_configured _ | Run_started | Run_finished | Run_failed -> "run"
@@ -88,6 +102,10 @@ let category = function
   | Cache_trace _ | Cache_hit _ | Cache_miss _ -> "cache"
   | Node_rebuild_started _ | Node_rebuild_finished _ | Node_rebuild_failed _ -> "node"
   | Store_object_persisted _ | Store_trace_persisted _ -> "store"
+  | Network_operation _ -> "network"
+  | Fault_injected _ -> "fault"
+  | Scheduler_fallback _ -> "scheduler"
+  | Metric_summary _ -> "metric"
 
 let kind = function
   | Run_created -> "run.created"
@@ -109,6 +127,18 @@ let kind = function
   | Node_rebuild_failed _ -> "node.rebuild"
   | Store_object_persisted _ -> "store.object.persisted"
   | Store_trace_persisted _ -> "store.trace.persisted"
+  | Network_operation { operation; _ } ->
+      (match operation with
+       | Request -> "network.request" | Response -> "network.response"
+       | Drop -> "network.drop" | Retry -> "network.retry"
+       | Unreachable -> "network.unreachable"
+       | Corruption_detected -> "network.corruption_detected")
+  | Fault_injected { operation; _ } ->
+      (match operation with
+       | Partition -> "fault.partition" | Heal -> "fault.heal"
+       | Crash -> "fault.crash" | Restart -> "fault.restart")
+  | Scheduler_fallback _ -> "scheduler.fallback"
+  | Metric_summary _ -> "metric.summary"
 
 let phase = function
   | Run_started | Node_rebuild_started _ -> Started
@@ -119,6 +149,8 @@ let phase = function
   | Identity_node_key_computed _ | Identity_result_hash_computed _
   | Cache_trace _ | Cache_hit _ | Cache_miss _
   | Store_object_persisted _ | Store_trace_persisted _ -> Instant
+  | Network_operation _ | Fault_injected _ | Scheduler_fallback _
+  | Metric_summary _ -> Instant
 
 let visibility = function
   | Cache_trace { status = Stale None | Unauthorized; _ } -> Redacted
@@ -223,6 +255,15 @@ let payload_fields = function
         field "outcome" (string (outcome_name outcome));
         field "result_hash" (string (Identity_types.Object_hash.to_string result_hash));
         field "cell_count" (string_of_int cell_count) ]
+  | Network_operation { link_id; bytes; attempt; _ } ->
+      [ field "link_id" (string link_id); field "bytes" (string_of_int bytes);
+        field "attempt" (string_of_int attempt) ]
+  | Fault_injected { target; _ } -> [field "target" (string target)]
+  | Scheduler_fallback { link_id } -> [field "link_id" (string link_id)]
+  | Metric_summary { requests; retries; bytes } ->
+      [ field "requests" (string_of_int requests);
+        field "retries" (string_of_int retries);
+        field "bytes" (string_of_int bytes) ]
 
 let to_json event =
   let fields =
@@ -380,6 +421,40 @@ let of_json text =
              let outcome = match outcome with "ok" -> Some Succeeded | "failed" -> Some Failed_outcome | _ -> None in
              (match outcome with Some outcome -> Ok (Store_trace_persisted { key = Identity_types.Cache_key.of_string key; outcome; result_hash = Identity_types.Object_hash.of_digest result_hash; cell_count }) | None -> error "invalid store trace outcome")
          | _ -> error "invalid store trace payload")
+    | ("network.request" | "network.response" | "network.drop" |
+       "network.retry" | "network.unreachable" |
+       "network.corruption_detected"), "instant" ->
+        (match fields with
+         | [("link_id", JString link_id); ("bytes", JInt bytes);
+            ("attempt", JInt attempt)] ->
+             let operation = match kind with
+               | "network.request" -> Request | "network.response" -> Response
+               | "network.drop" -> Drop | "network.retry" -> Retry
+               | "network.unreachable" -> Unreachable
+               | "network.corruption_detected" -> Corruption_detected
+               | _ -> assert false in
+             Ok (Network_operation { operation; link_id; bytes; attempt })
+         | _ -> error "invalid network payload")
+    | ("fault.partition" | "fault.heal" | "fault.crash" |
+       "fault.restart"), "instant" ->
+        (match fields with
+         | [("target", JString target)] ->
+             let operation = match kind with
+               | "fault.partition" -> Partition | "fault.heal" -> Heal
+               | "fault.crash" -> Crash | "fault.restart" -> Restart
+               | _ -> assert false in
+             Ok (Fault_injected { operation; target })
+         | _ -> error "invalid fault payload")
+    | "scheduler.fallback", "instant" ->
+        (match fields with
+         | [("link_id", JString link_id)] -> Ok (Scheduler_fallback { link_id })
+         | _ -> error "invalid scheduler fallback payload")
+    | "metric.summary", "instant" ->
+        (match fields with
+         | [("requests", JInt requests); ("retries", JInt retries);
+            ("bytes", JInt bytes)] ->
+             Ok (Metric_summary { requests; retries; bytes })
+         | _ -> error "invalid metric summary payload")
     | _ -> error "unknown event kind or phase"
   in
   match value 0 with

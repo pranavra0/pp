@@ -1,0 +1,7 @@
+scenario v1 {
+  seed: 2, program: { file: "../examples/nodes.pp", argv: [] },
+  hosts: { control: { cores: 1, store: cold }, worker: { cores: 1, store: cold } },
+  links: [{ id: work, from: control, to: worker, latency: "1ms", bandwidth: "1gbit", loss: "100%" }],
+  grants: [], actions: [],
+  expect: [{ eventually: { event: "network.retry" } }, { eventually: { event: "scheduler.fallback" } }]
+}

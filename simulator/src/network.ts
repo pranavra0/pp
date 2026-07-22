@@ -1,6 +1,6 @@
 import type { ActionSpec, LinkSpec, Scenario } from "./scenario.ts";
 
-export interface NetworkEvent { readonly timeUs: number; readonly kind: string; readonly host: string; readonly link?: string; readonly bytes?: number; readonly attempt?: number }
+export interface NetworkEvent { readonly timeUs: number; readonly kind: string; readonly host: string; readonly link?: string; readonly target?: string; readonly bytes?: number; readonly attempt?: number }
 export interface TransferResult { readonly status: "delivered" | "fallback"; readonly attempts: number; readonly events: readonly NetworkEvent[]; readonly finishedUs: number }
 
 class Random {
@@ -30,7 +30,7 @@ export class VirtualNetwork {
         case "crash": this.alive.set(action.host, false); break;
         case "restart": this.alive.set(action.host, true); break;
       }
-      this.events.push({ timeUs: this.timeUs, kind: `fault.${action.kind}`, host: "control", ...target(action) });
+      this.events.push({ timeUs: this.timeUs, kind: `fault.${action.kind}`, host: "control", target: target(action) });
     }
   }
   transfer(linkId: string, bytes: number, retries = 2): TransferResult {
@@ -63,8 +63,12 @@ export class VirtualNetwork {
   }
 }
 
-const target = (action: ActionSpec): Pick<NetworkEvent, "link"> | Record<string, never> =>
-  action.kind === "partition" || action.kind === "heal" ? { link: action.link } : {};
+const target = (action: ActionSpec): string => {
+  switch (action.kind) {
+    case "partition": case "heal": return action.link;
+    case "crash": case "restart": return action.host;
+  }
+};
 
 export const linkMetrics = (events: readonly NetworkEvent[]) => ({
   requests: events.filter((event) => event.kind === "network.request").length,

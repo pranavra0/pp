@@ -8,6 +8,9 @@ type cache_trace_status = Usable | Stale of Identity_types.Cell_id.t option | Un
 type cache_outcome = Succeeded | Failed_outcome
 type cache_miss_reason = Cache_reads_disabled | No_stored_trace |
   No_usable_trace | Result_object_missing
+type network_operation = Request | Response | Drop | Retry | Unreachable |
+  Corruption_detected
+type fault_operation = Partition | Heal | Crash | Restart
 type payload =
   | Run_created
   | Run_configured of { event_level : level }
@@ -54,6 +57,15 @@ type payload =
       result_hash : Identity_types.Object_hash.t;
       cell_count : int;
     }
+  | Network_operation of {
+      operation : network_operation;
+      link_id : string;
+      bytes : int;
+      attempt : int;
+    }
+  | Fault_injected of { operation : fault_operation; target : string }
+  | Scheduler_fallback of { link_id : string }
+  | Metric_summary of { requests : int; retries : int; bytes : int }
 
 type t = private {
   schema_version : int;

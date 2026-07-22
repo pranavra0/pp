@@ -18,8 +18,25 @@ cmp "$TMP/first.ppsim" "$TMP/second.ppsim"
 deno task lab validate "$TMP/first.ppsim" >/dev/null
 
 PP="$PP" deno task lab bundle fixtures/network.ppsim "$TMP/run.bundle.json"
+PP="$PP" deno task lab bundle fixtures/network.ppsim "$TMP/replay.bundle.json"
 grep -q '"bundle_version": 1' "$TMP/run.bundle.json"
 grep -q '"passed": true' "$TMP/run.bundle.json"
+node - "$TMP/run.bundle.json" "$TMP/replay.bundle.json" <<'NODE'
+const fs = require("fs");
+const normalize = (path) => {
+  const bundle = JSON.parse(fs.readFileSync(path, "utf8"));
+  const events = bundle.events_jsonl.trim().split("\n").map(JSON.parse).map(({ run_id, wall_time_ns, ...event }) => event);
+  return JSON.stringify({ scenario: bundle.scenario, events, assertions: bundle.assertions, metrics: bundle.metrics });
+};
+if (normalize(process.argv[2]) !== normalize(process.argv[3])) process.exit(1);
+NODE
+for fixture in fixtures/partition.ppsim fixtures/loss.ppsim fixtures/corruption.ppsim fixtures/heal.ppsim; do
+  PP="$PP" deno task lab bundle "$fixture" "$TMP/$(basename "$fixture").json"
+  if grep -q '"passed": false' "$TMP/$(basename "$fixture").json"; then
+    echo "failed simulator assertion in $fixture" >&2
+    exit 1
+  fi
+done
 
 PP="$PP" deno run --allow-net=127.0.0.1 --allow-read --allow-run --allow-write --allow-env controller.ts .. 0 > "$TMP/controller.out" 2> "$TMP/controller.err" &
 controller_pid=$!
@@ -52,6 +69,6 @@ if (!started.url.startsWith("http://127.0.0.1:") || !started.url.includes("#toke
   } while (recording.status === 202);
   if (!recording.ok) process.exit(1);
   const bundle = await fetch(`${url.origin}/bundle`, { headers: { authorization: `Bearer ${session}` } }).then((response) => response.json());
-  if (bundle.bundle_version !== 1 || bundle.network_events.length === 0) process.exit(1);
+  if (bundle.bundle_version !== 1 || !bundle.events_jsonl.includes('"kind":"network.response"')) process.exit(1);
 })().catch((error) => { console.error(error); process.exit(1); });
 NODE

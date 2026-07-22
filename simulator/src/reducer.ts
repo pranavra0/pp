@@ -14,11 +14,12 @@ export interface ReplayState {
   readonly runStatus: "idle" | "running" | "finished" | "failed";
   readonly hosts: Set<string>;
   readonly nodes: Map<string, NodeState>;
+  readonly links: Map<string, { readonly id: string; readonly from?: string; readonly to?: string; readonly status: "active" | "dropped" | "partitioned" | "corrupt" }>;
   readonly counts: Map<string, number>;
 }
 
 export const initialState = (): ReplayState => ({
-  cursor: 0, runStatus: "idle", hosts: Set(), nodes: Map(), counts: Map()
+  cursor: 0, runStatus: "idle", hosts: Set(), nodes: Map(), links: Map(), counts: Map()
 });
 
 const text = (event: PpEvent, field: string): string | undefined => {
@@ -31,6 +32,7 @@ export function reduceEvent(state: ReplayState, event: PpEvent): ReplayState {
   const hosts = state.hosts.add(event.host_id);
   const counts = state.counts.set(event.category, (state.counts.get(event.category) ?? 0) + 1);
   let nodes = state.nodes;
+  let links = state.links;
   const key = text(event, "node_key") ?? text(event, "cache_key");
   if (key) {
     const previous = nodes.get(key) ?? { key, host: event.host_id, status: "known", cache: "unknown" };
@@ -46,7 +48,19 @@ export function reduceEvent(state: ReplayState, event: PpEvent): ReplayState {
   if (event.kind === "run.started") runStatus = "running";
   if (event.kind === "run.finished") runStatus = "finished";
   if (event.kind === "run.failed") runStatus = "failed";
-  return { cursor: event.event_id, runStatus, hosts, nodes, counts };
+  const linkId = text(event, "link_id") ?? (event.category === "fault" ? text(event, "target") : undefined);
+  if (linkId) {
+    const previous = links.get(linkId) ?? { id: linkId, status: "active" as const };
+    let status = previous.status;
+    if (event.kind === "network.drop" || event.kind === "network.unreachable") status = "dropped";
+    if (event.kind === "network.corruption_detected") status = "corrupt";
+    if (event.kind === "fault.partition") status = "partitioned";
+    if (event.kind === "fault.heal" || event.kind === "network.response") status = "active";
+    const from = event.kind === "network.request" ? event.host_id : previous.from;
+    const to = event.kind === "network.response" ? event.host_id : previous.to;
+    links = links.set(linkId, { ...previous, from, to, status });
+  }
+  return { cursor: event.event_id, runStatus, hosts, nodes, links, counts };
 }
 
 export class Replay {

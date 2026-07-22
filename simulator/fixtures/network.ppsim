@@ -12,6 +12,7 @@ scenario v1 {
   grants: [], actions: [],
   expect: [
     { eventually: { event: "run.finished" } },
-    { eventually: { event: "network.response" } }
+    { eventually: { event: "network.response" } },
+    { eventually: { event: "cache.hit", status: "ok" } }
   ]
 }

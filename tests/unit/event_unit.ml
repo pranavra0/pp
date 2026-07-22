@@ -42,6 +42,18 @@ let payloads = [
   Event.Store_object_persisted result_hash;
   Event.Store_trace_persisted { key = cache_key; outcome = Event.Succeeded; result_hash; cell_count = 2 };
   Event.Store_trace_persisted { key = cache_key; outcome = Event.Failed_outcome; result_hash; cell_count = 1 };
+  Event.Network_operation { operation = Event.Request; link_id = "a-b"; bytes = 12; attempt = 1 };
+  Event.Network_operation { operation = Event.Response; link_id = "a-b"; bytes = 12; attempt = 1 };
+  Event.Network_operation { operation = Event.Drop; link_id = "a-b"; bytes = 12; attempt = 1 };
+  Event.Network_operation { operation = Event.Retry; link_id = "a-b"; bytes = 12; attempt = 2 };
+  Event.Network_operation { operation = Event.Unreachable; link_id = "a-b"; bytes = 12; attempt = 2 };
+  Event.Network_operation { operation = Event.Corruption_detected; link_id = "a-b"; bytes = 12; attempt = 2 };
+  Event.Fault_injected { operation = Event.Partition; target = "a-b" };
+  Event.Fault_injected { operation = Event.Heal; target = "a-b" };
+  Event.Fault_injected { operation = Event.Crash; target = "worker" };
+  Event.Fault_injected { operation = Event.Restart; target = "worker" };
+  Event.Scheduler_fallback { link_id = "a-b" };
+  Event.Metric_summary { requests = 3; retries = 2; bytes = 12 };
 ]
 
 let replace_once source before after =

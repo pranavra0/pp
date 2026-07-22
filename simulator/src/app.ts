@@ -12,7 +12,7 @@ const examples = {
   "Macro expansion": "defmacro unless(test, body) { quasiquote { if unquote(test) { nil } else { unquote(body) } } }\nunless(false, 42)"
 } as const;
 
-const categories: readonly EventCategory[] = ["run", "source", "identity", "cache", "node", "store"];
+const categories: readonly EventCategory[] = ["run", "source", "identity", "cache", "node", "store", "scheduler", "network", "fault", "metric"];
 const get = <T extends Element>(selector: string): T => {
   const element = document.querySelector<T>(selector);
   if (!element) throw new Error(`missing ${selector}`);
@@ -83,6 +83,7 @@ let events: readonly PpEvent[] = [];
 let replay = new Replay(events);
 let cursor = 0;
 let selected: number | null = null;
+let explanations: readonly string[] = [];
 let timer: number | undefined;
 
 for (const category of categories) {
@@ -106,7 +107,16 @@ function short(value: string): string { return value.length > 14 ? `${value.slic
 function renderTopology(state: ReplayState): void {
   topology.replaceChildren();
   const namespace = "http://www.w3.org/2000/svg";
-    state.hosts.toArray().forEach((host, hostIndex) => {
+  const hosts = state.hosts.toArray();
+  state.links.valueSeq().forEach((link) => {
+    const from = hosts.indexOf(link.from ?? ""), to = hosts.indexOf(link.to ?? "");
+    if (from < 0 || to < 0) return;
+    const line = document.createElementNS(namespace, "line");
+    line.setAttribute("x1", String(155 + from * 270)); line.setAttribute("y1", "160");
+    line.setAttribute("x2", String(155 + to * 270)); line.setAttribute("y2", "160");
+    line.setAttribute("class", `link ${link.status}`); topology.append(line);
+  });
+  hosts.forEach((host, hostIndex) => {
     const group = document.createElementNS(namespace, "g");
     group.setAttribute("transform", `translate(${40 + hostIndex * 270} 45)`);
     const box = document.createElementNS(namespace, "rect");
@@ -129,7 +139,12 @@ function renderTopology(state: ReplayState): void {
 function renderInspector(): void {
   const event = selected === null ? undefined : events[selected - 1];
   if (!event) {
-    inspector.innerHTML = "<p>Select an event to inspect its canonical payload and causal chain.</p>";
+    inspector.replaceChildren();
+    const prompt = document.createElement("p"); prompt.textContent = "Select an event to inspect its canonical payload and causal chain."; inspector.append(prompt);
+    if (explanations.length) {
+      const list = document.createElement("ul");
+      list.append(...explanations.map((explanation) => { const item = document.createElement("li"); item.textContent = explanation; return item; })); inspector.append(list);
+    }
     return;
   }
   const chain = replay.causalChain(event.event_id).map((item) => `#${item.event_id} ${item.kind}`).join(" → ");
@@ -174,13 +189,15 @@ async function load(text: string): Promise<void> {
 
 async function loadRecording(text: string): Promise<void> {
   if (text.trimStart().startsWith("{")) {
-    const bundle = JSON.parse(text) as { bundle_version?: number; scenario?: string; events_jsonl?: string; source_snapshot?: { name: string; text: string }; assertions?: readonly { passed: boolean }[] };
+    const bundle = JSON.parse(text) as { bundle_version?: number; scenario?: string; events_jsonl?: string; source_snapshot?: { name: string; text: string }; assertions?: readonly { passed: boolean }[]; explanations?: readonly string[] };
     if (bundle.bundle_version !== 1 || typeof bundle.scenario !== "string" || typeof bundle.events_jsonl !== "string") throw new Error("unsupported run bundle");
     scenario.value = bundle.scenario;
+    explanations = bundle.explanations ?? [];
     if (bundle.source_snapshot) { source.value = bundle.source_snapshot.text; surface.value = bundle.source_snapshot.name.endsWith(".ppl") ? "playground.ppl" : "playground.pp"; }
     diagnostics.textContent = `Imported bundle: ${bundle.assertions?.filter((assertion) => assertion.passed).length ?? 0}/${bundle.assertions?.length ?? 0} assertions passed.`;
     await load(bundle.events_jsonl); return;
   }
+  explanations = [];
   await load(text);
 }
 
