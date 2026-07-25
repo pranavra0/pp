@@ -38,6 +38,8 @@ val set_sealed_pin : t -> string -> string -> unit
 val observations : t -> (string * string) list
 val add_observation : t -> string * string -> unit
 val clear_observations : t -> unit
+val add_wanted_node : t -> Identity_types.Node_key.t -> unit
+val wanted_nodes : t -> Identity_types.Node_key.t list
 val add_fenced_action : t -> string * Core_model.value -> unit
 val take_fenced_actions : t -> (string * Core_model.value) list
 val find_run_pin : t -> string -> string option

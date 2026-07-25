@@ -29,6 +29,7 @@ type domain_state = {
 type run_state = {
   sealed_pins : (string, string) Hashtbl.t;
   mutable observations : (string * string) list;
+  wanted_nodes : (Identity_types.Node_key.t, unit) Hashtbl.t;
   run_pins : (string, string) Hashtbl.t;
   preseeded_run_pins : (string, string) Hashtbl.t;
 }
@@ -68,6 +69,7 @@ let create ?executor ~scheduler operations = {
   };
   run = {
     sealed_pins = Hashtbl.create 16; observations = [];
+    wanted_nodes = Hashtbl.create 64;
     run_pins = Hashtbl.create 64; preseeded_run_pins = Hashtbl.create 64;
   };
   fenced = {
@@ -93,6 +95,7 @@ let call t ~env fn args =
 let reset_pass_state t =
   Hashtbl.clear t.domains.probes; Hashtbl.clear t.run.sealed_pins;
   Hashtbl.clear t.run.run_pins;
+  Hashtbl.clear t.run.wanted_nodes;
   Hashtbl.iter (Hashtbl.replace t.domains.probes) t.domains.preseeded_probes;
   Hashtbl.iter (Hashtbl.replace t.run.run_pins) t.run.preseeded_run_pins;
   t.run.observations <- [];
@@ -141,6 +144,9 @@ let set_sealed_pin t = Hashtbl.replace t.run.sealed_pins
 let observations t = t.run.observations
 let add_observation t x = t.run.observations <- x :: t.run.observations
 let clear_observations t = t.run.observations <- []
+let add_wanted_node t key = Hashtbl.replace t.run.wanted_nodes key ()
+let wanted_nodes t =
+  Hashtbl.to_seq_keys t.run.wanted_nodes |> List.of_seq |> List.sort compare
 let add_fenced_action t x =
   t.fenced.fenced_actions <- x :: t.fenced.fenced_actions
 let take_fenced_actions t =

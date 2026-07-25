@@ -214,7 +214,7 @@ The repository layer is:
 | `artifact_tree.ml`, `artifact_store.ml` | Canonical ordinary tree validation, blob reachability, materialization, and snapshotting |
 | `trace_repository.ml` | Locked trace sets and trace encoding |
 | `cell_repository.ml` | File and sealed pins and snapshot reads |
-| `repository_inventory.ml`, `store_gc.ml`, `gcroots.ml` | Explicit mark-by-replay GC |
+| `repository_inventory.ml`, `store_gc.ml`, `gcroots.ml` | Wanted roots and direct trace-graph GC |
 | `remote_protocol.ml` | Typed pin and serve-hit messages plus their canonical codec |
 | `transport.ml`, `remote.ml` | Hash-checked local-directory artifact movement and remote placement |
 
@@ -232,6 +232,15 @@ the filesystem and process domains is in `stdlib/domain-fs.pp` and
 `reconciliation.ml` binds a command to a session and runs domain passes.
 `fenced.ml` and `journal.ml` handle non-repeatable actions. A domain observes
 before a pass and verifies after apply.
+
+A successful pass records its canonical desired object and the node keys
+forced to derive it as one wanted root. Cache validation, stabilization, and
+GC use the same trace edges: node reads name children, trace outcomes name
+result objects, and canonical trees name blobs. Changing desired state records
+a new retained graph; reconciliation withdraws removed domain entries and GC
+can collect only data outside the retained graphs. A fresh process reconstructs
+the same keys from pinned source and island values and uses the same traces to
+validate hits or rebuild misses.
 
 `scheduler.ml` owns an installable result-transparent handler service. A
 handler names its policy, declares redundant width, dispatches node misses,

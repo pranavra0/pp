@@ -65,7 +65,6 @@ let run_admin ctx cli =
           | None -> false
 
 let prepare ctx cli =
-  (match Cli.gc_mark_out cli with Some _ -> Cache_policy.begin_gc Cache_policy.default | None -> ());
   (match Cli.desired_object cli with
    | Some (hash, root) ->
        Transport.LocalDir.pull_object root ~hash;

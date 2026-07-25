@@ -25,7 +25,6 @@ val fenced_policy : t -> Invocation.fenced_policy
 val gc_keep_epochs : t -> int
 val gc_grace_seconds : t -> float
 val gc : t -> bool
-val gc_mark_out : t -> string option
 val update_islands : t -> bool
 val fetch_islands : t -> bool
 val pin_file : t -> string option

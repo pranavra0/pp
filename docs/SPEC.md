@@ -323,12 +323,12 @@ Grounding: Nix needs "dynamic derivations" and a socket mechanism for this;
 a language whose graph expands under evaluation gets it natively. Demand
 pruning is Excel not recalculating sheets nobody looks at.
 
-**Status: partial** — `node { e }` and the store exist, and the reverse-edge
-dirty-propagation graph follows explicit child-result edges for push
-`stabilize`. Pull watch resets the whole reachable graph while push watch
-resets only the affected closure. They produce the same results, while push
-also cuts off an unchanged inline intermediate (`tests/032`, `tests/101`). Still missing:
-a formal root desired-state formula and an explicit wanted-set.
+**Status: holds** — the fully forced desired object plus the node keys used to
+derive it form the explicit wanted root. Push watch selects affected work
+through child-result edges while pull watch reconstructs keys from pinned
+source and island values in a fresh process. Cache validation, stabilization,
+transport, and GC use the same child/result/tree edges (`tests/032`,
+`tests/050`, `tests/101`).
 
 Test: a root demanding 1 of a manifest's 3 children executes exactly 1
 child (journal/trace proves it), .
@@ -1491,7 +1491,7 @@ migration.
 | LAW 4 | one scope model | holds | top level, blocks, and modules prebind the same definitions while preserving value statement timing; `tests/025-def-value.sh`, `tests/039-global-scope.pp`, `tests/095-scope-identity.sh` |
 | LAW 5 | `let*` sequential sugar | holds | reader emits `ELetStar`; sequential; `tests/007-phase0-laws.pp` |
 | LAW 6 | node call-by-value plus memoization | holds | application is call-by-value; `node { e }` and applied `defnode` memoize persistently, keyed on code, free-variable values, and argument value hashes (`tests/011`, `tests/097`) |
-| LAW 7 | demand-pruning at node granularity | partial | push watch selects affected work through child-result edges while pull watch returns the same result from a fresh graph (`tests/032`, `tests/101`); a root desired-state formula and an explicit wanted-set are still absent |
+| LAW 7 | demand-pruning at node granularity | holds | the desired object and forced node keys root the durable graph shared by cache validation, stabilization, transport, and GC (`tests/032`, `tests/050`, `tests/101`) |
 | LAW 8 | `delay` ephemeral vs `node` persistent | holds | `delay` and local bindings are fresh, in-memory thunks; only `node` thunks use in-process deduplication, and nodes persist across runs |
 | LAW 11 | stack-safe non-tail recursion | holds | heap continuation machine plus iterative builtin list traversal; regular deep regression (`tests/087-deep-recursion.pp`) and million-element acceptance fixture (`tests/fixtures/million-non-tail.pp`) |
 | LAW 12 | total quotation, quasiquote | holds | `tests/007-phase0-laws.pp`; `defmacro` is built on this base — `Quotation.value_to_expr` completes the round trip, `tests/041-defmacro.pp` |

@@ -13,10 +13,6 @@ val check_enabled : t -> bool
 val volatile_count : t -> int
 val reset_volatile : t -> unit
 val note_volatile : t -> unit
-val begin_gc : t -> unit
-val end_gc : t -> (string, unit) Hashtbl.t option
-val gc_marks : t -> (string, unit) Hashtbl.t
-val mark : t -> string -> unit
 val short_key : string -> string
 val diagnose : t -> ('a, out_channel, unit, unit, unit, unit) format6 -> 'a
 val lookup : t -> key:Identity_types.Cache_key.t ->

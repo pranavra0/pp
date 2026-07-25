@@ -18,7 +18,7 @@ let recover ctx cli =
   Dynamic_scope.with_top_level
     (App_context.session ctx) (App_context.invocation ctx)
     ~f:(fun () ->
-      if Reconciliation.should_run reconciliation && Cli.gc_mark_out cli = None then begin
+      if Reconciliation.should_run reconciliation then begin
         let count = Reconciliation.recover reconciliation ~decide:(fenced_decision cli) in
         if count > 0 then
           Printf.eprintf "[fenced] %d unknown-status action(s) in journal; applying policy=%s\n%!"

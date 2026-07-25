@@ -22,7 +22,6 @@ type t = {
   gc_keep_epochs : int;
   gc_grace_seconds : float;
   gc : bool;
-  gc_mark_out : string option;
   update_islands : bool;
   fetch_islands : bool;
   pin_file : string option;
@@ -78,7 +77,6 @@ type raw = {
   gc_keep_epochs : string ref;
   gc_grace_seconds : string ref;
   gc : bool ref;
-  gc_mark_out : string option ref;
   update_islands : bool ref;
   fetch_islands : bool ref;
   pin_file : string option ref;
@@ -116,7 +114,7 @@ let new_raw command_argv = {
   watch_interval = ref "1.0"; stabilize = ref false; schedule = ref "serial";
   fenced_policy = ref "abort"; gc_keep_epochs = ref "5";
   gc_grace_seconds = ref (string_of_float Store_gc.default_grace_seconds);
-  gc = ref false; gc_mark_out = ref None; update_islands = ref false;
+  gc = ref false; update_islands = ref false;
   fetch_islands = ref false; pin_file = ref None;
   dump_pins_file = ref None; emit_braces_file = ref None;
   roundtrip_braces_file = ref None; fmt = ref None; compare_hash = ref None;
@@ -231,8 +229,7 @@ let flags raw =
       (opt2 "--desired-object" (fun h root -> raw.desired_object := Some (h, root)));
     doc_of "  pp --publish-object <shared-root> <file>  Publish the program's value and canonical tree blobs to a shared local-dir store, by hash\n"
       (opt1 "--publish-object" (fun root -> raw.publish_object_root := Some root));
-    opt1 "--gc-mark" (fun out -> raw.gc_mark_out := Some out);
-    doc_of "  pp gc [--gc-keep-epochs N] [--gc-grace-seconds S]  Explicit store GC: mark-by-replay the last N reconcile/supervise epochs, sweep the rest\n"
+    doc_of "  pp gc [--gc-keep-epochs N] [--gc-grace-seconds S]  Explicit store GC: retain the last N wanted graphs and sweep unreachable data\n"
       (flag "gc" (fun () -> raw.gc := true));
     opt1 "--gc-keep-epochs" (fun n -> raw.gc_keep_epochs := n);
     opt1 "--gc-grace-seconds" (fun n -> raw.gc_grace_seconds := n);
@@ -300,7 +297,7 @@ let validated raw =
     desired_object = !(raw.desired_object); publish_object_root = !(raw.publish_object_root);
     watch = !(raw.watch); watch_interval = interval; stabilize = !(raw.stabilize);
     schedule_policy = policy; fenced_policy; gc_keep_epochs = keep;
-    gc_grace_seconds = grace; gc = !(raw.gc); gc_mark_out = !(raw.gc_mark_out);
+    gc_grace_seconds = grace; gc = !(raw.gc);
     update_islands = !(raw.update_islands); fetch_islands = !(raw.fetch_islands);
     pin_file = !(raw.pin_file);
     dump_pins_file = !(raw.dump_pins_file); emit_braces_file = !(raw.emit_braces_file);
@@ -351,7 +348,6 @@ let fenced_policy (t : t) = t.fenced_policy
 let gc_keep_epochs (t : t) = t.gc_keep_epochs
 let gc_grace_seconds (t : t) = t.gc_grace_seconds
 let gc (t : t) = t.gc
-let gc_mark_out (t : t) = t.gc_mark_out
 let update_islands (t : t) = t.update_islands
 let fetch_islands (t : t) = t.fetch_islands
 let pin_file (t : t) = t.pin_file

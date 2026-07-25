@@ -12,9 +12,6 @@ let run host cli =
     (match Cli.publish_object_root cli with
      | Some _ -> Command_cluster.publish ctx cli; exit 0
      | None -> ());
-    (match Cli.gc_mark_out cli with
-     | Some output -> Command_gc.run_mark ctx cli output; exit 0
-     | None -> ());
     Command_eval.run ctx cli;
     Command_cluster.serve_remote ctx cli;
     if Cache_policy.check_enabled Cache_policy.default &&
