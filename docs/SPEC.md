@@ -525,10 +525,15 @@ the second, and a scripting-tier expression is never cached (`tests/010`,
 Node writes are confined to per-node sandbox scratch and absolute node writes
 error (LAW 18, `tests/017`). Ambient `run` is scripting-tier only because it
 cannot produce a complete trace. `run-closed!` accepts an immutable request
-through a session-owned executor, but also remains scripting-tier while time,
-randomness, CPU, kernel, and resource limits are unmediated (`tests/102`).
-Thus no cacheable foreign process currently runs with ambient or incompletely
-evidenced authority.
+through a session-owned executor. Its result is rejected unless it contains
+exactly the selected outputs backed by hash-verified blobs; output, evidence,
+and resource maps are canonicalized independently of provider ordering.
+The Linux provider denies undeclared filesystem, environment, network, and
+loader access, confines subprocesses to the same sandbox, and reports signals
+as exit status. It explicitly reports clocks, randomness, CPU/kernel behavior,
+and resource limits as ambient, so `run-closed!` remains scripting-tier
+(`tests/102`). Thus no cacheable foreign process runs with ambient or
+incompletely evidenced authority.
 
 Test: the same `node { e }` forced twice across two processes runs once,
 which the store proves (`tests/010`, `tests/014`); a scripting-tier expression

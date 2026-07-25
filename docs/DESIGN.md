@@ -144,7 +144,8 @@ same trust boundaries for readers.
   accepts only the exact Linux platform constraint and does not mediate time,
   randomness, CPU instructions, kernel behavior, or resource limits. It fails
   unavailable when Bubblewrap cannot create every requested namespace and
-  remains scripting-tier until those gaps are mediated.
+  remains scripting-tier while reporting those ambient facts as ordinary
+  evidence.
 
 ## Extension rules
 

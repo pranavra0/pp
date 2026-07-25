@@ -129,5 +129,85 @@ else
   ok "closed-static-tool-unavailable"
 fi
 
+if command -v go >/dev/null 2>&1; then
+  CGO_ENABLED=0 go build -o "$TMP/hostile" \
+    "$(dirname "$0")/fixtures/closed-hostile.go"
+
+  cat >"$TMP/hostile.pp" <<EOF
+let tool = blob(slurp("$TMP/hostile"))
+let result = perform run-closed!({
+  :tool -> tool,
+  :args -> ["report"],
+  :inputs -> {"input" -> blob("input")},
+  :env -> {"EXPLICIT" -> "yes"},
+  :platform -> {"os" -> "linux"},
+  :outputs -> ["result"]
+})
+let evidence = hash-map-get(result, :evidence)
+let resources = hash-map-get(result, :resources)
+print(hash-map-get(result, :stdout))
+print(hash-map-get(evidence, "clock"))
+print(hash-map-get(evidence, "randomness"))
+print(hash-map-get(resources, "limits"))
+EOF
+  run --grant process --grant "fs:$TMP/hostile:ro" "$TMP/hostile.pp"
+  if grep -q "closed Linux runner unavailable" "$TMP/out"; then
+    ok "closed-hostile-runner-unavailable"
+  else
+    for fact in filesystem-denied=true environment-cleared=true \
+        environment-explicit=yes network-denied=true child-ok \
+        subprocess-confined=true loader-denied=true randomness-available=true \
+        clock-available=true; do
+      if grep -q "$fact" "$TMP/out"; then ok "closed-hostile-$fact"
+      else bad "closed-hostile-$fact" "$(cat "$TMP/out")"; fi
+    done
+    if [ "$(grep -c '^"ambient"$' "$TMP/out")" -eq 3 ]; then
+      ok "closed-ambient-evidenced"
+    else
+      bad "closed-ambient-evidenced" "$(cat "$TMP/out")"
+    fi
+
+    cat >"$TMP/escape.pp" <<EOF
+let tool = blob(slurp("$TMP/hostile"))
+perform run-closed!({
+  :tool -> tool,
+  :args -> ["escape"],
+  :inputs -> {"input" -> blob("input")},
+  :env -> {},
+  :platform -> {"os" -> "linux"},
+  :outputs -> ["escape"]
+})
+EOF
+    run --grant process --grant "fs:$TMP/hostile:ro" "$TMP/escape.pp"
+    if grep -Eq "selected output (escapes|is missing)" "$TMP/out"; then
+      ok "closed-output-symlink-escape"
+    else
+      bad "closed-output-symlink-escape" "$(cat "$TMP/out")"
+    fi
+
+    cat >"$TMP/signal.pp" <<EOF
+let tool = blob(slurp("$TMP/hostile"))
+let result = perform run-closed!({
+  :tool -> tool,
+  :args -> ["signal"],
+  :inputs -> {},
+  :env -> {},
+  :platform -> {"os" -> "linux"},
+  :outputs -> []
+})
+print(hash-map-get(result, :exit))
+print(hash-map-get(hash-map-get(result, :evidence), "signals"))
+EOF
+    run --grant process --grant "fs:$TMP/hostile:ro" "$TMP/signal.pp"
+    if grep -q '^143$' "$TMP/out" && grep -q '^"exit-status"$' "$TMP/out"; then
+      ok "closed-signal-evidenced"
+    else
+      bad "closed-signal-evidenced" "$(cat "$TMP/out")"
+    fi
+  fi
+else
+  ok "closed-hostile-helper-unavailable"
+fi
+
 rm -rf "$TMP"
 exit "$fail"
