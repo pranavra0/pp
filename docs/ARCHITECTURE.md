@@ -151,7 +151,8 @@ The main effect paths are:
 | Effect | Owner | Result or rule |
 |---|---|---|
 | `read-file`, `write-file`, `slurp` | `observation.ml`, `process.ml`, and evaluator effects | Capability check and cell recording; node writes stay in node scratch space |
-| `run`, `run-dep!` | `process.ml` and `observation.ml` | Process result plus tool/tree or depfile cells |
+| `run`, `run-dep!` | `process.ml` and `observation.ml` | Legacy ambient process plus conservative tool/tree or trusted depfile cells |
+| `run-closed!` | `closed_action.ml` | Immutable tool/input blobs, empty environment and namespace, selected output blobs; unavailable rather than ambient fallback |
 | `http-get`, `http-post` | evaluator effect path | Network capability; not valid inside a persistent node |
 | `probe` | `session.ml` and `observation.ml` | One pinned observation per pass |
 | `fenced` | `fenced.ml`, `journal.ml`, and reconciliation | Intent/done journal with an explicit recovery policy |

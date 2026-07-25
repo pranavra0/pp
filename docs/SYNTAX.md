@@ -166,6 +166,12 @@ always `perform` underneath.
 ```pp
 run!("cc", "-c", src, "-o", obj)
 run-dep!("cc", "-MD", ...)         # depfile-refined tracing
+run-closed!({
+  :tool -> compiler,
+  :args -> ["-c", "/in/main.c", "-o", "main.o"],
+  :inputs -> {"main.c" -> source},
+  :outputs -> ["main.o"]
+})
 write!(path, content)
 log!(f"building {src}")
 ```
