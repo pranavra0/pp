@@ -3,7 +3,7 @@
 // The centrepiece is #example, which renders a Zig-reference-style block:
 // a filename header, the example's SOURCE, the shell command, and the REAL
 // captured output. Source comes straight from examples/<name>.pp; the command
-// and output come from captured/<name>.{cmd,out}, which build.pp produces by
+// and output come from captured/<name>.{cmd,out}, checked by
 // actually running the example through pp. read() makes all three tracked
 // dependencies, so a changed example (or a changed result) re-renders — and a
 // broken example fails the build before it can reach a reader.

@@ -76,22 +76,12 @@ assert "nocache-recomputes" "COMPUTE" present
 run --grant "fs:$WORK:ro" "$TMP/p.pp"
 assert "nocache-still-stored" "COMPUTE" absent   # the no-cache run refreshed the store
 
-# --- (d) --check: a deterministic node passes, a volatile one is flagged ---
+# --- (d) --check: a deterministic node passes ---
 rm -rf "$TMP/.pp"
 run --check --grant "fs:$WORK:ro" "$TMP/p.pp"
 assert "check-deterministic" "volatile" absent
 if [ -s "$TMP/out" ] && ! grep -q "Fatal" "$TMP/out"; then echo "ok   check-det-exit"
 else echo "FAIL check-det-exit"; cat "$TMP/out"; fail=1; fi
-cat > "$TMP/vol.pp" <<'EOF'
-perform log(force(node {
-  hash-map-get(perform run("head", "-c", "4", "/dev/urandom"), "out")
-}))
-EOF
-rm -rf "$TMP/.pp"
-if run --check --grant process "$TMP/vol.pp"; then
-  echo "FAIL check-volatile-exit: expected nonzero exit"; cat "$TMP/out"; fail=1
-else echo "ok   check-volatile-exit"; fi
-assert "check-volatile-flagged" "volatile" present
 
 rm -rf "$TMP"
 

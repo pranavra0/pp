@@ -8,9 +8,7 @@
 # entirely (Primitives.probe_value_for consults probe_values FIRST,
 # unconditionally, before ever calling a registered probe's fn).
 #
-# demo/volatile-deploy.pp is a DELIBERATELY adversarial program, separate
-# from demo/deploy.pp (whose OWN diagonal oracle, tests/052, needs no
-# pinning at all): it folds `(probe "replica-count")` directly into its
+# demo/volatile-deploy.pp folds `(probe "replica-count")` directly into its
 # returned desired-state value, so the published hash tracks
 # metrics-file's CURRENT content whenever the probe is left unpinned — the
 # one shape that makes "probe cells are pinned inputs" falsifiable.
@@ -28,9 +26,8 @@
 #                       must be ABSENT for every one of them (proof the
 #                       observe-fn never ran at all).
 #
-# Push/materialization combos (the other half of the 12-way shape
-# tests/052's oracle exercises for demo/deploy.pp) are NOT wired here:
-# demo/volatile-deploy.pp deliberately registers no domain at all — it is
+# Push/materialization combinations are not wired here:
+# the program deliberately registers no domain — it is
 # the minimal adversarial shape (a bare probe folded into a returned
 # value, nothing to materialize onto disk) — so a --watch --stabilize
 # "push" pass has no tree to converge/diff against. Push+remote combos are

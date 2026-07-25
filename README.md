@@ -63,8 +63,7 @@ let (m = module { def double(x) { x * 2 } }) {
   `--reconcile`/`--supervise`
 - `tests/` — the test suite (see docs/TESTING.md)
 - `tools/` — the metamorphic fuzzer
-- `scripts/` — build and test entry points: `run-tests.sh`, `build-self.sh`,
-  `build-lua.sh`, `build-manual.sh`
+- `scripts/` — build and test entry points
 - `examples/` — small standalone pp programs, executed by the suite and swept
   by the reader and `pp fmt` round-trip tests
 - `demo/` — larger worked examples (deploy, agent) with their fixtures

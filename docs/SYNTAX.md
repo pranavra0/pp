@@ -165,7 +165,7 @@ always `perform` underneath.
 
 ```pp
 run!("cc", "-c", src, "-o", obj)
-run-dep!("cc", "-MD", ...)         # depfile-refined tracing
+run-dep!("deps.d", "cc", "-MD", ...) # legacy scripting adapter
 run-closed!({
   :tool -> compiler,
   :args -> ["-c", "/in/main.c", "-o", "main.o"],
@@ -183,6 +183,10 @@ log!(f"building {src}")
 exceptions, so every effect wrapper in stdlib and the manual carries it
 (`run-dep!`, not `rundep`). Pure functions carry no suffix.
 
+The process effects are currently scripting-tier only. Cacheable nodes may
+use ordinary observations and pure computation; closed execution returns to
+the node tier only after its protocol accounts for every semantic input.
+
 ---
 
 ## Nodes and authority
@@ -192,10 +196,8 @@ validity (traces) attach. It is a keyword: never inferred, never granted
 by an attribute.
 
 ```pp
-node compile(src) needs fs.read("src/"), process {
-  let obj = scratch(src |> replace-ext(".o"))
-  run!("cc", "-c", src, "-o", obj)
-  obj
+node source-digest(src) needs fs.read("src/") {
+  hash-string($file(src))
 }
 ```
 
@@ -483,29 +485,12 @@ settled surface.
 ## A full example
 
 ```pp
-node compile(src) needs fs.read("src/"), process {
-  let obj = scratch(src |> replace-ext(".o"))
-  run!("cc", ...($config("cflags", [])), "-c", src, "-o", obj)
-  obj
+node source-digest(src) needs fs.read("src/") {
+  hash-string($file(src))
 }
 
-node link(objs) needs process {
-  let app = scratch("app")
-  run!("cc", "-o", app, ...objs)
-  app
-}
-
-node build() reads $glob("src/*.c") {
-  try {
-    objs <- map(compile, $glob("src/*.c")) |> collect
-    [:ok, link(objs)]
-  }
-}
-
-with { config: { :cc -> "clang", :cflags -> ["-O2", "-Wall"] } } {
-  reconcile {
-    "build/app" -> build()
-  }
+reconcile {
+  "main.digest" -> source-digest("src/main.c")
 }
 ```
 

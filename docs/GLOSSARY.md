@@ -94,17 +94,14 @@ brace-to-s-expression mapping.
   way back to a `VString`.
 - `run`, or the process effect: `perform run(CMD, ARG…)` executes an
   external command under `--grant process`, and returns
-  `{"exit","out","err"}`. Inside a node, its working directory is the
-  node's sandbox, and the trace records `tool:` and `tree:` cells
-  (`tests/017`).
+  `{"exit","out","err"}`. It is scripting-tier only because an ambient
+  process cannot produce a complete validating trace (`tests/017`).
 - `run-dep!`, or the depfile adapter: `perform run-dep!(DEPFILE, CMD, ARG…)`
-  works like `run`, but reads the tool's Makefile-style depfile to refine
-  the trace down to the exact files read. It records granted dependencies
-  as `file:` cells and system dependencies as `tool:` cells, with no
-  coarse `tree:` cell (`tests/022`).
+  is the legacy scripting adapter. A tool's self-reported dependencies are
+  not a cache correctness boundary (`tests/022`).
 - sandbox, or per-node scratch: a throwaway directory that pp creates
-  lazily for each node force and deletes when it completes (`run`,
-  `slurp`, and `write-file` all resolve there, capability-free and
+  lazily for each node force and deletes when it completes (`slurp` and
+  `write-file` resolve there, capability-free and
   unrecorded); an absolute path in a node write is an error instead (SPEC
   law 18) — hygiene, not soundness; traces make the system sound.
 - desired-state value (partly real): the pure, hashable value a pp

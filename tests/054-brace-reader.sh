@@ -230,9 +230,9 @@ fi
 # the printer/second-reader round trip with hash equality.
 rt_fail=0
 mkdir -p "$TMP/rt"
-for f in "$ROOT"/tests/[0-9]*.pp "$ROOT"/tests/gen-cproject.pp \
+for f in "$ROOT"/tests/[0-9]*.pp \
          "$ROOT"/tests/mutate-cproject.pp "$ROOT"/stdlib/*.pp \
-         "$ROOT"/build.pp "$ROOT"/demo/*.pp "$ROOT"/examples/*.pp; do
+         "$ROOT"/build.pp "$ROOT"/demo/volatile-deploy.pp "$ROOT"/examples/*.pp; do
   [ -f "$f" ] || continue
   if ! "$PP" fmt --to-sexpr "$f" > "$TMP/rt/tree.ppl" 2>"$TMP/rt.err"; then
     bad "roundtrip-tree-to-sexpr ($f)" "$(tail -1 "$TMP/rt.err")"

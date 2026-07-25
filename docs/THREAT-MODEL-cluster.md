@@ -207,7 +207,7 @@ rather than a true single-process, dual-store setup.
 - claim T6: placement never changes a key or a result hash. Remote placement
   sends only data-closed node misses. The member computes the same key and
   result as a local worker because identity uses code and free-variable
-  hashes, not location (LAW 20). `tests/048` checks this.
+  hashes, not location (LAW 20).
 - claim T7: garbage collection of the store, running beside a parallel build,
   causes no crash or wrong result. `pp gc` marks by replay and protects recent
   and concurrent data. `tests/050` checks this.
