@@ -1,6 +1,6 @@
 #!/bin/sh
 # A domain converges the world to a DESIRED state you return as a value. The
-# fs domain (stdlib/domain-fs.pp) takes a {relative-path -> content} map and
+# fs domain (stdlib/domain-fs.pp) takes a canonical tree value and
 # makes a directory tree match it: creating, updating, and deleting files.
 # Hermetic: a throwaway HOME (so the store and journal are fresh) and a root
 # under it. The reconcile summary's absolute root path is filtered to ROOT.
@@ -8,7 +8,11 @@ export HOME=$(mktemp -d)
 ROOT="$HOME/site"
 
 cat > "$HOME/site.pp" <<'PP'
-{"index.html" -> "<h1>pp</h1>\n", "conf/app.txt" -> "mode=prod\n"}
+{:tree -> {
+  "index.html" -> {:kind -> :file, :mode -> 420, :blob -> blob("<h1>pp</h1>\n")},
+  "conf" -> {:kind -> :directory, :mode -> 493},
+  "conf/app.txt" -> {:kind -> :file, :mode -> 420, :blob -> blob("mode=prod\n")}
+}}
 PP
 
 filter() { sed "s#root=[^ ]*#root=ROOT#"; }

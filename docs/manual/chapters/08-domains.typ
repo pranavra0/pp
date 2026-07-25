@@ -52,7 +52,8 @@ library.
 
 `pp --reconcile ROOT prog.pp` auto-loads the fs domain and registers it with a
 write capability narrowed to `ROOT`. It takes the program's final value as the
-desired state of the tree under `ROOT`: a `{relative-path → content}` map. It
+desired state of the tree under `ROOT`: a canonical tree value. File entries
+carry a mode and blob identity; directory entries make parents explicit. It
 diffs that against the real directory by content hash and materializes missing
 and changed files atomically. It also deletes files under `ROOT` that the map
 does not mention. The domain is the single writer, and the write grant is your
@@ -69,13 +70,12 @@ output is machine-independent.
 #example("domain-reconcile", sh: true)
 
 Nothing in `site.pp` describes how to converge. There is no "if missing, create"
-logic. It states the desired contents, and the domain works out the difference.
+logic. It states the desired tree, and the domain works out the difference.
 Reverting `conf/app.txt` and restoring the deleted `index.html` are the same
 mechanism, driven entirely by the diff.
 
-Desired contents may be inline strings, as here, or raw blob identities
-into the content-addressed store — a compiled artifact ingested with `blob`. A
-blob reference diffs by hash without loading its bytes. So `rm -rf` on the tree
+File contents are raw blob identities in the content-addressed store. A blob
+identity diffs without loading its bytes. So `rm -rf` on the tree
 restores from the store with zero tool re-runs when the desired-state nodes hit.
 
 == Watching, and other domains

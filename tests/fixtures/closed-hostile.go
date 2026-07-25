@@ -52,6 +52,16 @@ func escape() {
 	_ = os.Symlink("/in/input", "/out/escape")
 }
 
+func copyInput() {
+	content, err := os.ReadFile("/in/input")
+	if err != nil {
+		os.Exit(2)
+	}
+	if os.WriteFile("/out/result", content, 0640) != nil {
+		os.Exit(3)
+	}
+}
+
 func main() {
 	switch os.Args[1] {
 	case "child":
@@ -60,6 +70,8 @@ func main() {
 		report()
 	case "escape":
 		escape()
+	case "copy":
+		copyInput()
 	case "signal":
 		_ = syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
 	}

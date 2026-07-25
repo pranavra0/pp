@@ -228,9 +228,9 @@ kill $WATCH_PID 2>/dev/null
 wait $WATCH_PID 2>/dev/null || true
 
 rm -rf "$TMP/.pp"
-# Program that returns a desired-state map
+# Program that returns a canonical desired tree.
 cat > "$TMP/reconcile.pp" <<EOF
-{"file.txt" -> slurp("$TMP/a.c")}
+{:tree -> {"file.txt" -> {:kind -> :file, :mode -> 420, :blob -> blob(slurp("$TMP/a.c"))}}}
 EOF
 echo "RECONCILE-CONTENT" > "$TMP/a.c"
 OUTROOT="$TMP/outroot"

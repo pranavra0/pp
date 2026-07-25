@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Filesystem-domain reconciler v1 — desired state, single writer.
 #
-#   pp --reconcile ROOT prog.pp takes the program's final value — a map of
-#   relative paths to string contents — as the DESIRED state of the domain
+#   pp --reconcile ROOT prog.pp takes the program's final canonical tree as
+#   the DESIRED state of the domain
 #   rooted at ROOT, and makes reality match it:
 #     - plan  = diff desired against observed (content hashes);
 #     - apply = temp-file + rename materialization (atomic), parents created;
-#     - files under ROOT not in the desired map are deleted (single writer —
+#     - files under ROOT not in the desired tree are deleted (single writer —
 #       the domain is managed, the grant is the consent);
 #     - verify-after-write re-reads every written file;
 #     - an intent/done pair is journaled to ~/.pp/store/journal before/after
@@ -38,10 +38,14 @@ check_file() {  # NAME PATH EXPECTED-CONTENT
 run() { "$PP" "$@" > "$TMP/out" 2>&1; }
 
 cat > "$TMP/d1.pp" <<'EOF'
-{"a.txt" -> "A1", "sub/b.txt" -> string-append("B", "1")}
+{:tree -> {
+  "a.txt" -> {:kind -> :file, :mode -> 420, :blob -> blob("A1")},
+  "sub" -> {:kind -> :directory, :mode -> 493},
+  "sub/b.txt" -> {:kind -> :file, :mode -> 420, :blob -> blob(string-append("B", "1"))}
+}}
 EOF
 cat > "$TMP/d2.pp" <<'EOF'
-{"a.txt" -> "A2"}
+{:tree -> {"a.txt" -> {:kind -> :file, :mode -> 420, :blob -> blob("A2")}}}
 EOF
 
 # --- (a) no write grant ⇒ capability error, nothing materialized ---
@@ -91,7 +95,7 @@ fi
 
 # --- (g) stratification: desired state may not read its own domain (SPEC law 30) ---
 cat > "$TMP/strat.pp" <<EOF
-{"a.txt" -> slurp("$OUT/a.txt")}
+{:tree -> {"a.txt" -> {:kind -> :file, :mode -> 420, :blob -> blob(slurp("$OUT/a.txt"))}}}
 EOF
 run --grant "fs:$OUT:rw" --grant "fs:$OUT:ro" --reconcile "$OUT" "$TMP/strat.pp"
 assert "stratification-error" "tratification" present

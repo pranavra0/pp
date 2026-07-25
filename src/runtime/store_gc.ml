@@ -144,12 +144,13 @@ let run ~(grace_seconds : float) : unit =
          is not)\n%!";
       exit 1
     end;
-    let snapshot = manifest_snapshot () in
-    let aborted = ref false in
-    let (ko, do_) = sweep Repository_inventory.Object "object:" live grace_seconds snapshot aborted in
-    let (kt, dt) = sweep Repository_inventory.Trace "trace:" live grace_seconds snapshot aborted in
-    let (kb, db) = sweep Repository_inventory.Blob "blob:" live grace_seconds snapshot aborted in
-    Printf.printf
-      "pp gc: objects kept=%d deleted=%d, traces kept=%d deleted=%d, blobs kept=%d deleted=%d\n"
-      ko do_ kt dt kb db
+    Store_layout.with_lifecycle_write (fun () ->
+      let snapshot = manifest_snapshot () in
+      let aborted = ref false in
+      let (ko, do_) = sweep Repository_inventory.Object "object:" live grace_seconds snapshot aborted in
+      let (kt, dt) = sweep Repository_inventory.Trace "trace:" live grace_seconds snapshot aborted in
+      let (kb, db) = sweep Repository_inventory.Blob "blob:" live grace_seconds snapshot aborted in
+      Printf.printf
+        "pp gc: objects kept=%d deleted=%d, traces kept=%d deleted=%d, blobs kept=%d deleted=%d\n"
+        ko do_ kt dt kb db)
   end

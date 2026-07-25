@@ -171,6 +171,43 @@ EOF
       bad "closed-ambient-evidenced" "$(cat "$TMP/out")"
     fi
 
+    ORIGIN="$TMP/origin"
+    DESTINATION="$TMP/destination"
+    SHARED="$TMP/shared"
+    mkdir -p "$ORIGIN" "$DESTINATION"
+    TOOL_HASH=$(sha256sum "$TMP/hostile" | cut -d' ' -f1)
+    INPUT_HASH=$(printf portable-tree-input | sha256sum | cut -d' ' -f1)
+    cat >"$TMP/ingest.pp" <<EOF
+blob(slurp("$TMP/hostile"))
+blob("portable-tree-input")
+EOF
+    HOME="$ORIGIN" "$PP" --grant "fs:$TMP/hostile:ro" "$TMP/ingest.pp" >/dev/null
+    HOME="$ORIGIN" "$PP" --transport-push blob "$TOOL_HASH" "$SHARED" >/dev/null
+    HOME="$ORIGIN" "$PP" --transport-push blob "$INPUT_HASH" "$SHARED" >/dev/null
+    HOME="$DESTINATION" "$PP" --transport-pull blob "$TOOL_HASH" "$SHARED" >/dev/null
+    HOME="$DESTINATION" "$PP" --transport-pull blob "$INPUT_HASH" "$SHARED" >/dev/null
+    cat >"$TMP/portable.pp" <<EOF
+let result = perform run-closed!({
+  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> "$TOOL_HASH"}}},
+  :tool-path -> "tool",
+  :args -> ["copy"],
+  :inputs -> {:tree -> {"input" -> {:kind -> :file, :mode -> 292, :blob -> "$INPUT_HASH"}}},
+  :env -> {},
+  :platform -> {"os" -> "linux"},
+  :outputs -> ["result"]
+})
+let tree = result[:outputs][:tree]
+print(blob-get(tree["result"][:blob]))
+print(tree)
+EOF
+    HOME="$DESTINATION" run --grant process "$TMP/portable.pp"
+    if grep -q '^"portable-tree-input"$' "$TMP/out" \
+        && grep -q ':mode -> 416' "$TMP/out"; then
+      ok "closed-tree-empty-store-portable"
+    else
+      bad "closed-tree-empty-store-portable" "$(cat "$TMP/out")"
+    fi
+
     cat >"$TMP/escape.pp" <<EOF
 perform run-closed!({
   :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob(slurp("$TMP/hostile"))}}},

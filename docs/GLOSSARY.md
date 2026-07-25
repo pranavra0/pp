@@ -104,8 +104,8 @@ brace-to-s-expression mapping.
 - desired-state value (partly real): the pure, hashable value a pp
   program's root returns: `{path → blob-hash}` for a build,
   `{proc → spec}` for services. Real today for the filesystem domain as
-  `{relative-path → content}` (an inline string or raw identity from
-  `blob(S)`), consumed by `pp --reconcile ROOT`
+  a canonical tree whose file entries carry raw identities from `blob(S)`,
+  consumed by `pp --reconcile ROOT`
   (`tests/018`, `tests/023`); and for the process domain as
   `{service-name → spec}`, consumed by `pp --supervise` (`tests/033`).
 - reconciler: retired as a proper noun; there is no `reconciler.ml` any

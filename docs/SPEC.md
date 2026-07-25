@@ -1073,13 +1073,13 @@ start/stop/restart decision — moved into `stdlib/domain-fs.pp` and
 
 `pp --reconcile ROOT prog.pp` auto-loads `stdlib/domain-fs.pp` and registers
 it with a write capability restricted to ROOT, taking the program's final
-value — `{relative-path → content}` — as the filesystem domain's desired
-state. It diffs that against observed reality by content hash, applies
+canonical tree value as the filesystem domain's desired state. It diffs file
+entries against observed reality by blob identity, applies
 atomically, deletes unmanaged files (single writer), journals, requires a
 filesystem write grant, and refuses stratification (`tests/018`, unchanged
 byte for byte from the earlier implementation). Desired contents may be
-inline strings or raw content-addressed blob identities
-(`tests/023`).
+File entries carry modes and raw content-addressed blob identities
+(`tests/023`); directory entries make parent structure explicit.
 
 Watch mode: `pp --watch --reconcile ROOT prog.pp` runs the program,
 reconciles, polls cells for changes, and re-runs on change (`tests/031`).

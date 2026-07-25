@@ -9,3 +9,5 @@ val ensure_dir : string -> unit
 val read : string -> string option
 val atomic_replace : string -> string -> unit
 val init : t -> unit
+val with_lifecycle_read : (unit -> 'a) -> 'a
+val with_lifecycle_write : (unit -> 'a) -> 'a

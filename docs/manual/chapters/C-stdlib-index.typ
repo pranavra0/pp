@@ -272,7 +272,7 @@ The one entry point you call directly:
   align: (left, left),
   stroke: (x: none, y: 0.5pt + luma(220)),
   table.header([*Signature*], [*Description*]),
-  [`register-fs-domain(root, write-cap)`], [Register the filesystem domain rooted at `root`, converging a `{relpath → content}` map (content: an inline string or a blob identity).],
+  [`register-fs-domain(root, write-cap)`], [Register the filesystem domain rooted at `root`, converging a canonical tree value.],
   [`register-proc-domain(write-cap)`], [Register the process domain, converging a `{name → spec}` map (spec: `cmd`/`args`/`env`/`cwd`).],
 )
 
@@ -284,9 +284,8 @@ The one entry point you call directly:
   align: (left, left),
   stroke: (x: none, y: 0.5pt + luma(220)),
   table.header([*Signature*], [*Description*]),
-  [`fs-blob-id?(c)`], [Whether content `c` is a blob identity.],
-  [`fs-content-hash(c)`], [A content's identity hash: the ref's hash, or `hash-string` of inline bytes.],
-  [`fs-content-bytes(c)`], [The bytes for content: pulled from the store for a blob identity, else inline.],
+  [`fs-content-hash(c)`], [A file descriptor's blob identity.],
+  [`fs-content-bytes(c)`], [The bytes named by a file descriptor.],
   [`fs-validate-rel-part(rel, part)`], [Reject `..` in a desired path component.],
   [`fs-validate-rel(rel)`], [Validate that a desired path is relative and traversal-free.],
   [`fs-plan-item(kind, rel, content)`], [Build one create/update/delete plan item.],

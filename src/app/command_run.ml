@@ -57,6 +57,12 @@ let run_files ?(retain_thunks = false) ctx cli files =
       | [] -> None) None files
 
 let build_all_desired cli value =
+  (match Cli.reconcile_root cli with
+   | None -> ()
+   | Some _ ->
+       match Artifact_tree.of_value (Force_deep.force_deep value) with
+       | Ok _ -> ()
+       | Error message -> command ("reconcile: invalid canonical tree: " ^ message));
   let entries =
     (match Cli.reconcile_root cli with Some _ -> [(Core_model.VString "fs", value)] | None -> [])
     @ (if Cli.supervise cli then [(Core_model.VString "proc", value)] else [])
