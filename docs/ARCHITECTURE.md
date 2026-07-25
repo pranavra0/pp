@@ -157,6 +157,24 @@ The main effect paths are:
 | `probe` | `session.ml` and `observation.ml` | One pinned observation per pass |
 | `fenced` | `fenced.ml`, `journal.ml`, and reconciliation | Intent/done journal with an explicit recovery policy |
 
+Host substitution happens outside the evaluator. The application installs the
+result-transparent scheduler and the optional closed-action executor in the
+session. Observers and domain drivers are ordinary registered pp functions;
+the runtime retains authority checks, observation recording, journaling, and
+verification around their calls. Artifact transport is an explicit
+application command whose receive side always rehashes before repository
+ingestion. With no registration, closed execution, observation, domain
+mutation, and transport are unavailable; none falls back to ambient access.
+
+The conformance evidence uses the same boundaries as production:
+`lifecycle_unit` supplies a fake executor and domain registration,
+`tests/046` supplies a third-party domain driver, `tests/047` exercises the
+production local transport including hostile bytes, `tests/074` exercises
+production observers against hostile worlds, and `tests/102` checks the
+production closed executor and fail-closed hosts. Providers return data; only
+the runtime records traces, checks authority, verifies immutable hashes, and
+brackets mutation.
+
 ## Persistent nodes and cache
 
 `node { e }` creates a persistent thunk. `delay` creates an in-memory thunk.
