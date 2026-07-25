@@ -83,7 +83,8 @@ let write_file path content mode =
 
 let read_blob label hash =
   match Blob_repository.get Blob_repository.default hash with
-  | Some content -> content
+  | Some content when Hasher.hash_string content = hash -> content
+  | Some _ -> failwith (Printf.sprintf "run-closed!: %s blob hash mismatch: %s" label hash)
   | None -> failwith (Printf.sprintf "run-closed!: %s blob is missing: %s" label hash)
 
 let runner () =
@@ -148,10 +149,6 @@ let has_process_cap () =
 let linux_executor () request =
   if request.Executor.platform <> ["os", "linux"] then
     failwith "run-closed!: Linux executor requires :platform -> {\"os\" -> \"linux\"}";
-  List.iter (fun (name, _) ->
-    if name = "" || String.contains name '=' || String.contains name '\000' then
-      failwith ("run-closed!: invalid environment name: " ^ name))
-    request.environment;
   let marker = Filename.temp_file "pp-closed-" "" in
   Sys.remove marker;
   Unix.mkdir marker 0o700;
@@ -176,7 +173,24 @@ let linux_executor () request =
           | VString path, VString reference -> path, blob_hash "output value" (VString reference)
           | _ -> assert false)
       in
-      { Executor.exit_status; stdout; stderr; outputs; evidence = []; resources = [] })
+      {
+        Executor.exit_status;
+        stdout;
+        stderr;
+        outputs;
+        evidence = [
+          "clock", "ambient";
+          "environment", "request-only";
+          "filesystem", "request-only";
+          "kernel", "ambient";
+          "loader", "request-only";
+          "network", "denied";
+          "randomness", "ambient";
+          "signals", "exit-status";
+          "subprocess", "same-sandbox";
+        ];
+        resources = ["limits", "ambient"];
+      })
 
 let parse_request entries =
   validate_request entries;
@@ -208,7 +222,20 @@ let parse_request entries =
   reject_duplicates "input path" (List.map fst inputs);
   reject_duplicates "environment name" (List.map fst environment);
   reject_duplicates "platform field" (List.map fst platform);
-  { Executor.tool = tool_hash; arguments; inputs; environment; platform; outputs }
+  List.iter (fun (name, value) ->
+    if name = "" || String.contains name '=' || String.contains name '\000' then
+      failwith ("run-closed!: invalid environment name: " ^ name);
+    if String.contains value '\000' then
+      failwith ("run-closed!: invalid environment value for: " ^ name))
+    environment;
+  {
+    Executor.tool = tool_hash;
+    arguments;
+    inputs = List.sort compare inputs;
+    environment = List.sort compare environment;
+    platform = List.sort compare platform;
+    outputs = List.sort String.compare outputs;
+  }
 
 let run args =
   if Effect.perform Dynamic_scope.In_node then
@@ -226,6 +253,9 @@ let run args =
       failwith "run-closed!: trusted executor unavailable")
   in
   let result = Executor.run executor request in
+  List.iter (fun (path, hash) ->
+    ignore (read_blob ("output " ^ path) hash))
+    result.outputs;
   VMap [
     VKeyword "exit", VInt result.exit_status;
     VKeyword "stdout", VString result.stdout;
