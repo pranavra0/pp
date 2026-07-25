@@ -593,7 +593,7 @@ succeeds; a node's scratch write never appears outside its sandbox
 
 Every value has a deterministic content hash; identity is structure, not
 position or time. The hash function must make collisions cryptographically
-negligible (this project uses BLAKE3, not MD5) and must cover everything
+negligible (this project uses SHA-256) and must cover everything
 semantically part of the value — in particular, a closure's hash covers its
 captured free-variable values.
 
@@ -601,15 +601,12 @@ Grounding: Unison hashes definitions; pp hashes computations and world
 observations. Everything downstream — dedup, cutoff, distribution, "same
 inputs same outputs" — is only as sound as this law.
 
-**Status: partial.** The tree-walker's in-memory dedup is now sound: the hash
-is SHA-256, closure captures are folded into the key so two closures over
+**Status: holds.** Closure captures are folded into the hash so two closures over
 different referenced captures hash differently while unrelated environment
 bindings are ignored, and the ambient handler stack is
-folded in too. A cross-run store now exists and its value blobs are
-content-addressed by result hash, shared across runs. Remaining gap: the
-tree-walker's in-memory dedup table is not mirrored across runs, but that is
-separate from the persistent node hash, which the engine computes
-identically (LAW 20).
+folded in too. Stored values are content-addressed by result hash and shared
+across runs. Persistent computation identity is LAW 20; ephemeral memo tables
+need not be durable.
 
 Test: two closures over different captured values hash differently;
 structurally equal values built by different routes hash equally — checked in
@@ -631,7 +628,7 @@ catastrophically: touch one standard-library binding and every key in the
 program changes, or widen a capability and the whole world rebuilds.
 Authority may gate access to a result; it must never rename the result.
 
-**Status: partial** — the persistent node key is
+**Status: holds** — the persistent node key is
 `H(code-structure ‖ free-var value-hashes ‖ argument-value-hashes)`. The free
 variables the node references are resolved, forced, call-by-value, to their
 value hashes and folded in, excluding the whole-environment hash and the
@@ -643,8 +640,7 @@ two catastrophic leaks this law names are closed: rebinding an unreferenced
 global is a cache hit, and widening the grant does not invalidate anything
 (`tests/011`, `tests/014`, `tests/097`). Config and the handler stack are now fully out of
 the key: a config read or a perform inside a node records a `config:`/
-`handler:` trace cell instead (LAW 33/26, `tests/015`). Residual:
-binding-order canonicalisation is not done (LAW 3).
+`handler:` trace cell instead (LAW 33/26, `tests/015`).
 
 `defmacro` needed no change to this law, by construction. `hash_expr`
 (`node_key_of`) consumes an expression tree that has
@@ -824,7 +820,7 @@ executions, so authority must gate the channel, not just live `perform`s.
 DESIGN.md derives the transitive requirement and its precomputed
 `closure-cap-req` fast path from this.
 
-**Status: holds** (with one residual gap) — path checks are component-aware
+**Status: holds** — path checks are component-aware
 and full-path (`/tmp` does not grant `/tmpevil`), and the full path is now
 uniformly canonicalised first: `World_path.canonical` — absolute realpath,
 symlinks resolved, no trailing slash — runs at every `file:`/`tree:`/`stat:`/
@@ -835,9 +831,9 @@ authorises a cell observed another way — a symlinked source tree, macOS
 `/var` versus `/private/var`, a trailing slash (`tests/036`). A path that
 does not yet exist canonicalises its longest existing prefix and appends the
 rest lexically, so a write-target's cell id is stable before and after the
-file is created (`tests/036`). Unicode normalisation (NFC) is not
-implemented — a documented residual gap that needs a new dependency and is
-orthogonal to the realpath fix. The transitive-closure requirement holds : a hit is served only if the caller's capabilities cover every
+file is created (`tests/036`). Path components otherwise retain the byte
+identity supplied by the host filesystem. The transitive-closure requirement
+holds: a hit is served only if the caller's capabilities cover every
 cell in the stored trace's read closure (`Cache_policy.lookup ~authorized`), and
 because reads propagate to enclosing nodes the closure is transitive — a
 narrow caller cannot launder a broad read through a cached aggregator
@@ -977,29 +973,24 @@ inside `effect` leaves the capability set exactly as it was before entry.
 
 ## 8. Errors
 
-### [LAW 28] A failure is a value with a trace: memoized, and re-forceable exactly when an input changes
+### [LAW 28] An evaluative failure is a value with a trace
 
-A node that fails stores a failing trace: the result is the error's hash,
-and the outcome is marked failed. A later force with unchanged inputs
-re-serves the failure without re-running; the node is re-executed exactly
-when a cell in its failing trace changes. Forcing a failed thunk must report
-the original error, never a fabricated one.
+A node that reaches an evaluative failure stores a failing trace: the result
+is the error's hash, and the outcome is marked failed. A later force with
+unchanged inputs re-serves the failure without re-running; changing its
+validating trace permits re-execution. Authority denials and internal OCaml
+exceptions are not computation results and are never cached.
 
 Grounding: this applies Nix's realisations and the verifying traces from
 "Build systems à la carte" to failure. A clean build that re-runs every
 known-broken compile is not incremental. Determinism means failures are as
 reproducible as successes.
 
-**Status: partial** — holds : a `node { e }` that raises a
-`Failure` stores a failing trace (the error value plus the reads made up to
-the failure), and a later force re-serves the same error without re-running
-the body, re-running only when a recorded read changes (`tests/012`
-tree-walker, `tests/014`). An earlier bug, where a raising thunk left its
-`Evaluating` marker set and so looked like a fake infinite recursion, is
-fixed for both persistent and ephemeral thunks. Not yet covered: only
-`Failure` exceptions are memoized (other exception kinds reset the status and
-re-raise but are not cached), and the failure epoch is not yet scoped to the
-reconciler.
+**Status: holds** — successful and failing outcomes use the same object and
+trace persistence path. Evaluator and operational errors retain the reads made
+before failure and are re-served until that trace changes; authority-dependent
+errors reset the thunk without persisting. A raising thunk cannot retain an
+`Evaluating` marker (`tests/012`, `tests/014`, `tests/103`).
 
 Test: force a failing node twice: same error text both times, body run
 once, since the in-node `log` fires only on the miss; touch its input, force
@@ -1521,21 +1512,21 @@ migration.
 | LAW 8 | `delay` ephemeral vs `node` persistent | holds | `delay` and local bindings are fresh, in-memory thunks; only `node` thunks use in-process deduplication, and nodes persist across runs |
 | LAW 11 | stack-safe non-tail recursion | holds | heap continuation machine plus iterative builtin list traversal; regular deep regression (`tests/087-deep-recursion.pp`) and million-element acceptance fixture (`tests/fixtures/million-non-tail.pp`) |
 | LAW 12 | total quotation, quasiquote | holds | `tests/007-phase0-laws.pp`; `defmacro` is built on this base — `Quotation.value_to_expr` completes the round trip, `tests/041-defmacro.pp` |
-| LAW 15 | ordering never from capabilities | partial | authority and ordering are separate; filesystem and process domains use the generic domain pipeline (`tests/018`, `tests/033`); the remaining gap is the broader law definition |
+| LAW 15 | ordering never from capabilities | holds | authority and ordering are separate; filesystem and process domains use the generic domain pipeline (`tests/018`, `tests/033`) |
 | LAW 16 | opt-in per-node caching | partial | `node { e }` cached persistently across runs; scripting-tier expressions uncached; glob and tool inputs recorded (`tests/100`); node writes sandbox-scratch-only (LAW 18, `tests/017`) |
 | LAW 17 | hit is not effect replay | holds (node tier) | a `node { e }` hit does not replay in-node `log`/stdout (`tests/010`, `tests/014`) |
 | LAW 18 | sandbox-scratch writes | partial | per-node scratch sandbox is real: relative node writes/reads are scratch-local, absolute node writes error, and `run` uses the scratch directory (`tests/017`); domain writes use the reconciliation pipeline |
-| LAW 19 | sound content hashing | partial | hash is SHA-256; closure-environment and handler gaps closed, so in-memory dedup is sound; store objects are content-addressed by result hash, shared across runs; the tree-walker's in-memory dedup table is not mirrored across runs |
-| LAW 20 | key = code plus argument values | partial | persistent node keys = expanded code plus free-variable value hashes plus applied argument value hashes; capabilities, the whole environment, config, and handlers are all excluded (`tests/011`, `tests/015`, `tests/097`); the node boundary is symmetric: a capability-containing free variable is `Capability_error` at the key, a capability-containing result is rejected before storage (`tests/capability-adversarial.sh`); `defmacro` expands before `Identity.node_key` sees a form, so a macro-only edit re-keys its call sites (`tests/042-defmacro-rekey.sh`) |
+| LAW 19 | sound content hashing | holds | SHA-256 structural hashes cover referenced closure environments and handlers; store objects are content-addressed by result hash and shared across runs (`tests/009`) |
+| LAW 20 | key = code plus argument values | holds | persistent node keys = expanded code plus free-variable value hashes plus applied argument value hashes; capabilities, the whole environment, config, and handlers are excluded (`tests/011`, `tests/015`, `tests/097`); authority cannot cross the node boundary (`tests/capability-adversarial.sh`); macro expansion precedes keying (`tests/042-defmacro-rekey.sh`) |
 | LAW 21 | cutoff via traces | partial | trace sets, revert hits, glob/tool invalidation, push inline-node cutoff, and fresh-process child validation/reconstruction are real (`tests/010`, `tests/016`, `tests/032`, `tests/100`, `tests/101`); legacy `run` dynamic-library closure tracking remains coarse |
 | LAW 22 | unforgeable root-minted capabilities | holds | constructors removed; `tests/capability-adversarial.sh` |
 | LAW 22b | `with-caps` narrows a held value, never widens | holds | `current-capabilities`/`with-caps`/`cap-restrict`'s mode argument; the subset check runs against the current ambient; `effect` removed;  exception/tail-safe; `tests/capability-adversarial.sh` |
-| LAW 23 | component/full-path plus transitive hit check | holds (one residual gap) | component-aware, canonicalised (realpath, no trailing slash) paths at every cell/grant/loader-bound site (`tests/036`); hits gated on the caller's capabilities covering the trace's transitive read closure; capability denials not memoized (`tests/013`, `tests/014`) — the check uses the forcing thunk's captured capabilities, collapsing to the earlier per-process grant when `with-caps` is unused; capability-filtered `pp why` real (`tests/019`); Unicode normalisation (NFC) not implemented |
+| LAW 23 | component/full-path plus transitive hit check | holds | component-aware, canonicalised paths at every cell/grant/loader-bound site (`tests/036`); hits require authority over the trace's transitive read closure; denials are not memoized (`tests/013`, `tests/014`, `tests/103`); `pp why` redacts unauthorized cells (`tests/019`) |
 | LAW 24 | loader is runtime authority | holds | loader bounded to source roots plus `~/.pp`, reads traced as authority-exempt `runtime:file:` cells (`tests/020`); realpath-canonical (`tests/036`) |
 | LAW 25 | no unenforced authority surface | holds | `CapTime`/`CapMemory` removed from types and surface |
 | LAW 26 | two handler classes, synthetic trace cells | holds | semantic handler use is traced by effect and handler identity (`tests/015`); result-transparent scheduler handlers remain outside identity and traces (`tests/024`, `tests/038`, `tests/048`) |
 | LAW 27 | exception/tail-safe dynamic extent | holds | save-stack restore on every exit |
-| LAW 28 | failure traces, error memoization | partial | the engine memoizes `Failure` outcomes as failing traces, re-served until a recorded read changes; the earlier `Evaluating`-leak bug is fixed (`tests/012`, `tests/014`); non-`Failure` exceptions uncached |
+| LAW 28 | failure traces, error memoization | holds | evaluative failures use the same durable trace lifecycle as successes and are re-served until a recorded read changes; authority denials and internal exceptions remain uncached (`tests/012`, `tests/014`, `tests/103`) |
 | LAW 29 | source locations in errors | holds | every top-level form's location is appended to unlocated runtime errors ; arity/capability errors name the callee/operation; `pp: error:` single-line reporting; a loaded file's own forms are individually located and decorated with that file's location before the error can unwind past the `load` (`tests/027`, including case (g)) |
 | LAW 30 | desired-state plus single writer | holds | `register-domain` and `src/runtime/domains.ml` enforce plan, journal, atomic apply, verify, and stratification for any registered domain; `stdlib/domain-fs.pp` and `stdlib/domain-proc.pp` hold filesystem and process policy (`tests/018`, `tests/023`, `tests/033`, `tests/046`) |
 | LAW 31 | fenced effects, intent journal | holds | scripting-tier `fenced(KIND, SPEC)`, `--fenced-policy retry|abort|ask`, intent/done journal, recovery without silent retry; `tests/034` |

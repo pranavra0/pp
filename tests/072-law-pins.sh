@@ -31,7 +31,7 @@ TESTS="$ROOT/tests"
 # tail. Each must be a real "holds" law and must NOT be pinned (or it should be
 # promoted off this list); the checks below enforce both, so the list cannot go
 # stale silently.
-PENDING="1 5 9 10 12 13 14 15 17 29 31 32 34 35 37 38"
+PENDING="1 5 9 10 12 13 14 15 29 31 32 35 37 38"
 
 # ---- 1. Parse SPEC: emit "<law-id> <status-word>" for every law. -----------
 # BSD/awk-portable: no gawk match() arrays. Take the first **Status:** line
