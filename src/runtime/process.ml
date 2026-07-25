@@ -8,22 +8,20 @@ open Pp_kernel
    structured capability error, which node caching deliberately does not memoize
    (authority is not identity).
 
-   Trace soundness: a run inside a node is traced by the coarse-cell
-   soundness floor — one whole-tree hash per fs-read grant, refined per-tool
-   by the depfile adapter below when a tool emits one. It records
+   Trace invalidation: a run inside a node records one whole-tree hash per
+   fs-read grant, refined per-tool by the depfile adapter below when a tool
+   emits one. It records
      - `tool:<resolved-binary>` — content hash of the executable, and
      - `tree:<root>`           — whole-tree content hash of every
                                  fs-read-granted root at run time,
-   so a cached node that ran a process re-runs when the tool or anything
-   under a granted tree changes — including files the process read that pp
-   itself never saw. Reads outside granted roots (system headers etc.) are
-   the documented staleness hole the future `toolchain:` closure cell covers.
+   so a cached node re-runs when the tool or anything under a granted tree
+   changes. Ambient reads outside those roots remain a staleness hole.
 
    Sandbox: inside a node the child process runs
    with the node's scratch directory as cwd, so relative outputs land in
    node-local scratch and never in the caller's tree. The sandbox does not
-   fail-close absolute paths — it is a hygiene mechanism; the trace cells
-   above are the soundness mechanism. *)
+   fail-close absolute paths. Plain `run` is therefore a legacy observational
+   adapter, not a mediated foreign-world boundary. *)
 
 open Core_model
 open Source_error
@@ -52,9 +50,8 @@ let record_tool_cell (resolved : string) : unit =
   | Some h -> Observation.record (Observation.tool resolved) h
   | None -> ()
 
-(* The coarse-cell soundness floor: one whole-tree hash per fs-read
-   grant. Used by plain `run` and as run-dep!'s fallback when the tool
-   produced no depfile. *)
+(* One whole-tree hash per fs-read grant. Plain `run` uses this conservative
+   invalidation, and run-dep! falls back to it when no depfile appears. *)
 let record_tree_cells () : unit =
   List.iter (fun cap ->
     List.iter (fun ((path : Paths.canonical), mode) ->

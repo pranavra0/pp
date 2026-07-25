@@ -137,6 +137,12 @@ same trust boundaries for readers.
 - `$probe` is deliberately volatile. The probe owner supplies its value once
   per pass. The value stays in session state and does not enter the durable
   object store.
+- `run` and `run-dep!` launch ambient POSIX processes. Tree hashes and trusted
+  depfiles improve invalidation but cannot account for every observation.
+- `run-closed!` closes the environment, filesystem, and network around
+  immutable blobs. Its first Linux backend does not mediate time, randomness,
+  CPU instructions, or kernel behavior. It fails unavailable when Bubblewrap
+  cannot create every requested namespace.
 
 ## Extension rules
 

@@ -526,8 +526,12 @@ the resolved tool plus a coarse hash for every readable input tree
 (`tests/100`). The purity half of the bargain is now partly enforced: node
 writes are confined to per-node sandbox scratch and absolute node writes error
 (LAW 18, `tests/017`), and a tool run inside a node executes in the scratch
-dir. A tool's own absolute-path writes are not fail-closed — traces, not the
-sandbox, are the soundness mechanism for that case.
+dir. `run-closed!` instead accepts an immutable tool blob, an immutable map of
+input blobs, arguments, and selected outputs. Its Linux backend supplies an
+empty environment and filesystem/network namespaces, snapshots only selected
+regular files, and fails unavailable rather than falling back to ambient
+execution (`tests/102`). Time, randomness, CPU, and kernel behavior are not
+yet mediated. Plain `run` and trusted depfiles retain ambient-read holes.
 
 Test: the same `node { e }` forced twice across two processes runs once,
 which the store proves (`tests/010`, `tests/014`); a scripting-tier expression
@@ -572,8 +576,9 @@ errors, even with a read-write grant. The scripting tier is unchanged. `run`
 (`tests/017`). The reconciled-domain write path is now generic: filesystem and
 process domains apply desired state through the single writer
 (`stdlib/domain-fs.pp`, `stdlib/domain-proc.pp`), while a tool's own absolute-
-path writes remain outside the sandbox's control and traces provide the
-soundness boundary.
+path writes remain outside the sandbox's control. `run-closed!` instead gives
+the tool one private output directory and ingests only explicitly selected
+regular files as immutable blobs (`tests/102`).
 
 Test: a node calling `perform write-file("/abs/x", …)` errors and the file is
 not written; the same call in scripting tier
@@ -1840,7 +1845,7 @@ Creation-time narrowing stays expressible by composition:
 
 | # | Brace form | Reads as |
 |---|---|---|
-| L41 | `perform name(a, …)` | `(perform name a …)` — for every effect: `read-file` `write-file` `run` `run-dep!` `http-get` `http-post` `log` `tree-observe` `materialize-file` `remove-file` `proc-spawn` `proc-alive?` `proc-stop` `proc-reap` `domain-state-get` `domain-state-put` (an earlier revision renamed the depfile effect `run-dep` to `run-dep!`; the `!` marks the effect) |
+| L41 | `perform name(a, …)` | `(perform name a …)` — for every effect: `read-file` `write-file` `run` `run-dep!` `run-closed!` `http-get` `http-post` `log` `tree-observe` `materialize-file` `remove-file` `proc-spawn` `proc-alive?` `proc-stop` `proc-reap` `domain-state-get` `domain-state-put` (the `!` marks effect names that expose the suffix directly) |
 | L42 | `with-handler(n1 = h1, n2 = h2) { body… }` | `(with-handler [n1 h1 n2 h2] body…)` — a handler name may also be a keyword literal, as in sexprs |
 | L43 | `with-caps(E) { body… }` | `(with-caps E body…)` |
 | L44 | `with-config(E) { body… }` | `(with-config E body…)` — `E` is any expression, typically a map literal `{:k -> v}` |

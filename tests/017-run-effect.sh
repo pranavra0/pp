@@ -5,13 +5,13 @@
 #   {"exit" int, "out" string, "err" string}. Authority enters only via
 #   `--grant process` (SPEC law 22): no grant, no exec.
 #
-#   Trace soundness (the coarse-cell floor): inside a node, a run records
+#   Conservative invalidation: inside a node, a run records
 #     - `tool:<resolved-binary>` — the command's content hash, and
 #     - `tree:<root>`           — a whole-tree content hash for EVERY
 #                                 fs-read-granted root,
 #   so a cached run-node re-runs when the tool or anything under a granted
-#   tree changes — even files pp itself never read. Coarse but sound;
-#   depfile adapters refine later.
+#   tree changes — even files pp itself never read. Ambient reads outside
+#   those trees remain an honest edge; depfile adapters refine trusted tools.
 #
 #   Sandbox (SPEC law 18): inside a node, `run` executes in a per-node scratch
 #   directory; relative slurp/write-file resolve there (unrecorded,
