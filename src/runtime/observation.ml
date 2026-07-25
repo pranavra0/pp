@@ -119,17 +119,22 @@ let rec current_node_trace seen key =
 
 and current_node_hash seen key =
   let session = Effect.perform Dynamic_scope.Get_session in
-  match Session.node_key_by_id session key with
-  | Some current_key ->
-      (match Session.find_node_thunk session current_key with
-       | Some thunk ->
-           (try Some (Identity.hash_value (Session.force session (VThunk thunk)))
-            with _ -> None)
-       | None -> None)
+  let force_thunk current_key =
+    match Session.find_node_thunk session current_key with
+    | Some thunk ->
+        (try Some (Identity.hash_value (Session.force session (VThunk thunk)))
+         with _ -> None)
+    | None -> None
+  in
+  match force_thunk (Identity_types.Node_key.of_string key) with
+  | Some hash -> Some hash
   | None ->
-      Option.map (fun trace ->
-        Identity_types.Object_hash.to_string trace.Trace_repository.result_hash)
-        (current_node_trace seen key)
+      (match Session.node_key_by_id session key with
+       | Some current_key -> force_thunk current_key
+       | None ->
+           Option.map (fun trace ->
+             Identity_types.Object_hash.to_string trace.Trace_repository.result_hash)
+             (current_node_trace seen key))
 
 and observe_seen seen cell =
   let session = Effect.perform Dynamic_scope.Get_session in
@@ -181,14 +186,22 @@ let rec authorized_seen seen caps cell =
   | Cell.Node key ->
       if KeySet.mem key seen then false
       else
-        (match current_node_trace seen key with
-         | None -> false
-         | Some trace ->
-             let seen = KeySet.add key seen in
+        let session = Effect.perform Dynamic_scope.Get_session in
+        let current_key = Option.value ~default:key
+          (Option.map Identity_types.Node_key.to_string
+             (Session.node_key_by_id session key))
+        in
+        let traces = Trace_repository.load Trace_repository.default
+          ~key:(Identity_types.Cache_key.of_string current_key)
+        in
+        let seen = KeySet.add current_key (KeySet.add key seen) in
+        traces <> []
+        && List.for_all (fun trace ->
              List.for_all (fun (cell, _) ->
                authorized_seen seen caps
                  (Cell.parse (Identity_types.Cell_id.to_string cell)))
                trace.Trace_repository.reads)
+             traces
   | Cell.Domain { name; _ } ->
       (match Session.find_domain (Effect.perform Dynamic_scope.Get_session) name with
        | Some entry -> Capability.subseteq entry.Session.dm_cap caps | None -> false)

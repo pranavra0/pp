@@ -13,11 +13,15 @@ open Core_model
 let register_node_key ~(key : Identity_types.Node_key.t) ~thunk =
   Session.set_node_thunk (Effect.perform Dynamic_scope.Get_session) key thunk
 
-let dependency_cell key =
-  let session = Effect.perform Dynamic_scope.Get_session in
-  match Session.find_node_thunk session (Identity_types.Node_key.of_string key) with
-  | Some { thunk_hash = Some id; _ } -> Some (Cell.serialize (Cell.Node id))
-  | Some { thunk_hash = None; _ } | None -> None
+let dependency_cells key =
+  let durable = Cell.serialize (Cell.Node key) in
+  match Session.find_node_thunk
+          (Effect.perform Dynamic_scope.Get_session)
+          (Identity_types.Node_key.of_string key)
+  with
+  | Some { thunk_hash = Some id; _ } ->
+      [durable; Cell.serialize (Cell.Node id)]
+  | Some { thunk_hash = None; _ } | None -> [durable]
 
 let add_runtime_edges reverse =
   Session.iter_node_dependents (Effect.perform Dynamic_scope.Get_session)

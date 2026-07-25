@@ -715,11 +715,13 @@ through free variables, so the compile re-runs but the link hits
 (`tests/016`). Nested traces now contain child-result cells instead of copying
 the child's world reads. Push watch recomputes a stale inline child and cuts
 off its parent when the result hash is unchanged; pull watch reaches the same
-result by rebuilding from the root (`tests/032`, `tests/101`). `$glob` records an exact tree cell, and `run`
+result by rebuilding from the root. Child-result cells use the durable child
+node key, so a fresh process can recursively validate a parent hit and can
+reconstruct a stale inline child by rerunning the parent (`tests/032`,
+`tests/101`). `$glob` records an exact tree cell, and `run`
 records the resolved tool binary plus coarse readable-tree cells; changes and
-reverts are covered by `tests/100`. A fresh process cannot rebuild an inline
-child solely from a stored parent trace because executable node closures are
-not durable data, and dynamic-library closure tracking remains coarse.
+reverts are covered by `tests/100`. Legacy `run` dynamic-library closure
+tracking remains coarse.
 
 Test: editing a file read by a node re-runs it; an unchanged read hits;
 reverting the file hits the original trace in the set (`tests/010`); a
@@ -915,25 +917,22 @@ change only where or when work runs, never observable results. They cross
 node boundaries freely and appear in no key and no trace. Semantic handlers —
 a mock `read-file`, fault injection, an alternate `run` — change meaning:
 each intercepted `perform` inside a node records a synthetic trace cell
-`handler:<handler-code-hash>:<effect>:<arg-hash> → result-hash`.
+`handler:<effect> → handler-identity`.
 
-Grounding: this resolves an old trace-layer problem where swapping a mock for
-the real implementation changed the handler code hash, hence the synthetic
-cell, hence gave sound invalidation — strictly better than keying on the
-whole handler stack, which would rebuild the world on any handler change,
-even for effects a node never performed. It is also what makes "the
-scheduler is just a handler" (LAW 31) compatible with caching at all.
+Grounding: swapping a mock for the real implementation changes the synthetic
+cell and invalidates only nodes that performed that effect. Arguments are
+ordinary computation data and observations made by the handler join the same
+trace, so duplicating arguments and results into the handler cell adds no
+correctness. This is also what makes "the scheduler is just a handler"
+(LAW 31) compatible with caching.
 
-**Status: partial** — the semantic half is implemented at node granularity : every `perform` inside a node records a `handler:<effect>`
+**Status: holds** — every `perform` inside a node records a `handler:<effect>`
 trace cell whose observed hash is the intercepting handler's value hash, or a
 builtin marker when none intercepts, re-observed against the caller's handler
 stack on a hit. So a node cached under a mock `read-file` and one cached
 under the real builtin coexist as two traces under one key and never
-cross-contaminate (`tests/015`). The recorded cell is coarser than the law's
-`handler:<code>:<effect>:<arg-hash> → result-hash` form, with no per-argument
-or per-result refinement yet, and the handler stack is still folded
-conservatively into the in-memory thunk key. The result-transparent class is
-implemented by the scheduler's opaque handler service. A handler supplies
+cross-contaminate (`tests/015`). The result-transparent class is implemented
+by the scheduler's opaque handler service. A handler supplies
 only a name, redundant width, best-effort miss dispatch, and cancellation; it
 cannot replace key construction, hit authorization, or rebuilding. The
 host-provided serial/parallel/race/remote handlers are excluded from node
@@ -1528,13 +1527,13 @@ migration.
 | LAW 18 | sandbox-scratch writes | partial | per-node scratch sandbox is real: relative node writes/reads are scratch-local, absolute node writes error, and `run` uses the scratch directory (`tests/017`); domain writes use the reconciliation pipeline |
 | LAW 19 | sound content hashing | partial | hash is SHA-256; closure-environment and handler gaps closed, so in-memory dedup is sound; store objects are content-addressed by result hash, shared across runs; the tree-walker's in-memory dedup table is not mirrored across runs |
 | LAW 20 | key = code plus argument values | partial | persistent node keys = expanded code plus free-variable value hashes plus applied argument value hashes; capabilities, the whole environment, config, and handlers are all excluded (`tests/011`, `tests/015`, `tests/097`); the node boundary is symmetric: a capability-containing free variable is `Capability_error` at the key, a capability-containing result is rejected before storage (`tests/capability-adversarial.sh`); `defmacro` expands before `Identity.node_key` sees a form, so a macro-only edit re-keys its call sites (`tests/042-defmacro-rekey.sh`) |
-| LAW 21 | cutoff via traces | partial | trace sets, revert hits, glob/tool invalidation, and push inline-node cutoff are real, with pull/push result parity (`tests/010`, `tests/016`, `tests/032`, `tests/100`, `tests/101`); fresh-process inline rebuilding and precise dynamic-library closure tracking remain absent |
+| LAW 21 | cutoff via traces | partial | trace sets, revert hits, glob/tool invalidation, push inline-node cutoff, and fresh-process child validation/reconstruction are real (`tests/010`, `tests/016`, `tests/032`, `tests/100`, `tests/101`); legacy `run` dynamic-library closure tracking remains coarse |
 | LAW 22 | unforgeable root-minted capabilities | holds | constructors removed; `tests/capability-adversarial.sh` |
 | LAW 22b | `with-caps` narrows a held value, never widens | holds | `current-capabilities`/`with-caps`/`cap-restrict`'s mode argument; the subset check runs against the current ambient; `effect` removed;  exception/tail-safe; `tests/capability-adversarial.sh` |
 | LAW 23 | component/full-path plus transitive hit check | holds (one residual gap) | component-aware, canonicalised (realpath, no trailing slash) paths at every cell/grant/loader-bound site (`tests/036`); hits gated on the caller's capabilities covering the trace's transitive read closure; capability denials not memoized (`tests/013`, `tests/014`) — the check uses the forcing thunk's captured capabilities, collapsing to the earlier per-process grant when `with-caps` is unused; capability-filtered `pp why` real (`tests/019`); Unicode normalisation (NFC) not implemented |
 | LAW 24 | loader is runtime authority | holds | loader bounded to source roots plus `~/.pp`, reads traced as authority-exempt `runtime:file:` cells (`tests/020`); realpath-canonical (`tests/036`) |
 | LAW 25 | no unenforced authority surface | holds | `CapTime`/`CapMemory` removed from types and surface |
-| LAW 26 | two handler classes, synthetic trace cells | partial | semantic handler cells work at node granularity (`tests/015`); cells are coarser than the law's per-argument form, and result-transparent handler cells are not implemented |
+| LAW 26 | two handler classes, synthetic trace cells | holds | semantic handler use is traced by effect and handler identity (`tests/015`); result-transparent scheduler handlers remain outside identity and traces (`tests/024`, `tests/038`, `tests/048`) |
 | LAW 27 | exception/tail-safe dynamic extent | holds | save-stack restore on every exit |
 | LAW 28 | failure traces, error memoization | partial | the engine memoizes `Failure` outcomes as failing traces, re-served until a recorded read changes; the earlier `Evaluating`-leak bug is fixed (`tests/012`, `tests/014`); non-`Failure` exceptions uncached |
 | LAW 29 | source locations in errors | holds | every top-level form's location is appended to unlocated runtime errors ; arity/capability errors name the callee/operation; `pp: error:` single-line reporting; a loaded file's own forms are individually located and decorated with that file's location before the error can unwind past the `load` (`tests/027`, including case (g)) |

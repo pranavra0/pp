@@ -43,20 +43,22 @@ let lookup t ~(key : Identity_types.Cache_key.t)
       if authorized c then Identity_types.Cell_id.to_string c
       else "<redacted unauthorized cell>"
     in
-    (* Why a trace is unusable: the first stale cell, else the first
-       unauthorized one; `Usable otherwise. *)
+    (* Authorization precedes reobservation: whether an unauthorized cell
+       changed is itself information the caller may not learn. *)
     let classify t =
-      match
-        List.find_opt (fun (c, h) ->
-          match Observation.observe_id c with
-          | Some cur -> cur <> h
-          | None -> true)
-          t.Trace_repository.reads
+      match List.find_opt (fun (c, _) -> not (authorized c))
+              t.Trace_repository.reads
       with
-      | Some (c, _) -> `Stale c
+      | Some (c, _) -> `Unauthorized c
       | None ->
-           (match List.find_opt (fun (c, _) -> not (authorized c)) t.Trace_repository.reads with
-           | Some (c, _) -> `Unauthorized c
+          (match
+             List.find_opt (fun (c, h) ->
+               match Observation.observe_id c with
+               | Some cur -> cur <> h
+               | None -> true)
+               t.Trace_repository.reads
+           with
+           | Some (c, _) -> `Stale c
            | None -> `Usable)
     in
     let classified = List.mapi (fun i t -> (i + 1, t, classify t)) traces in

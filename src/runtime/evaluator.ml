@@ -84,7 +84,6 @@ let rec force (v : value) : value =
              Option.iter (fun id ->
                Effect.perform (Dynamic_scope.Record_node_force id)) t.thunk_hash;
            decr_force_depth ();
-           Node.record_node_dependency t;
            force result
        | Evaluating ->
            decr_force_depth ();

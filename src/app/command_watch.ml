@@ -20,7 +20,7 @@ let run ctx cli files =
   let observe_changed ~previous changed_cells =
     let reverse = Store_index.reverse () in
     Stabilize.add_runtime_edges reverse;
-    let dirty = Store_index.dirty_keys ~dependency_cell:Stabilize.dependency_cell
+    let dirty = Store_index.dirty_keys ~dependency_cells:Stabilize.dependency_cells
       changed_cells reverse in
     Stabilize.reset_dirty (List.map Identity_types.Node_key.of_string dirty);
     Session.begin_pass session;

@@ -60,8 +60,10 @@ perform log(force(node {
 EOF
 rm -rf "$TMP/.pp"
 run --grant "fs:$TMP:ro" "$TMP/q.pp"                  # broad run populates
+printf 'ROTATED\n' > "$PRIV/secret-name.txt"
 run why --grant "fs:$WORK:ro" "$TMP/q.pp"             # narrow caller asks why
 assert "why-unauthorized"       "\[why\].*unauthorized" present
+assert "why-unauthorized-not-stale" "\[why\].*stale"    absent
 assert "why-redacts-cell"       "redacted"              present
 assert "why-no-secret-leak"     "\[why\].*secret-name"  absent
 
