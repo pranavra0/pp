@@ -4,7 +4,9 @@ open Source_error
 type t = { root : string }
 type area = Objects | Traces | Blobs | Fenced_specs | Procs | Locks
 
-let default = { root = Filename.concat (Sys.getenv "HOME") ".pp/store" }
+let default = {
+  root = Filename.concat (Option.value (Sys.getenv_opt "HOME") ~default:"/tmp") ".pp/store"
+}
 let root t = t.root
 let area_name = function
   | Objects -> "objects" | Traces -> "traces" | Blobs -> "blobs"

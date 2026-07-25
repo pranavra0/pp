@@ -82,6 +82,15 @@ let rec force (v : value) : value =
        | Evaluated result ->
            if Evaluator_thunks.is_persistent t then
              Option.iter (fun id ->
+               let session = Effect.perform Dynamic_scope.Get_session in
+               let key = Identity_types.Node_key.of_string id in
+               if Session.memory_cache_enabled session then
+                 ignore (Event_sink.emit (Session.event_sink session) (Event.Cache_hit {
+                   key = Identity_types.Cache_key.of_node_key key;
+                   outcome = Event.Succeeded;
+                   result_hash = Identity_types.Object_hash.of_digest (Identity.hash_value result);
+                   cell_count = 0;
+                 }));
                Effect.perform (Dynamic_scope.Record_node_force id)) t.thunk_hash;
            decr_force_depth ();
            Node.record_node_dependency t;

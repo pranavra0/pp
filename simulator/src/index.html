@@ -3,23 +3,26 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>pp simulator playground</title>
+  <title>pp · operational computation lab</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header>
-    <h1>pp simulator</h1>
-    <nav><a href="../">Manual</a></nav>
+    <div class="brand"><span class="brand-mark">pp</span><div><h1>Operational computation lab</h1><p>See why content-addressed, capability-scoped work changes DevOps.</p></div></div>
+    <nav><a href="../">Language manual</a></nav>
   </header>
-  <div class="toolbar" aria-label="Replay controls">
-    <button id="run">Run source</button>
-    <button id="run-scenario" disabled>Run scenario</button>
+  <div class="toolbar" aria-label="Lab navigation and replay controls">
+    <div class="mode-switch" role="tablist" aria-label="Lab surface"><button id="mode-playground" class="active" role="tab" aria-selected="true">Playground</button><button id="mode-simulator" role="tab" aria-selected="false">Simulator</button></div>
+    <span class="toolbar-divider"></span>
+    <button id="run">Run pp</button>
+    <button id="run-scenario">Run ppsim</button>
     <button id="pause-run" disabled>Pause run</button>
     <button id="resume-run" disabled>Resume run</button>
     <button id="step-run" disabled>Step run</button>
     <button id="stop-run" disabled>Stop run</button>
     <button id="export" disabled>Export run</button>
-    <select id="example" aria-label="Example"></select>
+    <select id="example" aria-label="Playground example"></select>
+    <select id="scenario-example" aria-label="Simulator scenario"></select>
     <label class="file">Open recording <input id="recording" type="file" accept=".jsonl,.json,application/jsonl,application/json"></label>
     <button id="step-back" title="Previous event">◀ Step</button>
     <button id="play">Play</button>
@@ -28,20 +31,40 @@
     <output id="status">Loading recording…</output>
   </div>
   <main>
-    <section class="workspace panel" aria-labelledby="source-title">
-      <h2 id="source-title">Source and scenario</h2>
-      <div class="editors">
-        <label>Program <select id="surface"><option value="playground.pp">.pp</option><option value="playground.ppl">.ppl</option></select>
-          <textarea id="source" spellcheck="false"></textarea></label>
-        <label>Scenario (.ppsim)<textarea id="scenario" spellcheck="false">scenario v1 {
-  seed: 0,
-  program: { file: "playground.pp", argv: [] },
-  hosts: { browser: { cores: 1, store: cold } },
-  links: [], grants: [], actions: [],
-  expect: [{ eventually: { event: "run.finished" } }]
-}</textarea></label>
+    <section id="playground-view" class="surface-view">
+      <div class="hero panel">
+        <div><p class="eyebrow">THE LANGUAGE SURFACE</p><h2>Make operations convergent.</h2><p>Deployments, drift correction, secret rotation, and recovery become expressions over observed state—not fragile sequences of shell commands.</p></div>
+        <div class="principles"><div><strong>Desired state</strong><span>observe · diff · verify</span></div><div><strong>Scoped authority</strong><span>no ambient credentials</span></div><div><strong>Recoverable</strong><span>retry the same result</span></div></div>
       </div>
-      <pre id="diagnostics" aria-live="polite">Ready. Browser mode uses virtual host services.</pre>
+      <section class="editor panel" aria-labelledby="source-title">
+        <div class="panel-heading"><div><p class="eyebrow">TRY IT</p><h2 id="source-title">pp playground</h2></div><label class="surface-picker">surface <select id="surface"><option value="playground.pp">.pp</option><option value="playground.ppl">.ppl</option></select></label></div>
+        <div class="editor-body"><label class="code-label">Program<textarea id="source" spellcheck="false"></textarea></label><div class="run-help"><strong>Operational question</strong><p>What happens when the network, host, config, or credential changes? Run this expression, then use Simulator to inject the failure around it.</p><button id="jump-simulator" class="quiet">Open ppsim →</button></div></div>
+      </section>
+    </section>
+    <section id="simulator-view" class="surface-view hidden">
+      <div class="sim-hero panel"><div><p class="eyebrow">THE PPSIM LAB</p><h2>Classic DevOps failures, one execution model.</h2><p>Choose a deploy, drift, secret, or recovery incident. Inject the failure and inspect the same traceable plan, authority checks, retries, and verification you would need in production.</p></div><div id="scenario-summary" class="scenario-summary"></div></div>
+      <section class="scenario-editor panel" aria-labelledby="scenario-title">
+        <div class="panel-heading"><div><p class="eyebrow">SCENARIO DEFINITION</p><h2 id="scenario-title">ppsim scenario</h2></div><span class="file-badge">.ppsim</span></div>
+        <div class="scenario-body"><label class="code-label">Faults, hosts, capabilities, assertions<textarea id="scenario" spellcheck="false">scenario v1 {
+  seed: 7,
+  program: { file: "examples/nodes.pp", argv: [] },
+  hosts: {
+    control: { cores: 2, store: cold },
+    worker_a: { cores: 2, store: cold },
+    worker_b: { cores: 2, store: warm }
+  },
+  links: [
+    { id: control-a, from: control, to: worker_a, latency: "20ms", bandwidth: "100mbit", loss: "0%" },
+    { id: control-b, from: control, to: worker_b, latency: "35ms", bandwidth: "50mbit", loss: "0%" }
+  ],
+  grants: [], actions: [],
+  expect: [{ eventually: { event: "run.finished" } }, { eventually: { event: "network.response" } }]
+}</textarea></label><div class="scenario-explain"><h3>Scenario lens</h3><p id="scenario-description">Choose a scenario to see what pp is proving.</p><div id="capabilities" class="capabilities"></div><button id="jump-playground" class="quiet">Edit the pp program →</button></div></div>
+      </section>
+    </section>
+    <section class="workspace panel" aria-labelledby="graph-title">
+      <div class="panel-heading"><div><p class="eyebrow">LIVE RECORDING</p><h2 id="graph-title">Execution graph</h2></div><span class="legend"><i class="hit"></i> verified hit <i class="miss"></i> rebuilt <i class="fault"></i> fault</span></div>
+      <pre id="diagnostics" aria-live="polite">Ready. Run pp for a local trace, or open Simulator for a fault-injected run.</pre>
       <svg id="topology" viewBox="0 0 900 240" role="img" aria-label="Recorded hosts and nodes"></svg>
     </section>
     <section class="timeline panel" aria-labelledby="events-title">

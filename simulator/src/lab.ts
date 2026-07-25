@@ -31,7 +31,7 @@ export function checkExpectations(expect: readonly ExpectSpec[], events: readonl
   });
 }
 
-const modeledEvents = (native: readonly PpEvent[], network: readonly NetworkEvent[], metrics: ReturnType<typeof linkMetrics>): readonly PpEvent[] => {
+export const modeledEvents = (native: readonly PpEvent[], network: readonly NetworkEvent[], metrics: ReturnType<typeof linkMetrics>): readonly PpEvent[] => {
   const runId = native[0]?.run_id ?? "run";
   const events: PpEvent[] = [...native];
   for (const item of network) {

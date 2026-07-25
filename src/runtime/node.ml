@@ -227,6 +227,18 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
 
 let lookup_hit ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
     (t : thunk) : value option =
+  let session = Effect.perform Dynamic_scope.Get_session in
+  match Session.memory_cache_get session (Key.to_string key) with
+  | Some value ->
+      let sink = Session.event_sink session in
+      ignore (Event_sink.emit sink (Event.Cache_hit {
+        key = Identity_types.Cache_key.of_node_key key;
+        outcome = Event.Succeeded;
+        result_hash = Object_hash.of_digest (Identity.hash_value value);
+        cell_count = 0;
+      }));
+      Some value
+  | None ->
   let cache_key = Identity_types.Cache_key.of_node_key key in
   let result, report =
     Cache_policy.lookup_with_report Cache_policy.default ~key:cache_key ~authorized
@@ -278,6 +290,8 @@ let force ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
             let result_hash =
               Object_hash.of_digest (Identity.hash_value result)
             in
+            Session.memory_cache_set (Effect.perform Dynamic_scope.Get_session)
+              (Key.to_string key) result;
             ignore (Event_sink.emit sink ?parent_event_id
               (Event.Node_rebuild_finished { key; result_hash }));
             result

@@ -9,9 +9,13 @@ type domain_entry = {
 }
 type t
 
-val create : ?event_sink:Event_sink.t -> scheduler:Scheduler.t -> Evaluator_ops.t -> t
+val create : ?event_sink:Event_sink.t -> ?memory_cache:bool -> scheduler:Scheduler.t -> Evaluator_ops.t -> t
 val scheduler : t -> Scheduler.t
 val event_sink : t -> Event_sink.t
+val set_event_sink : t -> Event_sink.t -> unit
+val memory_cache_get : t -> string -> Core_model.value option
+val memory_cache_set : t -> string -> Core_model.value -> unit
+val memory_cache_enabled : t -> bool
 val force : t -> Core_model.value -> Core_model.value
 val core_operations : t -> Evaluator_ops.core
 val node_operations : t -> Evaluator_ops.node

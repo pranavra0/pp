@@ -1,15 +1,61 @@
 import { decodeJsonl, type EventCategory, type PpEvent } from "./event.ts";
+import { checkExpectations, modeledEvents } from "./lab.ts";
+import { VirtualNetwork, linkMetrics, type NetworkEvent } from "./network.ts";
 import { filterEvents, Replay, type ReplayState } from "./reducer.ts";
+import { decodeScenario } from "./scenario.ts";
 
 declare global {
   var ppBrowser: { run(sourceName: string, source: string): string };
 }
 
+function browserRun(sourceName: string, text: string): string {
+  const runtime = globalThis.ppBrowser;
+  if (!runtime || typeof runtime.run !== "function") {
+    throw new Error("The pp browser runtime is unavailable. Reload the simulator after the runtime finishes loading.");
+  }
+  return runtime.run(sourceName, text);
+}
+
 const examples = {
-  "Cold and warm node": "let answer = force(node { 40 + 2 })\nprint(answer)",
-  "Functions and collections": "let twice = fn(x) { x * 2 }\n[twice(2), twice(3), {answer: twice(21)}]",
-  "Effects and handlers": "with { handlers: { :ask -> fn(question) { string-append(question, \" 42\") } } } { perform ask(\"answer:\") }",
-  "Macro expansion": "defmacro unless(test, body) { quasiquote { if unquote(test) { nil } else { unquote(body) } } }\nunless(false, 42)"
+  "Cache identity": "let first = node { print(\"compute once\"); 6 * 7 }\nlet second = node { print(\"compute once\"); 6 * 7 }\nprint(force(first))\nprint(force(second))",
+  "Lazy work": "let answer = delay(do { print(\"compute once\"); 6 * 7 })\nprint(force(answer))\nprint(force(answer))",
+  "Effect handler": "with { handlers: { :ask -> fn(question) { string-append(question, \" 42\") } } } {\n  print(perform ask(\"answer:\"))\n}",
+  "Macro expansion": "defmacro unless(test, body) {\n  quasiquote { if unquote(test) { nil } else { unquote(body) } }\n}\nprint(unless(false, \"ran\"))\nprint(unless(true, \"skipped\"))"
+} as const;
+
+const scenarios = {
+  "Deploy through a partition": {
+    description: "A production deploy loses its control-plane link mid-flight. The same desired result is retried or run locally; a broken network does not create a second meaning.",
+    text: `scenario v1 {
+  seed: 7, program: { file: "examples/nodes.pp", argv: [] },
+  hosts: { control_plane: { cores: 2, store: cold }, api_a: { cores: 2, store: cold }, api_b: { cores: 2, store: warm } },
+  links: [{ id: api-a, from: control_plane, to: api_a, latency: "20ms", bandwidth: "100mbit", loss: "0%" }, { id: api-b, from: control_plane, to: api_b, latency: "35ms", bandwidth: "50mbit", loss: "0%" }],
+  grants: ["deploy:api-a", "deploy:api-b"], actions: [{ at: "25ms", partition: api-b }], expect: [{ eventually: { event: "scheduler.fallback" } }, { eventually: { event: "run.finished" } }]
+}` },
+  "Reconcile configuration drift": {
+    description: "The controller repeatedly converges desired state instead of replaying an imperative script. An interrupted pass can resume from data and verify what actually landed.",
+    text: `scenario v1 {
+  seed: 12, program: { file: "examples/reconciliation.pp", argv: [] },
+  hosts: { controller: { cores: 2, store: warm }, node_a: { cores: 1, store: warm }, node_b: { cores: 1, store: warm } },
+  links: [{ id: node-a, from: controller, to: node_a, latency: "8ms", bandwidth: "1gbit", loss: "0%" }, { id: node-b, from: controller, to: node_b, latency: "12ms", bandwidth: "1gbit", loss: "30%" }],
+  grants: ["fs:write:/etc/service", "process:service"], actions: [], expect: [{ eventually: { event: "run.finished" } }, { eventually: { event: "network.retry" } }]
+}` },
+  "Rotate one tenant secret": {
+    description: "A credential changes for one tenant. Capability-scoped observations invalidate only the affected node and keep the secret out of published results and logs.",
+    text: `scenario v1 {
+  seed: 21, program: { file: "examples/nodes.pp", argv: [] },
+  hosts: { secrets: { cores: 1, store: warm }, tenant_a: { cores: 2, store: warm }, tenant_b: { cores: 2, store: warm } },
+  links: [{ id: tenant-a, from: secrets, to: tenant_a, latency: "4ms", bandwidth: "1gbit", loss: "0%" }, { id: tenant-b, from: secrets, to: tenant_b, latency: "4ms", bandwidth: "1gbit", loss: "0%", corruption: "100%" }],
+  grants: ["secret:tenant-a:read", "secret:tenant-b:read"], actions: [], expect: [{ eventually: { event: "network.corruption_detected" } }, { eventually: { event: "scheduler.fallback" } }]
+}` },
+  "Recover after a host restart": {
+    description: "A worker disappears during reconciliation. The journal, content identity, and desired-state pass make recovery an ordinary retry rather than a hand-written rollback script.",
+    text: `scenario v1 {
+  seed: 31, program: { file: "examples/reconciliation.pp", argv: [] },
+  hosts: { controller: { cores: 2, store: warm }, worker_a: { cores: 2, store: warm }, worker_b: { cores: 2, store: cold } },
+  links: [{ id: worker-a, from: controller, to: worker_a, latency: "8ms", bandwidth: "1gbit", loss: "0%" }, { id: worker-b, from: controller, to: worker_b, latency: "16ms", bandwidth: "1gbit", loss: "0%" }],
+  grants: ["fs:write:/srv/app", "process:app"], actions: [{ at: "10ms", crash: worker_b }, { at: "40ms", restart: worker_b }], expect: [{ eventually: { event: "fault.restart" } }, { eventually: { event: "run.finished" } }]
+}` }
 } as const;
 
 const categories: readonly EventCategory[] = ["run", "source", "evaluation", "identity", "cache", "node", "scheduler", "store", "capability", "network", "process", "domain", "reconcile", "watch", "fault", "metric"];
@@ -39,6 +85,12 @@ const surface = get<HTMLSelectElement>("#surface");
 const source = get<HTMLTextAreaElement>("#source");
 const diagnostics = get<HTMLElement>("#diagnostics");
 const scenario = get<HTMLTextAreaElement>("#scenario");
+const scenarioExample = get<HTMLSelectElement>("#scenario-example");
+const playgroundView = get<HTMLElement>("#playground-view");
+const simulatorView = get<HTMLElement>("#simulator-view");
+const scenarioSummary = get<HTMLElement>("#scenario-summary");
+const scenarioDescription = get<HTMLElement>("#scenario-description");
+const capabilities = get<HTMLElement>("#capabilities");
 
 let controllerSession: string | undefined;
 let liveEvents: PpEvent[] = [];
@@ -96,7 +148,32 @@ for (const [name, text] of Object.entries(examples)) {
   const option = document.createElement("option");
   option.value = text; option.textContent = name; example.append(option);
 }
+for (const name of Object.keys(scenarios)) {
+  const option = document.createElement("option"); option.value = name; option.textContent = name; scenarioExample.append(option);
+}
 source.value = example.value;
+scenarioDescription.textContent = scenarios["Deploy through a partition"].description;
+
+function updateScenarioLens(): void {
+  try {
+    const parsed = decodeScenario(scenario.value);
+    const grants = parsed.grants.length ? parsed.grants : ["pure / no ambient authority"];
+    scenarioSummary.replaceChildren(...[
+      [parsed.hosts.length, "hosts"], [parsed.links.length, "links"], [parsed.actions.length, "faults"], [parsed.expect.length, "assertions"]
+    ].map(([value, label]) => { const chip = document.createElement("div"); chip.className = "summary-chip"; chip.innerHTML = `<strong>${value}</strong><span>${label}</span>`; return chip; }));
+    capabilities.replaceChildren(...grants.map((grant) => { const item = document.createElement("span"); item.className = "capability"; item.textContent = grant; return item; }));
+  } catch (error) {
+    scenarioSummary.textContent = "Scenario needs attention"; capabilities.textContent = (error as Error).message;
+  }
+}
+
+function setMode(mode: "playground" | "simulator"): void {
+  const simulator = mode === "simulator";
+  document.body.classList.toggle("simulator-mode", simulator); playgroundView.classList.toggle("hidden", simulator); simulatorView.classList.toggle("hidden", !simulator);
+  get<HTMLButtonElement>("#mode-playground").classList.toggle("active", !simulator); get<HTMLButtonElement>("#mode-simulator").classList.toggle("active", simulator);
+  get<HTMLButtonElement>("#mode-playground").setAttribute("aria-selected", String(!simulator)); get<HTMLButtonElement>("#mode-simulator").setAttribute("aria-selected", String(simulator));
+  if (simulator) updateScenarioLens();
+}
 
 const activeCategories = (): ReadonlySet<string> => new Set(
   [...filterRoot.querySelectorAll<HTMLInputElement>("input:checked")].map((input) => input.value)
@@ -209,16 +286,46 @@ seek.addEventListener("input", () => { stop(); cursor = Number(seek.value); rend
 query.addEventListener("input", render);
 filterRoot.addEventListener("change", render);
 example.addEventListener("change", () => { source.value = example.value; });
+scenarioExample.addEventListener("change", () => { const selectedScenario = scenarios[scenarioExample.value as keyof typeof scenarios]; if (selectedScenario) { scenario.value = selectedScenario.text; scenarioDescription.textContent = selectedScenario.description; updateScenarioLens(); } });
+scenario.addEventListener("input", updateScenarioLens);
+get<HTMLButtonElement>("#mode-playground").addEventListener("click", () => setMode("playground"));
+get<HTMLButtonElement>("#mode-simulator").addEventListener("click", () => setMode("simulator"));
+get<HTMLButtonElement>("#jump-simulator").addEventListener("click", () => setMode("simulator"));
+get<HTMLButtonElement>("#jump-playground").addEventListener("click", () => setMode("playground"));
 runSource.addEventListener("click", async () => {
-  stop(); diagnostics.textContent = "Running shared pp runtime…";
-  await new Promise((resolve) => window.setTimeout(resolve, 0));
-  const result = JSON.parse(globalThis.ppBrowser.run(surface.value, source.value)) as
-    { ok: boolean; output?: string; error?: string; events: string };
-  diagnostics.textContent = result.ok ? (result.output || "(no output)") : (result.error || "Evaluation failed");
-  await load(result.events);
-  cursor = events.length; render();
+  try {
+    stop(); diagnostics.textContent = "Running shared pp runtime…";
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    const result = JSON.parse(browserRun(surface.value, source.value)) as
+      { ok: boolean; output?: string; error?: string; events: string };
+    diagnostics.textContent = result.ok ? (result.output || "(no output)") : (result.error || "Evaluation failed");
+    await load(result.events);
+    cursor = events.length; render();
+  } catch (error) {
+    diagnostics.textContent = (error as Error).message;
+  }
 });
 runScenario.addEventListener("click", async () => {
+  if (!controllerSession) {
+    try {
+      diagnostics.textContent = "Running browser scenario across virtual hosts…";
+      const parsed = decodeScenario(scenario.value);
+      const result = JSON.parse(browserRun(surface.value, source.value)) as
+        { ok: boolean; output?: string; error?: string; events: string };
+      const native = decodeJsonl(result.events);
+      const network = new VirtualNetwork(parsed);
+      const networkEvents: NetworkEvent[] = [];
+      const bytes = new TextEncoder().encode(source.value).byteLength;
+      for (const link of parsed.links) networkEvents.push(...network.transfer(link.id, bytes).events);
+      events = modeledEvents(native, networkEvents, linkMetrics(networkEvents));
+      replay = new Replay(events); cursor = events.length; selected = null; explanations = [];
+      const assertions = checkExpectations(parsed.expect, events, networkEvents);
+      const passed = assertions.filter((assertion) => assertion.passed).length;
+      diagnostics.textContent = result.ok ? `${result.output || "Browser scenario finished."} (${passed}/${assertions.length} assertions)` : (result.error || "Browser scenario failed");
+      render();
+    } catch (error) { diagnostics.textContent = (error as Error).message; }
+    return;
+  }
   diagnostics.textContent = "Running native scenario…";
   const requestId = crypto.randomUUID();
   let response = await controllerRequest("/run", { method: "POST", headers: { "x-request-id": requestId }, body: scenario.value });
@@ -248,5 +355,5 @@ nativeControls.forEach((control) => control.addEventListener("click", async () =
 }));
 document.addEventListener("keydown", (event) => { if (event.code === "Space" && event.target === document.body) { event.preventDefault(); togglePlay(); } });
 
-try { await bootstrapController(); await load(await (await fetch("local-build.jsonl")).text()); }
+try { await bootstrapController(); await load(await (await fetch("local-build.jsonl")).text()); updateScenarioLens(); }
 catch (error) { status.textContent = (error as Error).message; }

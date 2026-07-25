@@ -29,20 +29,23 @@ let quote text =
 let json_strings values =
   "[" ^ String.concat "," (List.map quote values) ^ "]"
 
+let browser_session = lazy (Session.create ~event_sink:Event_sink.noop
+    ~memory_cache:true ~scheduler:(Scheduler.create ~handler:Scheduler.serial) Evaluator.operations)
+
 let run source_name source =
   Store_layout.init Store_layout.default;
   Cache_policy.configure Cache_policy.default ~no_cache:false ~why:false ~check:false;
   let recording = Buffer.create 4096 in
   let sink = Event_sink.buffer recording ~run_id:"browser" ~host_id:"browser"
       ~level:Event.Semantic in
-  let scheduler = Scheduler.create ~handler:Scheduler.serial in
-  let session = Session.create ~event_sink:sink ~scheduler Evaluator.operations in
+  let session = Lazy.force browser_session in
+  Session.set_event_sink session sink;
   let invocation = invocation () in
   ignore (Event_sink.emit sink Event.Run_created);
   ignore (Event_sink.emit sink Event.Run_started);
   try
     let values = Dynamic_scope.with_top_level session invocation ~f:(fun () ->
-      Repl.execute_string ~source:source_name source) () in
+      Repl.execute_string ~retain_thunks:true ~source:source_name source) () in
     ignore (Event_sink.emit sink Event.Run_finished);
     let output = String.concat "\n" (List.map Presentation.string_of_value values) in
     let hashes = List.map Identity.hash_value values in

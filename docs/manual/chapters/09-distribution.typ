@@ -104,9 +104,12 @@ safe, and deleting live data is the only hazard.
 
 The simulator linked at the top of this manual runs the same reader, macro
 expander, evaluator, identity code, cache policy, and event schema as native
-pp. Browser mode supplies declared virtual host services. A local loopback
-controller can instead run a trusted workspace program through native pp and
-return the recording to the same timeline and inspector.
+pp. Browser mode supplies declared virtual host services and can run a finite
+scenario over deterministic virtual links, so the default example visibly
+shows a control host, two workers, build/cache events, latency, and artifact
+movement. A local loopback controller can instead run a trusted workspace
+program through native pp and return the recording to the same timeline and
+inspector.
 
 Scenarios are finite `.ppsim` data. Hosts, directed links, seeded loss and
 corruption, partitions, crashes, and assertions are explicit; unknown fields

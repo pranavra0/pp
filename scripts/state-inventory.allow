@@ -47,6 +47,7 @@ mutable-field|src/runtime/session.ml|observations|pass
 mutable-field|src/runtime/session.ml|cache_bust|evaluation-session
 mutable-field|src/runtime/session.ml|force_depth|evaluation-session
 mutable-field|src/runtime/session.ml|eval_depth|evaluation-session
+mutable-field|src/runtime/session.ml|event_sink|observation
 mutable-field|src/runtime/session.ml|force_path|evaluation-session
 mutable-field|src/runtime/session.ml|fenced_epoch|pass
 mutable-field|src/runtime/session.ml|fenced_epoch_nonce|evaluation-session
