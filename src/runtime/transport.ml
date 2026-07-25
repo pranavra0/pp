@@ -343,7 +343,7 @@ let decide host ~(key : string) ~(token_text : string) : decision =
                 in
                 let blob_hashes =
                   List.sort_uniq compare
-                    (Blobref.blob_refs_in v
+                    (Artifact_tree.reachable_blobs v
                      @ List.concat_map (fun tr ->
                        List.filter_map (fun (c, h) ->
                          match Cell.parse (Identity_types.Cell_id.to_string c) with

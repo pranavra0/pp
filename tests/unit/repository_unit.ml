@@ -3,6 +3,16 @@ open Pp_runtime
 
 let check condition message = if not condition then failwith message
 
+let tree_value entries =
+  Core_model.VMap [Core_model.VKeyword "tree", Core_model.VMap entries]
+
+let file blob mode =
+  Core_model.VMap [
+    Core_model.VKeyword "kind", Core_model.VKeyword "file";
+    Core_model.VKeyword "mode", Core_model.VInt mode;
+    Core_model.VKeyword "blob", Core_model.VString blob;
+  ]
+
 let () =
   let layout = Store_layout.default in
   Store_layout.init layout;
@@ -11,6 +21,51 @@ let () =
   Object_repository.put objects ~key ~value:(Core_model.VInt 42);
   check (Object_repository.get objects ~key = Some (Core_model.VInt 42))
     "object repository did not return its value";
+  let blob = String.make 64 'a' in
+  let tree = tree_value [
+    Core_model.VString "bin",
+      Core_model.VMap [
+        Core_model.VKeyword "kind", Core_model.VKeyword "directory";
+        Core_model.VKeyword "mode", Core_model.VInt 0o755;
+      ];
+    Core_model.VString "bin/tool", file blob 0o755;
+  ] in
+  (match Artifact_tree.of_value tree with
+   | Ok parsed ->
+       check (Artifact_tree.blob_hashes parsed = [blob])
+         "canonical tree did not expose its blob edge"
+   | Error message -> failwith message);
+  check (Artifact_tree.reachable_blobs
+           (Core_model.VVector [|Core_model.VString ("blob:" ^ blob); tree|]) = [blob])
+    "tree reachability scanned an incidental blob-looking string";
+  (match Artifact_tree.of_value (tree_value [
+           Core_model.VString "../escape", file blob 0o644]) with
+   | Error _ -> ()
+   | Ok _ -> failwith "tree accepted an escaping path");
+  (match Artifact_tree.of_value (tree_value [
+           Core_model.VString "missing/file", file blob 0o644]) with
+   | Error _ -> ()
+   | Ok _ -> failwith "tree accepted a missing parent directory");
+  let bytes = "portable tree bytes" in
+  let stored_blob = Blob_repository.put Blob_repository.default bytes in
+  let portable = [
+    Artifact_tree.Directory { path = "bin"; mode = 0o755 };
+    Artifact_tree.File { path = "bin/tool"; mode = 0o755; blob = stored_blob };
+    Artifact_tree.Directory { path = "empty"; mode = 0o700 };
+    Artifact_tree.Symlink { path = "latest"; target = "bin/tool" };
+  ] in
+  let materialized = Filename.temp_file "pp-tree-unit-" "" in
+  Sys.remove materialized;
+  Unix.mkdir materialized 0o700;
+  Fun.protect
+    ~finally:(fun () -> Fswalk.remove_tree materialized)
+    (fun () ->
+      Artifact_store.materialize ~root:materialized portable;
+      let round_trip =
+        Artifact_store.snapshot ~root:materialized ~paths:["bin"; "empty"; "latest"]
+      in
+      check (Artifact_tree.to_value round_trip = Artifact_tree.to_value portable)
+        "tree materialization and snapshot did not round-trip");
   let cache_key = Identity_types.Cache_key.of_digest key in
   let result_hash = Identity_types.Object_hash.of_digest key in
   let cell = Identity_types.Cell_id.of_string "runtime-file:p" in

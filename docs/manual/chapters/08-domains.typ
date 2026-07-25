@@ -73,7 +73,7 @@ logic. It states the desired contents, and the domain works out the difference.
 Reverting `conf/app.txt` and restoring the deleted `index.html` are the same
 mechanism, driven entirely by the diff.
 
-Desired contents may be inline strings, as here, or `blob:<hash>` references
+Desired contents may be inline strings, as here, or raw blob identities
 into the content-addressed store — a compiled artifact ingested with `blob`. A
 blob reference diffs by hash without loading its bytes. So `rm -rf` on the tree
 restores from the store with zero tool re-runs when the desired-state nodes hit.

@@ -193,6 +193,7 @@ The repository layer is:
 | `store_layout.ml` | Store paths, version stamp, and atomic replacement |
 | `object_repository.ml` | Immutable encoded values and fenced specifications |
 | `blob_repository.ml` | Immutable byte blobs |
+| `artifact_tree.ml`, `artifact_store.ml` | Canonical ordinary tree validation, blob reachability, materialization, and snapshotting |
 | `trace_repository.ml` | Locked trace sets and trace encoding |
 | `cell_repository.ml` | File and sealed pins and snapshot reads |
 | `repository_inventory.ml`, `store_gc.ml`, `gcroots.ml` | Explicit mark-by-replay GC |

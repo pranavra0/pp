@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# `run-closed!` accepts only immutable tool/input blobs, rejects path escape
+# `run-closed!` accepts only immutable tool/input trees, rejects path escape
 # before execution, and either enters a network/filesystem namespace or fails
 # explicitly when the host cannot provide that namespace.
 # pins: LAW-16 LAW-18 LAW-22
@@ -9,10 +9,11 @@ set -uo pipefail
 run() { "$PP" "$@" >"$TMP/out" 2>&1; }
 
 cat >"$TMP/no-cap.pp" <<'EOF'
-perform run-closed!({
-  :tool -> blob("not-a-tool"),
+let result = perform run-closed!({
+  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob("not-a-tool")}}},
+  :tool-path -> "tool",
   :args -> [],
-  :inputs -> {},
+  :inputs -> {:tree -> {}},
   :env -> {},
   :platform -> {"os" -> "linux"},
   :outputs -> []
@@ -23,26 +24,26 @@ if grep -q "no process authority" "$TMP/out"; then ok "closed-no-cap"
 else bad "closed-no-cap" "$(cat "$TMP/out")"; fi
 
 cat >"$TMP/traversal.pp" <<'EOF'
-let tool = blob("not-a-tool")
 perform run-closed!({
-  :tool -> tool,
+  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob("not-a-tool")}}},
+  :tool-path -> "tool",
   :args -> [],
-  :inputs -> {"../escape" -> blob("input")},
+  :inputs -> {:tree -> {"../escape" -> {:kind -> :file, :mode -> 420, :blob -> blob("input")}}},
   :env -> {},
   :platform -> {"os" -> "linux"},
   :outputs -> []
 })
 EOF
 run --grant process "$TMP/traversal.pp"
-if grep -q "rejects non-canonical input path" "$TMP/out"; then ok "closed-input-traversal"
+if grep -q "non-canonical tree path" "$TMP/out"; then ok "closed-input-traversal"
 else bad "closed-input-traversal" "$(cat "$TMP/out")"; fi
 
 cat >"$TMP/output-traversal.pp" <<'EOF'
-let tool = blob("not-a-tool")
 perform run-closed!({
-  :tool -> tool,
+  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob("not-a-tool")}}},
+  :tool-path -> "tool",
   :args -> [],
-  :inputs -> {},
+  :inputs -> {:tree -> {}},
   :env -> {},
   :platform -> {"os" -> "linux"},
   :outputs -> ["../escape"]
@@ -54,9 +55,10 @@ else bad "closed-output-traversal" "$(cat "$TMP/out")"; fi
 
 cat >"$TMP/platform.pp" <<'EOF'
 perform run-closed!({
-  :tool -> blob("not-a-tool"),
+  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob("not-a-tool")}}},
+  :tool-path -> "tool",
   :args -> [],
-  :inputs -> {},
+  :inputs -> {:tree -> {}},
   :env -> {},
   :platform -> {"os" -> "plan9"},
   :outputs -> []
@@ -68,9 +70,10 @@ else bad "closed-platform-denied" "$(cat "$TMP/out")"; fi
 
 cat >"$TMP/environment.pp" <<'EOF'
 perform run-closed!({
-  :tool -> blob("not-a-tool"),
+  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob("not-a-tool")}}},
+  :tool-path -> "tool",
   :args -> [],
-  :inputs -> {},
+  :inputs -> {:tree -> {}},
   :env -> {"BAD=NAME" -> "value"},
   :platform -> {"os" -> "linux"},
   :outputs -> []
@@ -83,9 +86,10 @@ else bad "closed-environment-denied" "$(cat "$TMP/out")"; fi
 cat >"$TMP/node.pp" <<'EOF'
 force(node {
   perform run-closed!({
-    :tool -> blob("not-a-tool"),
+    :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob("not-a-tool")}}},
+    :tool-path -> "tool",
     :args -> [],
-    :inputs -> {},
+    :inputs -> {:tree -> {}},
     :env -> {},
     :platform -> {"os" -> "linux"},
     :outputs -> []
@@ -106,11 +110,11 @@ done
 
 if [ -n "$tool" ]; then
   cat >"$TMP/execute.pp" <<EOF
-let tool = blob(slurp("$tool"))
 let result = perform run-closed!({
-  :tool -> tool,
+  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob(slurp("$tool"))}}},
+  :tool-path -> "tool",
   :args -> ["--help"],
-  :inputs -> {},
+  :inputs -> {:tree -> {}},
   :env -> {"EXPLICIT" -> "yes"},
   :platform -> {"os" -> "linux"},
   :outputs -> []
@@ -134,11 +138,11 @@ if command -v go >/dev/null 2>&1; then
     "$(dirname "$0")/fixtures/closed-hostile.go"
 
   cat >"$TMP/hostile.pp" <<EOF
-let tool = blob(slurp("$TMP/hostile"))
 let result = perform run-closed!({
-  :tool -> tool,
+  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob(slurp("$TMP/hostile"))}}},
+  :tool-path -> "tool",
   :args -> ["report"],
-  :inputs -> {"input" -> blob("input")},
+  :inputs -> {:tree -> {"input" -> {:kind -> :file, :mode -> 292, :blob -> blob("input")}}},
   :env -> {"EXPLICIT" -> "yes"},
   :platform -> {"os" -> "linux"},
   :outputs -> ["result"]
@@ -168,29 +172,30 @@ EOF
     fi
 
     cat >"$TMP/escape.pp" <<EOF
-let tool = blob(slurp("$TMP/hostile"))
 perform run-closed!({
-  :tool -> tool,
+  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob(slurp("$TMP/hostile"))}}},
+  :tool-path -> "tool",
   :args -> ["escape"],
-  :inputs -> {"input" -> blob("input")},
+  :inputs -> {:tree -> {"input" -> {:kind -> :file, :mode -> 292, :blob -> blob("input")}}},
   :env -> {},
   :platform -> {"os" -> "linux"},
   :outputs -> ["escape"]
 })
+print(hash-map-get(result, :outputs))
 EOF
     run --grant process --grant "fs:$TMP/hostile:ro" "$TMP/escape.pp"
-    if grep -Eq "selected output (escapes|is missing)" "$TMP/out"; then
-      ok "closed-output-symlink-escape"
+    if grep -q ':kind -> :symlink' "$TMP/out"; then
+      ok "closed-output-symlink-preserved"
     else
       bad "closed-output-symlink-escape" "$(cat "$TMP/out")"
     fi
 
     cat >"$TMP/signal.pp" <<EOF
-let tool = blob(slurp("$TMP/hostile"))
 let result = perform run-closed!({
-  :tool -> tool,
+  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob(slurp("$TMP/hostile"))}}},
+  :tool-path -> "tool",
   :args -> ["signal"],
-  :inputs -> {},
+  :inputs -> {:tree -> {}},
   :env -> {},
   :platform -> {"os" -> "linux"},
   :outputs -> []

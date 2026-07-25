@@ -229,7 +229,7 @@ let flags raw =
       (opt1 "--member-name" (fun n -> raw.member_name := Some n));
     doc_of "  pp --desired-object <hash> <shared-root> [--member-name <n>] [flags]  Pull a published desired-state value by hash and converge it (never runs a program to derive it)\n"
       (opt2 "--desired-object" (fun h root -> raw.desired_object := Some (h, root)));
-    doc_of "  pp --publish-object <shared-root> <file>  Publish the program's value (+ its blob: refs) to a shared local-dir store, by hash\n"
+    doc_of "  pp --publish-object <shared-root> <file>  Publish the program's value and canonical tree blobs to a shared local-dir store, by hash\n"
       (opt1 "--publish-object" (fun root -> raw.publish_object_root := Some root));
     opt1 "--gc-mark" (fun out -> raw.gc_mark_out := Some out);
     doc_of "  pp gc [--gc-keep-epochs N] [--gc-grace-seconds S]  Explicit store GC: mark-by-replay the last N reconcile/supervise epochs, sweep the rest\n"

@@ -13,7 +13,7 @@ let run_mark ctx cli output =
      let forced = Force_deep.force_deep desired in
      Cache_policy.mark Cache_policy.default ("object:" ^ Identity.hash_value forced);
      List.iter (fun blob -> Cache_policy.mark Cache_policy.default ("blob:" ^ blob))
-       (Blobref.blob_refs_in forced)
+       (Artifact_tree.reachable_blobs forced)
    with _ -> ());
   let marks = Hashtbl.fold (fun key () acc -> key :: acc)
       (Cache_policy.gc_marks Cache_policy.default) [] in

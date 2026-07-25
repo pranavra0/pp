@@ -2,8 +2,8 @@
    `pp gc` CLI command (command_gc.ml).
 
    Roots = the last N recorded epochs (Gcroots.read_all — already capped to
-   N at write time, domains.ml's record_epoch) + their transitive blob:
-   refs. Mark-by-replay (traces do not record child-keys, so there is no
+   N at write time, domains.ml's record_epoch) + their canonical tree blob
+   edges. Mark-by-replay (traces do not record child-keys, so there is no
    on-disk node graph to walk — the only way to discover what a root's
    closure touches is to re-run it): for each
    recorded root, re-run the IDENTICAL `pp` invocation (same files/grants/

@@ -525,9 +525,9 @@ the second, and a scripting-tier expression is never cached (`tests/010`,
 Node writes are confined to per-node sandbox scratch and absolute node writes
 error (LAW 18, `tests/017`). Ambient `run` is scripting-tier only because it
 cannot produce a complete trace. `run-closed!` accepts an immutable request
-through a session-owned executor. Its result is rejected unless it contains
-exactly the selected outputs backed by hash-verified blobs; output, evidence,
-and resource maps are canonicalized independently of provider ordering.
+through a session-owned executor. Tools, inputs, and selected outputs use the
+canonical ordinary tree value; every file is backed by a hash-verified blob.
+Evidence and resource maps are canonicalized independently of provider ordering.
 The Linux provider denies undeclared filesystem, environment, network, and
 loader access, confines subprocesses to the same sandbox, and reports signals
 as exit status. It explicitly reports clocks, randomness, CPU/kernel behavior,
@@ -1078,7 +1078,7 @@ state. It diffs that against observed reality by content hash, applies
 atomically, deletes unmanaged files (single writer), journals, requires a
 filesystem write grant, and refuses stratification (`tests/018`, unchanged
 byte for byte from the earlier implementation). Desired contents may be
-inline strings or `blob:<sha256>` content-addressed-store references
+inline strings or raw content-addressed blob identities
 (`tests/023`).
 
 Watch mode: `pp --watch --reconcile ROOT prog.pp` runs the program,

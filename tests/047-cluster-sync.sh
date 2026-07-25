@@ -281,7 +281,9 @@ mkdir -p "$BLOB_NODEA/.pp/cluster" "$BLOB_NODEB/.pp/cluster"
 cp "$NODEA/.pp/cluster/secret" "$NODEA/.pp/cluster/id" "$BLOB_NODEA/.pp/cluster/"
 cp "$NODEA/.pp/cluster/secret" "$NODEA/.pp/cluster/id" "$BLOB_NODEB/.pp/cluster/"
 cat > "$TMP/blob-result.pp" <<'EOF'
-let (ref = force(node { blob("payload") })) { print(blob-get(ref)) }
+let (tree = force(node {
+  {:tree -> {"payload" -> {:kind -> :file, :mode -> 420, :blob -> blob("payload")}}}
+})) { print(blob-get(tree[:tree]["payload"][:blob])) }
 EOF
 HOME="$BLOB_NODEA" "$PP" "$TMP/blob-result.pp" > "$TMP/out" 2>&1
 assert "result-blob-builds" "payload" present

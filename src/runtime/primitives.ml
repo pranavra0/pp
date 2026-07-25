@@ -474,34 +474,21 @@ let register_io () =
     | _ -> failwith "slurp expects a file path string"
   );
 
-  (* ---- blob: ingest bytes into the CAS, return a small reference ----
-     (blob S) stores S under ~/.pp/store/blobs/<sha256> and returns
-     "blob:<sha256>". Desired-state maps carry these refs instead of inline
-     bytes; the reconciler diffs them by hash and materializes from the
-     store — which is what lets `rm -rf build/` restore with zero tool
-     re-runs. *)
   register "blob" (fun args _env ->
     let args = force_args args in
     match args with
-    | [VString s] -> VString ("blob:" ^ Blob_repository.put Blob_repository.default s)
+    | [VString s] -> VString (Blob_repository.put Blob_repository.default s)
     | _ -> failwith "blob expects a string");
 
-  (* (blob-get REF) — the inverse: "blob:<sha256>" → the stored bytes.
-     Content-addressed, so no cell is recorded: the ref in a node's key or
-     free vars already pins exactly these bytes. *)
   register "blob-get" (fun args _env ->
     let args = force_args args in
     match args with
-    | [VString r] ->
-        let prefix = "blob:" in
-        let plen = String.length prefix in
-        if String.length r > plen && String.sub r 0 plen = prefix then
-          let h = String.sub r plen (String.length r - plen) in
-          (match Blob_repository.get Blob_repository.default h with
-           | Some bytes -> VString bytes
-           | None -> failwith ("blob-get: blob missing from store: " ^ h))
-        else failwith ("blob-get expects a blob:<hash> reference, got " ^ r)
-    | _ -> failwith "blob-get expects a blob reference string");
+    | [VString hash] ->
+        (match Blob_repository.get Blob_repository.default hash with
+         | Some bytes when Hasher.hash_string bytes = hash -> VString bytes
+         | Some _ -> failwith ("blob-get: blob hash mismatch: " ^ hash)
+         | None -> failwith ("blob-get: blob missing from store: " ^ hash))
+    | _ -> failwith "blob-get expects a blob identity string");
   ()
 
 let register_stdlib () =

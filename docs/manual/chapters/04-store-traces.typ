@@ -18,7 +18,7 @@ content-addressed parts:
 - `traces/` — one file per node key, holding the set of traces recorded for
   that node (see below).
 - `blobs/` — raw bytes ingested by `blob(…)`, named by their hash. The
-  program above turned a file's contents into a `blob:` reference, and the bytes
+  program above turned a file's contents into a blob identity, and the bytes
   landed here.
 
 (`VERSION` stamps the store format and `locks/` guards concurrent writers.

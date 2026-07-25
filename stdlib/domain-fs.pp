@@ -1,7 +1,7 @@
 # stdlib/domain-fs.pp — filesystem-domain policy
 #
 # This is the POLICY half of the domain: what counts as
-# create/update/delete, how a `blob:<hash>` reference resolves to bytes,
+# create/update/delete and how a blob identity resolves to bytes,
 # single-writer deletion. The TRUSTED MECHANICS (atomic materialize/remove,
 # whole-tree observation) are OCaml primitives (src/runtime/domain_prims.ml),
 # reached only via `perform`. main.ml's `--reconcile ROOT` auto-loads this
@@ -10,27 +10,16 @@
 # `cap-restrict`.
 #
 # observe = perform tree-observe(root)   -> {relpath -> content-hash}
-# desired = {relpath -> content}  (content: an inline string, or a
-# "blob:<sha256>" / "blob:<sha256>:x" CAS reference from the
-# `blob` primitive — :x materializes with the executable bit)
+# desired = {relpath -> content} (content: an inline string or a raw blob
+# identity returned by `blob`)
 # diff    = create/update/delete by content hash, PURE — its only
 # inputs are `observed`/`desired` plus `root` (captured
 # lexically by register-fs-domain, not threaded as a diff
 # argument — Q13's diff signature stays (observed, desired))
 # apply   = materialize-file / remove-file per item
 
-# ---- blob: reference parsing ----
-
-def fs-blob-ref?(c) { starts-with?(c, "blob:") }
-
-def fs-blob-ref-hash(c) {
-  let (rest = string-sub(c, 5, string-length(c) - 5)) {
-    if ends-with?(rest, ":x") { string-sub(rest, 0, string-length(rest) - 2) } else {
-      rest
-    }
-  } }
-def fs-blob-ref-executable?(c) {
-  if fs-blob-ref?(c) { ends-with?(c, ":x") } else { false }
+def fs-blob-id?(c) {
+  string-length(c) = 64
 }
 # A desired content's identity hash: a blob ref diffs BY HASH, without
 # loading bytes (exit criterion 4 — `rm -rf build/` restores from the CAS
@@ -38,12 +27,12 @@ def fs-blob-ref-executable?(c) {
 # algorithm (hash-string, SHA-256) `tree-observe` used to hash the file on
 # disk, so the two sides of the diff compare like for like.
 def fs-content-hash(c) {
-  if fs-blob-ref?(c) { fs-blob-ref-hash(c) } else { hash-string(c) }
+  if fs-blob-id?(c) { c } else { hash-string(c) }
 }
 # Bytes are pulled from the store only when a write is actually needed
 # (apply time), never during diff.
 def fs-content-bytes(c) {
-  if fs-blob-ref?(c) { blob-get(string-append("blob:", fs-blob-ref-hash(c))) } else {
+  if fs-blob-id?(c) { blob-get(c) } else {
     c
 # ---- desired-path validation (relative, no traversal) ----
   } }
@@ -107,9 +96,7 @@ def fs-apply-item(root, item) {
   let (kind = item[:kind], rel = item[:rel], path = string-append(root, "/", rel)) {
     if kind = "delete" { perform remove-file(path) } else {
       let (content = item[:content], bytes = fs-content-bytes(content)) {
-        if fs-blob-ref-executable?(content) {
-          perform materialize-file(path, bytes, :executable)
-        } else { perform materialize-file(path, bytes) }
+        perform materialize-file(path, bytes)
       }
     }
   }

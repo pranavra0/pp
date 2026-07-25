@@ -119,6 +119,6 @@ let lookup t ~(key : Identity_types.Cache_key.t)
                    mark t ("blob:" ^ Identity_types.Observed_hash.to_string h)
                | _ -> ())
                tr.Trace_repository.reads;
-             List.iter (fun h -> mark t ("blob:" ^ h)) (Blobref.blob_refs_in v);
+             List.iter (fun h -> mark t ("blob:" ^ h)) (Artifact_tree.reachable_blobs v);
              (match tr.Trace_repository.outcome with Trace_repository.Ok -> HitOk v | Trace_repository.Failed -> HitFailed v))
   end

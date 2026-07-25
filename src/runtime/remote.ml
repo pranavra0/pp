@@ -127,31 +127,6 @@ let preseed_pins_from_file session ~(pins_file : string) : unit =
                            (corrupt) — refusing to pin" hash)
                       else Session.preseed_run_pin session cell hash))
 
-(* ---- "blob:<hash>" refs embedded in a node's RESULT value ----
-
-   The `blob`/`blob-get` pair (primitives.ml) is deliberately NOT a traced
-   cell — a node's small metadata result carries a "blob:<sha256>" string
-   reference instead of inlining bytes (so a compile node's result stays
-   small; blob-get's own comment: "the ref in a node's key or free vars
-   already pins exactly these bytes"). Transport.decide's blob_hashes are
-   derived only from `tr_reads` (Cell.File cells) — sound for "a node
-   returns the file it slurped", but INCOMPLETE for
-   "a node returns a blob ref to bytes it wrote/ingested itself"
-   (the `(blob (slurp OUTPUT-FILE))` compile pattern — no `file:`
-   cell records the OUTPUT file at all, since reading back a node's own
-   just-written sandbox output is not a world observation). Remote
-   placement must ship these too, or a dispatcher-side consumer of the
-   pulled result (e.g. `link`'s `blob-get`) finds the metadata but not the
-   bytes it names. Scans a value's own STRUCTURE (VMap/VVector/VPair/VSet
-   spine — never forces anything already-forced-by-Codec.decode_value) for
-   "blob:" + exactly 64 lowercase-hex chars, the same shape blob-get's own
-   prefix check already assumes. *)
-(* Factored out to src/kernel/blobref.ml (Cache_policy's GC mark-by-
-   replay needs the identical scan and is compiled before this module) —
-   [blob_refs_in] here is just a re-export so every existing call site in
-   this file keeps working unchanged. *)
-let blob_refs_in = Blobref.blob_refs_in
-
 (* ---- Member side: serve the dispatcher's assigned keys after running ----
 
    Reuses Transport.serve_hit VERBATIM, once per key, against THIS
@@ -159,11 +134,8 @@ let blob_refs_in = Blobref.blob_refs_in
    this is exactly the cluster transport's serve-hit path, just driven internally by
    `--remote-node` instead of by a second `pp --serve-hit` invocation per
    key (an optimization: one subprocess handles run + serve for the whole
-   assigned batch). The ONE addition on top of serve_hit itself: on a hit,
-   also push any "blob:" refs embedded in the result value (see
-   blob_refs_in above) into shared_root — belt-and-suspenders, ignoring a
-   ref that doesn't actually name a local blob (a coincidental string that
-   merely matches the shape). *)
+   assigned batch). Tree blob edges move through the same verified transport
+   path as observed file blobs. *)
 let serve_assigned_keys host ~(token_text : string) ~(keys_file : string)
     ~(shared_root : string) ~(reply_file : string) : unit =
   let keys =
@@ -178,7 +150,7 @@ let serve_assigned_keys host ~(token_text : string) ~(keys_file : string)
          | None -> ()
          | Some v ->
              List.iter (fun h -> try Transport.LocalDir.push_blob shared_root ~hash:h with _ -> ())
-               (blob_refs_in v))
+               (Artifact_tree.reachable_blobs v))
     | _ -> ())
     replies;
   Store_layout.atomic_replace reply_file (String.concat "" replies)
@@ -332,18 +304,13 @@ let ship_and_pull host invocation ~(member_home : string) (closed : Scheduler.jo
              try
                match Transport.recv_hit ~reply_text:line ~shared_root with
                | Transport.RHit { result_hash; _ } ->
-                   (* blob_refs_in, mirrored on the pull side: a "blob:"
-                      ref embedded in the (just-pulled, re-hash-verified)
-                      result value names bytes serve_assigned_keys already
-                      pushed to shared_root above — pull those too, same
-                      re-hash-on-receive choke point as everything else. *)
                    (match Object_repository.get Object_repository.default ~key:result_hash with
                     | None -> ()
                     | Some v ->
                         List.iter (fun h ->
                           try Transport.LocalDir.pull_blob shared_root ~hash:h
                           with _ -> ())
-                          (blob_refs_in v))
+                          (Artifact_tree.reachable_blobs v))
                | Transport.RMiss _ | Transport.RDeny _ -> ()
              with e ->
                Cache_policy.diagnose Cache_policy.default "remote: recv-hit failed (%s) — that key stays a \
