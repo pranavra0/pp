@@ -242,6 +242,15 @@ can collect only data outside the retained graphs. A fresh process reconstructs
 the same keys from pinned source and island values and uses the same traces to
 validate hits or rebuild misses.
 
+`stdlib/dune.pp` is an ecosystem adapter, not a runtime module. Its
+working-tree implementation observes the project, lets Dune perform its own
+incremental policy, and returns a canonical artifact tree. Its closed-source
+implementation builds the equivalent immutable `run-closed!` request. Both
+use the same `dune-build(adapter, spec)` library interface. Dune targets,
+arguments, build-directory policy, and output selection occur only in that pp
+file; `tests/104` proves null and precise Dune actions, artifact restoration,
+and the absence of Dune concepts from `src/runtime`.
+
 `scheduler.ml` owns an installable result-transparent handler service. A
 handler names its policy, declares redundant width, dispatches node misses,
 and cancels outstanding work. The host installs `serial`, `parallel:N`,
