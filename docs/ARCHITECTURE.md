@@ -198,7 +198,7 @@ The repository layer is:
 | `cell_repository.ml` | File and sealed pins and snapshot reads |
 | `repository_inventory.ml`, `store_gc.ml`, `gcroots.ml` | Explicit mark-by-replay GC |
 | `remote_protocol.ml` | Typed pin and serve-hit messages plus their canonical codec |
-| `transport.ml`, `remote.ml` | Hash-checked artifact movement and remote placement behind minimal interfaces |
+| `transport.ml`, `remote.ml` | Hash-checked local-directory artifact movement and remote placement |
 
 `codec.ml` defines the canonical durable encoding. The store does not use
 OCaml `Marshal`. Every durable write uses the atomic replacement boundary.

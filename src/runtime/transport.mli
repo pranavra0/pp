@@ -9,7 +9,6 @@ module LocalDir : sig
   val pull_object : t -> hash:string -> unit
   val pull_blob : t -> hash:string -> unit
   val pull_trace : t -> key:string -> unit
-  val control : t -> request:string -> string
 end
 
 type reply_decision =

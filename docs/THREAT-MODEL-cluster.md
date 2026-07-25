@@ -227,7 +227,7 @@ This document does not cover:
   through `--grant`: an address or membership fact is not an authority
   ceiling, the same distinction LAW 34 draws between location and syntax
 - encryption performed by pp itself: the local-directory transport is a
-  plain file copy. The ssh transport, stubbed for now as `Transport.Ssh`,
+  plain file copy. A future remote transport
   gets its confidentiality for free from ssh itself, but this model never
   treats that confidentiality as load-bearing. Every claim above holds
   even for the local-directory transport's fully plain file copy, which is

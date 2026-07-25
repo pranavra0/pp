@@ -27,26 +27,6 @@ let raise_integrity message =
 let raise_unavailable peer message =
   raise (Error (Transport (Unavailable { peer; message })))
 
-(* ---- The abstract shape: local-dir today, ssh later ----
-
-   Push/pull of hash-named
-   artifacts (objects|blobs|traces) + a control request/reply channel in
-   the store's canonical text (a captured message is inspectable like a
-   trace — no new wire format). [t] is "the other side" — a second
-   store-shaped root directory for local-dir, a host spec for ssh. *)
-module type TRANSPORT = sig
-  type t
-
-  val push_object : t -> hash:string -> unit
-  val push_blob : t -> hash:string -> unit
-  val push_trace : t -> key:string -> unit
-  val pull_object : t -> hash:string -> unit
-  val pull_blob : t -> hash:string -> unit
-  val pull_trace : t -> key:string -> unit
-
-  val control : t -> request:string -> string
-end
-
 (* ---- The unbypassable re-hash-on-receive choke point ----
 
    Every artifact that ever enters THIS node's own store from a remote
@@ -248,49 +228,6 @@ module LocalDir = struct
       raise_unavailable root (Printf.sprintf "transport: pull-trace %s: not found at %s" key root)
     else ingest_trace_lines ~key (Cell_repository.read_raw path)
 
-  (* Control has no generic realization for local-dir without a listening
-     peer process (there is no daemon); nothing calls this — the
-     request/reply-FILE convention actually
-     exercised is [serve_hit]/[recv_hit] below, driven by two `pp` CLI
-     invocations (one per simulated node). See the module header for why:
-     Store_layout.root Store_layout.default's process-wide singleton means a
-     single process can only ever serve hits against ITS OWN store, so
-     "control" here is realized at the CLI layer rather than through this
-     function. *)
-  let control (_ : t) ~(request : string) : string =
-    ignore request;
-    raise_unavailable "local-dir"
-      "transport: LocalDir.control is not used this stage — see \
-       Transport.serve_hit / Transport.recv_hit"
-end
-
-(* Conformance check only (never instantiated): proves LocalDir's shape
-   satisfies TRANSPORT despite carrying an extra helper
-   ([push_trace_filtered]) the signature doesn't mention. *)
-module LocalDir_conforms : TRANSPORT = LocalDir
-
-(* ---- ssh: STUBBED ----
-
-   scp/rsync for artifacts, `ssh <host> pp --worker-control` for control —
-   drops in behind the exact
-   same TRANSPORT shape once a real second machine is needed. Every
-   operation is a clear "not yet" error naming itself, never a silent
-   no-op. *)
-module Ssh : TRANSPORT = struct
-  type t = string (* a host spec, e.g. "user@host" *)
-
-  let not_yet (op : string) (host : t) : 'a =
-    raise_unavailable host (Printf.sprintf
-      "pp: transport ssh: %s not implemented (host %s) — local-dir is the \
-       only transport; ssh drops in behind the identical TRANSPORT shape" op host)
-
-  let push_object host ~hash:_ = not_yet "push_object" host
-  let push_blob host ~hash:_ = not_yet "push_blob" host
-  let push_trace host ~key:_ = not_yet "push_trace" host
-  let pull_object host ~hash:_ = not_yet "pull_object" host
-  let pull_blob host ~hash:_ = not_yet "pull_blob" host
-  let pull_trace host ~key:_ = not_yet "pull_trace" host
-  let control host ~request:_ = not_yet "control" host
 end
 
 (* ---- Serve-hit: the capability-gated single-hit control path ----
