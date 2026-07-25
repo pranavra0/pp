@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
 # tests/086 — the manual's code examples are executable.
 #
-# docs/manual/build.pp runs every example while rendering the manual and embeds
-# its real output, so a broken example fails the build and the docs cannot
-# drift — but that build needs typst and runs outside `dune runtest`. This is
-# the typst-free half, on every run: each docs/manual/examples/NAME.pp is
+# Each docs/manual/examples/NAME.pp is
 # executed and must succeed — except the handful that deliberately demonstrate
 # an error, which must fail. So an example that stops running is a red build
 # without waiting for a manual render.

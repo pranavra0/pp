@@ -43,24 +43,20 @@ check_file "blob-txt" "$OUT/plain.txt" "INLINE"
 run --grant "fs:$OUT:rw" --reconcile "$OUT" "$TMP/d.pp"
 assert "blob-null"    "create=0" present
 
-# --- (b) rebuild-from-store at unit scale: the desired map comes from a
-#         tool-running node; rm -rf build ⇒ restored from the store with
-#         ZERO tool re-runs ---
+# --- (b) rebuild-from-store: the desired map comes from a cached node;
+#         deleting the materialized tree does not rerun the node ---
 cat > "$TMP/b.pp" <<'EOF'
 let (obj = force(node {
   perform log("COMPILE")
-  do {
-    perform run("sh", "-c", "printf TOOL-OUT > a.o")
-    blob(slurp("a.o"))
-  }
+  blob("TOOL-OUT")
 })) { {"a.o" -> obj} }
 EOF
 rm -rf "$TMP/.pp" "$OUT"
-run --grant "fs:$OUT:wo" --grant process --reconcile "$OUT" "$TMP/b.pp"
+run --grant "fs:$OUT:wo" --reconcile "$OUT" "$TMP/b.pp"
 assert "c4-build-compiles" "COMPILE" present
 check_file "c4-built"      "$OUT/a.o" "TOOL-OUT"
 rm -rf "$OUT"
-run --grant "fs:$OUT:wo" --grant process --reconcile "$OUT" "$TMP/b.pp"
+run --grant "fs:$OUT:wo" --reconcile "$OUT" "$TMP/b.pp"
 assert "c4-restore-no-recompile" "COMPILE" absent
 check_file "c4-restored"   "$OUT/a.o" "TOOL-OUT"
 

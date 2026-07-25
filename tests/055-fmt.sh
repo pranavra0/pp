@@ -208,9 +208,9 @@ fi
 sweep_fail=0
 sweep_count=0
 sweep_comments=0
-for f in "$ROOT"/tests/[0-9]*.pp "$ROOT"/tests/gen-cproject.pp \
+for f in "$ROOT"/tests/[0-9]*.pp \
          "$ROOT"/tests/mutate-cproject.pp "$ROOT"/stdlib/*.pp \
-         "$ROOT"/build.pp "$ROOT"/demo/*.pp "$ROOT"/examples/*.pp \
+         "$ROOT"/build.pp "$ROOT"/demo/volatile-deploy.pp "$ROOT"/examples/*.pp \
          "$ROOT"/docs/manual/*.pp "$ROOT"/docs/manual/examples/*.pp; do
   [ -f "$f" ] || continue
   sweep_count=$((sweep_count + 1))

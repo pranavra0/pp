@@ -61,28 +61,28 @@ EOF
 run "$LINK/via-real.pp"         # invoked via the SYMLINK path; loads via the REAL
 assert "loader-symlink-invoke-real-load" "LIBVAL" present
 
-# --- (a2) a node's tree:/tool: cells hit when the SAME content is granted
-#          via a different spelling than the run that produced the trace ---
+# --- (a2) a node's file cell hits when the same content is granted via a
+#          different spelling than the read that produced the trace ---
 printf 'DATA1\n' > "$SRC/in.txt"
 cat > "$TMP/build.pp" <<EOF
 perform log(force(node {
   perform log("RUN")
-  hash-map-get(perform run("sh", "-c", "cat $SRC/in.txt"), "out")
+  slurp("$SRC/in.txt")
 }))
 EOF
 
 rm -rf "$TMP/.pp"
-run --grant process --grant "fs:$LINK:ro" "$TMP/build.pp"
+run --grant "fs:$LINK:ro" "$TMP/build.pp"
 assert "a2-cold-symlink-miss" "RUN"   present
 assert "a2-cold-symlink-data" "DATA1" present
-run --grant process --grant "fs:$SRC:ro" "$TMP/build.pp"
+run --grant "fs:$SRC:ro" "$TMP/build.pp"
 assert "a2-real-grant-hit"    "RUN"   absent   # <- the canonicalization proof
 assert "a2-real-grant-data"   "DATA1" present
 
 rm -rf "$TMP/.pp"
-run --grant process --grant "fs:$SRC:ro" "$TMP/build.pp"
+run --grant "fs:$SRC:ro" "$TMP/build.pp"
 assert "a2-cold-real-miss"    "RUN"   present
-run --grant process --grant "fs:$LINK:ro" "$TMP/build.pp"
+run --grant "fs:$LINK:ro" "$TMP/build.pp"
 assert "a2-symlink-grant-hit" "RUN"   absent   # <- and the reverse direction
 
 # --- (b) macOS /var vs /private/var: exercise whatever symlink layer the
@@ -102,14 +102,14 @@ if [ "$REALVARDIR" != "$VARDIR" ]; then
   cat > "$TMP/varbuild.pp" <<EOF
 perform log(force(node {
   perform log("RUN")
-  hash-map-get(perform run("sh", "-c", "cat $VARDIR/varin.txt"), "out")
+  slurp("$VARDIR/varin.txt")
 }))
 EOF
   rm -rf "$TMP/.pp"
-  run --grant process --grant "fs:$VARDIR:ro" "$TMP/varbuild.pp"
+  run --grant "fs:$VARDIR:ro" "$TMP/varbuild.pp"
   assert "b-cold-varpath-miss" "RUN"   present
   assert "b-cold-varpath-data" "DATA2" present
-  run --grant process --grant "fs:$REALVARDIR:ro" "$TMP/varbuild.pp"
+  run --grant "fs:$REALVARDIR:ro" "$TMP/varbuild.pp"
   assert "b-privatevar-grant-hit" "RUN" absent   # /var grant covers a /private/var-observed cell
 else
   echo "ok   b-skipped-no-var-symlink-on-this-host ($VARDIR already symlink-free)"
@@ -117,16 +117,16 @@ fi
 
 # --- (c) trailing-slash grant == no-trailing-slash grant, both directions ---
 rm -rf "$TMP/.pp"
-run --grant process --grant "fs:$SRC/:ro" "$TMP/build.pp"
+run --grant "fs:$SRC/:ro" "$TMP/build.pp"
 assert "c-cold-trailing-slash-miss" "RUN"   present
 assert "c-cold-trailing-slash-data" "DATA1" present
-run --grant process --grant "fs:$SRC:ro" "$TMP/build.pp"
+run --grant "fs:$SRC:ro" "$TMP/build.pp"
 assert "c-no-slash-hit" "RUN" absent
 
 rm -rf "$TMP/.pp"
-run --grant process --grant "fs:$SRC:ro" "$TMP/build.pp"
+run --grant "fs:$SRC:ro" "$TMP/build.pp"
 assert "c-cold-no-slash-miss" "RUN" present
-run --grant process --grant "fs:$SRC/:ro" "$TMP/build.pp"
+run --grant "fs:$SRC/:ro" "$TMP/build.pp"
 assert "c-trailing-slash-hit" "RUN" absent
 
 # --- (d) a write-target's cell-id is stable across the file's creation:

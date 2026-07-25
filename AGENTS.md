@@ -17,7 +17,7 @@ pp file.pp            # bin/pp is on PATH via direnv; else `opam exec -- dune ex
   (`dune exec ./tools/fuzz.exe -- --grammar full --count 2000`) and the suite.
 - A content key must include everything the computation depends on. If you
   touch hashing or thunk keys, keep `tests/009` passing. If you touch the
-  store, traces, or node keying, keep `tests/010` to `tests/024` passing.
+  store, traces, or node keying, keep `tests/010` to `tests/023` passing.
   `pp why file.pp` explains hits and misses.
 - Verify by running the binary, not by reading docs. Prose has lied before;
   the tests and fuzzer exist because of it.

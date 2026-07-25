@@ -44,8 +44,6 @@ executable outside dune's package machinery, for example by removing
    dune runtest --force
    dune exec ./tools/fuzz.exe -- --grammar core --count 2000
    dune exec ./tools/fuzz.exe -- --grammar full --count 2000
-   scripts/build-self.sh
-   scripts/build-lua.sh
    ```
 5. Commit your changes: `git commit -am "release vX.Y.Z"`.
 6. Tag the release: `git tag -a vX.Y.Z -m "vX.Y.Z"`.
@@ -88,8 +86,8 @@ alone.
 
 ### What this repo's CI proves, and what it does not prove
 
-`.github/workflows/ci.yml` runs `dune build`, `dune runtest --force`, the
-fuzzer, and `scripts/build-lua.sh` on Linux and macOS, on every push and
+`.github/workflows/ci.yml` runs `dune build`, `dune runtest --force`, and the
+fuzzer on Linux and macOS, on every push and
 pull request to `master`, from a git checkout using `actions/checkout`. It
 does not re-run the from-tarball smoke test above. Do that by hand before
 tagging, or add a release workflow that does it for you.

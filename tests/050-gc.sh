@@ -15,7 +15,7 @@
 #     passes): store size stays BOUNDED with `pp gc` between iterations,
 #     visibly grows without it.
 #   - `pp gc` never deletes a live root's closure: after GC, re-running the
-#     LAST (kept) program is a pure cache hit (zero new execs) and produces
+#     LAST (kept) program is a pure cache hit and produces
 #     the byte-identical materialized tree.
 #   - a live build racing `pp gc` (a long grace period stands in for "the
 #     concurrent write is still in flight"): no crash, no wrong result,
@@ -41,11 +41,11 @@ run_iter() {  # I
   local i="$1"
   cat > "$TMP/d.pp" <<EOF
 let (v = force(node {
-  perform run("sh", "-c", "echo iter-$i")
+  perform log("COMPUTE")
   number->string($i)
 })) { {"cur.txt" -> v, "churn-$i.txt" -> "x"} }
 EOF
-  "$PP" --grant process --grant "fs:${OUT}:wo" --reconcile "$OUT" "$TMP/d.pp" > "$TMP/iter.out" 2>&1
+  "$PP" --grant "fs:${OUT}:wo" --reconcile "$OUT" "$TMP/d.pp" > "$TMP/iter.out" 2>&1
 }
 
 N=8
@@ -83,11 +83,9 @@ else bad "journal-epoch-line-per-pass" "expected $N, got $nepochs"; fi
 # rebuilds as a pure cache hit (0 new execs) and the tree is byte-identical.
 # ===========================================================================
 cp -r "$OUT" "$TMP/out-post-gc.snapshot"
-before=$(grep -c "^exec " "$J" 2>/dev/null || echo 0)
 run_iter "$N"
-after=$(grep -c "^exec " "$J" 2>/dev/null || echo 0)
-if [ "$after" -eq "$before" ]; then ok "gc-preserves-live-closure (0 new execs re-running the kept root)"
-else bad "gc-preserves-live-closure" "$((after - before)) new execs"; fi
+if ! grep -q "COMPUTE" "$TMP/iter.out"; then ok "gc-preserves-live-closure"
+else bad "gc-preserves-live-closure" "$(cat "$TMP/iter.out")"; fi
 if diff -rq "$TMP/out-post-gc.snapshot" "$OUT" > "$TMP/diff.out" 2>&1; then
   ok "gc-rebuild-byte-identical"
 else
@@ -108,12 +106,10 @@ cat > "$TMP/race.pp" <<'EOF'
 def int-range(a, b) { if a >= b { nil } else { cons(a, int-range(a + 1, b)) } }
 def sum-list(lst) { if nil?(lst) { 0 } else { car(lst) + sum-list(cdr(lst)) } }
 def mk(i) {
-  node {
-    perform run("sh", "-c", string-append("sleep 0.1; echo race-", number->string(i)))
-    i } }
+  node { i } }
 print(sum-list(force-deep(map(mk, int-range(0, 16)))))
 EOF
-"$PP" --grant process --schedule parallel:8 "$TMP/race.pp" > "$TMP/race-before.out" 2>&1 &
+"$PP" --schedule parallel:8 "$TMP/race.pp" > "$TMP/race-before.out" 2>&1 &
 RACE_PID=$!
 "$PP" --gc-keep-epochs "$KEEP" --gc-grace-seconds 30 gc > "$TMP/gc-race.out" 2>&1
 GC_CODE=$?
@@ -128,13 +124,11 @@ RESULT=$(cat "$TMP/race-before.out")
 if [ "$RESULT" = "120" ]; then ok "t7-correct-result (0+..+15=120)"
 else bad "t7-correct-result" "got '$RESULT'"; fi
 
-before2=$(grep -c "^exec " "$J" 2>/dev/null || echo 0)
-"$PP" --grant process --schedule parallel:8 "$TMP/race.pp" > "$TMP/race-after.out" 2>&1
-after2=$(grep -c "^exec " "$J" 2>/dev/null || echo 0)
-if [ "$after2" -eq "$before2" ] && [ "$(cat "$TMP/race-after.out")" = "120" ]; then
-  ok "t7-subsequent-rebuild-byte-identical (0 new execs, same result)"
+"$PP" --schedule parallel:8 "$TMP/race.pp" > "$TMP/race-after.out" 2>&1
+if [ "$(cat "$TMP/race-after.out")" = "120" ]; then
+  ok "t7-subsequent-rebuild-byte-identical"
 else
-  bad "t7-subsequent-rebuild-byte-identical" "$((after2 - before2)) new execs, result='$(cat "$TMP/race-after.out")'"
+  bad "t7-subsequent-rebuild-byte-identical" "result='$(cat "$TMP/race-after.out")'"
 fi
 
 # ===========================================================================
@@ -149,7 +143,6 @@ rm -rf "$TMP/.pp" "$OUT"; mkdir -p "$OUT"
 TRIGGER="$TMP/trigger.txt"; echo "0" > "$TRIGGER"
 cat > "$TMP/watch.pp" <<EOF
 let (n = slurp("$TRIGGER"), v = force(node {
-  perform run("sh", "-c", string-append("echo tick-", n))
   n
 })) {
   {"cur.txt" -> v, string-append("churn-", string-append(n, ".txt")) -> "x"}
@@ -159,10 +152,10 @@ timeout_bin() { command -v timeout >/dev/null 2>&1 && echo timeout || echo ""; }
 TB=$(timeout_bin)
 run_watch() {
   if [ -n "$TB" ]; then
-    "$TB" 6 "$PP" --watch --watch-interval 0.2 --grant process --grant "fs:${TMP}:ro" \
+    "$TB" 6 "$PP" --watch --watch-interval 0.2 --grant "fs:${TMP}:ro" \
       --grant "fs:${OUT}:wo" --reconcile "$OUT" "$TMP/watch.pp" > "$TMP/watch.out" 2>&1
   else
-    "$PP" --watch --watch-interval 0.2 --grant process --grant "fs:${TMP}:ro" \
+    "$PP" --watch --watch-interval 0.2 --grant "fs:${TMP}:ro" \
       --grant "fs:${OUT}:wo" --reconcile "$OUT" "$TMP/watch.pp" > "$TMP/watch.out" 2>&1 &
     echo $! > "$TMP/watch.pid"
   fi

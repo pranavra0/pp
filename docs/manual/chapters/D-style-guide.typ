@@ -115,11 +115,10 @@ header listing every export:
 
 == Tier Awareness
 
-- *Node tier* (`node { … }`) — pure, cached. `!`-suffixed functions may appear
-  when they perform traced effects (`run!`, `run-dep!`); their results become
-  part of the node's cached value.
+- *Node tier* (`node { … }`) — pure, cached. Only fully traced observations
+  and effects may appear here; process effects are currently scripting-tier.
 - *Scripting tier* (top-level `do { … }`) — imperative, uncached. `!` functions
   live here.
 
-`!` means "does I/O or mutates the world." It is not a ban from node bodies;
-it is a warning that the function is not a pure computation.
+`!` means "does I/O or mutates the world." Whether it is valid in a node
+depends on whether the runtime can validate every semantic input.

@@ -49,14 +49,6 @@ the full suite and the full fuzzer. The architecture gate's controlled-probe
 test is `tests/094-architecture-gates.sh`; it proves each checker rejects a
 temporary violation and removes the probe.
 
-Two proofs run outside `dune runtest` because they invoke dune or the
-network:
-
-- `scripts/build-self.sh` — pp builds itself through a real `build.pp`;
-  a null rebuild never executes dune
-- `scripts/build-lua.sh` — the same rebuild guarantees on Lua 5.4.7; it
-  downloads the pinned tarball on first use
-
 The suite is slow: a full run takes about 3.5 minutes.
 
 

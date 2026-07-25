@@ -211,6 +211,8 @@ let parse_request entries =
   { Executor.tool = tool_hash; arguments; inputs; environment; platform; outputs }
 
 let run args =
+  if Effect.perform Dynamic_scope.In_node then
+    failwith "run-closed!: may not be called inside a node body until the execution protocol is fully mediated";
   if not (has_process_cap ()) then
     capability "capability error: no process authority for run-closed!";
   let request =

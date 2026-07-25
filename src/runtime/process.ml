@@ -1,27 +1,4 @@
 open Pp_kernel
-(* pp `run` process effect — execute an external command.
-
-   (perform run CMD ARG...) ⇒ {"exit" int, "out" string, "err" string}
-
-   Authority: `--grant process` (CapProcess) is required at perform time;
-   there is no way to mint it from user code. A denial raises a
-   structured capability error, which node caching deliberately does not memoize
-   (authority is not identity).
-
-   Trace invalidation: a run inside a node records one whole-tree hash per
-   fs-read grant, refined per-tool by the depfile adapter below when a tool
-   emits one. It records
-     - `tool:<resolved-binary>` — content hash of the executable, and
-     - `tree:<root>`           — whole-tree content hash of every
-                                 fs-read-granted root at run time,
-   so a cached node re-runs when the tool or anything under a granted tree
-   changes. Ambient reads outside those roots remain a staleness hole.
-
-   Sandbox: inside a node the child process runs
-   with the node's scratch directory as cwd, so relative outputs land in
-   node-local scratch and never in the caller's tree. The sandbox does not
-   fail-close absolute paths. Plain `run` is therefore a legacy observational
-   adapter, not a mediated foreign-world boundary. *)
 
 open Core_model
 open Source_error
@@ -45,27 +22,6 @@ let resolve_cmd (cmd : string) : string option =
     in
     find (String.split_on_char ':' path)
 
-let record_tool_cell (resolved : string) : unit =
-  match Observation.hash_file resolved with
-  | Some h -> Observation.record (Observation.tool resolved) h
-  | None -> ()
-
-(* One whole-tree hash per fs-read grant. Plain `run` uses this conservative
-   invalidation, and run-dep! falls back to it when no depfile appears. *)
-let record_tree_cells () : unit =
-  List.iter (fun cap ->
-    List.iter (fun ((path : Paths.canonical), mode) ->
-      match mode with
-      | Capability.Read | Capability.ReadWrite ->
-          Observation.record (Cell.Tree (path :> string)) (Observation.tree_hash (path :> string))
-      | Capability.Write -> ())
-    (Capability.list_fs_paths cap))
-    (Effect.perform Dynamic_scope.Get_capabilities)
-
-let record_run_observations (resolved : string) : unit =
-  record_tool_cell resolved;
-  record_tree_cells ()
-
 let read_all_exn (path : string) : string =
   let ic = open_in_bin path in
   Fun.protect
@@ -76,10 +32,7 @@ let read_all (path : string) : string =
   try read_all_exn path with
   | Sys_error _ | Unix.Unix_error _ | End_of_file -> ""
 
-(* Execute argv, capturing stdout/stderr; cwd is the node sandbox when inside
-   a node (created on demand), the process cwd otherwise. Every execution is
-   journaled — "null rebuild executes zero external processes" is proved by
-   the journal, not asserted. *)
+(* Execute argv, capturing stdout/stderr. Every execution is journaled. *)
 let exec (argv : string list) : int * string * string =
   let program =
     match argv with
@@ -107,17 +60,9 @@ let exec (argv : string list) : int * string * string =
             Fun.protect
               ~finally:(fun () -> Unix.close fd_in)
               (fun () ->
-                let saved_cwd = Unix.getcwd () in
-                (match Sandbox.current ~create:true with
-                 | Some d -> (try Unix.chdir d with Unix.Unix_error _ -> ())
-                 | None -> ());
                 let pid =
-                  Fun.protect
-                    ~finally:(fun () ->
-                      try Unix.chdir saved_cwd with Unix.Unix_error _ -> ())
-                    (fun () ->
-                       Unix.create_process program (Array.of_list argv)
-                         fd_in fd_out fd_err)
+                  Unix.create_process program (Array.of_list argv)
+                    fd_in fd_out fd_err
                 in
                 let (_, status) = Unix.waitpid [] pid in
                 let code = match status with
@@ -127,6 +72,8 @@ let exec (argv : string list) : int * string * string =
                 (code, read_all out_f, read_all err_f)))))
 
 let run_effect (args : value list) : value =
+  if Effect.perform Dynamic_scope.In_node then
+    failwith "run: may not be called inside a node body (scripting-tier only)";
   if not (has_process_cap ()) then
     capability "capability error: no process authority for run";
   let argv = List.map (function
@@ -137,96 +84,30 @@ let run_effect (args : value list) : value =
   match argv with
   | [] -> failwith "run expects a command"
   | cmd :: _ ->
-      let resolved = match resolve_cmd cmd with
-        | Some p -> p
-        | None -> failwith ("run: command not found: " ^ cmd)
-      in
-      (* Observations are recorded against the PRE-run world: a tool that
-         mutates a granted tree leaves a never-verifying trace behind, which
-         re-runs — the sound answer for a non-hermetic tool. *)
-      record_run_observations resolved;
+      (match resolve_cmd cmd with
+       | Some _ -> ()
+       | None -> failwith ("run: command not found: " ^ cmd));
       let (code, out, err) = exec argv in
       VMap [ (VString "exit", VInt code);
              (VString "out",  VString out);
              (VString "err",  VString err) ]
 
-(* ---- Depfile adapter ----
-
-   (perform run-dep! DEPFILE CMD ARG...) — like `run`, but after the exec the
-   Makefile-style depfile the tool wrote (`cc -MD -MF` and friends) is parsed
-   and the EXACT files the tool read become the trace cells:
-     granted dep      → precise `file:` cell (via read_file_cell, so it also
-                        gets pinned into this run's CAS-ingested snapshot
-                        like every other file: cell)
-     out-of-grant dep → `tool:` cell (a system read under process authority)
-   and NO coarse `tree:` cells are recorded — the refinement that shrinks the
-   trace below the coarse-cell soundness floor. A missing/unreadable depfile
-   falls back to the coarse floor. The adapter trusts the tool's report; that
-   trust is per-tool and explicit (you chose run-dep!). *)
-
-(* "target: dep dep \\\n dep" → the dep paths. Line continuations become
-   spaces; everything through the first ':' is the target and is dropped. *)
-let parse_depfile (content : string) : string list =
-  let buf = Buffer.create (String.length content) in
-  let n = String.length content in
-  let i = ref 0 in
-  while !i < n do
-    if !i + 1 < n && content.[!i] = '\\' && content.[!i + 1] = '\n' then begin
-      Buffer.add_char buf ' '; i := !i + 2
-    end else begin
-      Buffer.add_char buf content.[!i]; incr i
-    end
-  done;
-  let s = Buffer.contents buf in
-  let body =
-    match String.index_opt s ':' with
-    | Some idx -> String.sub s (idx + 1) (String.length s - idx - 1)
-    | None -> s
-  in
-  String.split_on_char '\n' body
-  |> List.concat_map (String.split_on_char ' ')
-  |> List.concat_map (String.split_on_char '\t')
-  |> List.filter (fun p -> p <> "")
-
-let record_depfile_cells (deps : string list) : unit =
-  List.iter (fun dep ->
-    if Sys.file_exists dep then begin
-      if List.exists (fun cap -> Capability.check_fs_read cap (World_path.canonical dep))
-           (Effect.perform Dynamic_scope.Get_capabilities)
-      then ignore (Cell_repository.read_file dep)
-      else
-        match Observation.hash_file dep with
-        | Some h -> Observation.record (Observation.tool dep) h
-        | None -> ()
-    end)
-    deps
-
 let run_dep_effect (args : value list) : value =
+  if Effect.perform Dynamic_scope.In_node then
+    failwith "run-dep!: may not be called inside a node body (scripting-tier only)";
   match args with
-  | VString depfile :: (VString cmd :: _ as cmd_args) ->
+  | VString _depfile :: (VString cmd :: _ as cmd_args) ->
       if not (has_process_cap ()) then
-    capability "capability error: no process authority for run-dep!";
+        capability "capability error: no process authority for run-dep!";
       let argv = List.map (function
         | VString s -> s
         | v -> failwith ("run-dep! expects string arguments, got " ^ Presentation.string_of_value v))
         cmd_args
       in
-      let resolved = match resolve_cmd cmd with
-        | Some p -> p
-        | None -> failwith ("run-dep!: command not found: " ^ cmd)
-      in
-      record_tool_cell resolved;
+      (match resolve_cmd cmd with
+       | Some _ -> ()
+       | None -> failwith ("run-dep!: command not found: " ^ cmd));
       let (code, out, err) = exec argv in
-      (* The depfile is a sandbox output, not an observation: read it raw. *)
-      let dep_path =
-        match Sandbox.resolve ~create:false depfile with
-        | Some p -> p
-        | None -> depfile
-      in
-      (match (try Some (read_all_exn dep_path)
-              with Sys_error _ | Unix.Unix_error _ | End_of_file -> None) with
-       | Some content -> record_depfile_cells (parse_depfile content)
-       | None -> record_tree_cells ()  (* no depfile ⇒ coarse-but-sound *));
       VMap [ (VString "exit", VInt code);
              (VString "out",  VString out);
              (VString "err",  VString err) ]

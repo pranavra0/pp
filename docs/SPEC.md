@@ -521,22 +521,14 @@ feature.
 **Status: partial** — `node { e }` is opt-in and cached persistently: the same
 node forced in two processes runs once, the store serves
 the second, and a scripting-tier expression is never cached (`tests/010`,
-`tests/014`). `$glob` records the tree snapshot it returns, and `run` records
-the resolved tool plus a coarse hash for every readable input tree
-(`tests/100`). The purity half of the bargain is now partly enforced: node
-writes are confined to per-node sandbox scratch and absolute node writes error
-(LAW 18, `tests/017`), and a tool run inside a node executes in the scratch
-dir. `run-closed!` instead accepts an immutable tool blob, an immutable map of
-input blobs, arguments, an explicit environment, a platform constraint, and
-selected outputs. A session-owned trusted executor returns exit status,
-stdout, stderr, immutable output blobs, and enforced resource facts. The
-production Linux provider clears the ambient environment, creates
-filesystem/network namespaces, snapshots only selected regular files, and
-fails unavailable rather than falling back (`tests/102`). Provider selection
-is host placement policy, not node identity. The current provider accepts only
-the exact `{"os" -> "linux"}` constraint. Time, randomness, CPU, kernel, and
-resource limits are not yet mediated. Plain `run` and trusted depfiles retain
-ambient-read holes.
+`tests/014`). `$glob` records the tree snapshot it returns (`tests/100`).
+Node writes are confined to per-node sandbox scratch and absolute node writes
+error (LAW 18, `tests/017`). Ambient `run` and `run-dep!` are scripting-tier
+only: neither tree hashing nor a tool's self-reported depfile is a complete
+trace. `run-closed!` accepts an immutable request through a session-owned
+executor, but also remains scripting-tier while time, randomness, CPU, kernel,
+and resource limits are unmediated (`tests/102`). Thus no cacheable foreign
+process currently runs with ambient or incompletely evidenced authority.
 
 Test: the same `node { e }` forced twice across two processes runs once,
 which the store proves (`tests/010`, `tests/014`); a scripting-tier expression
@@ -577,13 +569,11 @@ exist afterward. Without this, "single writer" (LAW 28) is only a slogan.
 Inside a node, a relative `write-file` targets the node's sandbox scratch, a
 lazily created temp directory deleted when the node's frame pops; reads and
 writes there are capability-free and unrecorded. An absolute `write-file`
-errors, even with a read-write grant. The scripting tier is unchanged. `run`
+errors, even with a read-write grant. The scripting tier is unchanged
 (`tests/017`). The reconciled-domain write path is now generic: filesystem and
 process domains apply desired state through the single writer
 (`stdlib/domain-fs.pp`, `stdlib/domain-proc.pp`), while a tool's own absolute-
-path writes remain outside the sandbox's control. `run-closed!` instead gives
-the tool one private output directory and ingests only explicitly selected
-regular files as immutable blobs (`tests/102`).
+path writes remain outside the sandbox's control.
 
 Test: a node calling `perform write-file("/abs/x", …)` errors and the file is
 not written; the same call in scripting tier
@@ -937,13 +927,13 @@ by the scheduler's opaque handler service. A handler supplies
 only a name, redundant width, best-effort miss dispatch, and cancellation; it
 cannot replace key construction, hit authorization, or rebuilding. The
 host-provided serial/parallel/race/remote handlers are excluded from node
-identity and traces; differential scheduling tests cover their result
-transparency (`tests/024`, `tests/038`, `tests/048`), and the kernel property
+identity and traces; scheduler stress covers their result transparency
+(`tests/038`), and the kernel property
 suite checks installation, cancellation, redundant width, and session
 isolation.
 `http-get`/`http-post` are newer builtin, semantic-class effects, dispatched
 through the same `perform_effect`/`handler:<effect>` machinery as
-`read-file`/`run` — no new handler category. They are banned inside node
+`read-file`/`run` — no new handler category. Network and process builtins are banned inside node
 bodies outright, by a trace-stack guard shaped like `fenced`/`write-file`'s
 node-body ban, rather than given a trace cell: a network read is not the
 declared-nondeterminism mechanism (LAW 37/38's probes are that mechanism) and
@@ -1144,11 +1134,6 @@ the leavers; no write grant gives a capability error; a self-reading desired
 state gives a stratification error (`tests/018`); the process domain's
 equivalents hold (`tests/033`); a from-scratch third-party domain holds all
 of the above plus plan caching and verify-after-write failure (`tests/046`).
-Most of the build-engine milestone's acceptance checks hold on a 101
-translation-unit C build (`tests/024`), the self-hosting build check passes
-via `scripts/build-self.sh`, and the same checks replicate on Lua 5.4.7
-(`scripts/build-lua.sh`) — all unaffected by the domain-generalisation work,
-since `--reconcile`'s observable behaviour is unchanged.
 
 ### [LAW 31] Fenced effects are reconciler-only, journaled, at-most-once per pass
 
@@ -1301,24 +1286,12 @@ collection (`pp gc`, explicit, never automatic) is orthogonal to placement:
 it never runs during a scheduled force, only via its own command, and is
 documented alongside LAW 30.
 
-Test: no reader accepts a placement form (unchanged). The same 101
-translation-unit build under `--schedule parallel:N` produces a
-byte-identical desired-state hash and materialized tree to the serial run,
-with measured speedup (`tests/024`'s `p3-*` assertions); `--check` under a
-non-serial policy re-runs forced-serial against the same store and fails on
-any hash mismatch (the schedule-transparency audit, same file). `tests/038`
-stress-tests N concurrent workers against one store and a `race:N` fan-out.
-For cluster placement: the same build, scaled to 8 translation units, under
-`--schedule remote:<member>` over the local-directory transport, is
-byte-identical against serial, plus the cross-machine hit, differing-file,
-and degrade-path assertions (`tests/048`'s `T6`/`Q11-bis`/`cross-machine-hit`
-assertions). For host-qualified domain distribution: `--member-name`
+Test: no reader accepts a placement form (unchanged). `tests/038`
+stress-tests concurrent workers against one store and a `race:N` fan-out.
+For host-qualified domain distribution, `--member-name`
 converges only its own slice while another host's stays untouched, and a
 member's recovery from `kill -9` holds on that slice
-(`tests/049-host-domains.sh`); the by-hash desired-value seam crosses two
-separate home directories including a `blob:` reference's bytes, rejects a
-tampered published object, and survives `pp gc` on the receiving side
-(`tests/051-cluster-exit.sh`); store size stays bounded across both repeated
+(`tests/049-host-domains.sh`); store size stays bounded across both repeated
 one-shot passes and a genuine `--watch`-loop/`pp gc` race, with the kept
 root's closure surviving the sweep (`tests/050-gc.sh`'s T7 assertions).
 
@@ -1518,18 +1491,18 @@ migration.
 | LAW 11 | stack-safe non-tail recursion | holds | heap continuation machine plus iterative builtin list traversal; regular deep regression (`tests/087-deep-recursion.pp`) and million-element acceptance fixture (`tests/fixtures/million-non-tail.pp`) |
 | LAW 12 | total quotation, quasiquote | holds | `tests/007-phase0-laws.pp`; `defmacro` is built on this base — `Quotation.value_to_expr` completes the round trip, `tests/041-defmacro.pp` |
 | LAW 15 | ordering never from capabilities | holds | authority and ordering are separate; filesystem and process domains use the generic domain pipeline (`tests/018`, `tests/033`) |
-| LAW 16 | opt-in per-node caching | partial | `node { e }` cached persistently across runs; scripting-tier expressions uncached; glob and tool inputs recorded (`tests/100`); node writes sandbox-scratch-only (LAW 18, `tests/017`) |
+| LAW 16 | opt-in per-node caching | partial | `node { e }` cached persistently across runs; scripting-tier expressions uncached; glob inputs recorded (`tests/100`); ambient and incompletely mediated process effects are rejected in nodes (`tests/017`, `tests/022`, `tests/102`) |
 | LAW 17 | hit is not effect replay | holds (node tier) | a `node { e }` hit does not replay in-node `log`/stdout (`tests/010`, `tests/014`) |
-| LAW 18 | sandbox-scratch writes | partial | per-node scratch sandbox is real: relative node writes/reads are scratch-local, absolute node writes error, and `run` uses the scratch directory (`tests/017`); domain writes use the reconciliation pipeline |
+| LAW 18 | sandbox-scratch writes | partial | per-node scratch is real: relative node writes/reads are scratch-local and absolute node writes error (`tests/017`); domain writes use the reconciliation pipeline |
 | LAW 19 | sound content hashing | holds | SHA-256 structural hashes cover referenced closure environments and handlers; store objects are content-addressed by result hash and shared across runs (`tests/009`) |
 | LAW 20 | key = code plus argument values | holds | persistent node keys = expanded code plus free-variable value hashes plus applied argument value hashes; capabilities, the whole environment, config, and handlers are excluded (`tests/011`, `tests/015`, `tests/097`); authority cannot cross the node boundary (`tests/capability-adversarial.sh`); macro expansion precedes keying (`tests/042-defmacro-rekey.sh`) |
-| LAW 21 | cutoff via traces | partial | trace sets, revert hits, glob/tool invalidation, push inline-node cutoff, and fresh-process child validation/reconstruction are real (`tests/010`, `tests/016`, `tests/032`, `tests/100`, `tests/101`); legacy `run` dynamic-library closure tracking remains coarse |
+| LAW 21 | cutoff via traces | partial | trace sets, revert hits, glob invalidation, push inline-node cutoff, and fresh-process child validation/reconstruction are real (`tests/010`, `tests/016`, `tests/032`, `tests/100`, `tests/101`) |
 | LAW 22 | unforgeable root-minted capabilities | holds | constructors removed; `tests/capability-adversarial.sh` |
 | LAW 22b | `with-caps` narrows a held value, never widens | holds | `current-capabilities`/`with-caps`/`cap-restrict`'s mode argument; the subset check runs against the current ambient; `effect` removed;  exception/tail-safe; `tests/capability-adversarial.sh` |
 | LAW 23 | component/full-path plus transitive hit check | holds | component-aware, canonicalised paths at every cell/grant/loader-bound site (`tests/036`); hits require authority over the trace's transitive read closure; denials are not memoized (`tests/013`, `tests/014`, `tests/103`); `pp why` redacts unauthorized cells (`tests/019`) |
 | LAW 24 | loader is runtime authority | holds | loader bounded to source roots plus `~/.pp`, reads traced as authority-exempt `runtime:file:` cells (`tests/020`); realpath-canonical (`tests/036`) |
 | LAW 25 | no unenforced authority surface | holds | `CapTime`/`CapMemory` removed from types and surface |
-| LAW 26 | two handler classes, synthetic trace cells | holds | semantic handler use is traced by effect and handler identity (`tests/015`); result-transparent scheduler handlers remain outside identity and traces (`tests/024`, `tests/038`, `tests/048`) |
+| LAW 26 | two handler classes, synthetic trace cells | holds | semantic handler use is traced by effect and handler identity (`tests/015`); result-transparent scheduler handlers remain outside identity and traces (`tests/038`) |
 | LAW 27 | exception/tail-safe dynamic extent | holds | save-stack restore on every exit |
 | LAW 28 | failure traces, error memoization | holds | evaluative failures use the same durable trace lifecycle as successes and are re-served until a recorded read changes; authority denials and internal exceptions remain uncached (`tests/012`, `tests/014`, `tests/103`) |
 | LAW 29 | source locations in errors | holds | every top-level form's location is appended to unlocated runtime errors ; arity/capability errors name the callee/operation; `pp: error:` single-line reporting; a loaded file's own forms are individually located and decorated with that file's location before the error can unwind past the `load` (`tests/027`, including case (g)) |
@@ -1537,8 +1510,8 @@ migration.
 | LAW 31 | fenced effects, intent journal | holds | scripting-tier `fenced(KIND, SPEC)`, `--fenced-policy retry|abort|ask`, intent/done journal, recovery without silent retry; `tests/034` |
 | LAW 32 | gradual types, strictest oracle | holds | the engine enforces; tests 004/005 restored; `tests/007-phase0-laws.pp` |
 | LAW 33 | config: computed keys, tail-safe scoping | holds | computed keys and tail-safe scoping ; config reads inside nodes are `config:<key>` trace cells, ambient config out of the node key (`tests/015`) |
-| LAW 34 | no location surface / scheduler exists | holds | the language has no location form; local process-pool scheduling, remote placement, host-qualified domains, and explicit GC are implemented (`tests/024`, `tests/038`, `tests/048`, `tests/049`, `tests/050`) |
-| LAW 35 | run-on-N-take-first as handler | holds | `race:N` process-pool fan-out lands (`tests/038`); `remote:<member>` cluster dispatch lands (`tests/048`), gated to data-closed batches, over the threat-model-gated transport |
+| LAW 34 | no location surface / scheduler exists | holds | the language has no location form; local process-pool scheduling, host-qualified domains, and explicit GC are implemented (`tests/038`, `tests/049`, `tests/050`) |
+| LAW 35 | run-on-N-take-first as handler | holds | `race:N` process-pool fan-out lands (`tests/038`) |
 | LAW 36 | evaluator correctness | partial | catalogued divergences and evaluator crash classes closed; `core` and sampled `full` green; negative-literal lexing remains a same-side issue; `defmacro` expands once, ahead of the evaluator (`macro.ml`), so it cannot itself become an evaluator-only feature — `stmt_defmacro` in `full` |
 | LAW 37 | declared nondeterminism | holds | `register-probe`/`probe` are the one sanctioned nondeterministic dependency, evaluated at most once per pass outside the reading node's trace stack, exposed only as a `probe:<name>` cell (`tests/043-probes.sh`) |
 | LAW 38 | volatile-node containment | holds | `--check` double-run detection unchanged (`tests/019`); containment is the same probe mechanism as LAW 37 — a volatile read wrapped as a probe is observed and pinned once per pass as its own cell, in-memory only, never written to `~/.pp/store` (`tests/043-probes.sh`) |
@@ -1579,8 +1552,7 @@ through the build-engine milestone's remaining work.
 > 2. A later migration transpile must preserve the source path and the line
 >    number of every location-carrying form nested inside hashed code — any
 >    `fn`/`def` inside a node body carries its definition line into the node
->    key, for example the `link` node of `tests/024`, whose body contains
->    `(fn (o) …)` — or node keys change and the null-rebuild exit fails. The
+>    key — or node keys change and reuse fails. The
 >    formatter that performs that later transpile, not this grammar, owns
 >    that constraint; it is recorded here because the grammar was shaped to
 >    make it satisfiable, since every brace form fits on the same line(s) as

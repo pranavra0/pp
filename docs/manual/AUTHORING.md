@@ -1,8 +1,7 @@
 # Authoring the pp manual
 
-The manual is Typst source built by `docs/manual/build.pp` (run
-`scripts/build-manual.sh`). Every code example is executed by pp during the
-build and its real output embedded — a broken example fails the build. Read
+The manual is Typst source. Every retained code example is exercised by
+`tests/086-manual-examples.sh`. Read
 `chapters/01-introduction.typ` and `chapters/02-language.typ` first; they set
 the voice and the example conventions. Match them.
 
@@ -67,7 +66,7 @@ Conventions:
 
 ## What you must not touch
 
-`build.pp`, `manual.typ`, `lib.typ`, `style.css`, `pp.tmTheme` are owned
+`manual.typ`, `lib.typ`, `style.css`, `pp.tmTheme` are owned
 centrally. Do not edit them and do not run the full manual build. Instead,
 **report** in your final message: (1) the chapter file(s) you wrote, (2) each
 example's manifest line in the exact form `("<name>" "pp"|"sh" "<grants>")`, and

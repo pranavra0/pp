@@ -80,6 +80,25 @@ run --grant process "$TMP/environment.pp"
 if grep -q "invalid environment name" "$TMP/out"; then ok "closed-environment-denied"
 else bad "closed-environment-denied" "$(cat "$TMP/out")"; fi
 
+cat >"$TMP/node.pp" <<'EOF'
+force(node {
+  perform run-closed!({
+    :tool -> blob("not-a-tool"),
+    :args -> [],
+    :inputs -> {},
+    :env -> {},
+    :platform -> {"os" -> "linux"},
+    :outputs -> []
+  })
+})
+EOF
+run --grant process "$TMP/node.pp"
+if grep -q "until the execution protocol is fully mediated" "$TMP/out"; then
+  ok "closed-node-denied"
+else
+  bad "closed-node-denied" "$(cat "$TMP/out")"
+fi
+
 tool=
 for candidate in /usr/bin/cosign-linux-amd64 /usr/bin/init.lxc.static; do
   if [ -x "$candidate" ]; then tool="$candidate"; break; fi
