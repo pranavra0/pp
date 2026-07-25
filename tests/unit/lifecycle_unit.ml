@@ -20,6 +20,8 @@ let operations = {
 
 let () =
   let session = Session.create ~scheduler operations in
+  check (Session.executor session = None)
+    "session installed an ambient executor";
   check (Session.next_gensym session = 1) "session gensym did not start at one";
   Session.preseed_probe session "stable" (Core_model.VInt 7);
   Session.set_probe session "transient" (Core_model.VInt 8);
