@@ -55,7 +55,12 @@ load("stdlib/map.pp")
 load("stdlib/string.pp")
 load("stdlib/domain-fs.pp")
 register-fs-domain("$root", cap-restrict(current-capabilities(), "$root", :wo))
-{"A" -> {"fs" -> {"a.txt" -> "from-A"}}, "B" -> {"fs" -> {"b.txt" -> "from-B"}}}
+{"A" -> {"fs" -> {:tree -> {
+  "a.txt" -> {:kind -> :file, :mode -> 420, :blob -> blob("from-A")}
+}}},
+ "B" -> {"fs" -> {:tree -> {
+  "b.txt" -> {:kind -> :file, :mode -> 420, :blob -> blob("from-B")}
+}}}}
 EOF
 }
 mk_fs_prog A "$ROOT_A"

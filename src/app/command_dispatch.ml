@@ -24,4 +24,9 @@ let run host cli =
       exit 1
     end
   in
+  let dispatch () =
+    if Cli.reconcile_root cli <> None || Cli.supervise cli then
+      Store_layout.with_lifecycle_read dispatch
+    else dispatch ()
+  in
   Scheduler.with_signal_handler (App_context.scheduler ctx) ~f:(fun () -> dispatch ()) ()

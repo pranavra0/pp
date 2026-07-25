@@ -102,6 +102,21 @@ let lookup t ~(key : Identity_types.Cache_key.t)
                (short_key (Identity_types.Cache_key.to_string key));
              Miss  (* object gone → recompute *)
          | Some v ->
+             let tree_blobs = Artifact_tree.reachable_blobs v in
+             let missing_blob =
+               List.find_opt (fun hash ->
+                 match Blob_repository.get Blob_repository.default hash with
+                 | Some bytes -> Hasher.hash_string bytes <> hash
+                 | None -> true)
+                 tree_blobs
+             in
+             match missing_blob with
+             | Some hash ->
+                 diagnose t "node %s: miss — tree blob %s missing or corrupt"
+                   (short_key (Identity_types.Cache_key.to_string key))
+                   (short_key hash);
+                 Miss
+             | None ->
              diagnose t "node %s: hit — %s trace verified (%d cells)"
                (short_key (Identity_types.Cache_key.to_string key))
                (match tr.Trace_repository.outcome with Trace_repository.Ok -> "ok" | Trace_repository.Failed -> "failing")
@@ -119,6 +134,6 @@ let lookup t ~(key : Identity_types.Cache_key.t)
                    mark t ("blob:" ^ Identity_types.Observed_hash.to_string h)
                | _ -> ())
                tr.Trace_repository.reads;
-             List.iter (fun h -> mark t ("blob:" ^ h)) (Artifact_tree.reachable_blobs v);
+             List.iter (fun h -> mark t ("blob:" ^ h)) tree_blobs;
              (match tr.Trace_repository.outcome with Trace_repository.Ok -> HitOk v | Trace_repository.Failed -> HitFailed v))
   end

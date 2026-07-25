@@ -10,39 +10,27 @@
 # `cap-restrict`.
 #
 # observe = perform tree-observe(root)   -> {relpath -> content-hash}
-# desired = {relpath -> content} (content: an inline string or a raw blob
-# identity returned by `blob`)
+# desired = {:tree -> {relpath -> file descriptor}}
 # diff    = create/update/delete by content hash, PURE — its only
 # inputs are `observed`/`desired` plus `root` (captured
 # lexically by register-fs-domain, not threaded as a diff
 # argument — Q13's diff signature stays (observed, desired))
 # apply   = materialize-file / remove-file per item
 
-def fs-blob-id?(c) {
-  string-length(c) = 64
-}
-# A desired content's identity hash: a blob ref diffs BY HASH, without
-# loading bytes (exit criterion 4 — `rm -rf build/` restores from the CAS
-# with zero tool re-runs); inline content hashes its own bytes, the SAME
-# algorithm (hash-string, SHA-256) `tree-observe` used to hash the file on
-# disk, so the two sides of the diff compare like for like.
 def fs-content-hash(c) {
-  if fs-blob-id?(c) { c } else { hash-string(c) }
+  c[:blob]
 }
-# Bytes are pulled from the store only when a write is actually needed
-# (apply time), never during diff.
 def fs-content-bytes(c) {
-  if fs-blob-id?(c) { blob-get(c) } else {
-    c
+  blob-get(c[:blob])
 # ---- desired-path validation (relative, no traversal) ----
-  } }
+}
 def fs-validate-rel-part(rel, part) {
   if part = ".." {
     error(string-append("reconcile: '..' not allowed in desired path: ", rel))
   }
 }
 def fs-validate-rel(rel) {
-  if rel = "" { error("reconcile: empty path in desired map") } else if starts-with?(rel, "/") {
+  if rel = "" { error("reconcile: empty path in desired tree") } else if starts-with?(rel, "/") {
     error(string-append("reconcile: desired paths must be relative to the domain root: ", rel))
   } else {
     each(
@@ -61,21 +49,22 @@ def fs-plan-item(kind, rel, content) {
 # lexical capture, like any other closed-over value).
 def fs-diff-for(root) {
   fn(observed, desired) {
-    each(fs-validate-rel, map-keys(desired))
-    let (dkeys = map-keys(desired), okeys = map-keys(observed), creates = filter(
+    let (entries = desired[:tree]) {
+    each(fs-validate-rel, map-keys(entries))
+    let (dkeys = filter(fn(rel) { entries[rel][:kind] = :file }, map-keys(entries)), okeys = map-keys(observed), creates = filter(
 
 
 fn(rel) { nil?(observed[rel]) }, dkeys), existing = filter(
 fn(rel) { not(nil?(observed[rel])) }, dkeys), updates = filter(
 fn(rel) {
-      not(observed[rel] = fs-content-hash(desired[rel]))
+      not(observed[rel] = fs-content-hash(entries[rel]))
     }, existing), deletes = filter(
 
-fn(rel) { nil?(desired[rel]) }, okeys), items = append(map(
+fn(rel) { nil?(entries[rel]) }, okeys), items = append(map(
 
-fn(rel) { fs-plan-item("create", rel, desired[rel]) }, creates), append(map(
+fn(rel) { fs-plan-item("create", rel, entries[rel]) }, creates), append(map(
 
-fn(rel) { fs-plan-item("update", rel, desired[rel]) }, updates), map(
+fn(rel) { fs-plan-item("update", rel, entries[rel]) }, updates), map(
 fn(rel) { fs-plan-item("delete", rel, nil) }, deletes)))) {
 {:items -> items, :summary -> vec[vec[:root, root], vec[:create, number->string(length(creates))], vec[:update, number->string(length(updates))], vec[:delete, number->string(length(deletes))]]}
 # A VECTOR of [key value] pairs, not a map — plan caching
@@ -85,7 +74,7 @@ fn(rel) { fs-plan-item("delete", rel, nil) }, deletes)))) {
 # must not be allowed to reorder this or the "root=R create=C
 # update=U delete=D" journal/print byte-compatibility breaks on
 # exactly the passes that matter most (repeated/null reconciles).
-    }
+    }}
   }
 }
 
@@ -96,7 +85,9 @@ def fs-apply-item(root, item) {
   let (kind = item[:kind], rel = item[:rel], path = string-append(root, "/", rel)) {
     if kind = "delete" { perform remove-file(path) } else {
       let (content = item[:content], bytes = fs-content-bytes(content)) {
-        perform materialize-file(path, bytes)
+        if content[:mode] = 493 {
+          perform materialize-file(path, bytes, :executable)
+        } else { perform materialize-file(path, bytes) }
       }
     }
   }

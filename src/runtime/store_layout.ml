@@ -102,3 +102,18 @@ let init t =
         List.iter (wipe t) versioned
       end;
       atomic_replace version_path version
+
+let with_lifecycle command f =
+  ensure_area default Locks;
+  let path = path default Locks "lifecycle" in
+  let fd = Unix.openfile path [Unix.O_CREAT; Unix.O_RDWR] 0o600 in
+  Fun.protect
+    ~finally:(fun () ->
+      (try Unix.lockf fd Unix.F_ULOCK 0 with Unix.Unix_error _ -> ());
+      Unix.close fd)
+    (fun () ->
+      Unix.lockf fd command 0;
+      f ())
+
+let with_lifecycle_read f = with_lifecycle Unix.F_RLOCK f
+let with_lifecycle_write f = with_lifecycle Unix.F_LOCK f

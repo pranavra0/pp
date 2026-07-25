@@ -50,7 +50,7 @@ rm -f "$TMP/touched"
 cat > "$TMP/simple.pp" <<EOF
 do {
   fenced("touch-file", {"run" -> ["/usr/bin/touch", "$TMP/touched"]})
-  {"file.txt" -> "hello"}
+  {:tree -> {"file.txt" -> {:kind -> :file, :mode -> 420, :blob -> blob("hello")}}}
 }
 EOF
 "$PP" --fenced-policy retry --reconcile "$OUT" --grant "fs:$OUT:rw" "$TMP/simple.pp" > "$TMP/outlog" 2>&1
@@ -121,7 +121,7 @@ chmod +x "$TMP/fenced-action.sh"
 cat > "$TMP/watch-crash.pp" <<EOF
 do {
   fenced("block-until-continue", {"run" -> ["$TMP/fenced-action.sh", "$TMP/fenced-active", "$TMP/fenced-continue", "$TMP/fenced-pid"]})
-  {"file.txt" -> "hello"}
+  {:tree -> {"file.txt" -> {:kind -> :file, :mode -> 420, :blob -> blob("hello")}}}
 }
 EOF
 "$PP" --watch --fenced-policy retry --reconcile "$OUT" --grant "fs:$OUT:rw" --watch-interval 1 "$TMP/watch-crash.pp" > "$TMP/watch-out" 2>&1 &

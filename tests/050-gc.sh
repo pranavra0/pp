@@ -43,7 +43,10 @@ run_iter() {  # I
 let (v = force(node {
   perform log("COMPUTE")
   number->string($i)
-})) { {"cur.txt" -> v, "churn-$i.txt" -> "x"} }
+})) { {:tree -> {
+  "cur.txt" -> {:kind -> :file, :mode -> 420, :blob -> blob(v)},
+  "churn-$i.txt" -> {:kind -> :file, :mode -> 420, :blob -> blob("x")}
+}} }
 EOF
   "$PP" --grant "fs:${OUT}:wo" --reconcile "$OUT" "$TMP/d.pp" > "$TMP/iter.out" 2>&1
 }
@@ -145,7 +148,10 @@ cat > "$TMP/watch.pp" <<EOF
 let (n = slurp("$TRIGGER"), v = force(node {
   n
 })) {
-  {"cur.txt" -> v, string-append("churn-", string-append(n, ".txt")) -> "x"}
+  {:tree -> {
+    "cur.txt" -> {:kind -> :file, :mode -> 420, :blob -> blob(v)},
+    string-append("churn-", string-append(n, ".txt")) -> {:kind -> :file, :mode -> 420, :blob -> blob("x")}
+  }}
 }
 EOF
 timeout_bin() { command -v timeout >/dev/null 2>&1 && echo timeout || echo ""; }
@@ -181,7 +187,8 @@ if [ "$watch_bound" -lt "$unbounded" ]; then
 else
   bad "watch-loop-store-bounded-under-gc" "watch_bound=$watch_bound unbounded=$unbounded"
 fi
-[ -f "$OUT/cur.txt" ] && ok "watch-loop-still-converged" || bad "watch-loop-still-converged"
+[ -f "$OUT/cur.txt" ] && ok "watch-loop-still-converged" \
+  || bad "watch-loop-still-converged" "$(cat "$TMP/watch.out")"
 
 # ===========================================================================
 # (4) the islands cache (~/.pp/islands) is a SEPARATE lifecycle — untouched.
