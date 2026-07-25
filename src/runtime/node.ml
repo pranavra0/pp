@@ -105,27 +105,14 @@ let validate_result (t : thunk) (result : value) : unit =
   end;
   enforce_type t result
 
-let persist_failure ~(key : Key.t) ~(reads : (string * string) list)
-    (message : string) : unit =
-  let cache_key = Identity_types.Cache_key.of_node_key key in
-  let error_value = VString message in
-  let result_hash = Object_hash.of_digest (Identity.hash_value error_value) in
-  (try Object_repository.put Object_repository.default
-         ~key:(Object_hash.to_string result_hash) ~value:error_value with _ -> ());
-  (try Trace_repository.put Trace_repository.default ~key:cache_key
-         ~outcome:Trace_repository.Failed ~result_hash
-         ~reads:(List.map (fun (cell, hash) ->
-           (Identity_types.Cell_id.of_string cell,
-            Identity_types.Observed_hash.of_digest hash)) reads) with _ -> ())
-
-let persist_success ~(key : Key.t) ~(reads : (string * string) list)
-    (result : value) : Object_hash.t =
+let persist ~(key : Key.t) ~(reads : (string * string) list)
+    ~(outcome : Trace_repository.outcome) (result : value) : Object_hash.t =
   let cache_key = Identity_types.Cache_key.of_node_key key in
   let result_hash = Object_hash.of_digest (Identity.hash_value result) in
   (try Object_repository.put Object_repository.default
          ~key:(Object_hash.to_string result_hash) ~value:result with _ -> ());
   (try Trace_repository.put Trace_repository.default ~key:cache_key
-         ~outcome:Trace_repository.Ok ~result_hash
+         ~outcome ~result_hash
          ~reads:(List.map (fun (cell, hash) ->
            (Identity_types.Cell_id.of_string cell,
             Identity_types.Observed_hash.of_digest hash)) reads) with _ -> ());
@@ -154,15 +141,17 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
         | Error error as e ->
             (match cache_decision error with
              | Cacheable ->
-                 persist_failure ~key ~reads:(List.rev !frame)
-                   (string_of_t error);
+                 ignore (persist ~key ~reads:(List.rev !frame)
+                   ~outcome:Trace_repository.Failed
+                   (VString (string_of_t error)));
                  t.thunk_status <- Unevaluated;
                  raise e
              | Do_not_cache ->
                  t.thunk_status <- Unevaluated;
                  raise e)
         | Failure msg ->
-            persist_failure ~key ~reads:(List.rev !frame) msg;
+            ignore (persist ~key ~reads:(List.rev !frame)
+              ~outcome:Trace_repository.Failed (VString msg));
             t.thunk_status <- Unevaluated;
             raise (Error (Evaluator { message = msg; location = None }))
         | e ->
@@ -171,7 +160,8 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
       in
       validate_result t result;
       t.thunk_status <- Evaluated result;
-      let result_hash = persist_success ~key ~reads:(List.rev !frame) result in
+      let result_hash = persist ~key ~reads:(List.rev !frame)
+        ~outcome:Trace_repository.Ok result in
       if Cache_policy.check_enabled Cache_policy.default then begin
         let frame2 = ref [] in
         let r2 =
