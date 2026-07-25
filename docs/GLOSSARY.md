@@ -96,9 +96,6 @@ brace-to-s-expression mapping.
   external command under `--grant process`, and returns
   `{"exit","out","err"}`. It is scripting-tier only because an ambient
   process cannot produce a complete validating trace (`tests/017`).
-- `run-dep!`, or the depfile adapter: `perform run-dep!(DEPFILE, CMD, ARG…)`
-  is the legacy scripting adapter. A tool's self-reported dependencies are
-  not a cache correctness boundary (`tests/022`).
 - sandbox, or per-node scratch: a throwaway directory that pp creates
   lazily for each node force and deletes when it completes (`slurp` and
   `write-file` resolve there, capability-free and

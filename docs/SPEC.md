@@ -523,12 +523,12 @@ node forced in two processes runs once, the store serves
 the second, and a scripting-tier expression is never cached (`tests/010`,
 `tests/014`). `$glob` records the tree snapshot it returns (`tests/100`).
 Node writes are confined to per-node sandbox scratch and absolute node writes
-error (LAW 18, `tests/017`). Ambient `run` and `run-dep!` are scripting-tier
-only: neither tree hashing nor a tool's self-reported depfile is a complete
-trace. `run-closed!` accepts an immutable request through a session-owned
-executor, but also remains scripting-tier while time, randomness, CPU, kernel,
-and resource limits are unmediated (`tests/102`). Thus no cacheable foreign
-process currently runs with ambient or incompletely evidenced authority.
+error (LAW 18, `tests/017`). Ambient `run` is scripting-tier only because it
+cannot produce a complete trace. `run-closed!` accepts an immutable request
+through a session-owned executor, but also remains scripting-tier while time,
+randomness, CPU, kernel, and resource limits are unmediated (`tests/102`).
+Thus no cacheable foreign process currently runs with ambient or incompletely
+evidenced authority.
 
 Test: the same `node { e }` forced twice across two processes runs once,
 which the store proves (`tests/010`, `tests/014`); a scripting-tier expression
@@ -1812,7 +1812,7 @@ Creation-time narrowing stays expressible by composition:
 
 | # | Brace form | Reads as |
 |---|---|---|
-| L41 | `perform name(a, …)` | `(perform name a …)` — for every effect: `read-file` `write-file` `run` `run-dep!` `run-closed!` `http-get` `http-post` `log` `tree-observe` `materialize-file` `remove-file` `proc-spawn` `proc-alive?` `proc-stop` `proc-reap` `domain-state-get` `domain-state-put` (the `!` marks effect names that expose the suffix directly) |
+| L41 | `perform name(a, …)` | `(perform name a …)` — for every effect: `read-file` `write-file` `run` `run-closed!` `http-get` `http-post` `log` `tree-observe` `materialize-file` `remove-file` `proc-spawn` `proc-alive?` `proc-stop` `proc-reap` `domain-state-get` `domain-state-put` (the `!` marks effect names that expose the suffix directly) |
 | L42 | `with-handler(n1 = h1, n2 = h2) { body… }` | `(with-handler [n1 h1 n2 h2] body…)` — a handler name may also be a keyword literal, as in sexprs |
 | L43 | `with-caps(E) { body… }` | `(with-caps E body…)` |
 | L44 | `with-config(E) { body… }` | `(with-config E body…)` — `E` is any expression, typically a map literal `{:k -> v}` |

@@ -165,7 +165,6 @@ always `perform` underneath.
 
 ```pp
 run!("cc", "-c", src, "-o", obj)
-run-dep!("deps.d", "cc", "-MD", ...) # legacy scripting adapter
 run-closed!({
   :tool -> compiler,
   :args -> ["-c", "/in/main.c", "-o", "main.o"],
@@ -180,8 +179,8 @@ log!(f"building {src}")
 
 `!` means "performs an effect" — exactly that, never "uncached" or
 "scripting-tier." The convention survives only if it applies with no
-exceptions, so every effect wrapper in stdlib and the manual carries it
-(`run-dep!`, not `rundep`). Pure functions carry no suffix.
+exceptions, so every effect wrapper in stdlib and the manual carries it.
+Pure functions carry no suffix.
 
 The process effects are currently scripting-tier only. Cacheable nodes may
 use ordinary observations and pure computation; closed execution returns to

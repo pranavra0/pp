@@ -92,27 +92,6 @@ let run_effect (args : value list) : value =
              (VString "out",  VString out);
              (VString "err",  VString err) ]
 
-let run_dep_effect (args : value list) : value =
-  if Effect.perform Dynamic_scope.In_node then
-    failwith "run-dep!: may not be called inside a node body (scripting-tier only)";
-  match args with
-  | VString _depfile :: (VString cmd :: _ as cmd_args) ->
-      if not (has_process_cap ()) then
-        capability "capability error: no process authority for run-dep!";
-      let argv = List.map (function
-        | VString s -> s
-        | v -> failwith ("run-dep! expects string arguments, got " ^ Presentation.string_of_value v))
-        cmd_args
-      in
-      (match resolve_cmd cmd with
-       | Some _ -> ()
-       | None -> failwith ("run-dep!: command not found: " ^ cmd));
-      let (code, out, err) = exec argv in
-      VMap [ (VString "exit", VInt code);
-             (VString "out",  VString out);
-             (VString "err",  VString err) ]
-  | _ -> failwith "run-dep! expects a depfile path, a command, and arguments"
-
 (* ---- write-file with the node/scripting split ----
    Shared by the builtin write-file implementation. Inside a node: a relative
    path writes node-local sandbox scratch (capability-free, unrecorded); an

@@ -152,7 +152,7 @@ on non-thunks.
 `with-handler`. The clause form `with { handlers: { :name -> fn(...) { ... } } }
 { ... }` installs the same handler map. Handling an effect yourself needs no
 capability. Built-in world effects include `read-file`, `write-file`, `run`,
-`run-dep!`, `run-closed!`, `http-get`, `http-post`, `log`, `tree-observe`, the
+`run-closed!`, `http-get`, `http-post`, `log`, `tree-observe`, the
 process effects, and the domain-state effects; user handlers may define
 additional effect names. Process and network effects are scripting-tier.
 
