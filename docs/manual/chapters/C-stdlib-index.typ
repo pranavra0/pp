@@ -13,6 +13,16 @@ variadic position; `[arg]` marks an optional one. Unless noted, a builtin
 forces the arguments it inspects; `cons`, `list`, `hash-map`, and `map` are
 deliberately lazy in the values they carry.
 
+== Dune adapter
+
+`load("stdlib/dune.pp")` provides `dune-build(adapter, spec)`.
+`:working-tree` observes a development tree and returns selected Dune output
+as a canonical artifact tree. `:closed-source` executes the equivalent
+immutable source/tool request through `run-closed!`. The library also exposes
+`dune-closed-request(spec)` so release requests can be inspected, hashed, and
+transported without execution. Dune target and output policy lives entirely
+in this library.
+
 == Core builtins
 
 These are always in scope — no `load` needed.
