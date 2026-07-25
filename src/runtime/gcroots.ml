@@ -1,119 +1,59 @@
 open Pp_kernel
-(* pp GC roots manifest — explicit `pp gc`'s roots: the last N epochs'
-   desired-state root hashes.
-
-   NOT the frozen journal grammar: journal.ml's `Epoch` entry is the
-   append-only, never-rotated, greppable audit-log record of a pass's root
-   hash — this is GC's OWN bookkeeping, capped to the last
-   the invocation's retained-epoch count, recording enough to REPLAY a root
-   program (files, --grant specs, --reconcile/--supervise/
-   --member-name/--desired-object) — mark-by-replay's load-bearing
-   precondition: traces do not record child-keys, so there is no on-disk
-   node graph to walk; the only way to discover which store artifacts a
-   root's closure actually touches is to re-run the SAME program, not
-   merely remember a hash.
-
-   One line per root, a plain Codec-encoded (Core_model.value) VMap — reusing
-   the store's own canonical text codec rather than inventing a third
-   bespoke line grammar (Trace_repository's trace lines and token.ml's token line
-   already are two; this is data all the way down, so Codec fits directly,
-   no hand-rolled parser needed). *)
-
 open Core_model
-
-let roots_path () : string = Filename.concat (Store_layout.root Store_layout.default) "gc-roots"
 
 type root = {
   gr_hash : string;
-  gr_grants : string list;
-  gr_files : string list;
-  gr_reconcile_root : string option;
-  gr_supervise : bool;
-  gr_member_name : string option;
-  gr_desired_object : (string * string) option;  (* (hash, shared-root) *)
+  gr_nodes : Identity_types.Node_key.t list;
 }
 
-let strs_to_value (l : string list) : value =
-  VVector (Array.of_list (List.map (fun s -> VString s) l))
+let roots_path () =
+  Filename.concat (Store_layout.root Store_layout.default) "gc-roots"
 
-let value_to_strs (v : value) : string list =
-  match v with
-  | VVector arr ->
-      Array.to_list arr
-      |> List.filter_map (function VString s -> Some s | _ -> None)
-  | _ -> []
-
-let opt_to_value = function None -> VNil | Some s -> VString s
-let value_to_opt = function VString s -> Some s | _ -> None
-
-let root_to_value (r : root) : value =
+let root_to_value root =
   VMap [
-    (VKeyword "hash", VString r.gr_hash);
-    (VKeyword "grants", strs_to_value r.gr_grants);
-    (VKeyword "files", strs_to_value r.gr_files);
-    (VKeyword "reconcile-root", opt_to_value r.gr_reconcile_root);
-    (VKeyword "supervise", VBool r.gr_supervise);
-    (VKeyword "member-name", opt_to_value r.gr_member_name);
-    (VKeyword "desired-object",
-     match r.gr_desired_object with
-     | None -> VNil
-     | Some (h, root) -> VVector [| VString h; VString root |]);
+    VKeyword "hash", VString root.gr_hash;
+    VKeyword "nodes",
+      VVector (Array.of_list (List.map
+        (fun key -> VString (Identity_types.Node_key.to_string key))
+        root.gr_nodes));
   ]
 
-let value_to_root (v : value) : root option =
-  match v with
-  | VMap kvs ->
-      let find k = List.assoc_opt (VKeyword k) kvs in
-      let bool_of = function Some (VBool b) -> b | _ -> false in
-      (match find "hash" with
-       | Some (VString hash) ->
-           let desired_object = match find "desired-object" with
-             | Some (VVector [| VString h; VString root |]) -> Some (h, root)
+let value_to_root = function
+  | VMap fields ->
+      (match List.assoc_opt (VKeyword "hash") fields,
+             List.assoc_opt (VKeyword "nodes") fields with
+       | Some (VString gr_hash), Some (VVector nodes) ->
+           let rec decode acc = function
+             | [] -> Some (List.rev acc)
+             | VString key :: rest ->
+                 decode (Identity_types.Node_key.of_string key :: acc) rest
              | _ -> None
            in
-           Some {
-             gr_hash = hash;
-             gr_grants = (match find "grants" with Some v -> value_to_strs v | None -> []);
-             gr_files = (match find "files" with Some v -> value_to_strs v | None -> []);
-             gr_reconcile_root =
-               (match find "reconcile-root" with Some v -> value_to_opt v | None -> None);
-             gr_supervise = bool_of (find "supervise");
-             gr_member_name =
-               (match find "member-name" with Some v -> value_to_opt v | None -> None);
-             gr_desired_object = desired_object;
-           }
+           Option.map (fun gr_nodes -> { gr_hash; gr_nodes })
+             (decode [] (Array.to_list nodes))
        | _ -> None)
   | _ -> None
 
-let read_all () : root list =
+let read_all () =
   let path = roots_path () in
   if not (Sys.file_exists path) then []
   else
     String.split_on_char '\n' (Cell_repository.read_raw path)
-    |> List.filter (fun l -> l <> "")
     |> List.filter_map (fun line ->
-         match Codec.decode_value line with
-         | Some v -> value_to_root v
-         | None -> None)
+         if line = "" then None
+         else Option.bind (Codec.decode_value line) value_to_root)
 
-(* Append [r], then drop everything but the last [keep] lines (oldest
-   first, so the tail is the most recent) — GC's own retention policy, NOT
-   an audit trail (unlike journal.ml's Epoch, which never rotates). *)
-let record ~(keep : int) (r : root) : unit =
+let record ~keep root =
   Store_layout.ensure_dir (Store_layout.root Store_layout.default);
-  let existing =
-    let path = roots_path () in
-    if Sys.file_exists path then
-      String.split_on_char '\n' (Cell_repository.read_raw path) |> List.filter (fun l -> l <> "")
-    else []
+  let existing = read_all () in
+  let updated = existing @ [root] in
+  let count = List.length updated in
+  let kept =
+    if keep > 0 && count > keep then
+      List.filteri (fun index _ -> index >= count - keep) updated
+    else updated
   in
-  match Codec.encode_value (root_to_value r) with
-  | None -> ()  (* every field here is plain data; unreachable in practice *)
-  | Some line ->
-      let updated = existing @ [line] in
-      let n = List.length updated in
-      let kept = if keep > 0 && n > keep then
-          List.filteri (fun i _ -> i >= n - keep) updated
-        else updated
-      in
-      Store_layout.atomic_replace (roots_path ()) (String.concat "\n" kept ^ "\n")
+  let lines = List.filter_map
+      (fun item -> Codec.encode_value (root_to_value item)) kept in
+  Store_layout.atomic_replace (roots_path ())
+    (String.concat "\n" lines ^ if lines = [] then "" else "\n")

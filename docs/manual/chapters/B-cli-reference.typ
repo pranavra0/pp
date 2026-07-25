@@ -169,7 +169,6 @@ are low-level and explicit by design; a normal run never types them.
   [`--serve-hit <key> <token-file> <shared-root> <reply-file>`], [Capability-gated cache lookup served to a dispatcher.],
   [`--recv-hit <reply-file> <shared-root>`], [Ingest a `serve-hit` reply.],
   [`--remote-node <token> <pins> <root> <keys> <reply>`], [The cluster-member side of remote placement; authority comes from the verified token, not `--grant`.],
-  [`--gc-mark <outfile>`], [Used only by `pp gc`'s own replay subprocess to record the live set.],
 )
 
 == Observation pinning

@@ -7,10 +7,9 @@ type t = {
   mutable why_enabled : bool;
   mutable check_enabled : bool;
   mutable volatile_count : int;
-  mutable gc_live : (string, unit) Hashtbl.t option;
 }
 let create () = { no_cache = false; why_enabled = false; check_enabled = false;
-  volatile_count = 0; gc_live = None }
+  volatile_count = 0 }
 let default = create ()
 let configure t ~no_cache ~why ~check =
   t.no_cache <- no_cache; t.why_enabled <- why; t.check_enabled <- check
@@ -23,10 +22,6 @@ let check_enabled t = t.check_enabled
 let volatile_count t = t.volatile_count
 let reset_volatile t = t.volatile_count <- 0
 let note_volatile t = t.volatile_count <- t.volatile_count + 1
-let begin_gc t = t.gc_live <- Some (Hashtbl.create 1024)
-let end_gc t = let live = t.gc_live in t.gc_live <- None; live
-let gc_marks t = Option.value ~default:(Hashtbl.create 0) t.gc_live
-let mark t id = Option.iter (fun live -> Hashtbl.replace live id ()) t.gc_live
 let short_key key = if String.length key > 12 then String.sub key 0 12 else key
 let diagnose t fmt =
   if t.why_enabled then Printf.eprintf ("[why] " ^^ fmt ^^ "\n%!")
@@ -122,18 +117,5 @@ let lookup t ~(key : Identity_types.Cache_key.t)
                (match tr.Trace_repository.outcome with Trace_repository.Ok -> "ok" | Trace_repository.Failed -> "failing")
                (List.length tr.Trace_repository.reads);
              Observation.replay tr.Trace_repository.reads;
-             (* GC mark (see [gc_marking]'s header comment above):
-                a verified hit means this trace/object/blob(s) are LIVE for
-                whichever root program is currently being replayed. *)
-             mark t ("trace:" ^ Identity_types.Cache_key.to_string key);
-             mark t ("object:" ^
-               Identity_types.Object_hash.to_string tr.Trace_repository.result_hash);
-             List.iter (fun (c, h) ->
-               match Cell.parse (Identity_types.Cell_id.to_string c) with
-               | Cell.File _ ->
-                   mark t ("blob:" ^ Identity_types.Observed_hash.to_string h)
-               | _ -> ())
-               tr.Trace_repository.reads;
-             List.iter (fun h -> mark t ("blob:" ^ h)) tree_blobs;
              (match tr.Trace_repository.outcome with Trace_repository.Ok -> HitOk v | Trace_repository.Failed -> HitFailed v))
   end

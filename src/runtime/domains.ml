@@ -262,17 +262,8 @@ let prepare_pass invocation (all_desired : value) : pass =
   stratification_check session targets;
   { invocation; forced_desired; targets }
 
-(* Recorded ONCE per
-   SUCCESSFUL pass (after every domain's run_target has completed without
-   raising) — [forced] is the exact fully-forced {domain -> desired} (or,
-   under host-qualified distribution, {host -> {domain -> desired}}) value
-   this pass converged, already computed by [prepare_pass] above (reused, not
-   re-forced). Stores it as an ordinary content-addressed object (so
-   `pp gc`'s replay subprocess, which re-derives the identical value, can
-   cross-check its own hash against this one) and appends BOTH the frozen
-   journal Epoch line (audit trail) and the Gcroots manifest entry (the
-   replayable "how" — see gcroots.ml). Best-effort: a failure to persist
-   the epoch must never fail an otherwise-successful reconcile pass. *)
+(* Record the converged desired object and the node keys forced to derive it.
+   Together they root the durable trace graph. *)
 let record_epoch invocation (forced : value) : unit =
   try
     let hash = Identity.hash_value forced in
@@ -281,12 +272,8 @@ let record_epoch invocation (forced : value) : unit =
     Journal.append (Journal.Epoch { hash });
     Gcroots.record ~keep:(Invocation.gc_keep_epochs invocation)
       { Gcroots.gr_hash = hash;
-        gr_grants = Invocation.initial_grant_specs invocation;
-        gr_files = Invocation.program_files invocation;
-        gr_reconcile_root = Invocation.program_reconcile_root invocation;
-        gr_supervise = Invocation.program_supervise invocation;
-        gr_member_name = Invocation.program_member_name invocation;
-        gr_desired_object = Invocation.program_desired_object invocation }
+        gr_nodes =
+          Session.wanted_nodes (Effect.perform Dynamic_scope.Get_session) }
   with Sys_error _ | Unix.Unix_error _ -> ()
 
 let run_pass (pass : pass) : unit =

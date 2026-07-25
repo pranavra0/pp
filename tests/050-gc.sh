@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
-# `pp gc` reclaims unreferenced store entries; it never runs automatically.
+# `pp gc` reclaims entries unreachable from retained wanted graphs; it never
+# runs automatically.
 #
-#   Roots = the last N recorded epochs (a NEW journal `epoch HASH` line per
-#   successful Domains.run_all pass, plus GC's own replayable manifest,
-#   src/runtime/gcroots.ml) + canonical tree blob edges. Mark by REPLAY: `pp gc`
-#   re-runs each recorded root program against the warm store, consulting
-#   hits only, marking every objects/<h>, traces/<key>, blobs/<h> it
-#   touches as live; sweeps the rest. Safety under concurrency: a
-#   creation-time grace period (nothing younger than --gc-grace-seconds is
-#   ever deleted) + a delete-time re-check of the roots manifest
-#   immediately before each unlink.
+#   Roots = the last N desired objects and their forced node keys. GC walks
+#   trace child/result edges and canonical tree blob edges directly. Safety
+#   under concurrency: a creation-time grace period plus a delete-time
+#   re-check of the roots manifest before each unlink.
 #
 #   - N --reconcile iterations WITH CHURN (a file added then removed across
 #     passes): store size stays BOUNDED with `pp gc` between iterations,
