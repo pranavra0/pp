@@ -527,11 +527,16 @@ the resolved tool plus a coarse hash for every readable input tree
 writes are confined to per-node sandbox scratch and absolute node writes error
 (LAW 18, `tests/017`), and a tool run inside a node executes in the scratch
 dir. `run-closed!` instead accepts an immutable tool blob, an immutable map of
-input blobs, arguments, and selected outputs. Its Linux backend supplies an
-empty environment and filesystem/network namespaces, snapshots only selected
-regular files, and fails unavailable rather than falling back to ambient
-execution (`tests/102`). Time, randomness, CPU, and kernel behavior are not
-yet mediated. Plain `run` and trusted depfiles retain ambient-read holes.
+input blobs, arguments, an explicit environment, a platform constraint, and
+selected outputs. A session-owned trusted executor returns exit status,
+stdout, stderr, immutable output blobs, and enforced resource facts. The
+production Linux provider clears the ambient environment, creates
+filesystem/network namespaces, snapshots only selected regular files, and
+fails unavailable rather than falling back (`tests/102`). Provider selection
+is host placement policy, not node identity. The current provider accepts only
+the exact `{"os" -> "linux"}` constraint. Time, randomness, CPU, kernel, and
+resource limits are not yet mediated. Plain `run` and trusted depfiles retain
+ambient-read holes.
 
 Test: the same `node { e }` forced twice across two processes runs once,
 which the store proves (`tests/010`, `tests/014`); a scripting-tier expression

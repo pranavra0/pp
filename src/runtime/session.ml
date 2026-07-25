@@ -43,15 +43,17 @@ type fenced_state = {
 type t = {
   operations : Evaluator_ops.t;
   scheduler : Scheduler.t;
+  executor : Executor.t option;
   evaluation : evaluation_state;
   domains : domain_state;
   run : run_state;
   fenced : fenced_state;
 }
 
-let create ~scheduler operations = {
+let create ?executor ~scheduler operations = {
   operations;
   scheduler;
+  executor;
   evaluation = {
     thunks = Hashtbl.create 1024; macros = Hashtbl.create 16; gensym = 0;
     node_thunks = Hashtbl.create 256; node_keys = Hashtbl.create 256;
@@ -77,6 +79,7 @@ let force t = t.operations.core.force
 let core_operations t = t.operations.core
 let node_operations t = t.operations.node
 let scheduler t = t.scheduler
+let executor t = t.executor
 let call t ~env fn args =
   match fn with
   | Core_model.VClosure c ->
