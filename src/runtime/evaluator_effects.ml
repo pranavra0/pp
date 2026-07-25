@@ -23,7 +23,6 @@ let builtin name args =
            Process.write_file_effect ~has_cap:has_fs_write path content
        | _ -> failwith "write-file expects path and content strings")
   | "run" -> Process.run_effect args
-  | "run-dep!" -> Process.run_dep_effect args
   | "run-closed!" -> Closed_action.run args
   | "http-get" ->
       (match args with

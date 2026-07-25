@@ -151,7 +151,7 @@ The main effect paths are:
 | Effect | Owner | Result or rule |
 |---|---|---|
 | `read-file`, `write-file`, `slurp` | `observation.ml`, `process.ml`, and evaluator effects | Capability check and cell recording; node writes stay in node scratch space |
-| `run`, `run-dep!` | `process.ml` | Scripting-only ambient processes |
+| `run` | `process.ml` | Scripting-only ambient process |
 | `run-closed!` | `closed_action.ml`, `executor.ml` | Scripting-only session-owned executor over immutable request/result values; unavailable rather than ambient fallback |
 | `http-get`, `http-post` | evaluator effect path | Network capability; not valid inside a persistent node |
 | `probe` | `session.ml` and `observation.ml` | One pinned observation per pass |

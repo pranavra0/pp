@@ -137,7 +137,7 @@ same trust boundaries for readers.
 - `$probe` is deliberately volatile. The probe owner supplies its value once
   per pass. The value stays in session state and does not enter the durable
   object store.
-- `run` and `run-dep!` launch ambient POSIX processes and are scripting-tier
+- `run` launches ambient POSIX processes and is scripting-tier
   only.
 - `run-closed!` closes the environment, filesystem, and network around
   immutable blobs through a session-owned executor. Its first Linux provider
