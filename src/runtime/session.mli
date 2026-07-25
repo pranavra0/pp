@@ -9,8 +9,9 @@ type domain_entry = {
 }
 type t
 
-val create : scheduler:Scheduler.t -> Evaluator_ops.t -> t
+val create : ?executor:Executor.t -> scheduler:Scheduler.t -> Evaluator_ops.t -> t
 val scheduler : t -> Scheduler.t
+val executor : t -> Executor.t option
 val force : t -> Core_model.value -> Core_model.value
 val core_operations : t -> Evaluator_ops.core
 val node_operations : t -> Evaluator_ops.node

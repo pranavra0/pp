@@ -140,9 +140,10 @@ same trust boundaries for readers.
 - `run` and `run-dep!` launch ambient POSIX processes. Tree hashes and trusted
   depfiles improve invalidation but cannot account for every observation.
 - `run-closed!` closes the environment, filesystem, and network around
-  immutable blobs. Its first Linux backend does not mediate time, randomness,
-  CPU instructions, or kernel behavior. It fails unavailable when Bubblewrap
-  cannot create every requested namespace.
+  immutable blobs through a session-owned executor. Its first Linux provider
+  accepts only the exact Linux platform constraint and does not mediate time,
+  randomness, CPU instructions, kernel behavior, or resource limits. It fails
+  unavailable when Bubblewrap cannot create every requested namespace.
 
 ## Extension rules
 

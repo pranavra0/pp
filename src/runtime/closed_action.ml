@@ -22,6 +22,14 @@ let strings label values =
     | _ -> failwith ("run-closed! expects " ^ label ^ " to contain strings"))
     values
 
+let string_map label = function
+  | VMap entries ->
+      List.map (function
+        | VString key, VString value -> key, value
+        | _ -> failwith ("run-closed! expects " ^ label ^ " to map strings to strings"))
+        entries
+  | _ -> failwith ("run-closed! expects " ^ label ^ " to be a map")
+
 let blob_hash label = function
   | VString reference ->
       (match Blobref.blob_refs_in (VString reference) with
@@ -54,7 +62,7 @@ let validate_request entries =
     entries
   in
   List.iter (fun name ->
-    if not (List.mem name ["tool"; "args"; "inputs"; "outputs"]) then
+    if not (List.mem name ["tool"; "args"; "inputs"; "env"; "platform"; "outputs"]) then
       failwith ("run-closed! request has unknown field :" ^ name))
     names;
   reject_duplicates "request field" names
@@ -83,52 +91,25 @@ let runner () =
   |> List.find_opt Sys.file_exists
   |> Option.value ~default:""
 
-let status_code = function
-  | Unix.WEXITED code -> code
-  | Unix.WSIGNALED signal | Unix.WSTOPPED signal -> 128 + signal
-
-let execute root tool arguments =
+let execute root tool arguments environment =
   let runner = runner () in
   if runner = "" then failwith "run-closed!: closed Linux runner unavailable: bubblewrap not found";
   let input = Filename.concat root "input" in
   let output = Filename.concat root "output" in
   let command =
-    [runner; "--unshare-all"; "--die-with-parent"; "--new-session"; "--clearenv";
+    [runner; "--unshare-all"; "--die-with-parent"; "--new-session"; "--clearenv"]
+    @ List.concat_map (fun (name, value) -> ["--setenv"; name; value]) environment
+    @ [
      "--ro-bind"; tool; "/tool"; "--ro-bind"; input; "/in";
      "--bind"; output; "/out"; "--chdir"; "/out"; "/tool"]
     @ arguments
   in
-  (try Journal.append (Journal.Exec ("/tool" :: arguments)) with
-   | Sys_error _ | Unix.Unix_error _ -> ());
-  let out_file = Filename.concat root "stdout" in
-  let err_file = Filename.concat root "stderr" in
-  let out_fd = Unix.openfile out_file [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o600 in
-  let err_fd = Unix.openfile err_file [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o600 in
-  let in_fd = Unix.openfile "/dev/null" [Unix.O_RDONLY] 0 in
-  let close () =
-    Unix.close in_fd;
-    Unix.close out_fd;
-    Unix.close err_fd
-  in
-  let status =
-    Fun.protect ~finally:close (fun () ->
-      let argv = Array.of_list command in
-      let pid = Unix.create_process runner argv in_fd out_fd err_fd in
-      snd (Unix.waitpid [] pid))
-  in
-  let read path =
-    let channel = open_in_bin path in
-    Fun.protect
-      ~finally:(fun () -> close_in_noerr channel)
-      (fun () -> really_input_string channel (in_channel_length channel))
-  in
-  let stdout = read out_file in
-  let stderr = read err_file in
-  match status with
-  | Unix.WEXITED code when code <> 0
+  let code, stdout, stderr = Process.exec command in
+  match code with
+  | code when code <> 0
       && String.starts_with ~prefix:"bwrap:" (String.trim stderr) ->
       failwith ("run-closed!: closed Linux runner unavailable: " ^ String.trim stderr)
-  | _ -> status_code status, stdout, stderr
+  | _ -> code, stdout, stderr
 
 let collect_outputs root paths =
   let output = Filename.concat root "output" in
@@ -164,22 +145,50 @@ let has_process_cap () =
   List.exists Capability.check_process
     (Effect.perform Dynamic_scope.Get_capabilities)
 
-let run args =
-  if not (has_process_cap ()) then
-    capability "capability error: no process authority for run-closed!";
-  let request =
-    match args with
-    | [VMap entries] -> entries
-    | _ -> failwith "run-closed! expects one request map"
-  in
-  validate_request request;
+let linux_executor () request =
+  if request.Executor.platform <> ["os", "linux"] then
+    failwith "run-closed!: Linux executor requires :platform -> {\"os\" -> \"linux\"}";
+  List.iter (fun (name, _) ->
+    if name = "" || String.contains name '=' || String.contains name '\000' then
+      failwith ("run-closed!: invalid environment name: " ^ name))
+    request.environment;
+  let marker = Filename.temp_file "pp-closed-" "" in
+  Sys.remove marker;
+  Unix.mkdir marker 0o700;
+  Fun.protect
+    ~finally:(fun () -> Fswalk.remove_tree marker)
+    (fun () ->
+      let input_root = Filename.concat marker "input" in
+      let output_root = Filename.concat marker "output" in
+      Unix.mkdir input_root 0o700;
+      Unix.mkdir output_root 0o700;
+      List.iter (fun (path, hash) ->
+        write_file (Filename.concat input_root path) (read_blob "input" hash) 0o400)
+        request.inputs;
+      let tool = Filename.concat marker "tool" in
+      write_file tool (read_blob "tool" request.tool) 0o500;
+      let exit_status, stdout, stderr =
+        execute marker tool request.arguments request.environment
+      in
+      let outputs =
+        collect_outputs marker request.outputs
+        |> List.map (function
+          | VString path, VString reference -> path, blob_hash "output value" (VString reference)
+          | _ -> assert false)
+      in
+      { Executor.exit_status; stdout; stderr; outputs; evidence = []; resources = [] })
+
+let parse_request entries =
+  validate_request entries;
   let required name =
-    match map_get name request with
+    match map_get name entries with
     | Some value -> value
     | None -> failwith ("run-closed! request is missing :" ^ name)
   in
   let tool_hash = blob_hash ":tool" (required "tool") in
   let arguments = required "args" |> proper_list ":args" |> strings ":args" in
+  let environment = required "env" |> string_map ":env" in
+  let platform = required "platform" |> string_map ":platform" in
   let outputs =
     required "outputs"
     |> proper_list ":outputs"
@@ -197,26 +206,35 @@ let run args =
   in
   reject_duplicates "output path" outputs;
   reject_duplicates "input path" (List.map fst inputs);
-  let marker = Filename.temp_file "pp-closed-" "" in
-  Sys.remove marker;
-  Unix.mkdir marker 0o700;
-  Fun.protect
-    ~finally:(fun () -> Fswalk.remove_tree marker)
-    (fun () ->
-      let input_root = Filename.concat marker "input" in
-      let output_root = Filename.concat marker "output" in
-      Unix.mkdir input_root 0o700;
-      Unix.mkdir output_root 0o700;
-      List.iter (fun (path, hash) ->
-        write_file (Filename.concat input_root path) (read_blob "input" hash) 0o400)
-        inputs;
-      let tool = Filename.concat marker "tool" in
-      write_file tool (read_blob "tool" tool_hash) 0o500;
-      let code, stdout, stderr = execute marker tool arguments in
-      let tree = collect_outputs marker outputs in
-      VMap [
-        VKeyword "exit", VInt code;
-        VKeyword "out", VString stdout;
-        VKeyword "err", VString stderr;
-        VKeyword "tree", VMap tree;
-      ])
+  reject_duplicates "environment name" (List.map fst environment);
+  reject_duplicates "platform field" (List.map fst platform);
+  { Executor.tool = tool_hash; arguments; inputs; environment; platform; outputs }
+
+let run args =
+  if not (has_process_cap ()) then
+    capability "capability error: no process authority for run-closed!";
+  let request =
+    match args with
+    | [VMap entries] -> parse_request entries
+    | _ -> failwith "run-closed! expects one request map"
+  in
+  let executor =
+    Session.executor (Effect.perform Dynamic_scope.Get_session)
+    |> Option.value ~default:(fun _ ->
+      failwith "run-closed!: trusted executor unavailable")
+  in
+  let result = Executor.run executor request in
+  VMap [
+    VKeyword "exit", VInt result.exit_status;
+    VKeyword "stdout", VString result.stdout;
+    VKeyword "stderr", VString result.stderr;
+    VKeyword "outputs",
+      VMap (List.map (fun (path, hash) ->
+        VString path, VString ("blob:" ^ hash)) result.outputs);
+    VKeyword "evidence",
+      VMap (List.map (fun (name, hash) ->
+        VString name, VString hash) result.evidence);
+    VKeyword "resources",
+      VMap (List.map (fun (name, value) ->
+        VString name, VString value) result.resources);
+  ]

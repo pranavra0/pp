@@ -13,6 +13,8 @@ perform run-closed!({
   :tool -> blob("not-a-tool"),
   :args -> [],
   :inputs -> {},
+  :env -> {},
+  :platform -> {"os" -> "linux"},
   :outputs -> []
 })
 EOF
@@ -26,6 +28,8 @@ perform run-closed!({
   :tool -> tool,
   :args -> [],
   :inputs -> {"../escape" -> blob("input")},
+  :env -> {},
+  :platform -> {"os" -> "linux"},
   :outputs -> []
 })
 EOF
@@ -39,12 +43,42 @@ perform run-closed!({
   :tool -> tool,
   :args -> [],
   :inputs -> {},
+  :env -> {},
+  :platform -> {"os" -> "linux"},
   :outputs -> ["../escape"]
 })
 EOF
 run --grant process "$TMP/output-traversal.pp"
 if grep -q "rejects non-canonical output path" "$TMP/out"; then ok "closed-output-traversal"
 else bad "closed-output-traversal" "$(cat "$TMP/out")"; fi
+
+cat >"$TMP/platform.pp" <<'EOF'
+perform run-closed!({
+  :tool -> blob("not-a-tool"),
+  :args -> [],
+  :inputs -> {},
+  :env -> {},
+  :platform -> {"os" -> "plan9"},
+  :outputs -> []
+})
+EOF
+run --grant process "$TMP/platform.pp"
+if grep -q "requires :platform" "$TMP/out"; then ok "closed-platform-denied"
+else bad "closed-platform-denied" "$(cat "$TMP/out")"; fi
+
+cat >"$TMP/environment.pp" <<'EOF'
+perform run-closed!({
+  :tool -> blob("not-a-tool"),
+  :args -> [],
+  :inputs -> {},
+  :env -> {"BAD=NAME" -> "value"},
+  :platform -> {"os" -> "linux"},
+  :outputs -> []
+})
+EOF
+run --grant process "$TMP/environment.pp"
+if grep -q "invalid environment name" "$TMP/out"; then ok "closed-environment-denied"
+else bad "closed-environment-denied" "$(cat "$TMP/out")"; fi
 
 tool=
 for candidate in /usr/bin/cosign-linux-amd64 /usr/bin/init.lxc.static; do
@@ -58,6 +92,8 @@ let result = perform run-closed!({
   :tool -> tool,
   :args -> ["--help"],
   :inputs -> {},
+  :env -> {"EXPLICIT" -> "yes"},
+  :platform -> {"os" -> "linux"},
   :outputs -> []
 })
 print(hash-map-get(result, :exit))

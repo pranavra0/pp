@@ -67,7 +67,10 @@ let create host cli =
       (Cli.schedule_policy cli) in
   let scheduler = Scheduler.create ~handler
   in
-  let session = Session.create ~scheduler Evaluator.operations in
+  let session =
+    Session.create ~executor:(Closed_action.linux_executor ()) ~scheduler
+      Evaluator.operations
+  in
   let reconciliation = Reconciliation.create ~session ~invocation in
   Store_layout.init Store_layout.default;
   Cache_policy.configure Cache_policy.default

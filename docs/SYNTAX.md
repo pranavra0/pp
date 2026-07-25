@@ -170,6 +170,8 @@ run-closed!({
   :tool -> compiler,
   :args -> ["-c", "/in/main.c", "-o", "main.o"],
   :inputs -> {"main.c" -> source},
+  :env -> {},
+  :platform -> {"os" -> "linux"},
   :outputs -> ["main.o"]
 })
 write!(path, content)
