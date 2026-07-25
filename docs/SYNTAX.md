@@ -167,8 +167,9 @@ always `perform` underneath.
 run!("cc", "-c", src, "-o", obj)
 run-closed!({
   :tool -> compiler,
+  :tool-path -> "bin/cc",
   :args -> ["-c", "/in/main.c", "-o", "main.o"],
-  :inputs -> {"main.c" -> source},
+  :inputs -> sources,
   :env -> {},
   :platform -> {"os" -> "linux"},
   :outputs -> ["main.o"]

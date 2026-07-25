@@ -72,7 +72,7 @@ let prepare ctx cli =
        (match Object_repository.get Object_repository.default ~key:hash with
         | Some value -> List.iter (fun blob ->
             try Transport.LocalDir.pull_blob root ~hash:blob with _ -> ())
-            (Blobref.blob_refs_in value)
+            (Artifact_tree.reachable_blobs value)
         | None -> ())
    | None -> ());
   (match Cli.remote_node cli with
@@ -107,6 +107,6 @@ let publish ctx cli =
                | Some _ -> Object_repository.put Object_repository.default ~key:hash ~value:forced);
               List.iter (fun blob ->
                 try Transport.LocalDir.push_blob shared_root ~hash:blob with _ -> ())
-                (Blobref.blob_refs_in forced);
+                (Artifact_tree.reachable_blobs forced);
               Transport.LocalDir.push_object shared_root ~hash;
               Printf.printf "publish-object: %s\n" hash) ()

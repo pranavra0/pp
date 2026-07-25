@@ -3,7 +3,7 @@
 #
 #   Roots = the last N recorded epochs (a NEW journal `epoch HASH` line per
 #   successful Domains.run_all pass, plus GC's own replayable manifest,
-#   src/runtime/gcroots.ml) + their transitive blob: refs. Mark by REPLAY: `pp gc`
+#   src/runtime/gcroots.ml) + canonical tree blob edges. Mark by REPLAY: `pp gc`
 #   re-runs each recorded root program against the warm store, consulting
 #   hits only, marking every objects/<h>, traces/<key>, blobs/<h> it
 #   touches as live; sweeps the rest. Safety under concurrency: a

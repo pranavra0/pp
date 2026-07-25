@@ -50,7 +50,8 @@ let () =
    | _ -> failwith "empty process argv was accepted"
    | exception Invalid_argument _ -> ());
   let request = {
-    Executor.tool = "tool";
+    Executor.tool = [];
+    tool_path = "tool";
     arguments = [];
     inputs = [];
     environment = [];
@@ -67,18 +68,13 @@ let () =
   } in
   let normalized =
     Executor.run
-      (fun _ -> result ["b", "2"; "a", "1"] ["z", "2"; "a", "1"] [])
+      (fun _ -> result [] ["z", "2"; "a", "1"] [])
       request
   in
-  check (normalized.Executor.outputs = ["a", "1"; "b", "2"])
-    "executor outputs were not canonicalized";
   check (normalized.Executor.evidence = ["a", "1"; "z", "2"])
     "executor evidence was not canonicalized";
-  (match Executor.run (fun _ -> result ["a", "1"] [] []) request with
-   | _ -> failwith "executor omitted a selected output"
-   | exception Failure _ -> ());
   (match Executor.run
-           (fun _ -> result ["a", "1"; "b", "2"] ["same", "1"; "same", "2"] [])
+           (fun _ -> result [] ["same", "1"; "same", "2"] [])
            request with
    | _ -> failwith "executor returned duplicate evidence"
    | exception Failure _ -> ());

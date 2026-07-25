@@ -149,7 +149,7 @@ state between machines by hash (`--publish-object`, `--desired-object`).
   [`cluster-init`], [Mint `~/.pp/cluster/{secret,id}` — the cluster's trust anchor.],
   [`--mint-token <out> <ttl-secs>`], [Mint a signed cluster token into `<out>`, carrying whatever `--grant` specs accompany it, valid for `<ttl-secs>`.],
   [`--member-name <n> <file.pp>`], [Host-qualified distribution: treat the desired state as a `{host → {domain → desired}}` map and converge only host `<n>`'s slice. Combine with `--reconcile`/`--supervise`.],
-  [`--publish-object <shared-root> <file.pp>`], [Run the program, store its fully-forced value (and every `blob:` ref it names) into a shared local-dir store by hash, and print the hash.],
+  [`--publish-object <shared-root> <file.pp>`], [Run the program, store its fully-forced value and canonical tree blobs in a shared local-dir store by hash, and print the hash.],
   [`--desired-object <hash> <shared-root>`], [Pull a published value by `<hash>` from `<shared-root>` and converge it directly — never runs a program to derive it. Takes `--member-name` and the reconcile/supervise flags.],
 )
 

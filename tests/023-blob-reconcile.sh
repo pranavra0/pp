@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Blob-hash desired values: the reconciler materializes from the CAS.
 #
-#   (blob S) ingests S into ~/.pp/store/blobs and returns "blob:<sha256>" —
+#   (blob S) ingests S into ~/.pp/store/blobs and returns its raw identity —
 #   a small, hashable reference. The reconciler accepts blob refs as desired
 #   contents: it diffs by hash WITHOUT loading bytes, materializes from the
 #   store, and errors if a referenced blob is missing.
@@ -31,7 +31,7 @@ check_file() {  # NAME PATH EXPECTED
 
 run() { "$PP" "$@" > "$TMP/out" 2>&1; }
 
-# --- (a) blob refs and inline strings coexist in one desired map ---
+# --- (a) blob identities and inline strings coexist in one desired map ---
 cat > "$TMP/d.pp" <<'EOF'
 {"a.o" -> blob("OBJ-BYTES"), "plain.txt" -> "INLINE"}
 EOF
@@ -62,7 +62,7 @@ check_file "c4-restored"   "$OUT/a.o" "TOOL-OUT"
 
 # --- (c) a dangling blob ref is a hard error, not silence ---
 cat > "$TMP/bad.pp" <<'EOF'
-{"x" -> "blob:0000000000000000000000000000000000000000000000000000000000000000"}
+{"x" -> "0000000000000000000000000000000000000000000000000000000000000000"}
 EOF
 run --grant "fs:$OUT:rw" --reconcile "$OUT" "$TMP/bad.pp"
 assert "dangling-blob-errors" "blob" present
