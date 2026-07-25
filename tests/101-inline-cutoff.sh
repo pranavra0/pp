@@ -40,5 +40,32 @@ run_mode() {
 run_mode "pull" "" 2
 run_mode "push" "--stabilize" 1
 
+# A fresh process has no executable inline-child closure in memory. It
+# recursively validates the stored child trace, serves the parent when that
+# trace is valid, and reruns the parent to reconstruct the child after the
+# child's world input changes.
+printf 'one\n' > "$TMP/input"
+rm -rf "$TMP/.pp"
+"$PP" --grant "fs:$TMP:ro" "$TMP/inline.pp" >"$TMP/fresh-cold.out" 2>&1
+"$PP" --grant "fs:$TMP:ro" "$TMP/inline.pp" >"$TMP/fresh-hit.out" 2>&1
+if grep -q "PARENT\\|CHILD" "$TMP/fresh-hit.out"; then
+  bad "fresh-valid-parent-hit" "$(cat "$TMP/fresh-hit.out")"
+else
+  ok "fresh-valid-parent-hit"
+fi
+printf 'two\n' > "$TMP/input"
+"$PP" --grant "fs:$TMP:ro" "$TMP/inline.pp" >"$TMP/fresh-stale.out" 2>&1
+if grep -q "PARENT" "$TMP/fresh-stale.out" && grep -q "CHILD" "$TMP/fresh-stale.out"; then
+  ok "fresh-stale-child-reconstructed"
+else
+  bad "fresh-stale-child-reconstructed" "$(cat "$TMP/fresh-stale.out")"
+fi
+"$PP" --grant "fs:$TMP:ro" "$TMP/inline.pp" >"$TMP/fresh-rehit.out" 2>&1
+if grep -q "PARENT\\|CHILD" "$TMP/fresh-rehit.out"; then
+  bad "fresh-rebuilt-parent-rehits" "$(cat "$TMP/fresh-rehit.out")"
+else
+  ok "fresh-rebuilt-parent-rehits"
+fi
+
 if [ "$fail" -eq 0 ]; then echo "=== INLINE CUTOFF TEST PASSED ==="; fi
 exit "$fail"

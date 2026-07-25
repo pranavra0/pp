@@ -7,13 +7,6 @@ open Source_error
 module Key = Identity_types.Node_key
 module Object_hash = Identity_types.Object_hash
 
-let record_node_dependency (t : thunk) : unit =
-  if Evaluator_thunks.is_persistent t && Effect.perform Dynamic_scope.In_node then
-    match t.thunk_hash, t.thunk_status with
-    | Some id, Evaluated result ->
-        Observation.record (Observation.node id) (Identity.hash_value result)
-    | Some _, (Unevaluated | Evaluating) | None, _ -> ()
-
 let resolve_free_variables ~(expr : expr) ~(env : env)
     ~(force : value -> value) : (string * value option) list =
   Free_vars.SS.elements (Free_vars.node_free_vars expr)
@@ -238,9 +231,9 @@ let force ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
           Effect.Deep.continue continuation ()
   in
   if nested then
-    Option.iter (fun id ->
-      Observation.record (Observation.node id) (Identity.hash_value result))
-      t.thunk_hash;
+    Observation.record
+      (Observation.node (Key.to_string key))
+      (Identity.hash_value result);
   Option.iter (fun id ->
     Effect.perform (Dynamic_scope.Record_node_force id)) t.thunk_hash;
   result
