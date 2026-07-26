@@ -576,7 +576,7 @@ Grounding: this is Nix and Bazel-style sandboxing — the build writes wherever
 it likes inside a throwaway directory, and only content-addressed outputs
 exist afterward. Without this, "single writer" (LAW 28) is only a slogan.
 
-**Status: partial** — the node/scripting split is enforced .
+**Status: holds** — the node/scripting split and output boundary are enforced.
 Inside a node, a relative `write-file` targets the node's sandbox scratch, a
 lazily created temp directory deleted when the node's frame pops; reads and
 writes there are capability-free and unrecorded. An absolute `write-file`
@@ -702,7 +702,7 @@ free and exact — hash equality instead of user-supplied equality functions.
 This is the comment-only-header-edit story from DESIGN.md: a compile must
 re-run, but a link must not.
 
-**Status: partial** — the validity-is-the-trace half is real: each node key
+**Status: holds** — each node key
 maps to a set of traces, every trace records the
 `(file-cell, content-hash)` observations the node made, plus `config:` and
 `handler:` cells (LAW 33/26), and a hit is granted only if some trace's every
@@ -720,7 +720,9 @@ off its parent when the result hash is unchanged; pull watch reaches the same
 result by rebuilding from the root. Child-result cells use the durable child
 node key, so a fresh process can recursively validate a parent hit and can
 reconstruct a stale inline child by rerunning the parent (`tests/032`,
-`tests/101`). `$glob` records an exact tree cell, and `run`
+`tests/101`). Push stabilization dirties direct trace readers first; an
+evaluated parent checks its child-result cells and is dirtied only when a child
+result hash changes. `$glob` records an exact tree cell, and `run`
 records the resolved tool binary plus coarse readable-tree cells; changes and
 reverts are covered by `tests/100`. Legacy `run` dynamic-library closure
 tracking remains coarse.
@@ -1506,10 +1508,10 @@ migration.
 | LAW 15 | ordering never from capabilities | holds | authority and ordering are separate; filesystem and process domains use the generic domain pipeline (`tests/018`, `tests/033`) |
 | LAW 16 | opt-in per-node caching | holds | persistent nodes cache across runs; ambient execution is scripting-only; an immutable foreign request runs in a node only after its trusted provider classifies it cacheable (`lifecycle_unit`, `tests/010`, `tests/017`, `tests/102`) |
 | LAW 17 | hit is not effect replay | holds (node tier) | a `node { e }` hit does not replay in-node `log`/stdout (`tests/010`, `tests/014`) |
-| LAW 18 | sandbox-scratch writes | partial | per-node scratch is real: relative node writes/reads are scratch-local and absolute node writes error (`tests/017`); domain writes use the reconciliation pipeline |
+| LAW 18 | sandbox-scratch writes | holds | per-node scratch is real: relative node writes/reads are scratch-local, closed-action outputs are canonical verified trees, and absolute node writes error (`tests/017`, `tests/102`); domain writes use the reconciliation pipeline |
 | LAW 19 | sound content hashing | holds | SHA-256 structural hashes cover referenced closure environments and handlers; store objects are content-addressed by result hash and shared across runs (`tests/009`) |
 | LAW 20 | key = code plus argument values | holds | persistent node keys = expanded code plus free-variable value hashes plus applied argument value hashes; capabilities, the whole environment, config, and handlers are excluded (`tests/011`, `tests/015`, `tests/097`); authority cannot cross the node boundary (`tests/capability-adversarial.sh`); macro expansion precedes keying (`tests/042-defmacro-rekey.sh`) |
-| LAW 21 | cutoff via traces | partial | trace sets, revert hits, glob invalidation, push inline-node cutoff, and fresh-process child validation/reconstruction are real (`tests/010`, `tests/016`, `tests/032`, `tests/100`, `tests/101`) |
+| LAW 21 | cutoff via traces | holds | trace sets, revert hits, glob invalidation, direct-reader invalidation with hash-gated child cutoff, push inline-node cutoff, and fresh-process child validation/reconstruction are real (`tests/010`, `tests/016`, `tests/032`, `tests/100`, `tests/101`) |
 | LAW 22 | unforgeable root-minted capabilities | holds | constructors removed; `tests/capability-adversarial.sh` |
 | LAW 22b | `with-caps` narrows a held value, never widens | holds | `current-capabilities`/`with-caps`/`cap-restrict`'s mode argument; the subset check runs against the current ambient; `effect` removed;  exception/tail-safe; `tests/capability-adversarial.sh` |
 | LAW 23 | component/full-path plus transitive hit check | holds | component-aware, canonicalised paths at every cell/grant/loader-bound site (`tests/036`); hits require authority over the trace's transitive read closure; denials are not memoized (`tests/013`, `tests/014`, `tests/103`); `pp why` redacts unauthorized cells (`tests/019`) |

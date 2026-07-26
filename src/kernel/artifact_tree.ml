@@ -140,6 +140,11 @@ let to_value entries =
   VMap [VKeyword "tree",
     VMap (List.map (fun entry -> VString (path_of_entry entry), descriptor entry) entries)]
 
+let validate entries =
+  match of_value (to_value entries) with
+  | Ok _ -> ()
+  | Error message -> failwith ("invalid artifact tree: " ^ message)
+
 let blob_hashes entries =
   List.filter_map (function File { blob; _ } -> Some blob | _ -> None) entries
   |> List.sort_uniq String.compare
