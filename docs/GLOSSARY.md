@@ -4,9 +4,6 @@ Short definitions of the vocabulary. See [DESIGN.md](DESIGN.md) for the
 concept model, [SPEC.md](SPEC.md) for the semantics, and
 [ARCHITECTURE.md](ARCHITECTURE.md) for the code structure.
 
-Terms marked (planned) do not exist in the code yet; see the status table in
-[SPEC.md](SPEC.md) for current implementation limits.
-
 The forms below are shown in `.pp`'s default brace surface. `.ppl` files,
 and macros written with `quote`, `quasiquote`, or `defmacro`, use the
 s-expression AST form instead: the same forms spelled `(node e)`,
@@ -40,11 +37,11 @@ brace-to-s-expression mapping.
   from this one idea.
 - `env_hash`: the precomputed, incrementally built content hash of an
   environment, giving it constant-time identity.
-- thunk key: `hash(expr, env_hash, capabilities, config, handlers)`. Equal
-  keys mean the same memoized thunk. The key must include everything the
-  computation depends on, or distinct computations collide — leaving out
-  the captured environment or the ambient handler stack once did exactly
-  that; both are now fixed.
+- thunk key: ephemeral binding thunks use their expression and dynamic
+  environment for in-process memoization. A persistent node instead uses
+  `H(code, referenced free-variable values, argument values)`. Capabilities,
+  configuration, and handlers stay out of node identity; observations of them
+  belong in the validating trace.
 - node: the unit of persistence and caching: a strict, content-addressed,
   cacheable graph node. `node { e }` is wired into `force` in both back
   ends and caches across runs; see [ARCHITECTURE.md](ARCHITECTURE.md) for
@@ -54,30 +51,26 @@ brace-to-s-expression mapping.
 - trace: recorded during a node's evaluation: the `(cell, observed-hash)`
   pairs it read, its result hash, and an outcome. The store keys each node
   to a set of traces, and a cache hit succeeds if any stored trace still
-  verifies against the world. Partly real today: file, config, and
-  handler cells, plus ok- and failed-outcomes, where a raising node
-  re-serves its failing trace until a read changes; child-keys and other
-  kinds are still planned.
-- cutoff (partly real): if a recomputed result's hash equals the prior
+  verifies against the world. File, tree, config, handler, probe, domain, and
+  child-node cells are implemented. Successful and evaluative-failure
+  outcomes share the same lifecycle.
+- cutoff: if a recomputed result's hash equals the prior
   result's hash, pp does not dirty its dependents. This works today at
   node granularity: a dependent node whose free variable is the
   recomputed node's value re-keys identically and hits the cache
-  (`tests/016`). Cutoff for
-  inline-nested nodes, and push-mode dirty-propagation over the
-  reverse-edge graph, are still planned.
-  (`objects/`, `traces/`), accessed through repositories and cache policy, used by the engine for `node { e }`
-  thunks.
+  (`tests/016`). Inline child-result cells and push stabilization propagate
+  changes through the same durable graph (`tests/032`, `tests/101`).
 
 ### The outside world
 
-- cell, or `Var` (partly real): a stable identity that names a piece of
+- cell: a stable identity that names a piece of
   the external world, plus its current observed value as a content hash.
   The observer is its only writer, and nodes compute over cells. Real
   today: `file:<path>`, `config:<key>`,
   `handler:<effect>`, `tool:<binary>`, `tree:<root>` (the coarse floor for
   `run`), `runtime:file:<path>`, `stat:<path>`, `env:<NAME>`, and `argv:`,
-  plus `probe:<name>`, `sealed:<path>`, and `domain:<name>:<sub>` for
-  registered domains (see below).
+  plus `node:<key>`, `probe:<name>`, `sealed:<path>`, and
+  `domain:<name>:<sub>` for child computations and registered domains.
 - probe (real): the sanctioned way to depend on something nondeterministic
   (SPEC laws 37 and 38). A script-tier call to
   `register-probe(name, observe-fn, read-cap)` registers an observer;
@@ -96,12 +89,19 @@ brace-to-s-expression mapping.
   external command under `--grant process`, and returns
   `{"exit","out","err"}`. It is scripting-tier only because an ambient
   process cannot produce a complete validating trace (`tests/017`).
+- `run-closed!`: executes immutable tool and input trees through the
+  session's trusted executor. The provider classifies each request before
+  execution. A node accepts only `Cacheable`; `Scripting_only` is rejected
+  before work begins. The bundled Linux provider is scripting-only because
+  clock, randomness, kernel behavior, and resource limits remain ambient.
+  Provider policy is optional canonical pp data in the request; the core does
+  not interpret it.
 - sandbox, or per-node scratch: a throwaway directory that pp creates
   lazily for each node force and deletes when it completes (`slurp` and
   `write-file` resolve there, capability-free and
   unrecorded); an absolute path in a node write is an error instead (SPEC
   law 18) — hygiene, not soundness; traces make the system sound.
-- desired-state value (partly real): the pure, hashable value a pp
+- desired-state value: the pure, hashable value a pp
   program's root returns: `{path → blob-hash}` for a build,
   `{proc → spec}` for services. Real today for the filesystem domain as
   a canonical tree whose file entries carry raw identities from `blob(S)`,
@@ -130,14 +130,13 @@ brace-to-s-expression mapping.
 - rebuilder (real): the one implementation of `force` over the store,
   verifying traces, applying cutoff on hash equality, and recording new
   traces on a miss. Both schedulers share it.
-- pull scheduler (real): suspending. It forces the root and recurses on
-  demand, for builds and provisioning (`--once`). This is the current
-  default and only scheduler: `--watch` runs it in a polling loop.
-- push scheduler (partly real): dirty-propagating over the reverse-edge
-  index derived from traces, re-forcing only dirty nodes. Meant for
-  services, through `--watch`; true push-mode `stabilize`, with real
-  dirty-propagation, is still planned (see pull scheduler, above, for
-  what `--watch` runs today).
+- scheduler: a result-transparent host service that dispatches node misses.
+  `serial`, `parallel:N`, `race:N`, and `remote:MEMBER` share one node
+  rebuilder and never enter computation identity.
+- pull watch: reconstructs the demanded graph and validates traces on each
+  pass.
+- push stabilization: uses the reverse trace index and child-result edges to
+  dirty only affected in-memory nodes (`--watch --stabilize`).
 
 ### Authority
 
@@ -165,9 +164,10 @@ brace-to-s-expression mapping.
 - handler, or `with-handler`: an installation, active for a dynamic
   extent, that intercepts matching `perform` calls. pp restores the
   previous handler on normal return, on exception, and on tail call.
-- result-transparent handler (planned): a scheduling or placement handler
+- result-transparent handler: a scheduling or placement handler
   that may change only where or when work runs, never its observable
-  results. It is left out of thunk keys.
+  results. The installed scheduler is this class and is left out of keys and
+  traces.
 - semantic handler: a handler that changes results, such as a mock
   `read-file` or fault injection. It records a synthetic
   `handler:<effect>` cell into the trace, so swapping the handler

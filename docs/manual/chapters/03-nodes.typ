@@ -60,5 +60,7 @@ None of these examples were granted anything. `node-identity` and
 touches nothing outside itself. Capabilities govern authority over the world,
 and the chapter on capabilities covers them. A computation that only computes
 needs none, and caching it needs none either. The moment a node reads the
-world — a file, the environment, a subprocess — the cache has to account for
-what it saw. That accounting is the subject of the next chapter.
+world, the cache has to account for what it saw. Files, configuration,
+handlers, probes, and child results become trace cells. Ambient subprocesses
+are rejected. The next chapters cover traces and the narrow provider contract
+for foreign execution.

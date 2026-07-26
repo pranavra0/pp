@@ -46,7 +46,7 @@ STORE="$TMP/.pp/store"
 # machine-specific path enters the node key (ELocated hashes the file name
 # as given). Fixture file NAMES pin the node key and result hash; fixture
 # BYTES pin the codec output.
-golden_run() {  # BACKEND-FLAGS...
+golden_run() {
   rm -rf "$TMP/.pp" "$TMP/golden"
   mkdir -p "$TMP/golden"
   cp "$FIX/golden.pp" "$TMP/golden/"
@@ -84,7 +84,7 @@ golden_check "golden"
 printf 'let (inf = 1.e+308 * 10.) {\n  print(force(node {\n    perform log("COMPUTE")\n    [0 - 5, -1. * 0., 1.e+308, 0.1, inf, 0. - inf, inf - inf, "q\\"b\\\\s nl\\n tab\\t ctrl\x01\x7f uni\xc3\xa9", :akey, quote { asym }, [1, [2, [3]]], {1 -> "i", :k -> 2, {"m" -> 1} -> 3, "s" -> 4}, hash-set(1, 2, 3), cons(1, 2)]\n  }))\n}\n' \
   > "$TMP/battery.pp"
 
-battery() {  # LABEL COLD-FLAGS... — cold store, then re-run cross-process/backend
+battery() {  # LABEL COLD-FLAGS... — cold store, then re-run cross-process
   local label="$1"; shift
   rm -rf "$TMP/.pp"
   "$PP" "$@" "$TMP/battery.pp" > "$TMP/run1.out" 2>&1

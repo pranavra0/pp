@@ -45,18 +45,14 @@ key is a function of the code and nothing else. That is what makes a build
 computed "here" usable "there". The result is addressed by what it is, not by
 where it was produced.
 
-== What is real, and what is stubbed
+== Transport boundary
 
-Be clear about the ground truth. The by-hash sync, the re-hash-on-receipt, the
-signed-token authority checks, and remote placement are all implemented and
-tested. But they run over a local-directory loopback transport, with two
-separate `~/.pp` stores standing in for two machines. The real network transport
-(ssh) is a stub: every operation raises a clear "not yet" error. The security
-model lives above the transport: content hashes, HMAC-signed capability tokens,
-authority gating. So a plaintext local-dir copy is deliberately the harder case
-to get right, and it is the case the tests exercise. A real cluster still needs
-the ssh transport underneath and a membership policy on top. The mechanisms they
-would carry are proven on the loopback.
+The by-hash sync, re-hash-on-receipt, signed-token authority checks, and remote
+placement are implemented and tested over a local-directory transport. Two
+separate `~/.pp` stores stand in for two machines. No SSH implementation or
+generic transport plugin ships today. A remote provider can carry the same
+canonical artifacts and signed requests; integrity and authority remain runtime
+checks rather than promises made by the connection.
 
 == Host-qualified identity
 
@@ -91,11 +87,9 @@ over a network. And `pp why`, run on a machine that pulled a trace, redacts any
 cell the local caller is not authorized to see, identically to a purely local
 run. Audit redacts. It never lies.
 
-A shared store only grows, so growth is bounded explicitly. `pp gc` keeps the
-last few successful reconcile passes as roots and sweeps everything their
-closures do not reach. It is never automatic, and never runs during a scheduled
-force. A trace does not record its children by key, so there is no on-disk graph
-to walk. Instead `gc` replays each root as an ordinary pp run. Every cache hit
-it makes marks its objects, traces, and blobs live. The sweep biases toward
-keeping: a root that fails to replay aborts the whole sweep. Over-retention is
-safe, and deleting live data is the only hazard.
+A shared store only grows, so growth is bounded explicitly. Each successful
+pass records its desired object and forced node keys as a wanted root. `pp gc`
+walks the same durable child, result, and tree-blob edges used by validation and
+stabilization, then sweeps only unreachable objects, traces, and blobs. It is
+never automatic. A grace period protects concurrent writes, and a changed root
+manifest stops deletion.

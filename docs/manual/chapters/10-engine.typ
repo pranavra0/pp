@@ -1,6 +1,6 @@
 #import "/lib.typ": example
 
-:= The engine
+= The engine
 
 pp runs every program through a single tree-walking evaluator. It interprets
 the AST directly — small, obvious, and the reference for what every form means.

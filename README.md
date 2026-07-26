@@ -20,9 +20,10 @@ Run `pp --help` to see all flags.
 
 Highlights:
 
-- hermetic builds: rebuilding this 101-file C project when nothing changed
-  takes 0 processes and 130ms. `rm -rf build/` restores everything from the
-  store. pp builds itself, and Lua 5.4.7 too
+- incremental computation: persistent nodes validate their recorded world
+  reads, reuse results across processes, and cut off unchanged dependents
+- artifact builds: the Dune adapter performs precise working-tree rebuilds,
+  returns immutable artifact trees, and restores deleted outputs from the store
 - reactive supervision: `pp --watch --supervise` starts services and
   restarts them when the spec changes. Kill one with `-9` and it converges
   back within one interval
@@ -34,14 +35,18 @@ Highlights:
   s-expressions, the AST written as text, for macros. `pp fmt` converts
   between them
 
+Foreign execution is provider-owned. The bundled Linux executor closes the
+filesystem, environment, loader, and network but reports its remaining ambient
+inputs, so it is scripting-only. A trusted provider may classify an immutable
+request as cacheable when it can guarantee that the request accounts for every
+semantic input. Toolchain and execution-policy schemas remain ordinary pp
+libraries; the optional `:policy` field is canonical pp data that only the
+provider interprets.
+
 ## A tour
 
 ```
-node {
-  "src/*.c" |> each(fn(f) {
-    perform run("cc", "-c", f)
-  })
-}
+let digest = force(node { hash-string($file("src/main.c")) })
 
 with-config({:host -> "db1"}) {
   let key = perform read-file("/run/secrets/key") |> unseal

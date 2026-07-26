@@ -12,7 +12,7 @@
 # The capability set is deliberately excluded from the key (authority gates a hit
 # at verify time, per SPEC law 23 — it never renames the result).
 #
-# Runs under an isolated HOME (tree-walker only, the sole backend with a store).
+# Runs under an isolated HOME.
 # A node logs "COMPUTE" on the miss; per SPEC law 17 a hit does not replay it, so the
 # presence/absence of COMPUTE tells miss from hit.
 set -uo pipefail

@@ -16,7 +16,7 @@
 #
 # The store lives at $HOME/.pp/store, so this test runs under an isolated HOME
 # and never touches the developer's real store. It exercises only the
-# tree-walker (the sole backend wired to the store).
+# single tree-walking evaluator.
 . "$(dirname "$0")/lib.sh"
 DATA="$TMP/data.txt"
 PROG="$TMP/prog.pp"

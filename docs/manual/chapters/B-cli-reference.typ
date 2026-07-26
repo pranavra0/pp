@@ -3,7 +3,7 @@
 = Command-line reference
 
 This appendix lists every flag `pp` accepts, grouped by what you use it for.
-It comes from the argument parser in `src/app/main.ml`. Where the built-in
+It comes from the argument parser in `src/app/cli.ml`. Where the built-in
 `pp --help` and this table disagree, the source wins. A few flags marked
 internal are dispatch machinery that `pp` invokes on itself. They are here for
 completeness; you should not need to type them by hand.
@@ -30,7 +30,7 @@ and `--watch` all layer onto whichever run mode you pick. Anything after a bare
   [`pp --help`, `pp -h`], [Print the usage summary and exit.],
 )
 
-== Back ends
+== Execution modes
 
 pp has a single tree-walking interpreter over the content-addressed store.
 Tail calls run in constant stack, and node results persist across runs.
@@ -87,7 +87,7 @@ flags inspect, bypass, audit, and reclaim that store.
   [`--no-cache <file.pp>`], [Skip cache reads and recompute every node; results are still written to the store.],
   [`--check <file.pp>`], [Determinism audit: run each node twice and flag any whose result differs (a volatile node). With a non-serial `--schedule`, also re-runs the whole program serially and compares the desired-state hash. Exits 1 if anything is flagged.],
   [`graph`], [Print the cell→node dependency graph reconstructed from stored traces. Needs no file.],
-  [`gc`], [Explicit store garbage collection (never automatic). Marks the store reachable from the last N reconcile/supervise epochs by replaying them, then sweeps the rest.],
+  [`gc`], [Explicit store garbage collection (never automatic). Walks the last N wanted graphs through durable child/result/blob edges, then sweeps unreachable data.],
   [`gc --gc-keep-epochs <N>`], [Keep the last N epochs (a small built-in default; N > 0).],
   [`gc --gc-grace-seconds <S>`], [Spare anything younger than S seconds from the sweep (S ≥ 0).],
 )

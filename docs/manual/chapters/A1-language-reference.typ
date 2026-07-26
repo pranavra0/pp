@@ -154,7 +154,9 @@ on non-thunks.
 capability. Built-in world effects include `read-file`, `write-file`, `run`,
 `run-closed!`, `http-get`, `http-post`, `log`, `tree-observe`, the
 process effects, and the domain-state effects; user handlers may define
-additional effect names. Process and network effects are scripting-tier.
+additional effect names. Ambient process and network effects are
+scripting-tier. `run-closed!` is cacheable only when its installed provider
+classifies the exact request as such.
 
 #example("ref-perform")
 

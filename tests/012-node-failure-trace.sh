@@ -9,7 +9,7 @@
 # changes. Before the fix, a raising thunk was left `Evaluating`, so the next
 # force misreported "infinite recursion detected".
 #
-# Tree-walker only (the store-backed backend), under an isolated HOME. A node
+# Under an isolated HOME, a node
 # logs "ATTEMPT" before failing, so ATTEMPT present ⇒ the body ran (miss),
 # ATTEMPT absent ⇒ the failure was re-served (hit).
 set -uo pipefail

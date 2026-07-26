@@ -3,7 +3,7 @@
 # a computation has the SAME name on every machine, and a result is moved by
 # that hash. Two throwaway HOMEs stand in for two machines (each has its own
 # ~/.pp store); a shared directory is the transport (a plain local-dir
-# loopback — the ssh transport is stubbed (see docs/THREAT-MODEL-cluster.md).
+# loopback — no network transport ships yet (see docs/THREAT-MODEL-cluster.md).
 # Content hashes are deterministic, so they are reproducible output.
 export HOME=$(mktemp -d)
 A="$HOME/machine-a"; B="$HOME/machine-b"; SHARED="$HOME/shared"
