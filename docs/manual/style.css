@@ -70,6 +70,9 @@ nav[role="doc-toc"] a { color: var(--nav-link-color); }
 nav[role="doc-toc"] a:hover { background: var(--link-hover-bg); }
 nav[role="doc-toc"] .prefix { color: var(--muted-text); margin-right: 0.4em; }
 
+.site-nav { display: flex; gap: 1.2em; margin: 0 0 2em; }
+.site-nav a:first-child { font-weight: bold; }
+
 @media screen and (min-width: 1025px) {
   nav[role="doc-toc"] {
     position: fixed;

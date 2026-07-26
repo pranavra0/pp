@@ -20,6 +20,12 @@
     })
     html.elem("script", read("dark-mode.js"))
     html.elem("h1", "pp reference manual")
+    html.elem("nav", attrs: (class: "site-nav"), {
+      html.elem("a", attrs: (href: "index.html"), "pp")
+      html.elem("a", attrs: (href: "using-pp.html"), "Using pp")
+      html.elem("a", attrs: (href: "cookbook.html"), "Cookbook")
+      html.elem("a", attrs: (href: "manual.html"), "Manual")
+    })
   }
 }
 

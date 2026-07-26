@@ -63,5 +63,8 @@ done
 (
   cd "$MANUAL"
   typst compile --root . manual.typ site/pp-manual.pdf
-  typst compile --root . --features html --format html manual.typ site/index.html
+  typst compile --root . --features html --format html manual.typ site/manual.html
+  typst compile --root . --features html --format html website.typ site/index.html
+  typst compile --root . --features html --format html chapters/01-using-pp.typ site/using-pp.html
+  typst compile --root . --features html --format html chapters/11-cookbook.typ site/cookbook.html
 )
