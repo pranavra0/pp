@@ -55,7 +55,9 @@ let validate_request entries =
     entries
   in
   List.iter (fun name ->
-    if not (List.mem name ["tool"; "tool-path"; "args"; "inputs"; "env"; "platform"; "outputs"]) then
+    if not (List.mem name
+      ["tool"; "tool-path"; "args"; "inputs"; "env"; "platform"; "policy"; "outputs"])
+    then
       failwith ("run-closed! request has unknown field :" ^ name))
     names;
   reject_duplicates "request field" names
@@ -89,52 +91,59 @@ let has_process_cap () =
   List.exists Capability.check_process
     (Effect.perform Dynamic_scope.Get_capabilities)
 
-let linux_executor () request =
-  if request.Executor.platform <> ["os", "linux"] then
-    failwith "run-closed!: Linux executor requires :platform -> {\"os\" -> \"linux\"}";
-  let marker = Filename.temp_file "pp-closed-" "" in
-  Sys.remove marker;
-  Unix.mkdir marker 0o700;
-  Fun.protect
-    ~finally:(fun () -> Fswalk.remove_tree marker)
-    (fun () ->
-      let input_root = Filename.concat marker "input" in
-      let output_root = Filename.concat marker "output" in
-      let tool_root = Filename.concat marker "tool-tree" in
-      Unix.mkdir input_root 0o700;
-      Unix.mkdir output_root 0o700;
-      Unix.mkdir tool_root 0o700;
-      Artifact_store.materialize ~root:input_root request.inputs;
-      Artifact_store.materialize ~root:tool_root request.tool;
-      let tool = Filename.concat tool_root request.tool_path in
-      let tool_stat =
-        try Unix.lstat tool
-        with Unix.Unix_error _ -> failwith ("run-closed!: tool path is missing: " ^ request.tool_path)
-      in
-      if tool_stat.Unix.st_kind <> Unix.S_REG || tool_stat.Unix.st_perm land 0o111 = 0 then
-        failwith ("run-closed!: tool path is not an executable file: " ^ request.tool_path);
-      let exit_status, stdout, stderr =
-        execute marker tool request.arguments request.environment
-      in
-      let outputs = Artifact_store.snapshot ~root:output_root ~paths:request.outputs in
-      {
-        Executor.exit_status;
-        stdout;
-        stderr;
-        outputs;
-        evidence = [
-          "clock", "ambient";
-          "environment", "request-only";
-          "filesystem", "request-only";
-          "kernel", "ambient";
-          "loader", "request-only";
-          "network", "denied";
-          "randomness", "ambient";
-          "signals", "exit-status";
-          "subprocess", "same-sandbox";
-        ];
-        resources = ["limits", "ambient"];
-      })
+let linux_executor () =
+  let execute_request request =
+    if request.Executor.platform <> ["os", "linux"] then
+      failwith "run-closed!: Linux executor requires :platform -> {\"os\" -> \"linux\"}";
+    let marker = Filename.temp_file "pp-closed-" "" in
+    Sys.remove marker;
+    Unix.mkdir marker 0o700;
+    Fun.protect
+      ~finally:(fun () -> Fswalk.remove_tree marker)
+      (fun () ->
+        let input_root = Filename.concat marker "input" in
+        let output_root = Filename.concat marker "output" in
+        let tool_root = Filename.concat marker "tool-tree" in
+        Unix.mkdir input_root 0o700;
+        Unix.mkdir output_root 0o700;
+        Unix.mkdir tool_root 0o700;
+        Artifact_store.materialize ~root:input_root request.inputs;
+        Artifact_store.materialize ~root:tool_root request.tool;
+        let tool = Filename.concat tool_root request.tool_path in
+        let tool_stat =
+          try Unix.lstat tool
+          with Unix.Unix_error _ -> failwith ("run-closed!: tool path is missing: " ^ request.tool_path)
+        in
+        if tool_stat.Unix.st_kind <> Unix.S_REG || tool_stat.Unix.st_perm land 0o111 = 0 then
+          failwith ("run-closed!: tool path is not an executable file: " ^ request.tool_path);
+        let exit_status, stdout, stderr =
+          execute marker tool request.arguments request.environment
+        in
+        let outputs = Artifact_store.snapshot ~root:output_root ~paths:request.outputs in
+        {
+          Executor.exit_status;
+          stdout;
+          stderr;
+          outputs;
+          evidence = [
+            "clock", "ambient";
+            "environment", "request-only";
+            "filesystem", "request-only";
+            "kernel", "ambient";
+            "loader", "request-only";
+            "network", "denied";
+            "randomness", "ambient";
+            "signals", "exit-status";
+            "subprocess", "same-sandbox";
+          ];
+          resources = ["limits", "ambient"];
+        })
+  in
+  Executor.make
+    ~classify:(fun _ ->
+      Executor.Scripting_only
+        "the Linux provider exposes ambient clock, randomness, kernel, and resource behavior")
+    ~execute:execute_request
 
 let parse_request entries =
   validate_request entries;
@@ -157,6 +166,13 @@ let parse_request entries =
   let arguments = required "args" |> proper_list ":args" |> strings ":args" in
   let environment = required "env" |> string_map ":env" in
   let platform = required "platform" |> string_map ":platform" in
+  let policy =
+    map_get "policy" entries
+    |> Option.value ~default:(VMap [])
+    |> Force_deep.force_deep
+  in
+  if Codec.encode_value policy = None then
+    failwith "run-closed! expects :policy to be canonical data";
   let outputs =
     required "outputs"
     |> proper_list ":outputs"
@@ -180,12 +196,11 @@ let parse_request entries =
     inputs;
     environment = List.sort compare environment;
     platform = List.sort compare platform;
+    policy;
     outputs = List.sort String.compare outputs;
   }
 
 let run args =
-  if Effect.perform Dynamic_scope.In_node then
-    failwith "run-closed!: may not be called inside a node body until the execution protocol is fully mediated";
   if not (has_process_cap ()) then
     capability "capability error: no process authority for run-closed!";
   let request =
@@ -194,10 +209,15 @@ let run args =
     | _ -> failwith "run-closed! expects one request map"
   in
   let executor =
-    Session.executor (Effect.perform Dynamic_scope.Get_session)
-    |> Option.value ~default:(fun _ ->
-      failwith "run-closed!: trusted executor unavailable")
+    match Session.executor (Effect.perform Dynamic_scope.Get_session) with
+    | Some executor -> executor
+    | None -> failwith "run-closed!: trusted executor unavailable"
   in
+  (match Effect.perform Dynamic_scope.In_node,
+         Executor.cacheability executor request with
+   | true, Executor.Scripting_only reason ->
+       failwith ("run-closed!: executor classifies this request as scripting-only: " ^ reason)
+   | false, _ | true, Executor.Cacheable -> ());
   let result = Executor.run executor request in
   Artifact_store.verify result.outputs;
   VMap [

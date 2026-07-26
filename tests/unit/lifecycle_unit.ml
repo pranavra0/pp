@@ -58,6 +58,7 @@ let () =
     inputs = [];
     environment = [];
     platform = ["os", "linux"];
+    policy = Core_model.VMap [];
     outputs = ["a"; "b"];
   } in
   let result outputs evidence resources = {
@@ -70,14 +71,67 @@ let () =
   } in
   let normalized =
     Executor.run
-      (fun _ -> result [] ["z", "2"; "a", "1"] [])
+      (Executor.make ~classify:(fun _ -> Executor.Cacheable)
+         ~execute:(fun _ -> result [] ["z", "2"; "a", "1"] []))
       request
   in
   check (normalized.Executor.evidence = ["a", "1"; "z", "2"])
     "executor evidence was not canonicalized";
   (match Executor.run
-           (fun _ -> result [] ["same", "1"; "same", "2"] [])
+           (Executor.make ~classify:(fun _ -> Executor.Cacheable)
+              ~execute:(fun _ -> result [] ["same", "1"; "same", "2"] []))
            request with
    | _ -> failwith "executor returned duplicate evidence"
    | exception Failure _ -> ());
+  let closed_request = Core_model.VMap [
+    Core_model.VKeyword "tool",
+      Artifact_tree.to_value [];
+    Core_model.VKeyword "tool-path", Core_model.VString "tool";
+    Core_model.VKeyword "args", Core_model.VNil;
+    Core_model.VKeyword "inputs",
+      Artifact_tree.to_value [];
+    Core_model.VKeyword "env", Core_model.VMap [];
+    Core_model.VKeyword "platform",
+      Core_model.VMap [Core_model.VString "test", Core_model.VString "true"];
+    Core_model.VKeyword "policy",
+      Core_model.VMap [Core_model.VKeyword "redundancy", Core_model.VInt 3];
+    Core_model.VKeyword "outputs", Core_model.VNil;
+  ] in
+  let process_cap = Capability.mint ~realpath:Fun.id "process" in
+  let run_in_node executor =
+    let session = Session.create ~executor ~scheduler operations in
+    try Closed_action.run [closed_request] with
+    | effect Dynamic_scope.Get_session, k -> Effect.Deep.continue k session
+    | effect Dynamic_scope.Get_capabilities, k ->
+        Effect.Deep.continue k [process_cap]
+    | effect Dynamic_scope.In_node, k -> Effect.Deep.continue k true
+  in
+  let executions = ref 0 in
+  let classified_policy = ref Core_model.VNil in
+  let cacheable =
+    Executor.make
+      ~classify:(fun request ->
+        classified_policy := request.Executor.policy;
+        Executor.Cacheable)
+      ~execute:(fun _ -> incr executions; result [] [] [])
+  in
+  ignore (run_in_node cacheable);
+  check (!executions = 1) "cacheable executor did not run inside a node";
+  check (!classified_policy =
+    Core_model.VMap [Core_model.VKeyword "redundancy", Core_model.VInt 3])
+    "executor did not receive ordinary request policy";
+  let scripting =
+    Executor.make
+      ~classify:(fun _ -> Executor.Scripting_only "test ambient input")
+      ~execute:(fun _ -> incr executions; result [] [] [])
+  in
+  (match run_in_node scripting with
+   | _ -> failwith "scripting-only executor ran inside a node"
+   | exception Failure message ->
+       check (String.starts_with
+         ~prefix:"run-closed!: executor classifies this request as scripting-only"
+         message)
+         "scripting-only executor reported the wrong boundary error");
+  check (!executions = 1)
+    "scripting-only executor performed work before refusing";
   print_endline "lifecycle: ok"

@@ -83,6 +83,25 @@ run --grant process "$TMP/environment.pp"
 if grep -q "invalid environment name" "$TMP/out"; then ok "closed-environment-denied"
 else bad "closed-environment-denied" "$(cat "$TMP/out")"; fi
 
+cat >"$TMP/policy.pp" <<'EOF'
+perform run-closed!({
+  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob("not-a-tool")}}},
+  :tool-path -> "tool",
+  :args -> [],
+  :inputs -> {:tree -> {}},
+  :env -> {},
+  :platform -> {"os" -> "linux"},
+  :policy -> fn() { nil },
+  :outputs -> []
+})
+EOF
+run --grant process "$TMP/policy.pp"
+if grep -q "expects :policy to be canonical data" "$TMP/out"; then
+  ok "closed-policy-canonical"
+else
+  bad "closed-policy-canonical" "$(cat "$TMP/out")"
+fi
+
 cat >"$TMP/node.pp" <<'EOF'
 force(node {
   perform run-closed!({
@@ -97,7 +116,7 @@ force(node {
 })
 EOF
 run --grant process "$TMP/node.pp"
-if grep -q "until the execution protocol is fully mediated" "$TMP/out"; then
+if grep -q "executor classifies this request as scripting-only" "$TMP/out"; then
   ok "closed-node-denied"
 else
   bad "closed-node-denied" "$(cat "$TMP/out")"
@@ -202,14 +221,14 @@ print(tree)
 EOF
     HOME="$DESTINATION" run --grant process "$TMP/portable.pp"
     if grep -q '^"portable-tree-input"$' "$TMP/out" \
-        && grep -q ':mode -> 416' "$TMP/out"; then
+        && grep -q ':mode 416' "$TMP/out"; then
       ok "closed-tree-empty-store-portable"
     else
       bad "closed-tree-empty-store-portable" "$(cat "$TMP/out")"
     fi
 
     cat >"$TMP/escape.pp" <<EOF
-perform run-closed!({
+let result = perform run-closed!({
   :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob(slurp("$TMP/hostile"))}}},
   :tool-path -> "tool",
   :args -> ["escape"],
@@ -221,7 +240,7 @@ perform run-closed!({
 print(hash-map-get(result, :outputs))
 EOF
     run --grant process --grant "fs:$TMP/hostile:ro" "$TMP/escape.pp"
-    if grep -q ':kind -> :symlink' "$TMP/out"; then
+    if grep -q ':kind :symlink' "$TMP/out"; then
       ok "closed-output-symlink-preserved"
     else
       bad "closed-output-symlink-escape" "$(cat "$TMP/out")"

@@ -5,6 +5,7 @@ type request = {
   inputs : Pp_kernel.Artifact_tree.t;
   environment : (string * string) list;
   platform : (string * string) list;
+  policy : Pp_kernel.Core_model.value;
   outputs : string list;
 }
 
@@ -17,7 +18,17 @@ type result = {
   resources : (string * string) list;
 }
 
-type t = request -> result
+type cacheability =
+  | Cacheable
+  | Scripting_only of string
+
+type t = {
+  classify : request -> cacheability;
+  execute : request -> result;
+}
+
+let make ~classify ~execute = { classify; execute }
+let cacheability executor request = executor.classify request
 
 let sort_pairs pairs = List.sort (fun (a, _) (b, _) -> String.compare a b) pairs
 
@@ -31,7 +42,7 @@ let reject_duplicates label pairs =
   check pairs
 
 let run (executor : t) (request : request) =
-  let result : result = executor request in
+  let result : result = executor.execute request in
   let evidence = sort_pairs result.evidence in
   let resources = sort_pairs result.resources in
   reject_duplicates "evidence name" evidence;
