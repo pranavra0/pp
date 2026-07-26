@@ -2,6 +2,9 @@
 # A node's result is cached in the content-addressed store and reused by a
 # LATER process. We use a throwaway store (a temp HOME) so this is hermetic.
 export HOME=$(mktemp -d)
+WORK=$(mktemp -d)
+trap 'rm -rf "$HOME" "$WORK"' EXIT
+cd "$WORK"
 
 cat > prog.pp <<'PP'
 def expensive() {
@@ -15,5 +18,3 @@ echo '$ pp prog.pp     # first run: the node body executes'
 echo
 echo '$ pp prog.pp     # second run: the result is served from the store'
 "$PP" prog.pp
-
-rm -rf "$HOME"

@@ -1,10 +1,12 @@
+open Pp_kernel
+
 exception Error of string
 
 val string_lit : string -> string
 val float_lit : float -> string
 
 type inverted = {
-  i_loc : (string * int) option;
+  i_loc : Source_range.t option;
   i_annots : (string * Pp_kernel.Core_model.expr) list;
   i_ret : Pp_kernel.Core_model.expr option;
   i_body : Pp_kernel.Core_model.expr;

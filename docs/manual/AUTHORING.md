@@ -2,9 +2,10 @@
 
 The manual is Typst source. Every retained pp example is exercised by
 `tests/086-manual-examples.sh`, and `scripts/build-manual.sh` executes every
-example referenced by a chapter before rendering the site and PDF. Read
-`chapters/01-introduction.typ` and `chapters/02-language.typ` first; they set
-the voice and the example conventions. Match them.
+example referenced by a chapter or the landing page before rendering the site
+and PDF. Read `chapters/01-introduction.typ` and
+`chapters/02-language.typ` first; they set the voice and the example
+conventions. Match them.
 
 ## Voice (copy the Zig language reference)
 
@@ -24,6 +25,8 @@ the voice and the example conventions. Match them.
   table of contents are automatic. Do **not** hand-number.
 - Do not use `@label` cross-references yet (they break the build until every
   label exists). Refer to other chapters in prose.
+- Keep project explanations and reference material in the manual. The landing
+  page is `website.typ`; do not create standalone pages for new topics.
 
 ## Examples — the core rule
 
@@ -75,6 +78,6 @@ scripts/build-manual.sh
 ```
 
 It refreshes the ignored `docs/manual/captured/` directory, then writes the
-tracked `docs/manual/site/index.html` and `pp-manual.pdf`. Do not hand-edit
+tracked `docs/manual/site/index.html`, `manual.html`, and `pp-manual.pdf`. Do not hand-edit
 captured output or rendered files. A broken example or Typst error fails the
 build.

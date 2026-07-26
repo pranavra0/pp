@@ -465,7 +465,10 @@ and gen_expr_of_tag ~(mode : mode) (st : rng) (depth : int) (tag : expr_tag) : e
   | Et_with_config -> EWithConfig (e (), e ())
   | Et_config -> EConfig (e (), if rb st then Some (e ()) else None)
   | Et_typed -> ETyped (e (), e ())
-  | Et_located -> ELocated ((gen_string ~mode st, ri st 1000), e ())
+  | Et_located ->
+      let source = gen_string ~mode st in
+      let line = ri st 1000 in
+      ELocated (Source_range.point ~source ~offset:0 ~line ~column:1, e ())
   | Et_match ->
       let arms =
         List.init (1 + small st) (fun _ ->
@@ -585,7 +588,8 @@ let rec dbg (e : expr) : string =
   | EWithConfig (m, b) -> Printf.sprintf "(with-config %s %s)" (dbg m) (dbg b)
   | EConfig (k, d) -> Printf.sprintf "(config %s %s)" (dbg k) (match d with Some x -> dbg x | None -> "-")
   | ETyped (x, t) -> Printf.sprintf "(: %s %s)" (dbg x) (dbg t)
-  | ELocated ((f, ln), x) -> Printf.sprintf "@%s:%d%s" f ln (dbg x)
+  | ELocated (range, x) ->
+      Printf.sprintf "@%s%s" (Source_range.format range) (dbg x)
   | EMatch (s, arms) -> Printf.sprintf "(match %s %s)" (dbg s) (l (List.map (fun (p, g, b) -> dbg_pat p ^ (match g with Some x -> " if " ^ dbg x | None -> "") ^ "=>" ^ dbg b) arms))
 
 let debug = try Sys.getenv "KP_DEBUG" = "1" with Not_found -> false
@@ -714,8 +718,8 @@ let reader_state_property () =
     fail "reader-state" "interleaved brace parsers changed generated names";
   match Reader.read_string ~source:"parity" "(print 1)",
         Reader_braces.read_string ~source:"parity" "print(1)" with
-  | [sexpr], [brace] when sexpr = brace -> ()
-  | _ -> fail "reader-state" "surface-equivalent forms lost location parity"
+  | [sexpr], [brace] when Identity.hash_expr sexpr = Identity.hash_expr brace -> ()
+  | _ -> fail "reader-state" "surface-equivalent forms lost semantic parity"
 
 let cap_properties (st : rng) ~(count : int) : unit =
   let depth () = 1 + ri st 3 in
@@ -1030,7 +1034,8 @@ let run ~(seed : int) ~(count : int) : bool =
   (* (i) injectivity over all three hashers + the pinned near-miss corpus *)
   injectivity ~name:"value" ~hash:Identity.hash_value ~show:dbg_value adv_values;
   injectivity ~name:"pattern" ~hash:Identity.hash_pattern ~show:dbg_pat adv_patterns;
-  injectivity ~name:"expr" ~hash:Identity.hash_expr ~show:dbg adv_exprs;
+  injectivity ~name:"expr" ~hash:Identity.hash_expr ~show:dbg
+    (List.map strip_loc adv_exprs);
   corpus_injectivity ();
   extracted_model_property ();
   observation_boundary_property ();

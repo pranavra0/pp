@@ -15,7 +15,7 @@ val argument_values : Core_model.thunk -> Core_model.value list
 val make_typed :
   Core_model.expr ->
   Core_model.expr ->
-  (string * int) option ->
+  Source_range.t option ->
   Core_model.env ->
   Core_model.value
 

@@ -159,7 +159,12 @@ The main effect paths are:
 
 Host substitution happens outside the evaluator. The application installs the
 result-transparent scheduler and the optional closed-action executor in the
-session. Observers and domain drivers are ordinary registered pp functions;
+session. A program may also call `configure-runtime` with an ordinary
+manifest map: its schedule selects the existing local scheduler handler, its
+reporter receives immutable runtime events after evaluation, and its build and
+execution policies remain canonical data for library adapters. CLI schedule
+options remain host-level overrides. Observers and domain drivers are ordinary
+registered pp functions;
 the runtime retains authority checks, observation recording, journaling, and
 verification around their calls. Artifact transport is an explicit
 application command whose receive side always rehashes before repository
@@ -239,6 +244,15 @@ OCaml `Marshal`. Every durable write uses the atomic replacement boundary.
 the filesystem and process domains is in `stdlib/domain-fs.pp` and
 `stdlib/domain-proc.pp`.
 
+`stdlib/runtime.pp` contains constructors for runtime manifests, schedules,
+reporters, and policy data. The constructors do not grant authority or invoke
+host services. `configure-runtime` validates the manifest at script scope and
+installs only generic runtime services. A custom scheduler receives only
+data-closed job descriptors and returns validated batches; the runtime still
+owns execution, cancellation, and remote transport. A custom domain remains a
+pp `observe`/`diff`/`apply` registration; a custom executor remains a trusted
+host provider.
+
 `reconciliation.ml` binds a command to a session and runs domain passes.
 `fenced.ml` and `journal.ml` handle non-repeatable actions. A domain observes
 before a pass and verifies after apply.
@@ -258,12 +272,14 @@ incremental policy, and returns a canonical artifact tree. Its closed-source
 implementation builds the equivalent immutable `run-closed!` request. Both
 use the same `dune-build(adapter, spec)` library interface. Dune targets,
 arguments, build-directory policy, and output selection occur only in that pp
-file; `tests/104` proves null and precise Dune actions, artifact restoration,
+file. If no request policy is supplied, the runtime manifest's
+`:execution-policy` is used as the default. `tests/104` proves null and precise Dune actions, artifact restoration,
 and the absence of Dune concepts from `src/runtime`.
 
 `scheduler.ml` owns an installable result-transparent handler service. A
 handler names its policy, declares redundant width, dispatches node misses,
-and cancels outstanding work. The host installs `serial`, `parallel:N`,
+and cancels outstanding work. The host or a pp runtime manifest installs
+`serial`, `parallel:N`,
 `race:N`, or `remote:MEMBER` from CLI configuration. Local work uses child
 processes. Remote placement uses the transport boundary and signed capability
 tokens. Every dispatch remains best-effort: the caller re-enters the same

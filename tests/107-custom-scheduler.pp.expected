@@ -1,0 +1,4 @@
+[info] BODY
+42
+[{:kind :runtime-schedule, :handler "custom"} {:kind :node-cache, :node "1ef802a74152", :reason :miss} {:kind :node-cache, :node "1ef802a74152", :reason :hit}]
+# exit: 0

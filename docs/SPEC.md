@@ -576,7 +576,7 @@ Grounding: this is Nix and Bazel-style sandboxing — the build writes wherever
 it likes inside a throwaway directory, and only content-addressed outputs
 exist afterward. Without this, "single writer" (LAW 28) is only a slogan.
 
-**Status: partial** — the node/scripting split is enforced .
+**Status: holds** — the node/scripting split and output boundary are enforced.
 Inside a node, a relative `write-file` targets the node's sandbox scratch, a
 lazily created temp directory deleted when the node's frame pops; reads and
 writes there are capability-free and unrecorded. An absolute `write-file`
@@ -702,7 +702,7 @@ free and exact — hash equality instead of user-supplied equality functions.
 This is the comment-only-header-edit story from DESIGN.md: a compile must
 re-run, but a link must not.
 
-**Status: partial** — the validity-is-the-trace half is real: each node key
+**Status: holds** — each node key
 maps to a set of traces, every trace records the
 `(file-cell, content-hash)` observations the node made, plus `config:` and
 `handler:` cells (LAW 33/26), and a hit is granted only if some trace's every
@@ -720,7 +720,9 @@ off its parent when the result hash is unchanged; pull watch reaches the same
 result by rebuilding from the root. Child-result cells use the durable child
 node key, so a fresh process can recursively validate a parent hit and can
 reconstruct a stale inline child by rerunning the parent (`tests/032`,
-`tests/101`). `$glob` records an exact tree cell, and `run`
+`tests/101`). Push stabilization dirties direct trace readers first; an
+evaluated parent checks its child-result cells and is dirtied only when a child
+result hash changes. `$glob` records an exact tree cell, and `run`
 records the resolved tool binary plus coarse readable-tree cells; changes and
 reverts are covered by `tests/100`. Legacy `run` dynamic-library closure
 tracking remains coarse.
@@ -1002,40 +1004,35 @@ Test: force a failing node twice: same error text both times, body run
 once, since the in-node `log` fires only on the miss; touch its input, force
 again, and it re-runs (`tests/012`).
 
-### [LAW 29] Errors carry source locations
+### [LAW 29] Errors carry structured source diagnostics
 
-A runtime error reports the file and line of the failing form, and, for type
-errors, the definition site of the annotation (LAW 30).
+A runtime error carries a structured diagnostic with an optional source range,
+stable error code, message, and related ranges. Source ranges use a source
+name, byte offset, and one-based line and column positions; ranges are
+half-open. Human-readable rendering is a CLI presentation concern.
 
 Grounding: an error without a location is a riddle, and the substrate for an
 operating system should not answer riddles with stack-free strings.
 
-**Status: holds** — emitting `ELocated` for every top-level form, and
-wrapping `def`/`fn`/`defnode` bodies with their definition-site location, is
-an obligation on every reader, identical across surfaces (the current
-s-expression reader satisfies it). The shared top-level driver appends the
-enclosing form's `file:line` to any runtime error
-whose message does not already carry a location, so arbitrary top-level
-expression errors report where they happened, never doubled
-(`tests/027-error-messages.sh`). Parse errors include file and line. Arity
-errors name the function being called (`arity mismatch calling f: …`),
-capability errors name the operation (`read-file: capability error: …`), and
-unbound-symbol errors use one stable format. Uncaught errors
-print as one clean `pp: error: …` line with exit code 1.
+**Status: holds** — every reader attaches token-precise ranges to its
+`ELocated` forms, and the shared error boundary fills an absent primary range
+without inspecting formatted message text. Reader, evaluator, and capability
+errors carry stable codes and can be converted to LSP-compatible diagnostics.
+The CLI continues to render one clean `pp: error: …` line with exit code 1.
 
-A loaded file's forms are located against that file, not the loading form:
+A loaded file's forms are ranged against that file, not the loading form:
 `Reader.read_string` reads a loaded file with its own path (it used to fall
 back silently to the reader's `"<?>"` placeholder), and each of its
 top-level forms is evaluated (the tree-walker's `eval_expressions`) or
 evaluated one at a time, under the same
-never-doubled location decoration as the outer top-level driver
-(`Error_context.with_form_location`/`message_has_location` — one implementation,
-shared across runs and both nesting levels). An error inside the loaded
-file is decorated with its own `file:line` before it can unwind past the
+never-doubled range decoration as the outer top-level driver
+(`Error_context.with_form_location` — one implementation shared across runs
+and both nesting levels). An error inside the loaded file is decorated with
+its own range before it can unwind past the
 `load`, so the `load(…)` call site's own decorator, seeing a message that
 already carries a location, leaves it alone.
 
-Test: `car(5)` at line 3 of `f.pp` reports `f.pp:3` in 
+Test: `car(5)` at line 3 of `f.pp` reports a primary range in `f.pp` in
 with byte-identical stderr (`tests/027`); case (g) loads a file whose second
 form is `car(5)` and checks that the reported location is the loaded file's
 line, not the loading form's.
@@ -1055,6 +1052,14 @@ and verifies after the write. A single writer means no write-write races,
 which means no ordering discipline is needed in user code (LAW 15). Nodes
 feeding a domain's desired state may not read that domain's own cells —
 stratification — because otherwise reconciling would loop forever.
+
+Runtime policies are also available to pp libraries through
+`configure-runtime`. A manifest may select built-in schedules, install a
+reporter, and provide canonical build/execution policy data. A custom schedule
+function receives only data-closed job descriptors and returns validated
+batches; it cannot execute a thunk or obtain authority. CLI schedule options
+override a manifest. Explicit request `:policy` values override a manifest's
+default `:execution-policy` when constructing `run-closed!` requests.
 
 Grounding: this is React, verbatim. You never touch the DOM; you return the
 desired DOM and the reconciler applies the diff. It is the same idea behind
@@ -1506,10 +1511,10 @@ migration.
 | LAW 15 | ordering never from capabilities | holds | authority and ordering are separate; filesystem and process domains use the generic domain pipeline (`tests/018`, `tests/033`) |
 | LAW 16 | opt-in per-node caching | holds | persistent nodes cache across runs; ambient execution is scripting-only; an immutable foreign request runs in a node only after its trusted provider classifies it cacheable (`lifecycle_unit`, `tests/010`, `tests/017`, `tests/102`) |
 | LAW 17 | hit is not effect replay | holds (node tier) | a `node { e }` hit does not replay in-node `log`/stdout (`tests/010`, `tests/014`) |
-| LAW 18 | sandbox-scratch writes | partial | per-node scratch is real: relative node writes/reads are scratch-local and absolute node writes error (`tests/017`); domain writes use the reconciliation pipeline |
+| LAW 18 | sandbox-scratch writes | holds | per-node scratch is real: relative node writes/reads are scratch-local, closed-action outputs are canonical verified trees, and absolute node writes error (`tests/017`, `tests/102`); domain writes use the reconciliation pipeline |
 | LAW 19 | sound content hashing | holds | SHA-256 structural hashes cover referenced closure environments and handlers; store objects are content-addressed by result hash and shared across runs (`tests/009`) |
 | LAW 20 | key = code plus argument values | holds | persistent node keys = expanded code plus free-variable value hashes plus applied argument value hashes; capabilities, the whole environment, config, and handlers are excluded (`tests/011`, `tests/015`, `tests/097`); authority cannot cross the node boundary (`tests/capability-adversarial.sh`); macro expansion precedes keying (`tests/042-defmacro-rekey.sh`) |
-| LAW 21 | cutoff via traces | partial | trace sets, revert hits, glob invalidation, push inline-node cutoff, and fresh-process child validation/reconstruction are real (`tests/010`, `tests/016`, `tests/032`, `tests/100`, `tests/101`) |
+| LAW 21 | cutoff via traces | holds | trace sets, revert hits, glob invalidation, direct-reader invalidation with hash-gated child cutoff, push inline-node cutoff, and fresh-process child validation/reconstruction are real (`tests/010`, `tests/016`, `tests/032`, `tests/100`, `tests/101`) |
 | LAW 22 | unforgeable root-minted capabilities | holds | constructors removed; `tests/capability-adversarial.sh` |
 | LAW 22b | `with-caps` narrows a held value, never widens | holds | `current-capabilities`/`with-caps`/`cap-restrict`'s mode argument; the subset check runs against the current ambient; `effect` removed;  exception/tail-safe; `tests/capability-adversarial.sh` |
 | LAW 23 | component/full-path plus transitive hit check | holds | component-aware, canonicalised paths at every cell/grant/loader-bound site (`tests/036`); hits require authority over the trace's transitive read closure; denials are not memoized (`tests/013`, `tests/014`, `tests/103`); `pp why` redacts unauthorized cells (`tests/019`) |
@@ -1557,8 +1562,9 @@ through the build-engine milestone's remaining work.
 > s-expression transpilation must yield the identical `Core_model.expr`, and
 > therefore identical LAW 20 keys. No renames: kebab-case identifiers
 > (`string-index`, `nil?`, `proc-alive?`, `run!`) survive verbatim. Because
-> `hash_expr` covers `ELocated (file, line)`, "identical `Core_model.expr`" has
-> two load-bearing corollaries.
+> Source ranges carry diagnostic extent and columns. The source name and
+> one-based start line remain in `ELocated` identity for cache compatibility;
+> changing only the range extent or columns does not change computation keys.
 >
 > 1. The brace reader must attach `ELocated` at exactly the sites the
 >    s-expression reader does (see B.4).
@@ -1830,7 +1836,7 @@ Creation-time narrowing stays expressible by composition:
 | L43 | `with-caps(E) { body… }` | `(with-caps E body…)` |
 | L44 | `with-config(E) { body… }` | `(with-config E body…)` — `E` is any expression, typically a map literal `{:k -> v}` |
 | L45 | `config(K)`; `config(K, D)` | `(config K)`; `(config K D)` — computed keys legal, LAW 33 |
-| L46 | `assert(C)`; `assert(C, M)` | `(assert C)`; `(assert C M)` — the shared desugar to `if` plus `error`, with `at file:line` baked into the message (see B.4) |
+| L46 | `assert(C)`; `assert(C, M)` | `(assert C)`; `(assert C M)` — the shared desugar to `if` plus `error`, with a structured source diagnostic attached at evaluation time (see B.4) |
 
 Capability values need no rows of their own: `current-capabilities()`,
 `cap-restrict(c, scope, :ro)`, `cap-compose(a, b)`, `cap-none()`,
@@ -1904,20 +1910,19 @@ statement is one top-level form, `ELocated`-wrapped exactly as
 For AST identity, and therefore hash and LAW 29 error-text identity, the
 brace reader attaches `ELocated` at exactly the sexpr reader's sites.
 
-- every top-level form: `ELocated ((source, line-of-first-token), form)`
-- `def`/`defnode`/`fn`: the line of the token after the head locates the
+- every top-level form: `ELocated (range-of-first-token, form)`
+- `def`/`defnode`/`fn`: the range of the token after the head locates the
   body (`ELocated (loc, body)`), the return annotation
   (`ELocated (loc, ETyped (body, ty))`), and each per-parameter check
   (`ELocated (loc, ETyped (ESymbol p, ty))` — LAW 32)
 - value defs: `EDefValue (x, ELocated (loc, rhs))`; value `defnode`:
   `EDefValue (x, ELocated (loc, ENode rhs))`
-- `assert`: the location is baked into the generated message string (`… at
-  file:line`), and a message-less `assert` renders its condition via
-  `quote_to_value`/`string_of_value` — that is, in AST, s-expression,
-  notation in both surfaces. That string is part of the desugared
-  expression and therefore of every enclosing hash: the brace reader must
-  reuse the same renderer verbatim, and no later stage may re-render assert
-  messages in brace notation without re-keying every node containing one.
+- `assert`: a message-less `assert` renders its condition via
+  `quote_to_value`/`string_of_value` — that is, in AST, s-expression notation
+  in both surfaces. The runtime diagnostic carries the source range; the
+  brace reader must reuse the same renderer verbatim, and no later stage may
+  re-render assert messages in brace notation without re-keying every node
+  containing one.
 
 ### B.5 Law audit
 

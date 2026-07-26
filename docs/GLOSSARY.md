@@ -133,6 +133,9 @@ brace-to-s-expression mapping.
 - scheduler: a result-transparent host service that dispatches node misses.
   `serial`, `parallel:N`, `race:N`, and `remote:MEMBER` share one node
   rebuilder and never enter computation identity.
+  A pp runtime manifest may select the built-in local handlers; arbitrary
+  remote placement remains a trusted host service. A custom pp scheduler may
+  only return data-closed job batches; the runtime executes them.
 - pull watch: reconstructs the demanded graph and validates traces on each
   pass.
 - push stabilization: uses the reverse trace index and child-result edges to

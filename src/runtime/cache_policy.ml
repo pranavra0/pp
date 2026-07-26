@@ -23,12 +23,20 @@ let volatile_count t = t.volatile_count
 let reset_volatile t = t.volatile_count <- 0
 let note_volatile t = t.volatile_count <- t.volatile_count + 1
 let short_key key = if String.length key > 12 then String.sub key 0 12 else key
+let event kind key reason =
+  let value = VMap [
+    VKeyword "kind", VKeyword kind;
+    VKeyword "node", VString (short_key key);
+    VKeyword "reason", VKeyword reason
+  ] in
+  try ignore (Effect.perform (Effects.Record_event value)) with _ -> ()
 let diagnose t fmt =
   if t.why_enabled then Printf.eprintf ("[why] " ^^ fmt ^^ "\n%!")
   else Printf.ifprintf stderr fmt
 let lookup t ~(key : Identity_types.Cache_key.t)
     ~(authorized : Identity_types.Cell_id.t -> bool) : result =
   if t.no_cache then begin
+    event "node-cache" (Identity_types.Cache_key.to_string key) "disabled";
     diagnose t "node %s: miss — cache reads disabled (--no-cache)"
       (short_key (Identity_types.Cache_key.to_string key));
     Miss
@@ -81,6 +89,7 @@ let lookup t ~(key : Identity_types.Cache_key.t)
     in
     match chosen with
     | None ->
+        event "node-cache" (Identity_types.Cache_key.to_string key) "miss";
         (if traces = [] then
            diagnose t "node %s: miss — no stored trace (first build)"
              (short_key (Identity_types.Cache_key.to_string key))
@@ -112,6 +121,7 @@ let lookup t ~(key : Identity_types.Cache_key.t)
                    (short_key hash);
                  Miss
              | None ->
+                 event "node-cache" (Identity_types.Cache_key.to_string key) "hit";
              diagnose t "node %s: hit — %s trace verified (%d cells)"
                (short_key (Identity_types.Cache_key.to_string key))
                (match tr.Trace_repository.outcome with Trace_repository.Ok -> "ok" | Trace_repository.Failed -> "failing")

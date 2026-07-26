@@ -183,6 +183,11 @@ reading contents.
 
 === Effects, domains, and metaprogramming
 
+`stdlib/runtime.pp` provides `schedule-serial`, `schedule-parallel`,
+`schedule-race`, `schedule-custom`, `runtime-manifest`, reporter constructors,
+and policy helpers. `configure-runtime` installs a manifest at script scope.
+`stdlib/domain.pp` provides generic domain and probe registration helpers.
+
 #table(
   columns: (auto, 1fr),
   inset: (x: 6pt, y: 4pt),

@@ -1,15 +1,16 @@
-# Deploy the pp reference manual to GitHub Pages.
+# Deploy the pp documentation site to GitHub Pages.
 #
 # On every push to master, builds the manual (via scripts/build-manual.sh,
 # which runs every code example through pp and typesets with typst) and
-# deploys docs/manual/site/ (index.html + pp-manual.pdf) to the gh-pages
-# branch. GitHub Pages must be configured to serve from the gh-pages branch.
+# deploys docs/manual/site/ (the landing page, guide pages, manual, and PDF) to
+# the gh-pages branch. GitHub Pages must be configured to serve from the
+# gh-pages branch.
 #
 # After this workflow runs once:
 #   1. Go to https://github.com/pranavra0/pp/settings/pages
 #   2. Under "Build and deployment" → "Source", select "Deploy from a branch"
 #   3. Branch: gh-pages, folder: / (root)
-#   4. Save — your manual is live at https://pranavra0.github.io/pp/
+#   4. Save — the site is live at https://pranavra0.github.io/pp/
 
 name: Deploy manual to GitHub Pages
 

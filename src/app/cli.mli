@@ -21,6 +21,7 @@ val watch : t -> bool
 val watch_interval : t -> float
 val stabilize : t -> bool
 val schedule_policy : t -> Scheduler.policy
+val schedule_explicit : t -> bool
 val fenced_policy : t -> Invocation.fenced_policy
 val gc_keep_epochs : t -> int
 val gc_grace_seconds : t -> float

@@ -20,6 +20,10 @@
     })
     html.elem("script", read("dark-mode.js"))
     html.elem("h1", "pp reference manual")
+    html.elem("nav", attrs: (class: "site-nav"), {
+      html.elem("a", attrs: (href: "index.html"), "pp")
+      html.elem("a", attrs: (href: "manual.html"), "Manual")
+    })
   }
 }
 
@@ -50,4 +54,3 @@
 #include "chapters/A1-language-reference.typ"
 #include "chapters/B-cli-reference.typ"
 #include "chapters/C-stdlib-index.typ"
-#include "chapters/D-style-guide.typ"

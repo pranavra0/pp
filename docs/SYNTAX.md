@@ -191,6 +191,42 @@ scripting-only because some semantic inputs remain ambient. Provider-specific
 execution policy is optional canonical data in `:policy`, usually constructed
 by a library or macro; it adds no syntax.
 
+## Runtime libraries
+
+Runtime policy is ordinary pp data. Load `stdlib/runtime.pp` and configure the
+current script before evaluating nodes:
+
+```pp
+load("stdlib/runtime.pp")
+configure-runtime({
+  :schedule -> schedule-parallel(4),
+  :build-policy -> build-policy({:toolchain -> "clang"}),
+  :execution-policy -> execution-policy({:network -> false}),
+  :reporter -> reporter-console
+})
+```
+
+For a custom result-transparent scheduler, provide a pp function over job
+descriptors. It returns a mode and a complete partition of job indexes:
+
+```pp
+def schedule-policy(jobs) {
+  {:mode -> :parallel, :width -> 4,
+   :batches -> vec[vec[0], vec[1], vec[2]]}
+}
+configure-runtime({:schedule -> schedule-custom(schedule-policy)})
+```
+
+The runtime rejects missing, duplicate, or out-of-range indexes. The policy
+cannot execute a job, inspect its thunk, or mint authority.
+
+The schedule selects where node misses are dispatched; it cannot change node
+results or keys. A reporter receives an immutable vector of runtime events
+after the program completes. Build and execution policies are canonical data
+interpreted by the selected library or executor provider. Unknown manifest
+fields, non-canonical policies, remote schedules without host configuration,
+and runtime configuration from inside a persistent node are errors.
+
 ---
 
 ## Nodes and authority

@@ -30,7 +30,9 @@ def dune-closed-request(spec) {
     :inputs -> spec[:inputs],
     :env -> {},
     :platform -> spec[:platform],
-    :policy -> spec[:policy],
+    :policy -> if nil?(spec[:policy]) {
+      runtime-config()[:execution-policy]
+    } else { spec[:policy] },
     :outputs -> [spec[:closed-output]]
   }
 }

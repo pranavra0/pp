@@ -80,11 +80,27 @@ let rec force (v : value) : value =
   | VThunk t ->
       (match t.thunk_status with
        | Evaluated result ->
-           if Evaluator_thunks.is_persistent t then
-             Option.iter (fun id ->
-               Effect.perform (Dynamic_scope.Record_node_force id)) t.thunk_hash;
-           decr_force_depth ();
-           force result
+           let stale_child =
+             match t.thunk_kind, Session.node_key (session ()) t with
+             | Persistent _, Some key ->
+                 Stabilize.evaluated_dependencies_changed ~key ~result
+             | _ -> false
+           in
+           if stale_child then begin
+             t.thunk_status <- Unevaluated;
+             match with_force_frame t (fun () ->
+               let nk = node_key_of t in
+               let run () = eval t.thunk_expr t.thunk_env in
+               force_node ~key:nk ~run t) with
+             | rerun -> decr_force_depth (); force rerun
+             | exception e -> decr_force_depth (); raise e
+           end else begin
+             if Evaluator_thunks.is_persistent t then
+               Option.iter (fun id ->
+                 Effect.perform (Dynamic_scope.Record_node_force id)) t.thunk_hash;
+             decr_force_depth ();
+             force result
+           end
        | Evaluating ->
            decr_force_depth ();
            force_cycle t

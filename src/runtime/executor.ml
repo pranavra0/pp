@@ -41,10 +41,19 @@ let reject_duplicates label pairs =
   in
   check pairs
 
+let validate_metadata label pairs =
+  List.iter (fun (name, value) ->
+    if name = "" || String.contains name '\000' || String.contains value '\000' then
+      failwith ("run-closed!: executor returned invalid " ^ label ^ ": " ^ name))
+    pairs
+
 let run (executor : t) (request : request) =
   let result : result = executor.execute request in
   let evidence = sort_pairs result.evidence in
   let resources = sort_pairs result.resources in
   reject_duplicates "evidence name" evidence;
   reject_duplicates "resource name" resources;
+  validate_metadata "evidence" evidence;
+  validate_metadata "resource" resources;
+  Pp_kernel.Artifact_tree.validate result.outputs;
   { result with evidence; resources }
