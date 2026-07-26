@@ -21,9 +21,16 @@ let add_runtime_edges reverse =
       let runtime = List.map Identity_types.Node_key.to_string keys in
       Hashtbl.replace reverse cell (List.sort_uniq compare (runtime @ stored)))
 
-(* Mark direct readers' in-memory thunks Unevaluated so the next force goes
-   through Cache_policy.lookup Cache_policy.default → miss → recompute. Nodes
-   not in memory are reconstructed by the ordinary pull path. *)
+let dependency_cells key =
+  let durable = Cell.serialize (Cell.Node key) in
+  match Session.find_node_thunk
+          (Effect.perform Dynamic_scope.Get_session)
+          (Identity_types.Node_key.of_string key)
+  with
+  | Some { thunk_hash = Some id; _ } ->
+      [durable; Cell.serialize (Cell.Node id)]
+  | Some { thunk_hash = None; _ } | None -> [durable]
+
 let reset_dirty (dirty_keys : Identity_types.Node_key.t list) : unit =
   List.iter (fun k ->
     match Session.find_node_thunk (Effect.perform Dynamic_scope.Get_session) k with
