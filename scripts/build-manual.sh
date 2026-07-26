@@ -10,8 +10,18 @@ SITE="$MANUAL/site"
 mkdir -p "$CAPTURED" "$SITE"
 
 mapfile -t examples < <(
-  rg -o '#example\("[^"]+"' "$MANUAL/chapters"/*.typ \
-    | sed -E 's/.*#example\("([^"]+)"/\1/' \
+  awk '
+    {
+      line = $0
+      while (match(line, /#example\("[^"]+"/)) {
+        example = substr(line, RSTART, RLENGTH)
+        sub(/^#example\("/, "", example)
+        sub(/"$/, "", example)
+        print example
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }
+  ' "$MANUAL/chapters"/*.typ \
     | sort -u
 )
 
