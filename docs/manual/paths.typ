@@ -32,7 +32,7 @@ transcripts, and the reference manual remains the lookup for every form.
 Make expensive steps nodes. Force dependencies before the next step. Equal
 code and inputs share a result, even in another process.
 
-#example("node-reuse", sh: true)
+#example("release-pipeline", sh: true)
 
 Continue with [the cookbook](cookbook.html), then read nodes and traces in the
 [manual](manual.html).
@@ -56,6 +56,8 @@ specification restarts a service. A killed service is started again.
 The process-domain section of the [manual](manual.html) shows the full
 observe / diff / apply protocol. The [gallery](gallery.html) collects the
 complete reconciliation examples.
+
+#example("supervise-release", sh: true)
 
 == Capabilities
 

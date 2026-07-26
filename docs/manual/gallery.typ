@@ -26,6 +26,22 @@
 These are small, complete programs. The source and output below are generated
 from the current pp binary during the site build.
 
+== A release graph
+
+This one transcript crosses the boundaries that usually belong to separate
+tools. Nodes build two artifacts. The desired tree deploys them. A second pass
+is a full graph hit. Editing one source rebuilds one artifact. Deleting a
+deployed file restores it without rebuilding either artifact.
+
+#example("release-pipeline", sh: true)
+
+== A self-healing service
+
+The process domain consumes a service specification. The supervisor notices a
+process killed outside pp and starts it again within the polling interval.
+
+#example("supervise-release", sh: true)
+
 == A cached computation
 
 This is the smallest example that crosses a process boundary without changing
