@@ -9,7 +9,7 @@ val key_of :
   expr:Core_model.expr -> env:Core_model.env ->
   force:(Core_model.value -> Core_model.value) -> Identity_types.Node_key.t
 
-val check_type : Core_model.value -> Core_model.expr -> (string * int) option -> unit
+val check_type : Core_model.value -> Core_model.expr -> Source_range.t option -> unit
 val enforce_type : Core_model.thunk -> Core_model.value -> unit
 val serve_hit : t:Core_model.thunk -> Cache_policy.result -> Core_model.value option
 val rebuild : key:Identity_types.Node_key.t ->

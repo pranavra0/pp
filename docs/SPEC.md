@@ -1004,40 +1004,35 @@ Test: force a failing node twice: same error text both times, body run
 once, since the in-node `log` fires only on the miss; touch its input, force
 again, and it re-runs (`tests/012`).
 
-### [LAW 29] Errors carry source locations
+### [LAW 29] Errors carry structured source diagnostics
 
-A runtime error reports the file and line of the failing form, and, for type
-errors, the definition site of the annotation (LAW 30).
+A runtime error carries a structured diagnostic with an optional source range,
+stable error code, message, and related ranges. Source ranges use a source
+name, byte offset, and one-based line and column positions; ranges are
+half-open. Human-readable rendering is a CLI presentation concern.
 
 Grounding: an error without a location is a riddle, and the substrate for an
 operating system should not answer riddles with stack-free strings.
 
-**Status: holds** — emitting `ELocated` for every top-level form, and
-wrapping `def`/`fn`/`defnode` bodies with their definition-site location, is
-an obligation on every reader, identical across surfaces (the current
-s-expression reader satisfies it). The shared top-level driver appends the
-enclosing form's `file:line` to any runtime error
-whose message does not already carry a location, so arbitrary top-level
-expression errors report where they happened, never doubled
-(`tests/027-error-messages.sh`). Parse errors include file and line. Arity
-errors name the function being called (`arity mismatch calling f: …`),
-capability errors name the operation (`read-file: capability error: …`), and
-unbound-symbol errors use one stable format. Uncaught errors
-print as one clean `pp: error: …` line with exit code 1.
+**Status: holds** — every reader attaches token-precise ranges to its
+`ELocated` forms, and the shared error boundary fills an absent primary range
+without inspecting formatted message text. Reader, evaluator, and capability
+errors carry stable codes and can be converted to LSP-compatible diagnostics.
+The CLI continues to render one clean `pp: error: …` line with exit code 1.
 
-A loaded file's forms are located against that file, not the loading form:
+A loaded file's forms are ranged against that file, not the loading form:
 `Reader.read_string` reads a loaded file with its own path (it used to fall
 back silently to the reader's `"<?>"` placeholder), and each of its
 top-level forms is evaluated (the tree-walker's `eval_expressions`) or
 evaluated one at a time, under the same
-never-doubled location decoration as the outer top-level driver
-(`Error_context.with_form_location`/`message_has_location` — one implementation,
-shared across runs and both nesting levels). An error inside the loaded
-file is decorated with its own `file:line` before it can unwind past the
+never-doubled range decoration as the outer top-level driver
+(`Error_context.with_form_location` — one implementation shared across runs
+and both nesting levels). An error inside the loaded file is decorated with
+its own range before it can unwind past the
 `load`, so the `load(…)` call site's own decorator, seeing a message that
 already carries a location, leaves it alone.
 
-Test: `car(5)` at line 3 of `f.pp` reports `f.pp:3` in 
+Test: `car(5)` at line 3 of `f.pp` reports a primary range in `f.pp` in
 with byte-identical stderr (`tests/027`); case (g) loads a file whose second
 form is `car(5)` and checks that the reported location is the loaded file's
 line, not the loading form's.
@@ -1567,8 +1562,9 @@ through the build-engine milestone's remaining work.
 > s-expression transpilation must yield the identical `Core_model.expr`, and
 > therefore identical LAW 20 keys. No renames: kebab-case identifiers
 > (`string-index`, `nil?`, `proc-alive?`, `run!`) survive verbatim. Because
-> `hash_expr` covers `ELocated (file, line)`, "identical `Core_model.expr`" has
-> two load-bearing corollaries.
+> Source ranges carry diagnostic extent and columns. The source name and
+> one-based start line remain in `ELocated` identity for cache compatibility;
+> changing only the range extent or columns does not change computation keys.
 >
 > 1. The brace reader must attach `ELocated` at exactly the sites the
 >    s-expression reader does (see B.4).
@@ -1840,7 +1836,7 @@ Creation-time narrowing stays expressible by composition:
 | L43 | `with-caps(E) { body… }` | `(with-caps E body…)` |
 | L44 | `with-config(E) { body… }` | `(with-config E body…)` — `E` is any expression, typically a map literal `{:k -> v}` |
 | L45 | `config(K)`; `config(K, D)` | `(config K)`; `(config K D)` — computed keys legal, LAW 33 |
-| L46 | `assert(C)`; `assert(C, M)` | `(assert C)`; `(assert C M)` — the shared desugar to `if` plus `error`, with `at file:line` baked into the message (see B.4) |
+| L46 | `assert(C)`; `assert(C, M)` | `(assert C)`; `(assert C M)` — the shared desugar to `if` plus `error`, with a structured source diagnostic attached at evaluation time (see B.4) |
 
 Capability values need no rows of their own: `current-capabilities()`,
 `cap-restrict(c, scope, :ro)`, `cap-compose(a, b)`, `cap-none()`,
@@ -1914,20 +1910,19 @@ statement is one top-level form, `ELocated`-wrapped exactly as
 For AST identity, and therefore hash and LAW 29 error-text identity, the
 brace reader attaches `ELocated` at exactly the sexpr reader's sites.
 
-- every top-level form: `ELocated ((source, line-of-first-token), form)`
-- `def`/`defnode`/`fn`: the line of the token after the head locates the
+- every top-level form: `ELocated (range-of-first-token, form)`
+- `def`/`defnode`/`fn`: the range of the token after the head locates the
   body (`ELocated (loc, body)`), the return annotation
   (`ELocated (loc, ETyped (body, ty))`), and each per-parameter check
   (`ELocated (loc, ETyped (ESymbol p, ty))` — LAW 32)
 - value defs: `EDefValue (x, ELocated (loc, rhs))`; value `defnode`:
   `EDefValue (x, ELocated (loc, ENode rhs))`
-- `assert`: the location is baked into the generated message string (`… at
-  file:line`), and a message-less `assert` renders its condition via
-  `quote_to_value`/`string_of_value` — that is, in AST, s-expression,
-  notation in both surfaces. That string is part of the desugared
-  expression and therefore of every enclosing hash: the brace reader must
-  reuse the same renderer verbatim, and no later stage may re-render assert
-  messages in brace notation without re-keying every node containing one.
+- `assert`: a message-less `assert` renders its condition via
+  `quote_to_value`/`string_of_value` — that is, in AST, s-expression notation
+  in both surfaces. The runtime diagnostic carries the source range; the
+  brace reader must reuse the same renderer verbatim, and no later stage may
+  re-render assert messages in brace notation without re-keying every node
+  containing one.
 
 ### B.5 Law audit
 

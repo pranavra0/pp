@@ -7,9 +7,9 @@ open Pp_kernel
    src/frontend/reader_braces.ml, the brace surface), so the two readers cannot drift:
    the block rule and duplicate-definition check, the per-parameter type-check
    desugar, the `and`/`or` -> `if` desugar, and the
-   `assert` -> `if`+`error` desugar (whose message string — including the
-   s-expression rendering of the condition and the `at file:line` suffix — is
-   part of the desugared expression and therefore of every enclosing hash;
+   `assert` -> `if`+`error` desugar (whose message string includes the
+   s-expression rendering of the condition and is part of the desugared
+   expression and therefore of every enclosing hash;
    Appendix B §B.4).
 
    The `try`-block lowering is brace-surface-only (the s-expression surface has
@@ -18,8 +18,7 @@ open Pp_kernel
    building quoted list data — and [lower_try] is written once over a
    [try_builder] the caller supplies, so those two shapes cannot drift.
 
-   [err] is each caller's own located-parse-error raiser, so error text keeps
-   that reader's exact `msg at file:line` format. *)
+   [err] is each caller's own located-parse-error raiser. *)
 
 open Core_model
 

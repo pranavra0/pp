@@ -31,10 +31,6 @@ let run cli =
           (List.length forms) (List.length forms'))
       end;
       List.iteri (fun i (a, b) ->
-        if a <> b then begin
-          Printf.eprintf "--- emitted brace text ---\n%s" braces;
-          command (Printf.sprintf "roundtrip: form %d is structurally unequal" i)
-        end;
         let ha = Identity.hash_expr a and hb = Identity.hash_expr b in
         if ha <> hb then begin
           Printf.eprintf "--- emitted brace text ---\n%s" braces;

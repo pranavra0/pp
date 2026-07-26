@@ -35,35 +35,59 @@ let string_of_token t =
   | TokIsland s -> "<" ^ s ^ ">"
   | TokEOF -> "<eof>"
 
-type state = { source : string; mutable line : int }
+type state = {
+  source : string;
+  mutable line : int;
+  mutable column : int;
+  mutable offset : int;
+}
 
-let create ?(source = "<?>") () = { source; line = 1 }
+let create ?(source = "<?>") () =
+  { source; line = 1; column = 1; offset = 0 }
 
 let lex_error state line msg =
-  reader ~location:(state.source, line) msg
+  reader ~location:(Source_range.point ~source:state.source ~offset:state.offset
+                      ~line ~column:state.column) msg
 
 (* A token that scanned off the end of the source — the lexer's out-of-input
    signal, distinct from a genuine bad-character error. See
    Source_error.Reader_incomplete. *)
 let lex_incomplete state line msg =
-  incomplete ~location:(state.source, line) msg
+  incomplete ~location:(Source_range.point ~source:state.source ~offset:state.offset
+                          ~line ~column:state.column) msg
 
-(* Lex a string into a list of (token, start_line) pairs. *)
-let lex state (input : string) : (token * int) list =
+(* Lex a string into tokens carrying half-open source ranges. *)
+let lex state (input : string) : (token * Source_range.t) list =
   let len = String.length input in
   let pos = ref 0 in
   let tokens = ref [] in
 
-  let add t = tokens := (t, state.line) :: !tokens in
+  let token_start = ref (state.offset, state.line, state.column) in
+  let add t =
+    let offset, line, column = !token_start in
+    let start_pos = Source_range.position ~offset ~line ~column in
+    let end_pos = Source_range.position ~offset:state.offset
+        ~line:state.line ~column:state.column in
+    tokens := (t, Source_range.make ~source:state.source ~start_pos ~end_pos)
+      :: !tokens
+  in
   let peek () = if !pos < len then Some input.[!pos] else None in
-  let advance () = pos := !pos + 1 in
+  let advance () =
+    if !pos < len then begin
+      let c = input.[!pos] in
+      incr pos;
+      state.offset <- state.offset + 1;
+      if c = '\n' then begin state.line <- state.line + 1; state.column <- 1 end
+      else state.column <- state.column + 1
+    end
+  in
 
   let rec next_delim () =
     match peek () with
     | None -> ()
     | Some c ->
       if c = ' ' || c = '\t' || c = '\n' || c = '\r' then
-        (if c = '\n' then state.line <- state.line + 1; advance (); next_delim ())
+        (advance (); next_delim ())
       else if c = ';' then
         (advance (); skip_comment ())
       else
@@ -71,19 +95,20 @@ let lex state (input : string) : (token * int) list =
 
   and skip_comment () =
     match peek () with
-    | Some '\n' -> state.line <- state.line + 1; advance (); next_delim ()
+    | Some '\n' -> advance (); next_delim ()
     | Some '\r' | None -> advance (); next_delim ()
     | Some _ -> advance (); skip_comment ()
 
   and token () =
+    token_start := (state.offset, state.line, state.column);
     match peek () with
     | None -> add TokEOF
-    | Some '(' -> add TokLParen; advance ()
-    | Some ')' -> add TokRParen; advance ()
-    | Some '[' -> add TokLBracket; advance ()
-    | Some ']' -> add TokRBracket; advance ()
-    | Some '{' -> add TokLBrace; advance ()
-    | Some '}' -> add TokRBrace; advance ()
+    | Some '(' -> advance (); add TokLParen
+    | Some ')' -> advance (); add TokRParen
+    | Some '[' -> advance (); add TokLBracket
+    | Some ']' -> advance (); add TokRBracket
+    | Some '{' -> advance (); add TokLBrace
+    | Some '}' -> advance (); add TokRBrace
     | Some '<' ->
         advance ();
         (match peek () with
@@ -91,8 +116,8 @@ let lex state (input : string) : (token * int) list =
          | Some c when (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ->
              read_island_rest ()
          | _ -> add (TokSymbol "<"))
-    | Some '\'' -> add TokQuote; advance ()
-    | Some '`' -> add TokQuasiquote; advance ()
+    | Some '\'' -> advance (); add TokQuote
+    | Some '`' -> advance (); add TokQuasiquote
     | Some ',' ->
         advance ();
         (match peek () with Some '@' -> advance (); add TokUnquoteSplicing | _ -> add TokUnquote)
@@ -132,7 +157,6 @@ let lex state (input : string) : (token * int) list =
            | Some c -> advance (); Buffer.add_char buf c; loop ()
            | None -> lex_incomplete state state.line "unterminated escape")
       | Some c ->
-          if c = '\n' then state.line <- state.line + 1;
           advance ();
           Buffer.add_char buf c;
           loop ()
@@ -202,7 +226,7 @@ let lex state (input : string) : (token * int) list =
 (* ---- Parser ---- *)
 
 type parse_state = {
-  tokens : (token * int) array;
+  tokens : (token * Source_range.t) array;
   mutable pos : int;
   source : string;
 }
@@ -211,8 +235,6 @@ let make_ps (state : state) tokens =
   { tokens = Array.of_list tokens; pos = 0; source = state.source }
 let peek ps =
   if ps.pos < Array.length ps.tokens then fst ps.tokens.(ps.pos) else TokEOF
-let peek_line ps =
-  if ps.pos < Array.length ps.tokens then snd ps.tokens.(ps.pos) else 1
 let advance ps = ps.pos <- ps.pos + 1
 let next ps = let t = peek ps in advance ps; t
 
@@ -220,11 +242,14 @@ let next ps = let t = peek ps in advance ps; t
    otherwise. The sexpr reader has no newline tokens, so the current token IS
    the next significant one. See Source_error.Reader_incomplete. *)
 let parse_error ps msg =
-  let file = ps.source in
-  let line = peek_line ps in
+  let location =
+    if peek ps = TokEOF then
+      snd ps.tokens.(Array.length ps.tokens - 1)
+    else snd ps.tokens.(ps.pos)
+  in
   if peek ps = TokEOF then
-    incomplete ~location:(file, line) msg
-  else reader ~location:(file, line) msg
+    incomplete ~location msg
+  else reader ~location msg
 
 (* Collect items until the [closing] delimiter (consumed); [what] names the
    form in the unterminated-at-EOF error. One loop for every bracketed form. *)
@@ -392,8 +417,8 @@ and assemble_fn_body locate (params : (string * expr option) list)
 
 (* (def name value)  or  (def (name params...) [: type] body...) *)
 and parse_def ps =
-  let line = peek_line ps in
-  let locate e = ELocated ((ps.source, line), e) in
+  let location = snd ps.tokens.(ps.pos) in
+  let locate e = ELocated (location, e) in
   match peek ps with
   | TokLParen ->
       (* (def (name params...) [: type] body...) *)
@@ -421,8 +446,8 @@ and parse_def ps =
 
 (* (fn [params...] [: type] body...) or (fn (params...) [: type] body...) *)
 and parse_fn ps =
-  let line = peek_line ps in
-  let locate e = ELocated ((ps.source, line), e) in
+  let location = snd ps.tokens.(ps.pos) in
+  let locate e = ELocated (location, e) in
   let params =
     match peek ps with
     | TokLBracket -> parse_vector_param_list ps
@@ -572,8 +597,8 @@ and parse_node ps =
 
 (* (defnode name value) or (defnode (name params...) [: type] body...) *)
 and parse_defnode ps =
-  let line = peek_line ps in
-  let locate e = ELocated ((ps.source, line), e) in
+  let location = snd ps.tokens.(ps.pos) in
+  let locate e = ELocated (location, e) in
   match peek ps with
   | TokLParen ->
       (* (defnode (name params...) [: type] body...) *)
@@ -879,6 +904,8 @@ and parse_qq_vector ps =
 
 let read state (input : string) : expr list =
   state.line <- 1;
+  state.column <- 1;
+  state.offset <- 0;
   let tokens = lex state input in
   let ps = make_ps state tokens in
   let result = ref [] in
@@ -886,9 +913,9 @@ let read state (input : string) : expr list =
     match peek ps with
     | TokEOF -> ()
     | _ ->
-        let line = peek_line ps in
+        let start_range = snd ps.tokens.(ps.pos) in
         let e = parse_expr ps in
-        result := ELocated ((state.source, line), e) :: !result;
+        result := ELocated (start_range, e) :: !result;
         loop ()
   in
   loop ();

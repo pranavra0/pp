@@ -10,6 +10,6 @@ val make_definition :
   Core_model.env ref -> Core_model.value
 val make_thunk :
   ?type_ann:Core_model.expr option ->
-  ?thunk_loc:(string * int) option ->
+  ?thunk_loc:Source_range.t option ->
   ?thunk_name:string option ->
   ?config_hash:string -> Core_model.expr -> Core_model.env -> Core_model.value

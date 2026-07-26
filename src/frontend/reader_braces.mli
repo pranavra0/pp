@@ -19,7 +19,7 @@ type btok =
   | TColon
   | TEOF
 
-type tok = { t : btok; tline : int; glued : bool }
+type tok = { t : btok; tline : int; trange : Source_range.t; glued : bool }
 
 type state
 

@@ -6,7 +6,7 @@ open Pp_kernel
    printer and the layer `pp fmt` (and `pp why`/`pp graph`/REPL
    display) builds on.
 
-   Location preservation: `ELocated ((file, line), _)` drives layout — the
+   Location preservation: `ELocated (range, _)` drives layout — the
    printer pads with newlines so the construct's first token lands on exactly
    [line], and raises [Unprintable] if a located line was already passed or a
    break is needed where the grammar forbids one (that is a bug in this
@@ -49,7 +49,7 @@ open Pp_kernel
      blocks, and a plain `quasiquote(...)` application), which the brace
      reader accepts verbatim — no un-lowering is attempted.
    - assert desugars print as the plain `if`/`error` form they already are;
-     the baked `at file:line` message string round-trips as a literal.
+   structured source diagnostics are not rewritten as surface text.
    - reader-only sugar (`|>`, cells, `reconcile`, `needs`) is never emitted:
      every such row lowers to forms with a canonical spelling below. *)
 
@@ -204,7 +204,7 @@ let check_file st (f : string) =
    a bare EDo body can only be the checks case). *)
 
 type inverted = Printer_common.inverted = {
-  i_loc : (string * int) option;
+  i_loc : Source_range.t option;
   i_annots : (string * expr) list;
   i_ret : expr option;
   i_body : expr;
@@ -264,9 +264,9 @@ let defmacro_shape (e : expr) : (string * string list) option =
 
 let rec print_expr st ~brk ?(lvl = lvl_any) (e : expr) : unit =
   match e with
-  | ELocated ((f, l), inner) ->
-      check_file st f;
-      require_line st ~brk l "a located form";
+  | ELocated (range, inner) ->
+      check_file st (Source_range.source range);
+      require_line st ~brk (Source_range.start range).line "a located form";
       print_expr st ~brk:false ~lvl inner
   | ELiteral v -> emit st (literal v)
   | ESymbol s ->
@@ -287,9 +287,9 @@ let rec print_expr st ~brk ?(lvl = lvl_any) (e : expr) : unit =
   | EFn (params, body') ->
       let inv = invert_fn_body params body' in
       (match inv.i_loc with
-       | Some (f, l) ->
-           check_file st f;
-           require_line st ~brk l "fn"
+       | Some range ->
+           check_file st (Source_range.source range);
+           require_line st ~brk (Source_range.start range).line "fn"
        | None -> ());
       emit st "fn";
       print_params st params inv.i_annots;
@@ -300,9 +300,9 @@ let rec print_expr st ~brk ?(lvl = lvl_any) (e : expr) : unit =
       if not (name_ok name) then unpr "def name %s has no brace spelling" name;
       let inv = invert_fn_body params body' in
       (match inv.i_loc with
-       | Some (f, l) ->
-           check_file st f;
-           require_line st ~brk l ("def " ^ name)
+       | Some range ->
+           check_file st (Source_range.source range);
+           require_line st ~brk (Source_range.start range).line ("def " ^ name)
        | None -> ());
       emit st "def ";
       emit st name;
@@ -314,9 +314,9 @@ let rec print_expr st ~brk ?(lvl = lvl_any) (e : expr) : unit =
       if not (name_ok name) then unpr "node name %s has no brace spelling" name;
       let inv = invert_fn_body params body' in
       (match inv.i_loc with
-       | Some (f, l) ->
-           check_file st f;
-           require_line st ~brk l ("node " ^ name)
+       | Some range ->
+           check_file st (Source_range.source range);
+           require_line st ~brk (Source_range.start range).line ("node " ^ name)
        | None -> ());
       emit st "node ";
       emit st name;
@@ -327,9 +327,9 @@ let rec print_expr st ~brk ?(lvl = lvl_any) (e : expr) : unit =
   | EDefValue (name, rhs) ->
       if not (name_ok name) then unpr "binding name %s has no brace spelling" name;
       (match rhs with
-       | ELocated ((f, l), v) ->
-           check_file st f;
-           require_line st ~brk l ("let " ^ name);
+       | ELocated (range, v) ->
+           check_file st (Source_range.source range);
+           require_line st ~brk (Source_range.start range).line ("let " ^ name);
            emit st "let ";
            emit st name;
            emit st " =";

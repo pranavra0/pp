@@ -2,7 +2,7 @@ open Pp_kernel
 open Core_model
 
 let make_with_hash ?name ?(kind = Ephemeral) ~tag (expr : expr)
-    (type_ann : expr option) (loc : (string * int) option) (env : env) : value =
+    (type_ann : expr option) (loc : Source_range.t option) (env : env) : value =
   let caps = Effect.perform Dynamic_scope.Get_capabilities in
   let cfg = Effect.perform Dynamic_scope.Get_config in
   let handlers = Effect.perform Dynamic_scope.Get_handlers in

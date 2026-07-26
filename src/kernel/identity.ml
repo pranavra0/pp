@@ -79,8 +79,10 @@ let rec hash_expr (e : expr) : string =
       Hasher.hash_concat ["config"; hash_expr key_expr; (match default with Some d -> hash_expr d | None -> "")]
   | ETyped (e, ty) ->
       Hasher.hash_concat ["typed"; hash_expr e; hash_expr ty]
-  | ELocated ((file, line), e) ->
-      Hasher.hash_concat ["located"; file; string_of_int line; hash_expr e]
+  | ELocated (range, e) ->
+      let position = Source_range.start range in
+      Hasher.hash_concat ["located"; Source_range.source range;
+                          string_of_int position.line; hash_expr e]
   | EMatch (scrutinee, arms) ->
       let arm_hashes = List.map (fun (p, guard, body) ->
         match guard with

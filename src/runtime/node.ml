@@ -39,7 +39,7 @@ let key_of ~(argument_values : value list) ~(expr : expr) ~(env : env)
 
 (* ---- Runtime type check (shared by the evaluator) --------------------- *)
 
-let check_type (v : value) (ty : expr) (loc : (string * int) option) : unit =
+let check_type (v : value) (ty : expr) (loc : Source_range.t option) : unit =
   let type_name =
     match ty with
     | ESymbol s -> s
@@ -153,7 +153,7 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
             ignore (persist ~key ~reads:(List.rev !frame)
               ~outcome:Trace_repository.Failed (VString msg));
             t.thunk_status <- Unevaluated;
-            raise (Error (Evaluator { message = msg; location = None }))
+            raise (Error (Evaluator (diagnostic msg)))
         | e ->
             t.thunk_status <- Unevaluated;
             raise e

@@ -45,7 +45,7 @@ and expr =
   | EWithConfig of expr * expr     (* (with-config {map} body) — ambient config *)
   | EConfig of expr * expr option  (* (config key [default]) — read config *)
   | ETyped of expr * expr          (* (the-expr : type) — type annotation *)
-  | ELocated of (string * int) * expr  (* source-located expression *)
+  | ELocated of Source_range.t * expr  (* source-located expression *)
   | EMatch of expr * (pattern * expr option * expr) list
       (* pattern, optional guard, body *)
 
@@ -93,7 +93,7 @@ and thunk = {
   mutable thunk_env : env;
   thunk_name : string option;          (* binding name, for force-cycle errors *)
   type_ann : expr option;              (* lazy gradual type annotation *)
-  thunk_loc : (string * int) option;   (* source location for error reporting *)
+  thunk_loc : Source_range.t option;   (* source location for error reporting *)
   config_hash : string;                (* ReaderT config snapshot identity *)
   thunk_kind : thunk_kind;
 }

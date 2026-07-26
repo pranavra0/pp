@@ -40,7 +40,7 @@ and expr =
   | EWithConfig of expr * expr
   | EConfig of expr * expr option
   | ETyped of expr * expr
-  | ELocated of (string * int) * expr
+  | ELocated of Source_range.t * expr
   | EMatch of expr * (pattern * expr option * expr) list
 
 and value =
@@ -84,7 +84,7 @@ and thunk = {
   mutable thunk_env : env;
   thunk_name : string option;
   type_ann : expr option;
-  thunk_loc : (string * int) option;
+  thunk_loc : Source_range.t option;
   config_hash : string;
   thunk_kind : thunk_kind;
 }
