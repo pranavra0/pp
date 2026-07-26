@@ -22,9 +22,10 @@
 pp is a content-addressed, capability-scoped language for computations that
 should be reusable, inspectable, and safe to move.
 
-The [reference manual](manual.html) is the source of truth. It contains the
-language, runtime, domains, distribution, CLI, standard library, and tested
-examples. The [PDF](pp-manual.pdf) is the same manual in a printable format.
+The #link("manual.html")[reference manual] is the source of truth. It
+contains the language, runtime, domains, distribution, CLI, standard library,
+and tested examples. The #link("pp-manual.pdf")[PDF] is the same manual in a
+printable format.
 
 == The short version
 
@@ -56,4 +57,5 @@ def compile(source) {
 print(force(compile("main.c")))
 ```
 
-Read the [manual](manual.html) when you need a form, flag, or runtime API.
+Read the #link("manual.html")[manual] when you need a form, flag, or runtime
+API.
