@@ -172,6 +172,7 @@ run-closed!({
   :inputs -> sources,
   :env -> {},
   :platform -> {"os" -> "linux"},
+  :policy -> {:redundancy -> 3},
   :outputs -> ["main.o"]
 })
 write!(path, content)
@@ -183,9 +184,12 @@ log!(f"building {src}")
 exceptions, so every effect wrapper in stdlib and the manual carries it.
 Pure functions carry no suffix.
 
-The process effects are currently scripting-tier only. Cacheable nodes may
-use ordinary observations and pure computation; closed execution returns to
-the node tier only after its protocol accounts for every semantic input.
+Ambient `run` is scripting-tier only. `run-closed!` may execute inside a node
+only when the installed trusted executor classifies that exact immutable
+request as cacheable. The bundled Linux executor classifies its requests as
+scripting-only because some semantic inputs remain ambient. Provider-specific
+execution policy is optional canonical data in `:policy`, usually constructed
+by a library or macro; it adds no syntax.
 
 ---
 

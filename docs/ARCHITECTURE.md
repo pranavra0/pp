@@ -152,7 +152,7 @@ The main effect paths are:
 |---|---|---|
 | `read-file`, `write-file`, `slurp` | `observation.ml`, `process.ml`, and evaluator effects | Capability check and cell recording; node writes stay in node scratch space |
 | `run` | `process.ml` | Scripting-only ambient process |
-| `run-closed!` | `closed_action.ml`, `executor.ml` | Scripting-only session-owned executor over immutable request/result values; canonical result validation; unavailable rather than ambient fallback |
+| `run-closed!` | `closed_action.ml`, `executor.ml` | Session-owned executor over immutable request/result values; provider classifies each request as cacheable or scripting-only before execution |
 | `http-get`, `http-post` | evaluator effect path | Network capability; not valid inside a persistent node |
 | `probe` | `session.ml` and `observation.ml` | One pinned observation per pass |
 | `fenced` | `fenced.ml`, `journal.ml`, and reconciliation | Intent/done journal with an explicit recovery policy |
@@ -174,6 +174,16 @@ production observers against hostile worlds, and `tests/102` checks the
 production closed executor and fail-closed hosts. Providers return data; only
 the runtime records traces, checks authority, verifies immutable hashes, and
 brackets mutation.
+
+An executor's cacheability classification is the complete trusted promise.
+The runtime interprets no platform, toolchain, sandbox, or resource-policy
+vocabulary. Inside a node it executes only a request classified `Cacheable`;
+it rejects `Scripting_only` before the provider performs work. The bundled
+Linux provider is scripting-only because clocks, randomness, kernel behavior,
+and resource limits remain ambient. Another trusted provider may interpret
+the request's optional canonical `:policy` value—such as a Nix-like execution
+policy—and classify the request cacheable without changing the evaluator or
+language surface.
 
 ## Persistent nodes and cache
 

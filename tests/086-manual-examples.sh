@@ -13,12 +13,11 @@ set -uo pipefail
 EX="$PWD/docs/manual/examples"
 
 # Examples that demonstrate an error on purpose (a denied capability, an
-# ill-typed call): these must FAIL on both back ends; every other example must
-# succeed on both.
+# ill-typed call): these must fail; every other example must succeed.
 is_error_demo() { case "$1" in cap-read|type-error|ref-type-error) return 0 ;; *) return 1 ;; esac; }
 
-run_one() {  # BACKEND-FLAG NAME -> sets REPLY to combined out+err, returns exit code
-  ( cd "$EX" && HOME=$(mktemp -d) "$PP" $1 "$2.pp" >"$TMP/o" 2>"$TMP/e" )
+run_one() {
+  ( cd "$EX" && HOME=$(mktemp -d) "$PP" "$1.pp" >"$TMP/o" 2>"$TMP/e" )
   local code=$?
   REPLY=$(cat "$TMP/o" "$TMP/e")
   return $code
@@ -28,7 +27,7 @@ count=0
 for f in "$EX"/*.pp; do
   name=$(basename "$f" .pp)
   count=$((count + 1))
-  run_one "" "$name"; code=$?; out=$REPLY
+  run_one "$name"; code=$?; out=$REPLY
   if is_error_demo "$name"; then
     if [ "$code" != 0 ]; then ok "manual-$name (error demo)"
     else bad "manual-$name" "expected an error demo to fail, got code=$code" "$out"; fi

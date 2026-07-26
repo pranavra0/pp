@@ -432,8 +432,8 @@ machinery (including LAW 20's `hash_expr`) ever sees it.
 
 Test (in the sexpr/AST notation, the natural one for a raw quoted-list
 literal — braces have no bare list literal outside `list(…)`, only calls and
-`[…]` vectors): `'(if a b c)` evaluates to the list `(if a b c)` in both
-backends; `` `(1 ,(+ 1 1)) `` evaluates to `(1 2)` in both. Quoting the brace
+`[…]` vectors): `'(if a b c)` evaluates to the list `(if a b c)`;
+`` `(1 ,(+ 1 1)) `` evaluates to `(1 2)`. Quoting the brace
 form of the same `if`, `quote { if a { b } else { c } }`, yields the
 identical list `(if a b c)` — one quoted-data language regardless of which
 reader produced the form.
@@ -518,7 +518,8 @@ package is a pure function of its inputs because that is what makes the store
 possible, not because purity is a virtue in itself. The restriction is the
 feature.
 
-**Status: partial** — `node { e }` is opt-in and cached persistently: the same
+**Status: holds for the provider-classified contract** — `node { e }` is
+opt-in and cached persistently: the same
 node forced in two processes runs once, the store serves
 the second, and a scripting-tier expression is never cached (`tests/010`,
 `tests/014`). `$glob` records the tree snapshot it returns (`tests/100`).
@@ -531,9 +532,14 @@ Evidence and resource maps are canonicalized independently of provider ordering.
 The Linux provider denies undeclared filesystem, environment, network, and
 loader access, confines subprocesses to the same sandbox, and reports signals
 as exit status. It explicitly reports clocks, randomness, CPU/kernel behavior,
-and resource limits as ambient, so `run-closed!` remains scripting-tier
-(`tests/102`). Thus no cacheable foreign process runs with ambient or
-incompletely evidenced authority.
+and resource limits as ambient, so it classifies every request as
+scripting-only. The runtime rejects such a request inside a node before
+execution. The executor interface can instead classify a request cacheable,
+which is the trusted guarantee that every semantic input is accounted for;
+the runtime then permits it in a node. The optional `:policy` field is
+canonical ordinary pp data; the runtime preserves it but interprets none of it
+(`lifecycle_unit`, `tests/102`). Thus no cacheable foreign process runs without
+an explicit provider guarantee.
 
 Test: the same `node { e }` forced twice across two processes runs once,
 which the store proves (`tests/010`, `tests/014`); a scripting-tier expression
@@ -1348,12 +1354,14 @@ Grounding: one engine with a metamorphic oracle is a strong correctness asset.
 The fuzzer turns "should agree" into "does agree, now and forever", by
 running tens of thousands of random programs every CI run.
 
-**Status: partial** — the fuzzer exists and runs the engine
+**Status: holds** — the fuzzer exists and runs the engine
 (`tools/fuzz.ml`; `dune exec ./tools/fuzz.exe`). Previously catalogued
 divergences are now closed; both `--grammar core` and `--grammar full` runs
 exit zero. The persistent node cache is verified across runs (`tests/014`).
-The negative-literal reader bug (`-5` lexes as a symbol) remains open. The build-engine milestone requires the `full`
-grammar to stay green under extended CI runs. `defmacro` would be an
+Signed integer and float literals are parsed consistently by both readers,
+survive formatting, and remain distinct from subtraction and hyphenated names
+(`tests/105`). The `full` grammar stays green in the release gate. `defmacro`
+would be an
 evaluator-only feature the moment it exists to violate this law — expansion
 happening outside the shared `macro.ml` path would be exactly the kind of
 divergence this law forbids. It does not, by construction: expansion
@@ -1496,7 +1504,7 @@ migration.
 | LAW 11 | stack-safe non-tail recursion | holds | heap continuation machine plus iterative builtin list traversal; regular deep regression (`tests/087-deep-recursion.pp`) and million-element acceptance fixture (`tests/fixtures/million-non-tail.pp`) |
 | LAW 12 | total quotation, quasiquote | holds | `tests/007-phase0-laws.pp`; `defmacro` is built on this base — `Quotation.value_to_expr` completes the round trip, `tests/041-defmacro.pp` |
 | LAW 15 | ordering never from capabilities | holds | authority and ordering are separate; filesystem and process domains use the generic domain pipeline (`tests/018`, `tests/033`) |
-| LAW 16 | opt-in per-node caching | partial | `node { e }` cached persistently across runs; scripting-tier expressions uncached; glob inputs recorded (`tests/100`); ambient and incompletely mediated process effects are rejected in nodes (`tests/017`, `tests/022`, `tests/102`) |
+| LAW 16 | opt-in per-node caching | holds | persistent nodes cache across runs; ambient execution is scripting-only; an immutable foreign request runs in a node only after its trusted provider classifies it cacheable (`lifecycle_unit`, `tests/010`, `tests/017`, `tests/102`) |
 | LAW 17 | hit is not effect replay | holds (node tier) | a `node { e }` hit does not replay in-node `log`/stdout (`tests/010`, `tests/014`) |
 | LAW 18 | sandbox-scratch writes | partial | per-node scratch is real: relative node writes/reads are scratch-local and absolute node writes error (`tests/017`); domain writes use the reconciliation pipeline |
 | LAW 19 | sound content hashing | holds | SHA-256 structural hashes cover referenced closure environments and handlers; store objects are content-addressed by result hash and shared across runs (`tests/009`) |
@@ -1517,7 +1525,7 @@ migration.
 | LAW 33 | config: computed keys, tail-safe scoping | holds | computed keys and tail-safe scoping ; config reads inside nodes are `config:<key>` trace cells, ambient config out of the node key (`tests/015`) |
 | LAW 34 | no location surface / scheduler exists | holds | the language has no location form; local process-pool scheduling, host-qualified domains, and explicit GC are implemented (`tests/038`, `tests/049`, `tests/050`) |
 | LAW 35 | run-on-N-take-first as handler | holds | `race:N` process-pool fan-out lands (`tests/038`) |
-| LAW 36 | evaluator correctness | partial | catalogued divergences and evaluator crash classes closed; `core` and sampled `full` green; negative-literal lexing remains a same-side issue; `defmacro` expands once, ahead of the evaluator (`macro.ml`), so it cannot itself become an evaluator-only feature — `stmt_defmacro` in `full` |
+| LAW 36 | evaluator correctness | holds | catalogued divergences are closed; signed literals agree across readers and formatting (`tests/105`); `core` and `full` fuzzing are green; macro expansion is shared ahead of evaluation |
 | LAW 37 | declared nondeterminism | holds | `register-probe`/`probe` are the one sanctioned nondeterministic dependency, evaluated at most once per pass outside the reading node's trace stack, exposed only as a `probe:<name>` cell (`tests/043-probes.sh`) |
 | LAW 38 | volatile-node containment | holds | `--check` double-run detection unchanged (`tests/019`); containment is the same probe mechanism as LAW 37 — a volatile read wrapped as a probe is observed and pinned once per pass as its own cell, in-memory only, never written to `~/.pp/store` (`tests/043-probes.sh`) |
 | LAW 39 | sealed cells | holds | `CapSecret`/`VSealed`: confidential reads redact on print, exclude from the content-addressed store, ban at the node boundary both directions, gate hits on a covering grant; `unseal(v)` is the explicit boundary (`tests/044-sealed.sh`) |

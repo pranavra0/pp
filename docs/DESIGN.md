@@ -147,6 +147,15 @@ same trust boundaries for readers.
   remains scripting-tier while reporting those ambient facts as ordinary
   evidence.
 
+Cache eligibility is a narrow provider guarantee, not a built-in sandbox
+policy. Before executing inside a node, the runtime asks the trusted executor
+to classify the immutable request. A cacheable classification means the
+provider guarantees that the request accounts for every semantic input; a
+scripting-only classification is rejected before execution. Providers and pp
+libraries may define platform, toolchain, resource, and reproducibility
+schemas in the request's optional canonical `:policy` value. The evaluator
+understands none of those schemas.
+
 ## Extension rules
 
 Add a new AST form only with its reader, printer, quote conversion, identity,

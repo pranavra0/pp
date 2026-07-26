@@ -150,7 +150,7 @@ run_case node-cap-capture-direct "may not be or contain a capability" "$TMP/node
 
 # --- node-cap-capture-via-closure (layer 1, closure-env-aware): a node whose
 #     free variable is a CLOSURE that captured a capability (as a parameter,
-#     so it lands in the closure's frame/env either backend can see) is
+#     so it lands in the closure's frame/env) is
 #     equally banned — the ban is structural, not "top of the value only". ---
 cat > "$TMP/node-cap-closure.pp" <<'EOF'
 def mk(cap) { fn() { cap } }

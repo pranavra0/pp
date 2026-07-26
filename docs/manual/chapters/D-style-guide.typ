@@ -116,7 +116,8 @@ header listing every export:
 == Tier Awareness
 
 - *Node tier* (`node { … }`) — pure, cached. Only fully traced observations
-  and effects may appear here; process effects are currently scripting-tier.
+  and effects may appear here. Ambient `run` is scripting-tier;
+  `run-closed!` additionally requires a cacheable provider classification.
 - *Scripting tier* (top-level `do { … }`) — imperative, uncached. `!` functions
   live here.
 
