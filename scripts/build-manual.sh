@@ -22,6 +22,7 @@ mapfile -t examples < <(
       }
     }
   ' "$MANUAL/chapters"/*.typ \
+    "$MANUAL/website.typ" \
     | sort -u
 )
 
@@ -63,5 +64,6 @@ done
 (
   cd "$MANUAL"
   typst compile --root . manual.typ site/pp-manual.pdf
-  typst compile --root . --features html --format html manual.typ site/index.html
+  typst compile --root . --features html --format html manual.typ site/manual.html
+  typst compile --root . --features html --format html website.typ site/index.html
 )
