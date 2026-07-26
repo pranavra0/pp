@@ -68,7 +68,9 @@ let create host cli =
   let scheduler = Scheduler.create ~handler
   in
   let session =
-    Session.create ~executor:(Closed_action.linux_executor ()) ~scheduler
+    Session.create ~executor:(Closed_action.linux_executor ())
+      ~remote_dispatch:(Remote.dispatcher host invocation)
+      ~schedule_locked:(Cli.schedule_explicit cli) ~scheduler
       Evaluator.operations
   in
   let reconciliation = Reconciliation.create ~session ~invocation in

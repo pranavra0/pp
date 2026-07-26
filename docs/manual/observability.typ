@@ -64,6 +64,18 @@ file under the managed root, then run the pass again:
 The second pass reports the create and update operations needed to restore the
 desired tree. With `--watch`, the same observation loop repeats automatically.
 
+== Library reporters
+
+Load `stdlib/runtime.pp` to install a reporter from pp itself:
+
+```pp
+configure-runtime({:reporter -> reporter-console})
+```
+
+The reporter receives a vector of immutable runtime events after evaluation. It
+may format or aggregate them, but cannot affect node results, cache identity,
+authority, or reconciliation.
+
 == Recovery is part of the record
 
 Domain writes use journalled intent and completion. A restart after an

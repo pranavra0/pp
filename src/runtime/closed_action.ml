@@ -62,6 +62,12 @@ let validate_request entries =
     names;
   reject_duplicates "request field" names
 
+let manifest_policy () =
+  let session = Effect.perform Dynamic_scope.Get_session in
+  match Session.runtime_manifest session with
+  | Some (VMap fields) -> map_get "execution-policy" fields
+  | _ -> None
+
 let runner () =
   ["/usr/bin/bwrap"; "/bin/bwrap"]
   |> List.find_opt Sys.file_exists
@@ -166,9 +172,9 @@ let parse_request entries =
   let arguments = required "args" |> proper_list ":args" |> strings ":args" in
   let environment = required "env" |> string_map ":env" in
   let platform = required "platform" |> string_map ":platform" in
-  let policy =
-    map_get "policy" entries
-    |> Option.value ~default:(VMap [])
+  let policy = match map_get "policy" entries with
+    | Some value -> value
+    | None -> Option.value ~default:(VMap []) (manifest_policy ())
     |> Force_deep.force_deep
   in
   if Codec.encode_value policy = None then

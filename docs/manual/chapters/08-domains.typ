@@ -98,6 +98,10 @@ observe/diff/apply triple registered via `register-domain`. It gets the same
 journal bracket, plan cache, verify-after-write, and stratification for free.
 The protocol is generic, not filesystem-shaped.
 
+Load `stdlib/domain.pp` for composition helpers such as `domain(spec)`,
+`probe(name, observe, cap)`, and `register-domains(domains)`. These are ordinary
+pp functions and do not bypass the generic lifecycle.
+
 == Fenced effects
 
 Convergence covers only idempotent change: applying a desired state twice is the

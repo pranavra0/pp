@@ -1,5 +1,8 @@
 open Pp_kernel
 type policy = Serial | Parallel of int | Race of int | Remote of string
+type batch_mode = Serial_batch | Parallel_batch of int | Race_batch of int
+  | Remote_batch of string
+type custom_plan = { mode : batch_mode; batches : int list list }
 
 type job = {
   j_key : Identity_types.Node_key.t;
@@ -20,6 +23,10 @@ val handler_name : handler -> string
 val serial : handler
 val builtin :
   remote_dispatch:(member:string -> job list -> unit) -> policy -> handler
+val custom :
+  name:string -> redundancy:int ->
+  remote_dispatch:(member:string -> job list -> unit) ->
+  plan:(job list -> custom_plan) -> handler
 
 val create : handler:handler -> t
 

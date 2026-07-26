@@ -11,6 +11,13 @@ let dump_pins ctx path =
       "[dump-pins] skipping non-data probe value for %s (code/handle/sealed)\n%!" name);
   Store_layout.atomic_replace path (Buffer.contents buffer)
 
+let run_reporters ctx =
+  let session = App_context.session ctx in
+  let events = Core_model.VVector (Array.of_list (Session.events session)) in
+  List.iter (fun reporter ->
+    ignore (Session.call session ~env:Environment.empty reporter [events]))
+    (Session.reporters session)
+
 let schedule_audit ctx cli files last =
   let scheduler = App_context.scheduler ctx in
   if Cache_policy.check_enabled Cache_policy.default &&
@@ -49,6 +56,7 @@ let run ctx cli =
           else begin
             let last = Command_run.run_files ctx cli files in
             Command_reconcile.run_pass ctx cli last;
+            run_reporters ctx;
             (match Cli.dump_pins_file cli with Some path -> dump_pins ctx path | None -> ());
             schedule_audit ctx cli files last
           end) ()

@@ -48,6 +48,11 @@ request satisfies it, and return a cacheable classification. A project can use
 macros to construct those request values. Neither requires an AST form or
 evaluator change.
 
+An application manifest may provide `:execution-policy` as the default for
+requests that omit `:policy`. An explicit request policy always wins. The
+runtime preserves policy data and asks the trusted executor whether the exact
+request is cacheable; pp libraries define the policy vocabulary.
+
 `stdlib/dune.pp` demonstrates the split. `dune-build(:working-tree, spec)` lets
 Dune incrementally build an observed development tree and returns a canonical
 artifact tree. `dune-build(:closed-source, spec)` sends the corresponding

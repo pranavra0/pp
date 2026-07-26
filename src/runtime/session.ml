@@ -32,6 +32,8 @@ type run_state = {
   wanted_nodes : (Identity_types.Node_key.t, unit) Hashtbl.t;
   run_pins : (string, string) Hashtbl.t;
   preseeded_run_pins : (string, string) Hashtbl.t;
+  mutable events : Core_model.value list;
+  mutable reporters : Core_model.value list;
 }
 
 type fenced_state = {
@@ -45,16 +47,21 @@ type t = {
   operations : Evaluator_ops.t;
   scheduler : Scheduler.t;
   executor : Executor.t option;
+  remote_dispatch : (member:string -> Scheduler.job list -> unit) option;
+  schedule_locked : bool;
   evaluation : evaluation_state;
   domains : domain_state;
   run : run_state;
   fenced : fenced_state;
+  mutable runtime_manifest : Core_model.value option;
 }
 
-let create ?executor ~scheduler operations = {
+let create ?executor ?remote_dispatch ?(schedule_locked = false) ~scheduler operations = {
   operations;
   scheduler;
   executor;
+  remote_dispatch;
+  schedule_locked;
   evaluation = {
     thunks = Hashtbl.create 1024; macros = Hashtbl.create 16; gensym = 0;
     node_thunks = Hashtbl.create 256; node_keys = Hashtbl.create 256;
@@ -71,11 +78,13 @@ let create ?executor ~scheduler operations = {
     sealed_pins = Hashtbl.create 16; observations = [];
     wanted_nodes = Hashtbl.create 64;
     run_pins = Hashtbl.create 64; preseeded_run_pins = Hashtbl.create 64;
+    events = []; reporters = [];
   };
   fenced = {
     fenced_actions = []; fenced_epoch_nonce = 0; fenced_epoch = "";
     fenced_epoch_recovered = false;
   };
+  runtime_manifest = None;
 }
 let force t = t.operations.core.force
 let core_operations t = t.operations.core
@@ -99,6 +108,7 @@ let reset_pass_state t =
   Hashtbl.iter (Hashtbl.replace t.domains.probes) t.domains.preseeded_probes;
   Hashtbl.iter (Hashtbl.replace t.run.run_pins) t.run.preseeded_run_pins;
   t.run.observations <- [];
+  t.run.events <- [];
   t.fenced.fenced_actions <- []
 let begin_pass t =
   reset_pass_state t;
@@ -116,6 +126,8 @@ let begin_evaluation ~retain_thunks t =
   t.evaluation.force_path <- [];
   t.evaluation.cache_bust <- 0;
   reset_pass_state t;
+  t.runtime_manifest <- None;
+  t.run.reporters <- [];
   if t.fenced.fenced_epoch_recovered then t.fenced.fenced_epoch_recovered <- false
   else t.fenced.fenced_epoch <- ""
 let begin_watch t =
@@ -144,6 +156,14 @@ let set_sealed_pin t = Hashtbl.replace t.run.sealed_pins
 let observations t = t.run.observations
 let add_observation t x = t.run.observations <- x :: t.run.observations
 let clear_observations t = t.run.observations <- []
+let add_event t event = t.run.events <- event :: t.run.events
+let events t = List.rev t.run.events
+let register_reporter t reporter = t.run.reporters <- reporter :: t.run.reporters
+let reporters t = List.rev t.run.reporters
+let set_runtime_manifest t value = t.runtime_manifest <- Some value
+let runtime_manifest t = t.runtime_manifest
+let remote_dispatch t = t.remote_dispatch
+let schedule_locked t = t.schedule_locked
 let add_wanted_node t key = Hashtbl.replace t.run.wanted_nodes key ()
 let wanted_nodes t =
   Hashtbl.to_seq_keys t.run.wanted_nodes |> List.of_seq |> List.sort compare

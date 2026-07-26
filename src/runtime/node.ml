@@ -199,19 +199,19 @@ let force ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
     | Some value -> value
     | None ->
         let scheduler = Session.scheduler (Effect.perform Dynamic_scope.Get_session) in
-        (match Scheduler.redundancy scheduler with
-         | width when width > 1 ->
-             let job = {
-               Scheduler.j_key = key;
-               j_run = (fun () -> rebuild ~key ~run t);
-               j_width = width;
-               j_thunk = t;
-             } in
-             Scheduler.dispatch_batch scheduler [job];
-             (match lookup_hit ~key ~authorized t with
-              | Some value -> value
-              | None -> rebuild ~key ~run t)
-         | _ -> rebuild ~key ~run t)
+        let width = Scheduler.redundancy scheduler in
+        if Scheduler.schedules_batches scheduler || width > 1 then
+          let job = {
+            Scheduler.j_key = key;
+            j_run = (fun () -> rebuild ~key ~run t);
+            j_width = width;
+            j_thunk = t;
+          } in
+          Scheduler.dispatch_batch scheduler [job];
+          (match lookup_hit ~key ~authorized t with
+           | Some value -> value
+           | None -> rebuild ~key ~run t)
+        else rebuild ~key ~run t
   in
   let result =
     if not nested then run_force ()

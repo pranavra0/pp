@@ -22,6 +22,11 @@ So it appears in no cache key and no trace. `pp --check` proves this. It re-runs
 any non-serial policy forced serial against the same store and fails on any hash
 mismatch.
 
+Libraries can select the same handlers through `stdlib/runtime.pp`. They can
+also provide a pure custom scheduler policy over data-only job descriptors.
+The policy returns a mode and a complete partition of job indexes; the runtime
+still owns execution, cancellation, and remote transport.
+
 == Identity is location-independent
 
 Location can be a scheduler's business, not the program's, because identity is a

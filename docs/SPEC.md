@@ -1058,6 +1058,14 @@ which means no ordering discipline is needed in user code (LAW 15). Nodes
 feeding a domain's desired state may not read that domain's own cells —
 stratification — because otherwise reconciling would loop forever.
 
+Runtime policies are also available to pp libraries through
+`configure-runtime`. A manifest may select built-in schedules, install a
+reporter, and provide canonical build/execution policy data. A custom schedule
+function receives only data-closed job descriptors and returns validated
+batches; it cannot execute a thunk or obtain authority. CLI schedule options
+override a manifest. Explicit request `:policy` values override a manifest's
+default `:execution-policy` when constructing `run-closed!` requests.
+
 Grounding: this is React, verbatim. You never touch the DOM; you return the
 desired DOM and the reconciler applies the diff. It is the same idea behind
 Kubernetes controllers and Terraform's plan/apply cycle, done with a language

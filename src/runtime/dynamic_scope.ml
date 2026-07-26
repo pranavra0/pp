@@ -41,6 +41,9 @@ let record_read cell_id observed_hash =
   if Effect.perform Get_observe_all then
     Session.add_observation (Effect.perform Get_session) (cell_id, observed_hash)
 
+let record_event event =
+  Session.add_event (Effect.perform Get_session) event
+
 let config_absent_hash = Hasher.hash_string "config-cell:absent"
 let builtin_handler_hash = Hasher.hash_string "handler-cell:builtin"
 
@@ -79,6 +82,9 @@ let with_top_level (session : Session.t) (invocation : Invocation.t) ~f x =
   | effect Get_handlers, k -> Effect.Deep.continue k []
   | effect (Lookup_handler _), k -> Effect.Deep.continue k None
   | effect (Record_read _), k -> Effect.Deep.continue k ()
+  | effect (Record_event event), k ->
+      Session.add_event session event;
+      Effect.Deep.continue k ()
   | effect (Record_node_force id), k ->
       Option.iter (Session.add_wanted_node session)
         (Session.node_key_by_id session id);

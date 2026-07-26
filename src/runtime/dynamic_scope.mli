@@ -7,6 +7,7 @@ type _ Effect.t +=
   | Get_handlers : (string * string) list Effect.t
   | Lookup_handler : string -> ((Core_model.value list -> Core_model.value) * string) option Effect.t
   | Record_read : string * string -> unit Effect.t
+  | Record_event : Core_model.value -> unit Effect.t
   | Record_node_force : string -> unit Effect.t
   | In_node : bool Effect.t
   | Current_sandbox : string option ref option Effect.t
@@ -23,6 +24,7 @@ val with_handlers :
   (unit -> 'a) -> 'a
 val with_domain : string -> (unit -> 'a) -> 'a
 val without_observation_collection : (unit -> 'a) -> 'a
+val record_event : Core_model.value -> unit
 val record_read : string -> string -> unit
 val config_lookup : string -> Core_model.value option
 val observe_config : string -> string
