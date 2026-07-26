@@ -12,7 +12,12 @@
     html.elem("h1", "pp")
     html.elem("nav", attrs: (class: "site-nav"), {
       html.elem("a", attrs: (href: "index.html"), "pp")
-      html.elem("a", attrs: (href: "using-pp.html"), "Using pp")
+      html.elem("a", attrs: (href: "paths.html"), "Paths")
+      html.elem("a", attrs: (href: "models.html"), "Models")
+      html.elem("a", attrs: (href: "gallery.html"), "Gallery")
+      html.elem("a", attrs: (href: "before-after.html"), "Before/After")
+      html.elem("a", attrs: (href: "observability.html"), "Observe")
+      html.elem("a", attrs: (href: "constraints.html"), "Constraints")
       html.elem("a", attrs: (href: "cookbook.html"), "Cookbook")
       html.elem("a", attrs: (href: "manual.html"), "Manual")
     })
@@ -24,16 +29,24 @@ should be reusable, inspectable, and safe to move.
 
 == Start here
 
-#link("using-pp.html")[Using pp] explains what pp is for and how one evaluation
-model grows from a pure function into a cached computation, a reconciler, or a
-distributed job.
+== Choose a path
 
-#link("cookbook.html")[The cookbook] starts with problems: cache a build step,
-inspect a miss, grant authority, repair drift, supervise a service, and share a
-result between stores.
+#table(
+  columns: (auto, 1fr),
+  stroke: .5pt,
+  inset: 6pt,
+  [*You want to*], [*Read*],
+  [build incrementally], [#link("paths.html")[Builds]],
+  [repair files or services], [#link("paths.html")[Reconciliation and supervision]],
+  [understand the vocabulary], [#link("models.html")[Mental models]],
+  [see complete programs], [#link("gallery.html")[Examples]],
+  [understand a cache miss], [#link("observability.html")[Observability]],
+  [understand the boundaries], [#link("constraints.html")[Constraints]],
+)
 
-#link("manual.html")[The reference manual] is the detailed guide. Every example
-on it is run by the build. The [PDF](pp-manual.pdf) is published beside it.
+The [cookbook](cookbook.html) starts with small tasks. The [reference
+manual](manual.html) is the detailed guide, and the [PDF](pp-manual.pdf) is
+published beside it.
 
 == The short version
 
@@ -56,5 +69,5 @@ def compile(source) {
 print(force(compile("main.c")))
 ```
 
-Read the [manual](manual.html) when you need a form or flag. Read the
-[cookbook](cookbook.html) when you have a task to solve.
+Read the [cookbook](cookbook.html) when you have a task to solve. Read the
+[manual](manual.html) when you need a form or flag.

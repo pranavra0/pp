@@ -1,4 +1,4 @@
-/* pp reference manual — styled after the Zig language reference: plain,
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>pp — mental models</title><meta name="authors" content="the pp project"></head><body><style>/* pp reference manual — styled after the Zig language reference: plain,
    system-font, a fixed left navigation column, thin-bordered code. No frills,
    no rounded cards. Includes a dark mode triggered by the #dm-toggle button,
    persisted in localStorage, or auto-detected via prefers-color-scheme.
@@ -159,3 +159,28 @@ strong { color: var(--text-color); }
 [data-theme="dark"] #dm-toggle {
   background: #fff;
 }
+</style><div style="display: contents;"><button id="dm-toggle" title="Toggle dark mode"></button></div><script>(function () {
+  const root = document.documentElement;
+  const btn = document.getElementById('dm-toggle');
+  const stored = localStorage.getItem('pp-theme');
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  function setTheme(dark) {
+    if (dark) {
+      root.setAttribute('data-theme', 'dark');
+    } else {
+      root.removeAttribute('data-theme');
+    }
+    localStorage.setItem('pp-theme', dark ? 'dark' : 'light');
+  }
+  setTheme(stored ? stored === 'dark' : prefersDark);
+  btn.addEventListener('click', function () {
+    setTheme(root.getAttribute('data-theme') !== 'dark');
+  });
+})();
+</script><h1>Mental models</h1><nav class="site-nav"><a href="index.html">pp</a><a href="paths.html">Paths</a><a href="models.html">Models</a><a href="gallery.html">Gallery</a><a href="before-after.html">Before/After</a><a href="observability.html">Observe</a><a href="constraints.html">Constraints</a><a href="cookbook.html">Cookbook</a><a href="manual.html">Manual</a></nav><p>The names in pp describe different parts of one evaluation story. Keep them separate and the rest of the system becomes predictable.</p><table><tr><td><strong>Thing</strong></td><td><strong>It is</strong></td><td><strong>It answers</strong></td></tr><tr><td>Value</td><td>content-addressed data</td><td>What is the result?</td></tr><tr><td>Node</td><td>a persistent computation</td><td>Can this work be reused?</td></tr><tr><td>Trace</td><td>evidence of reads and child results</td><td>Why is a reuse valid?</td></tr><tr><td>Capability</td><td>unforgeable authority</td><td>What may this code touch?</td></tr><tr><td>Handler</td><td>a dynamic interpretation of an effect</td><td>How is this effect handled?</td></tr><tr><td>Domain</td><td>observe / diff / apply policy</td><td>How does the world converge?</td></tr></table><h3>Value</h3><p>Every value has a content hash. Equal values have equal identity. A map’s binding order is not part of its meaning, and a closure includes the values it captures. This is the base that makes comparison and storage honest.</p><h3>Node</h3><p>A node packages reusable work. Its key includes its code and the values of its free variables. <code>delay</code> shares work in one process; <code>node</code> can share it across processes and stores.</p><pre><code data-lang="text">code + input values → node key → result</code></pre><h3>Trace</h3><p>A key alone does not prove that a stored result is still usable. A trace records the cells observed while producing it. pp verifies those observations before serving a hit. The trace is the reason a cache can account for the world it read.</p><h3>Capability</h3><p>A capability is authority, not information. It enters at the root, can be narrowed, and cannot be widened by user code. A filesystem observation without the matching capability is refused before the read.</p><h3>Handler</h3><p><code>perform</code> finds the nearest handler in dynamic extent. A result-transparent handler can change scheduling or interpretation without changing identity. A semantic handler is part of the computation’s meaning and is recorded in its trace.</p><h3>Domain</h3><p>A domain is a single writer for a namespace:</p><pre><code data-lang="text">observe world → diff observed desired → apply plan</code></pre><p>The desired value is ordinary pp data. The domain owns the narrow trusted boundary that changes the world. Filesystems and processes use the same protocol.</p><h3>The whole picture</h3><pre><code data-lang="text">value
+  ↓ force
+node + trace
+  ↓ desired state
+domain
+  ↓ apply
+world</code></pre><p>Read [the paths](paths.html) for applications, or the [manual](manual.html) for the laws behind each arrow.</p></body></html>

@@ -1,4 +1,4 @@
-/* pp reference manual — styled after the Zig language reference: plain,
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>pp — constraints</title><meta name="authors" content="the pp project"></head><body><style>/* pp reference manual — styled after the Zig language reference: plain,
    system-font, a fixed left navigation column, thin-bordered code. No frills,
    no rounded cards. Includes a dark mode triggered by the #dm-toggle button,
    persisted in localStorage, or auto-detected via prefers-color-scheme.
@@ -159,3 +159,22 @@ strong { color: var(--text-color); }
 [data-theme="dark"] #dm-toggle {
   background: #fff;
 }
+</style><div style="display: contents;"><button id="dm-toggle" title="Toggle dark mode"></button></div><script>(function () {
+  const root = document.documentElement;
+  const btn = document.getElementById('dm-toggle');
+  const stored = localStorage.getItem('pp-theme');
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  function setTheme(dark) {
+    if (dark) {
+      root.setAttribute('data-theme', 'dark');
+    } else {
+      root.removeAttribute('data-theme');
+    }
+    localStorage.setItem('pp-theme', dark ? 'dark' : 'light');
+  }
+  setTheme(stored ? stored === 'dark' : prefersDark);
+  btn.addEventListener('click', function () {
+    setTheme(root.getAttribute('data-theme') !== 'dark');
+  });
+})();
+</script><h1>Constraints</h1><nav class="site-nav"><a href="index.html">pp</a><a href="paths.html">Paths</a><a href="models.html">Models</a><a href="gallery.html">Gallery</a><a href="before-after.html">Before/After</a><a href="observability.html">Observe</a><a href="constraints.html">Constraints</a><a href="cookbook.html">Cookbook</a><a href="manual.html">Manual</a></nav><p>pp refuses a few convenient shortcuts. Each refusal protects one of the identities the rest of the system relies on.</p><h3>No ambient authority</h3><p>A function cannot read a file, inspect an environment variable, or start a process because the host happens to provide it. The root must grant the capability, and a callee can receive only a narrower one.</p><h3>No unsound cache</h3><p>A node cannot hide an input from its key or trace. Ambient subprocesses and unaccounted nondeterminism are scripting-tier. A trusted provider may classify an immutable request as cacheable only after accounting for its semantic input.</p><h3>No mutation inside a node</h3><p>Nodes are replayable values. An irreversible action cannot be smuggled into a cached body. Convergent writes belong to a domain; one-shot actions belong to a journalled fenced effect.</p><h3>No location syntax</h3><p>There is no <code>remote-eval</code>, placement annotation, or host-specific node form. <code>force</code> is the execution primitive. The scheduler can choose serial, parallel, race, or remote execution without changing program identity.</p><h3>No hidden ordering from authority</h3><p>Capabilities grant access; they do not establish sequence. Ordering comes from value dependencies, explicit <code>do</code> blocks, or a domain’s apply protocol.</p><h3>No magical reconciler</h3><p>The reconciler is not a second language hidden behind the CLI. A domain is ordinary pp policy over observe, diff, and apply, with a small trusted runtime boundary for journalling and verification.</p><h3>No silent recovery of ambiguous effects</h3><p>After a crash, a convergent write can be observed again. An irreversible action may have unknown status, so pp requires an explicit retry, abort, or ask policy.</p><p>These constraints are the design bargain. In return, a result can carry its identity, authority boundary, and evidence. Read [observability](observability.html) to see what that evidence looks like, or [the manual](manual.html) for the semantic laws.</p></body></html>

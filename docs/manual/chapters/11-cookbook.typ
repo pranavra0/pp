@@ -13,7 +13,12 @@
     html.elem("h1", "pp cookbook")
     html.elem("nav", attrs: (class: "site-nav"), {
       html.elem("a", attrs: (href: "index.html"), "pp")
-      html.elem("a", attrs: (href: "using-pp.html"), "Using pp")
+      html.elem("a", attrs: (href: "paths.html"), "Paths")
+      html.elem("a", attrs: (href: "models.html"), "Models")
+      html.elem("a", attrs: (href: "gallery.html"), "Gallery")
+      html.elem("a", attrs: (href: "before-after.html"), "Before/After")
+      html.elem("a", attrs: (href: "observability.html"), "Observe")
+      html.elem("a", attrs: (href: "constraints.html"), "Constraints")
       html.elem("a", attrs: (href: "cookbook.html"), "Cookbook")
       html.elem("a", attrs: (href: "manual.html"), "Manual")
     })

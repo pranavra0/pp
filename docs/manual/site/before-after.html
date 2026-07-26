@@ -1,0 +1,206 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>pp — before and after</title><meta name="authors" content="the pp project"></head><body><style>/* pp reference manual — styled after the Zig language reference: plain,
+   system-font, a fixed left navigation column, thin-bordered code. No frills,
+   no rounded cards. Includes a dark mode triggered by the #dm-toggle button,
+   persisted in localStorage, or auto-detected via prefers-color-scheme.
+   Read via typst read() and inlined into the exported HTML, so editing this
+   file re-triggers the manual build. */
+
+:root {
+  --text-color: #111;
+  --bg-color: #fff;
+  --muted-text: #575757;
+  --link-color: #1a1a8c;
+  --link-hover-bg: #fff2a8;
+  --border-color: #eee;
+  --code-bg: #f8f8f8;
+  --code-border: silver;
+  --pre-bg: #fff;
+  --ex-file-bg: #fcdba5;
+  --ex-out-bg: #fafafa;
+  --table-border: grey;
+  --blockquote-color: #444;
+  --nav-link-color: #111;
+}
+
+[data-theme="dark"] {
+  --text-color: #f0f0f0;
+  --bg-color: #000000;
+  --muted-text: #999;
+  --link-color: #79b8ff;
+  --link-hover-bg: #fff2a8;
+  --border-color: #333;
+  --code-bg: #1a1a1a;
+  --code-border: #444;
+  --pre-bg: #111;
+  --ex-file-bg: #3a3a1e;
+  --ex-out-bg: #111;
+  --table-border: #444;
+  --blockquote-color: #aaa;
+  --nav-link-color: #ccc;
+}
+
+body {
+  font-family: system-ui, -apple-system, Roboto, "Segoe UI", sans-serif;
+  line-height: 1.5;
+  color: var(--text-color);
+  background: var(--bg-color);
+  margin: 0;
+  padding: 1em;
+}
+
+/* content column */
+h1 { font-size: 1.8em; }
+h2 { font-size: 1.4em; margin-top: 1.8em; }
+h3 { font-size: 1.15em; }
+h4 { font-size: 1em; }
+h1, h2, h3, h4 { line-height: 1.2; }
+.prefix { color: var(--muted-text); font-weight: normal; }
+
+a { color: var(--link-color); text-decoration: none; }
+a:hover, a:focus { background: var(--link-hover-bg); }
+
+p { max-width: 62em; }
+
+/* the outline() nav — a fixed left column on wide screens, like Zig */
+nav[role="doc-toc"] { line-height: 1.3; }
+nav[role="doc-toc"] h2 { font-size: 1.1em; margin: 0 0 0.5em; }
+nav[role="doc-toc"] ol { list-style-type: none; padding-left: 1em; margin: 0; }
+nav[role="doc-toc"] > ol { padding-left: 0; }
+nav[role="doc-toc"] a { color: var(--nav-link-color); }
+nav[role="doc-toc"] a:hover { background: var(--link-hover-bg); }
+nav[role="doc-toc"] .prefix { color: var(--muted-text); margin-right: 0.4em; }
+
+.site-nav { display: flex; gap: 1.2em; margin: 0 0 2em; }
+.site-nav a:first-child { font-weight: bold; }
+.site-next { border-top: 1px solid var(--border-color); margin-top: 2em; padding-top: 1em; }
+
+@media screen and (min-width: 1025px) {
+  nav[role="doc-toc"] {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    width: 24em;
+    overflow: auto;
+    padding: 1em;
+    border-right: 1px solid var(--border-color);
+    box-sizing: border-box;
+  }
+  body { margin-left: 25em; max-width: 60em; }
+}
+
+/* code */
+code, pre, kbd, samp {
+  font-family: "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
+}
+code { background: var(--code-bg); border: 1px dotted var(--code-border); padding: 0 0.3em; }
+pre { line-height: normal; }
+pre > code {
+  display: block;
+  overflow: auto;
+  padding: 0.5em;
+  border: 1px solid var(--border-color);
+  background: var(--pre-bg);
+}
+
+/* runnable example blocks: filename caption, source, shell command, output —
+   the Zig-reference layout. */
+.ex-file {
+  display: block;
+  width: fit-content;
+  font-weight: bold;
+  background: var(--ex-file-bg);
+  padding: 0.15em 0.6em;
+  border-radius: 5px 5px 0 0;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.85em;
+}
+/* the code block sits flush under its filename caption: no gap, no overlap */
+.ex-file + pre { margin-top: 0; }
+.ex-file + pre > code { margin-top: 0; border-top-left-radius: 0; }
+.ex-shell {
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  color: var(--muted-text);
+  margin: 0.6em 0 0.2em;
+}
+pre.ex-out {
+  margin-top: 0.2em;
+  overflow: auto;
+  padding: 0.5em;
+  border: 1px solid var(--border-color);
+  background: var(--ex-out-bg);
+}
+
+/* tables (kept plain, Zig-style) */
+.table-wrapper { width: 100%; margin: 1em 0; overflow-x: auto; }
+table { border-collapse: collapse; }
+table, th, td { border: 1px solid var(--table-border); }
+th, td { padding: 0.5em; text-align: left; }
+th { font-weight: bold; }
+
+hr { border: 0; border-top: 1px solid var(--border-color); margin: 2em 0; }
+blockquote { margin: 1em 0; padding-left: 1em; border-left: 3px solid var(--border-color); color: var(--blockquote-color); }
+
+/* dark-mode toggle circle */
+#dm-toggle {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  cursor: pointer;
+  z-index: 9999;
+  background: #111;
+  outline: none;
+  transition: background 0.2s;
+}
+strong { color: var(--text-color); }
+[data-theme="dark"] #dm-toggle {
+  background: #fff;
+}
+</style><div style="display: contents;"><button id="dm-toggle" title="Toggle dark mode"></button></div><script>(function () {
+  const root = document.documentElement;
+  const btn = document.getElementById('dm-toggle');
+  const stored = localStorage.getItem('pp-theme');
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  function setTheme(dark) {
+    if (dark) {
+      root.setAttribute('data-theme', 'dark');
+    } else {
+      root.removeAttribute('data-theme');
+    }
+    localStorage.setItem('pp-theme', dark ? 'dark' : 'light');
+  }
+  setTheme(stored ? stored === 'dark' : prefersDark);
+  btn.addEventListener('click', function () {
+    setTheme(root.getAttribute('data-theme') !== 'dark');
+  });
+})();
+</script><h1>Before and after</h1><nav class="site-nav"><a href="index.html">pp</a><a href="paths.html">Paths</a><a href="models.html">Models</a><a href="gallery.html">Gallery</a><a href="before-after.html">Before/After</a><a href="observability.html">Observe</a><a href="constraints.html">Constraints</a><a href="cookbook.html">Cookbook</a><a href="manual.html">Manual</a></nav><p>The point of pp is easiest to see beside the scripts it replaces. The syntax is not the important part. The ownership of identity, authority, and change is.</p><h3>Shell build → pp build</h3><p>A shell build usually repeats every command and relies on timestamps or a hand-written dependency graph:</p><pre><code data-lang="sh"><span style="color: #900000">cc</span><span style="color: #900000"> -</span><span style="color: #900000">c</span><span style="color: #900000"> main.c</span><span style="color: #900000"> -</span><span style="color: #900000">o</span><span style="color: #900000"> main.o</span>
+<span style="color: #900000">cc</span><span style="color: #900000"> -</span><span style="color: #900000">c</span><span style="color: #900000"> util.c</span><span style="color: #900000"> -</span><span style="color: #900000">o</span><span style="color: #900000"> util.o</span>
+<span style="color: #900000">cc</span><span style="color: #900000"> main.o util.o</span><span style="color: #900000"> -</span><span style="color: #900000">o</span><span style="color: #900000"> app</span></code></pre><p>In pp, each expensive step is a node and the link step receives the compiled values:</p><pre><code data-lang="pp">def compile(source) {
+  node { print(<span style="color: #dd1144">"</span><span style="color: #dd1144">compile</span><span style="color: #dd1144">"</span>, source); string-append(source, <span style="color: #dd1144">"</span><span style="color: #dd1144">.o</span><span style="color: #dd1144">"</span>) }
+}
+
+def <span style="color: #005c5c">link</span>(left, right) {
+  node { print(<span style="color: #dd1144">"</span><span style="color: #dd1144">link</span><span style="color: #dd1144">"</span>, left, right); string-append(left, <span style="color: #dd1144">"</span><span style="color: #dd1144">+</span><span style="color: #dd1144">"</span>, right) }
+}
+
+print(force(<span style="color: #005c5c">link</span>(force(compile(<span style="color: #dd1144">"</span><span style="color: #dd1144">main.c</span><span style="color: #dd1144">"</span>)), force(compile(<span style="color: #dd1144">"</span><span style="color: #dd1144">util.c</span><span style="color: #dd1144">"</span>)))))</code></pre><p>The dependency graph is the value flow. The store can reuse either compile step independently. [The gallery](gallery.html) shows the cross-process transcript.</p><h3>Deployment script → reconciler</h3><p>An imperative deployment script describes transitions:</p><pre><code data-lang="sh"><strong><span style="color: #333333">if</span></strong> <span style="color: #900000">test</span><span style="color: #900000"> !</span><span style="color: #900000"> -</span><span style="color: #900000">f</span><span style="color: #900000"> site/index.html</span><strong><span style="color: #333333">;</span></strong> <strong><span style="color: #333333">then</span></strong>
+  <span style="color: #900000">cp</span><span style="color: #900000"> build/index.html site/index.html</span>
+<strong><span style="color: #333333">fi</span></strong>
+<span style="color: #900000">rm</span><span style="color: #900000"> -</span><span style="color: #900000">f</span><span style="color: #900000"> site/old.html</span></code></pre><p>That script grows a new branch for every drift case. A pp program returns the complete tree:</p><pre><code data-lang="pp">reconcile {
+  <span style="color: #dd1144">"</span><span style="color: #dd1144">index.html</span><span style="color: #dd1144">"</span> -> $file(<span style="color: #dd1144">"</span><span style="color: #dd1144">build/index.html</span><span style="color: #dd1144">"</span>),
+  <span style="color: #dd1144">"</span><span style="color: #dd1144">app.css</span><span style="color: #dd1144">"</span> -> $file(<span style="color: #dd1144">"</span><span style="color: #dd1144">build/app.css</span><span style="color: #dd1144">"</span>)
+}</code></pre><p>The filesystem domain computes create, update, and delete operations from the observed tree. Run the same pass again and it is a no-op. [The paths](paths.html) and [gallery](gallery.html) show the real transcript.</p><h3>Restart loop → supervisor</h3><p>A restart loop owns timing, process IDs, and special cases:</p><pre><code data-lang="sh"><strong><span style="color: #333333">while</span></strong> <span style="color: #900000">true</span><strong><span style="color: #333333">;</span></strong> <strong><span style="color: #333333">do</span></strong>
+  <span style="color: #900000">./worker</span> <strong><span style="color: #333333">||</span></strong> <span style="color: #900000">true</span>
+  <span style="color: #900000">sleep</span><span style="color: #900000"> 1</span>
+<strong><span style="color: #333333">done</span></strong></code></pre><p>The process domain instead consumes desired service specifications:</p><pre><code data-lang="pp">{
+  <span style="color: #dd1144">"</span><span style="color: #dd1144">worker</span><span style="color: #dd1144">"</span> -> {
+    :cmd -> <span style="color: #dd1144">"</span><span style="color: #dd1144">./worker</span><span style="color: #dd1144">"</span>,
+    :args -> [],
+    :env -> {},
+    :cwd -> <span style="color: #dd1144">"</span><span style="color: #dd1144">.</span><span style="color: #dd1144">"</span>
+  }
+}</code></pre><p><code>--supervise --watch</code> observes the process table and converges it to that map. A changed spec restarts the named service; a killed service is started again. The same observe / diff / apply protocol handles files and processes.</p><h3>Next</h3><p>Read [mental models](models.html) to name the pieces, then use [observability](observability.html) to see why pp can make these changes without hiding them.</p></body></html>

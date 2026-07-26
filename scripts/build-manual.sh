@@ -22,6 +22,9 @@ mapfile -t examples < <(
       }
     }
   ' "$MANUAL/chapters"/*.typ \
+    "$MANUAL/website.typ" "$MANUAL/paths.typ" "$MANUAL/models.typ" \
+    "$MANUAL/gallery.typ" "$MANUAL/before-after.typ" \
+    "$MANUAL/observability.typ" "$MANUAL/constraints.typ" \
     | sort -u
 )
 
@@ -65,6 +68,11 @@ done
   typst compile --root . manual.typ site/pp-manual.pdf
   typst compile --root . --features html --format html manual.typ site/manual.html
   typst compile --root . --features html --format html website.typ site/index.html
-  typst compile --root . --features html --format html chapters/01-using-pp.typ site/using-pp.html
   typst compile --root . --features html --format html chapters/11-cookbook.typ site/cookbook.html
+  typst compile --root . --features html --format html paths.typ site/paths.html
+  typst compile --root . --features html --format html models.typ site/models.html
+  typst compile --root . --features html --format html gallery.typ site/gallery.html
+  typst compile --root . --features html --format html before-after.typ site/before-after.html
+  typst compile --root . --features html --format html observability.typ site/observability.html
+  typst compile --root . --features html --format html constraints.typ site/constraints.html
 )
