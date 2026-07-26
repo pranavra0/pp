@@ -12,6 +12,9 @@ mutable-field|src/frontend/printer_braces.ml|indent|pass
 mutable-field|src/frontend/printer_braces.ml|line|pass
 mutable-field|src/frontend/printer_sexpr.ml|line|pass
 mutable-field|src/frontend/reader.ml|pos|pass
+mutable-field|src/frontend/reader.ml|line|pass
+mutable-field|src/frontend/reader.ml|column|pass
+mutable-field|src/frontend/reader.ml|offset|pass
 mutable-field|src/frontend/reader_braces.ml|pos|pass
 mutable-field|src/runtime/scheduler.ml|handler|command
 mutable-field|src/runtime/scheduler.ml|signal_handler|process-service
@@ -41,6 +44,9 @@ top-ref|src/kernel/environment.ml|env_counter|process-service
 mutable-field|src/runtime/session.ml|fenced_actions|pass
 mutable-field|src/runtime/session.ml|gensym|evaluation-session
 mutable-field|src/runtime/session.ml|observations|pass
+mutable-field|src/runtime/session.ml|events|pass
+mutable-field|src/runtime/session.ml|reporters|evaluation-session
+mutable-field|src/runtime/session.ml|runtime_manifest|evaluation-session
 mutable-field|src/runtime/session.ml|cache_bust|evaluation-session
 mutable-field|src/runtime/session.ml|force_depth|evaluation-session
 mutable-field|src/runtime/session.ml|eval_depth|evaluation-session

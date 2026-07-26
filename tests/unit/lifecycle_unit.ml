@@ -79,9 +79,29 @@ let () =
     "executor evidence was not canonicalized";
   (match Executor.run
            (Executor.make ~classify:(fun _ -> Executor.Cacheable)
+              ~execute:(fun _ -> result [] ["", "bad"] []))
+           request with
+   | _ -> failwith "executor accepted empty evidence name"
+   | exception Failure _ -> ());
+  (match Executor.run
+           (Executor.make ~classify:(fun _ -> Executor.Cacheable)
               ~execute:(fun _ -> result [] ["same", "1"; "same", "2"] []))
            request with
    | _ -> failwith "executor returned duplicate evidence"
+   | exception Failure _ -> ());
+  let invalid_tree = [
+    Artifact_tree.Directory { path = "out"; mode = 0o755 };
+    Artifact_tree.File {
+      path = "out";
+      mode = 0o644;
+      blob = Hasher.hash_string "output";
+    };
+  ] in
+  (match Executor.run
+           (Executor.make ~classify:(fun _ -> Executor.Cacheable)
+              ~execute:(fun _ -> result invalid_tree [] []))
+           request with
+   | _ -> failwith "executor accepted an invalid output tree"
    | exception Failure _ -> ());
   let closed_request = Core_model.VMap [
     Core_model.VKeyword "tool",

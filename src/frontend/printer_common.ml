@@ -1,3 +1,5 @@
+open Pp_kernel
+
 exception Error of string
 
 let error fmt = Printf.ksprintf (fun message -> raise (Error message)) fmt
@@ -39,7 +41,7 @@ let float_lit f =
 open Pp_kernel.Core_model
 
 type inverted = {
-  i_loc : (string * int) option;
+  i_loc : Source_range.t option;
   i_annots : (string * expr) list;
   i_ret : expr option;
   i_body : expr;
@@ -96,10 +98,10 @@ let block_stmts_of = function
   | expression -> [expression]
 
 let leading_anchor = function
-  | ELocated ((_, line), _) -> Some line
-  | EDefValue (_, ELocated ((_, line), _)) -> Some line
+  | ELocated (range, _) -> Some (Source_range.start range).line
+  | EDefValue (_, ELocated (range, _)) -> Some (Source_range.start range).line
   | EFn (params, body) | EDef (_, params, body) | EDefNode (_, params, body) ->
       (match invert_fn_body params body with
-       | Ok { i_loc = Some (_, line); _ } -> Some line
+       | Ok { i_loc = Some range; _ } -> Some (Source_range.start range).line
        | Ok { i_loc = None; _ } | Result.Error _ -> None)
   | _ -> None

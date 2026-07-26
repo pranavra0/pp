@@ -90,7 +90,7 @@ let snapshot ~root ~paths =
     | _ -> failwith ("selected output has an unsupported entry kind: " ^ path)
   in
   List.iter walk selected;
-  Hashtbl.to_seq_values entries
+  let tree = Hashtbl.to_seq_values entries
   |> List.of_seq
   |> List.sort (fun a b ->
        let path = function
@@ -99,3 +99,6 @@ let snapshot ~root ~paths =
          | Artifact_tree.Symlink { path; _ } -> path
        in
        String.compare (path a) (path b))
+  in
+  Artifact_tree.validate tree;
+  tree

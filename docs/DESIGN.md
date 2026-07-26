@@ -21,6 +21,11 @@ ownership, and [SPEC.md](SPEC.md) for laws and current limits.
    data and traces, not evaluator policy.
 8. Closed runtime sets have one source of truth. Readers, printers, tests,
    and generated specifications use the same tables where possible.
+9. Extensibility is policy composition. pp libraries may define domains,
+   schedules, build requests, execution policies, and reporters as ordinary
+   values and functions. The runtime supplies narrow interpreters for those
+   values; it never hands host closures, capabilities, or store authority to
+   a library callback.
 
 ## Why the evaluator stays single
 

@@ -25,6 +25,10 @@ open Pp_kernel
    ceiling). *)
 type policy = Serial | Parallel of int | Race of int | Remote of string
 
+type batch_mode = Serial_batch | Parallel_batch of int | Race_batch of int
+  | Remote_batch of string
+type custom_plan = { mode : batch_mode; batches : int list list }
+
 type job = {
   j_key : Identity_types.Node_key.t;
   j_run : unit -> Core_model.value;
@@ -247,6 +251,34 @@ let run_concurrent (scheduler : t) (limit : int) (jobs : job list) : unit =
     done;
     if !live_count > 0 then reap_one ()
   done
+
+let custom ~name ~redundancy
+    ~(remote_dispatch : member:string -> job list -> unit)
+    ~(plan : job list -> custom_plan) =
+  let run_batch scheduler mode jobs =
+    match mode with
+    | Serial_batch -> List.iter (fun job -> ignore (job.j_run ())) jobs
+    | Parallel_batch width -> run_concurrent scheduler width jobs
+    | Race_batch width -> run_concurrent scheduler width jobs
+    | Remote_batch member -> remote_dispatch ~member jobs
+  in
+  { h_name = name;
+    h_redundancy = max 1 redundancy;
+    h_dispatch = (fun scheduler jobs ->
+    let indexes = List.mapi (fun index _ -> index) jobs in
+    let plan = plan jobs in
+    let selected = List.concat plan.batches in
+    let valid_index index = index >= 0 && index < List.length jobs in
+    if List.exists (fun index -> not (valid_index index)) selected then
+      failwith "scheduler: custom plan contains an out-of-range job index";
+    let sorted = List.sort compare selected in
+    if sorted <> indexes then
+      failwith "scheduler: custom plan must schedule every job exactly once";
+    List.iter (fun batch ->
+      let batch_jobs = List.map (fun index -> List.nth jobs index) batch in
+      run_batch scheduler plan.mode batch_jobs)
+      plan.batches);
+    h_cancel = ignore }
 
 let builtin ~remote_dispatch = function
   | Serial -> serial_handler

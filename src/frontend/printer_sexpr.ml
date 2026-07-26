@@ -5,7 +5,7 @@ open Pp_kernel
    — same `ELocated` placement, hence the same content hash. This is the
    other half of `pp fmt` (src/frontend/printer_braces.ml is the first half),
    built with the same location-preserving discipline: pad newlines so
-   every construct's recorded (file, line) lands exactly, and raise
+   every construct's recorded source range lands on its recorded line, and raise
    [Unprintable] if a located line was already passed.
 
    Sexpr is easier to invert into than braces: it is *whitespace-
@@ -138,7 +138,7 @@ let check_file st (f : string) =
    reader-facing pieces). *)
 
 type inverted = Printer_common.inverted = {
-  i_loc : (string * int) option;
+  i_loc : Source_range.t option;
   i_annots : (string * expr) list;
   i_ret : expr option;
   i_body : expr;
@@ -161,9 +161,9 @@ let sep_before st (s : string) (e : expr) =
 
 let rec print_expr st (e : expr) : unit =
   match e with
-  | ELocated ((f, l), inner) ->
-      check_file st f;
-      require_line st l "a located form";
+  | ELocated (range, inner) ->
+      check_file st (Source_range.source range);
+      require_line st (Source_range.start range).line "a located form";
       print_expr st inner
   | ELiteral v -> emit st (literal v)
   | ESymbol s ->
@@ -185,7 +185,9 @@ let rec print_expr st (e : expr) : unit =
   | EFn (params, body') ->
       let inv = invert_fn_body params body' in
       (match inv.i_loc with
-       | Some (f, l) -> check_file st f; require_line st l "fn"
+       | Some range ->
+           check_file st (Source_range.source range);
+           require_line st (Source_range.start range).line "fn"
        | None -> ());
       emit st "(fn ";
       print_params st params inv.i_annots;
@@ -196,7 +198,9 @@ let rec print_expr st (e : expr) : unit =
       if not (name_ok name) then unpr "def name %s has no sexpr spelling" name;
       let inv = invert_fn_body params body' in
       (match inv.i_loc with
-       | Some (f, l) -> check_file st f; require_line st l ("def " ^ name)
+       | Some range ->
+           check_file st (Source_range.source range);
+           require_line st (Source_range.start range).line ("def " ^ name)
        | None -> ());
       emit st "(def ";
       print_name_params st name params inv.i_annots;
@@ -207,7 +211,9 @@ let rec print_expr st (e : expr) : unit =
       if not (name_ok name) then unpr "node name %s has no sexpr spelling" name;
       let inv = invert_fn_body params body' in
       (match inv.i_loc with
-       | Some (f, l) -> check_file st f; require_line st l ("defnode " ^ name)
+       | Some range ->
+           check_file st (Source_range.source range);
+           require_line st (Source_range.start range).line ("defnode " ^ name)
        | None -> ());
       emit st "(defnode ";
       print_name_params st name params inv.i_annots;
@@ -217,9 +223,9 @@ let rec print_expr st (e : expr) : unit =
   | EDefValue (name, rhs) ->
       if not (name_ok name) then unpr "binding name %s has no sexpr spelling" name;
       (match rhs with
-       | ELocated ((f, l), v) ->
-           check_file st f;
-           require_line st l ("def " ^ name);
+       | ELocated (range, v) ->
+           check_file st (Source_range.source range);
+           require_line st (Source_range.start range).line ("def " ^ name);
            emit st "(def "; emit st name; sep_before st " " v;
            print_expr st v; emit st ")"
        | v ->

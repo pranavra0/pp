@@ -1,13 +1,31 @@
-type location = string * int
+type location = Source_range.t
+
+type diagnostic = {
+  code : string option;
+  message : string;
+  location : location option;
+  related : (string * location) list;
+}
+
+type lsp_position = { line : int; character : int }
+type lsp_range = { start : lsp_position; end_ : lsp_position }
+type lsp_related = { message : string; range : lsp_range }
+type lsp_diagnostic = {
+  range : lsp_range option;
+  severity : int;
+  code : string option;
+  message : string;
+  related : lsp_related list;
+}
 
 type reader_error =
-  | Syntax of { message : string; location : location option }
-  | Incomplete of { message : string; location : location option }
+  | Syntax of diagnostic
+  | Incomplete of diagnostic
 
-type evaluator_error = { message : string; location : location option }
+type evaluator_error = diagnostic
 type capability_error =
-  | Denied of { message : string; location : location option }
-  | Authority_escape of { message : string; location : location option }
+  | Denied of diagnostic
+  | Authority_escape of diagnostic
 type store_error =
   | Read_failed of { path : string; message : string }
   | Write_failed of { path : string; message : string }
@@ -33,6 +51,10 @@ type t =
 
 type cache_decision = Cacheable | Do_not_cache
 val cache_decision : t -> cache_decision
+val diagnostic : ?code:string -> ?location:location ->
+  ?related:(string * location) list -> string -> diagnostic
+val diagnostic_of_t : t -> diagnostic option
+val to_lsp : diagnostic -> lsp_diagnostic
 val with_location : location option -> t -> t
 val string_of_t : t -> string
 

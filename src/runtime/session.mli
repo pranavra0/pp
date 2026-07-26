@@ -9,7 +9,10 @@ type domain_entry = {
 }
 type t
 
-val create : ?executor:Executor.t -> scheduler:Scheduler.t -> Evaluator_ops.t -> t
+val create : ?executor:Executor.t ->
+  ?remote_dispatch:(member:string -> Scheduler.job list -> unit) ->
+  ?schedule_locked:bool ->
+  scheduler:Scheduler.t -> Evaluator_ops.t -> t
 val scheduler : t -> Scheduler.t
 val executor : t -> Executor.t option
 val force : t -> Core_model.value -> Core_model.value
@@ -38,6 +41,14 @@ val set_sealed_pin : t -> string -> string -> unit
 val observations : t -> (string * string) list
 val add_observation : t -> string * string -> unit
 val clear_observations : t -> unit
+val add_event : t -> Core_model.value -> unit
+val events : t -> Core_model.value list
+val register_reporter : t -> Core_model.value -> unit
+val reporters : t -> Core_model.value list
+val set_runtime_manifest : t -> Core_model.value -> unit
+val runtime_manifest : t -> Core_model.value option
+val remote_dispatch : t -> (member:string -> Scheduler.job list -> unit) option
+val schedule_locked : t -> bool
 val add_wanted_node : t -> Identity_types.Node_key.t -> unit
 val wanted_nodes : t -> Identity_types.Node_key.t list
 val add_fenced_action : t -> string * Core_model.value -> unit

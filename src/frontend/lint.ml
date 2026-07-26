@@ -288,7 +288,8 @@ let rules : rule list = [
     innermost wrapper around it. *)
 let rec check_expr ?(line=0) file (e : expr) : unit =
   match e with
-  | ELocated ((_, l), inner) -> check_expr ~line:l file inner
+  | ELocated (range, inner) ->
+      check_expr ~line:(Source_range.start range).line file inner
   | node ->
       List.iter (fun r -> r.check file line node) rules;
       recurse ~line file node
@@ -412,9 +413,11 @@ let lint_file (path : string) : unit =
     | Failure msg ->
         Printf.eprintf "pp lint: parse error in %s: %s\n%!" path msg;
         exit 1
-    | Source_error.Error (Source_error.Reader (Source_error.Syntax { message; location })) ->
+    | Source_error.Error (Source_error.Reader
+        (Source_error.Syntax { message; location; _ })) ->
         let loc = match location with
-          | Some (f, l) -> Printf.sprintf " at %s:%d" f l | None -> "" in
+          | Some range -> Printf.sprintf " at %s" (Source_range.format range)
+          | None -> "" in
         Printf.eprintf "pp lint: parse error in %s: %s%s\n%!" path message loc;
         exit 1
   in

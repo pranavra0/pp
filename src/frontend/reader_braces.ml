@@ -11,15 +11,16 @@ open Pp_kernel
    rows L1–L61.
 
    Location placement mirrors reader.ml's sites exactly:
-   - every top-level statement: ELocated ((source, line-of-first-token), form)
-   - `def`/`fn`/`node f(..)`: the line of the token AFTER the head keyword
+   - every top-level statement: ELocated (range-of-first-token, form)
+   - `def`/`fn`/`node f(..)`: the range of the token AFTER the head keyword
      locates the body / return annotation / per-parameter checks
      (Desugar.assemble_fn_body)
    - `let x = e` / `node x { .. }`: EDefValue (x, ELocated (loc, rhs))
-   - `assert`: the location is baked into the generated message string, with
-     the condition rendered in s-expression notation (Desugar.desugar_assert).
+   - `assert`: the shared desugar renders the condition in s-expression
+     notation, and runtime diagnostics carry the source range.
 
-   Error messages carry `msg at file:line` in the sexpr reader's exact format. *)
+   Diagnostics carry structured ranges; string formatting is deferred to the
+   shared error renderer. *)
 
 open Core_model
 open Source_error
@@ -67,7 +68,7 @@ let string_of_btok = function
 (* [glued] = no whitespace/comment between this token's first character and
    the previous token's last character — the carrier of Appendix B's
    whitespace rule (infix operators require surrounding whitespace). *)
-type tok = { t : btok; tline : int; glued : bool }
+type tok = { t : btok; tline : int; trange : Source_range.t; glued : bool }
 
 (* Name characters: the sexpr reader's symbol characters minus ':' (§B.1).
    '<' is not a name character (lexed specially, as in sexprs). *)
@@ -88,19 +89,36 @@ let lex ~(file : string) (input : string) : tok list =
   let len = String.length input in
   let pos = ref 0 in
   let line = ref 1 in
+  let column = ref 1 in
   let toks = ref [] in
   let last_end = ref (-1) in   (* char index just past the previous token *)
-  let lex_error l msg = reader ~location:(file, l) msg in
+  let token_column = ref 1 in
+  let lex_error l msg =
+    reader ~location:(Source_range.point ~source:file ~offset:!pos ~line:l
+                       ~column:!column) msg in
   (* A token that scanned off the end of the source — the lexer's out-of-input
      signal, distinct from a genuine bad-character error. See
      Source_error.Reader_incomplete. *)
   let lex_incomplete l msg =
-    incomplete ~location:(file, l) msg in
+    incomplete ~location:(Source_range.point ~source:file ~offset:!pos ~line:l
+                           ~column:!column) msg in
   let peek () = if !pos < len then Some input.[!pos] else None in
   let peek_at k = if !pos + k < len then Some input.[!pos + k] else None in
-  let advance () = incr pos in
+  let advance () =
+    if !pos < len then begin
+      let c = input.[!pos] in
+      incr pos;
+      if c = '\n' then begin incr line; column := 1 end
+      else incr column
+    end
+  in
   let add_at start start_line t =
-    toks := { t; tline = start_line; glued = (start = !last_end) } :: !toks;
+    let start_pos = Source_range.position ~offset:start ~line:start_line
+        ~column:!token_column in
+    let end_pos = Source_range.position ~offset:!pos ~line:!line
+        ~column:!column in
+    let trange = Source_range.make ~source:file ~start_pos ~end_pos in
+    toks := { t; tline = start_line; trange; glued = (start = !last_end) } :: !toks;
     last_end := !pos
   in
   (* String body: same escapes as the sexpr reader (backslash n/t/backslash/
@@ -122,7 +140,6 @@ let lex ~(file : string) (input : string) : tok list =
            | Some c -> advance (); Buffer.add_char buf c; loop ()
            | None -> lex_incomplete start_line "unterminated escape")
       | Some c ->
-          if c = '\n' then incr line;
           advance ();
           Buffer.add_char buf c;
           loop ()
@@ -193,7 +210,6 @@ let lex ~(file : string) (input : string) : tok list =
                 in
                 str (); hole depth
             | Some c ->
-                if c = '\n' then incr line;
                 Buffer.add_char hbuf c; advance (); hole depth
           in
           hole 0;
@@ -203,7 +219,6 @@ let lex ~(file : string) (input : string) : tok list =
           segs := FHole src :: !segs;
           loop ()
       | Some c ->
-          if c = '\n' then incr line;
           advance (); Buffer.add_char lit c; loop ()
     in
     loop ();
@@ -243,10 +258,11 @@ let lex ~(file : string) (input : string) : tok list =
   let rec run () =
     let start = !pos in
     let start_line = !line in
+    token_column := !column;
     match peek () with
     | None -> add_at start start_line TEOF
     | Some (' ' | '\t' | '\r') -> advance (); run ()
-    | Some '\n' -> advance (); add_at start start_line TNewline; incr line; run ()
+    | Some '\n' -> advance (); add_at start start_line TNewline; run ()
     | Some '#' ->
         (* comment to end of line; the newline itself is the next token *)
         while (match peek () with Some c when c <> '\n' -> true | _ -> false)
@@ -332,7 +348,12 @@ type ps = {
   state : state;
 }
 
-let eof_tok = { t = TEOF; tline = 1; glued = false }
+let eof_tok = {
+  t = TEOF;
+  tline = 1;
+  trange = Source_range.point ~source:"<?>" ~offset:0 ~line:1 ~column:1;
+  glued = false;
+}
 
 let cur ps =
   if ps.pos < Array.length ps.toks then ps.toks.(ps.pos) else eof_tok
@@ -345,14 +366,14 @@ let advance ps = ps.pos <- ps.pos + 1
    is a genuine error on a token that is present. next_sig scans without
    mutating (unlike [peek ~nl], which consumes newlines via skip_nl). *)
 let parse_error ps msg =
-  let file = ps.file and line = (cur ps).tline in
+  let location = (cur ps).trange in
   let rec next_sig i =
     if i >= Array.length ps.toks then eof_tok
     else match ps.toks.(i).t with TNewline -> next_sig (i + 1) | _ -> ps.toks.(i)
   in
   if (next_sig ps.pos).t = TEOF then
-    incomplete ~location:(file, line) msg
-  else reader ~location:(file, line) msg
+    incomplete ~location msg
+  else reader ~location msg
 
 (* Skip newline tokens (used wherever the statement-continuation rule makes
    newlines insignificant: inside brackets, after an operator/'='/'->'/','
@@ -1291,8 +1312,8 @@ and normal_head_builder : head_builder = {
     if n = "and" then Desugar.desugar_and args else Desugar.desugar_or args);
   mk_fn = (fun ps ->
     advance ps;
-    let line = (cur ps).tline in
-    let locate e = ELocated ((ps.file, line), e) in
+    let location = (cur ps).trange in
+    let locate e = ELocated (location, e) in
     let params = parse_paren_params ps in
     let ret_ty = parse_ret_ty ps in
     let body = parse_block_body ps in
@@ -1300,8 +1321,8 @@ and normal_head_builder : head_builder = {
     EFn (names, body'));
   mk_def = (fun ps ->
     advance ps;
-    let line = (cur ps).tline in
-    let locate e = ELocated ((ps.file, line), e) in
+    let location = (cur ps).trange in
+    let locate e = ELocated (location, e) in
     let name = (match (cur ps).t with TName s -> s | _ -> assert false) in
     advance ps;
     if (cur ps).t <> TLParen then
@@ -1518,8 +1539,8 @@ and parse_head ps c (n : string) : expr =
   match n with
   | "node" when (match next_t with TName _ -> true | _ -> false) ->
       advance ps;
-      let line = (cur ps).tline in
-      let locate e = ELocated ((ps.file, line), e) in
+      let location = (cur ps).trange in
+      let locate e = ELocated (location, e) in
       let name = (match (cur ps).t with TName s -> s | _ -> assert false) in
       advance ps;
       (match (cur ps).t with
@@ -1676,7 +1697,6 @@ and parse_head ps c (n : string) : expr =
                            | _ -> false)) ->
            (* L21/L22: let x = E (a type annotation here is a parse error) *)
            advance ps;
-           let line = (cur ps).tline in
            let name = (match (cur ps).t with TName s -> s | _ -> assert false) in
            advance ps;
            if (cur ps).t = TColon then
@@ -1685,8 +1705,9 @@ and parse_head ps c (n : string) : expr =
                  (use let (" ^ name ^ ": ty = ...) { ... })");
            advance ps;  (* '=' *)
            skip_nl ps;
+           let location = (cur ps).trange in
            let rhs = parse_expr ps c in
-           EDefValue (name, ELocated ((ps.file, line), rhs))
+           EDefValue (name, ELocated (location, rhs))
        | TLParen ->
            (* L23/L24: let (x [: ty] = e, ...) { body... } *)
            advance ps;
@@ -2304,7 +2325,7 @@ let read state (input : string) : expr list =
            content hash depends only on the form (and its location), never on
            how many `try` blocks were parsed earlier in the process/file. *)
         state.try_counter <- 0;
-        let line = (cur ps).tline in
+        let start_range = (cur ps).trange in
         let e = parse_expr ps { nl = false; cond = false } in
         (match (cur ps).t with
          | TNewline | TSemi | TEOF -> ()
@@ -2312,7 +2333,7 @@ let read state (input : string) : expr list =
              parse_error ps
                ("expected newline or ';' between statements, got "
                 ^ string_of_btok t));
-        result := ELocated ((state.source, line), e) :: !result;
+        result := ELocated (start_range, e) :: !result;
         loop ()
   in
   loop ();

@@ -18,6 +18,7 @@ type t = {
   watch_interval : float;
   stabilize : bool;
   schedule_policy : Scheduler.policy;
+  schedule_explicit : bool;
   fenced_policy : Invocation.fenced_policy;
   gc_keep_epochs : int;
   gc_grace_seconds : float;
@@ -73,6 +74,7 @@ type raw = {
   watch_interval : string ref;
   stabilize : bool ref;
   schedule : string ref;
+  schedule_explicit : bool ref;
   fenced_policy : string ref;
   gc_keep_epochs : string ref;
   gc_grace_seconds : string ref;
@@ -111,7 +113,8 @@ let new_raw command_argv = {
   eval_string = ref None; reconcile_root = ref None; supervise = ref false;
   member_name = ref None; desired_object = ref None;
   publish_object_root = ref None; watch = ref false;
-  watch_interval = ref "1.0"; stabilize = ref false; schedule = ref "serial";
+  watch_interval = ref "1.0"; stabilize = ref false;
+  schedule = ref "serial"; schedule_explicit = ref false;
   fenced_policy = ref "abort"; gc_keep_epochs = ref "5";
   gc_grace_seconds = ref (string_of_float Store_gc.default_grace_seconds);
   gc = ref false; update_islands = ref false;
@@ -191,7 +194,7 @@ let parse_kernel_props raw rest =
 
 let flags raw =
   let set_fenced value = raw.fenced_policy := value in
-  let set_schedule spec = raw.schedule := spec in
+  let set_schedule spec = raw.schedule := spec; raw.schedule_explicit := true in
   [
     { name = "--"; doc = ""; internal = true; handler = fun rest -> raw.program_argv := rest; [] };
     doc_of "  pp --update <file.pp>     Re-resolve islands and rewrite inline pins (implies --fetch-islands)\n"
@@ -296,7 +299,8 @@ let validated raw =
     supervise = !(raw.supervise); member_name = !(raw.member_name);
     desired_object = !(raw.desired_object); publish_object_root = !(raw.publish_object_root);
     watch = !(raw.watch); watch_interval = interval; stabilize = !(raw.stabilize);
-    schedule_policy = policy; fenced_policy; gc_keep_epochs = keep;
+    schedule_policy = policy; schedule_explicit = !(raw.schedule_explicit);
+    fenced_policy; gc_keep_epochs = keep;
     gc_grace_seconds = grace; gc = !(raw.gc);
     update_islands = !(raw.update_islands); fetch_islands = !(raw.fetch_islands);
     pin_file = !(raw.pin_file);
@@ -344,6 +348,7 @@ let watch (t : t) = t.watch
 let watch_interval (t : t) = t.watch_interval
 let stabilize (t : t) = t.stabilize
 let schedule_policy (t : t) = t.schedule_policy
+let schedule_explicit (t : t) = t.schedule_explicit
 let fenced_policy (t : t) = t.fenced_policy
 let gc_keep_epochs (t : t) = t.gc_keep_epochs
 let gc_grace_seconds (t : t) = t.gc_grace_seconds

@@ -91,7 +91,7 @@ let macro_error (name : string) (msg : string) : 'a =
    itself the macro call); this function's job is only to add a wrap when
    there isn't one yet — e.g. an ordinary (non-macro-call) top-level form
    whose subexpressions were expanded without ever touching its own top. *)
-let relocate (loc : (string * int) option) (e : expr) : expr =
+let relocate (loc : Source_range.t option) (e : expr) : expr =
   match e with
   | ELocated _ -> e
   | _ -> (match loc with Some l -> ELocated (l, e) | None -> e)
@@ -147,7 +147,7 @@ let match_defmacro (e : expr) : (string * string list * expr) option =
    phase separation and Scheme's begin-for-syntax impose for the same
    reason). *)
 let apply_macro services expansion_count ~(name : string) ~(params : string list) ~(body : expr)
-    ~(args : expr list) ~(loc : (string * int) option) : expr =
+    ~(args : expr list) ~(loc : Source_range.t option) : expr =
   incr expansion_count;
   if !expansion_count > max_expansions then
     macro_error name "expansion did not terminate (possible non-terminating macro)";
@@ -188,9 +188,9 @@ let apply_macro services expansion_count ~(name : string) ~(params : string list
    the walk passes an ELocated node (the reader, and assemble_fn_body,
    attach these at more than just the top level — parameter type checks,
    typed bodies), and attached to the top of every expansion so an error
-   inside expanded code still cites a real file:line — the macro CALL
+   inside expanded code still cites a real source range — the macro CALL
    site's, not the macro DEFINITION's. *)
-let rec expand_expr services session expansion_count (loc : (string * int) option) (e : expr) : expr =
+let rec expand_expr services session expansion_count (loc : Source_range.t option) (e : expr) : expr =
   let expand_expr = expand_expr services session expansion_count in
   match e with
   | ELocated (l, inner) -> ELocated (l, expand_expr (Some l) inner)

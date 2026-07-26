@@ -70,6 +70,10 @@ nav[role="doc-toc"] a { color: var(--nav-link-color); }
 nav[role="doc-toc"] a:hover { background: var(--link-hover-bg); }
 nav[role="doc-toc"] .prefix { color: var(--muted-text); margin-right: 0.4em; }
 
+.site-nav { display: flex; gap: 1.2em; margin: 0 0 2em; }
+.site-nav a:first-child { font-weight: bold; }
+.site-next { border-top: 1px solid var(--border-color); margin-top: 2em; padding-top: 1em; }
+
 @media screen and (min-width: 1025px) {
   nav[role="doc-toc"] {
     position: fixed;
@@ -173,7 +177,83 @@ strong { color: var(--text-color); }
     setTheme(root.getAttribute('data-theme') !== 'dark');
   });
 })();
-</script><h1>pp</h1><nav class="site-nav"><a href="index.html">pp</a><a href="manual.html">Manual</a></nav><p>pp is a content-addressed, capability-scoped language for computations that should be reusable, inspectable, and safe to move.</p><p>The <a href="manual.html">reference manual</a> is the source of truth. It contains the language, runtime, domains, distribution, CLI, standard library, and tested examples. The <a href="pp-manual.pdf">PDF</a> is the same manual in a printable format.</p><h3>The short version</h3><pre><code data-lang="text">value → node → desired state → reconciled world</code></pre><p>Values have content identity. Nodes reuse computations across processes. Capabilities make authority explicit. Domains apply desired state and repair drift. Scheduling chooses where a force runs without changing the program’s identity.</p><h3>A small example</h3><pre><code data-lang="pp">def compile(source) {
+</script><h1>pp</h1><nav class="site-nav"><a href="index.html">pp</a><a href="manual.html">Manual</a></nav><p>pp is a content-addressed, capability-scoped language for computations that should be reusable, inspectable, and safe to move.</p><p>The <a href="manual.html">reference manual</a> is the source of truth. It contains the language, runtime, domains, distribution, CLI, standard library, and tested examples. The <a href="pp-manual.pdf">PDF</a> is the same manual in a printable format.</p><h3>The short version</h3><pre><code data-lang="text">value → node → desired state → reconciled world</code></pre><p>Values have content identity. Nodes reuse computations across processes. Capabilities make authority explicit. Domains apply desired state and repair drift. Scheduling chooses where a force runs without changing the program’s identity.</p><h3>One graph, several jobs</h3><p>This is the scale to keep in mind: source files become cached artifacts, the artifacts become desired state, the filesystem domain deploys them, and the same graph can be forced again after a source edit or a deleted output.</p><div><div class="ex-file">release-pipeline.sh</div><pre><code data-lang="bash"><em><span style="color: #545454">#</span></em><em><span style="color: #545454">!/bin/sh</span></em>
+<em><span style="color: #545454">#</span></em><em><span style="color: #545454"> One graph: source files become cached artifacts, then a desired tree. The</span></em>
+<em><span style="color: #545454">#</span></em><em><span style="color: #545454"> filesystem domain applies that tree and repairs drift. The transcript keeps</span></em>
+<em><span style="color: #545454">#</span></em><em><span style="color: #545454"> the high-level events and hides temporary paths.</span></em>
+<strong><span style="color: #333333">export</span></strong><span style="color: #900000"> </span><span style="color: #900000">HOME</span><strong><span style="color: #333333">=</span></strong><span style="color: #dd1144">$</span><span style="color: #dd1144">(</span><span style="color: #900000">mktemp</span><span style="color: #900000"> -</span><span style="color: #900000">d</span><span style="color: #dd1144">)</span>
+<span style="color: #900000">trap</span><span style="color: #900000"> </span><span style="color: #dd1144">'</span><span style="color: #dd1144">rm -rf "$HOME"</span><span style="color: #dd1144">'</span><span style="color: #900000"> EXIT</span>
+SRC<strong><span style="color: #333333">=</span></strong><span style="color: #dd1144">"</span><span style="color: #dd1144">$</span><span style="color: #dd1144">HOME</span><span style="color: #dd1144">/src</span><span style="color: #dd1144">"</span>
+OUT<strong><span style="color: #333333">=</span></strong><span style="color: #dd1144">"</span><span style="color: #dd1144">$</span><span style="color: #dd1144">HOME</span><span style="color: #dd1144">/release</span><span style="color: #dd1144">"</span>
+<span style="color: #900000">mkdir</span><span style="color: #900000"> -</span><span style="color: #900000">p</span><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">$</span><span style="color: #dd1144">SRC</span><span style="color: #dd1144">"</span>
+<span style="color: #900000">printf</span><span style="color: #900000"> </span><span style="color: #dd1144">'</span><span style="color: #dd1144">main-v1\n</span><span style="color: #dd1144">'</span><span style="color: #900000"> </span><strong><span style="color: #333333">></span></strong><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">$</span><span style="color: #dd1144">SRC</span><span style="color: #dd1144">/main.src</span><span style="color: #dd1144">"</span>
+<span style="color: #900000">printf</span><span style="color: #900000"> </span><span style="color: #dd1144">'</span><span style="color: #dd1144">util-v1\n</span><span style="color: #dd1144">'</span><span style="color: #900000"> </span><strong><span style="color: #333333">></span></strong><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">$</span><span style="color: #dd1144">SRC</span><span style="color: #dd1144">/util.src</span><span style="color: #dd1144">"</span>
+
+<span style="color: #900000">cat</span><span style="color: #900000"> </span><strong><span style="color: #333333">></span></strong><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">$</span><span style="color: #dd1144">HOME</span><span style="color: #dd1144">/release.pp</span><span style="color: #dd1144">"</span><span style="color: #900000"> </span><strong><span style="color: #333333">&lt;&lt;</span></strong><strong><span style="color: #333333">EOF</span></strong>
+<span style="color: #dd1144">def compile(path, name) {</span>
+<span style="color: #dd1144">  node {</span>
+<span style="color: #dd1144">    print(string-append("compile ", name))</span>
+<span style="color: #dd1144">    blob(string-append(slurp(path), "compiled</span><span style="color: #005c5c">\\</span><span style="color: #dd1144">n"))</span>
+<span style="color: #dd1144">  }</span>
+<span style="color: #dd1144">}</span>
+
+<span style="color: #dd1144">let main = compile("</span><span style="color: #dd1144">$</span><span style="color: #dd1144">SRC</span><span style="color: #dd1144">/main.src", "main")</span>
+<span style="color: #dd1144">let util = compile("</span><span style="color: #dd1144">$</span><span style="color: #dd1144">SRC</span><span style="color: #dd1144">/util.src", "util")</span>
+<span style="color: #dd1144">{:tree -> {</span>
+<span style="color: #dd1144">  "bin" -> {:kind -> :directory, :mode -> 493},</span>
+<span style="color: #dd1144">  "bin/main.o" -> {:kind -> :file, :mode -> 420, :blob -> main},</span>
+<span style="color: #dd1144">  "bin/util.o" -> {:kind -> :file, :mode -> 420, :blob -> util}</span>
+<span style="color: #dd1144">}}</span>
+<strong><span style="color: #333333">EOF</span></strong>
+
+<span style="color: #900000">run</span>() {
+  <span style="color: #dd1144">"</span><span style="color: #dd1144">$</span><span style="color: #dd1144">PP</span><span style="color: #dd1144">"</span><span style="color: #900000"> --</span><span style="color: #900000">grant</span><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">fs:</span><span style="color: #dd1144">$</span><span style="color: #dd1144">SRC</span><span style="color: #dd1144">:ro</span><span style="color: #dd1144">"</span><span style="color: #900000"> --</span><span style="color: #900000">grant</span><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">fs:</span><span style="color: #dd1144">$</span><span style="color: #dd1144">OUT</span><span style="color: #dd1144">:rw</span><span style="color: #dd1144">"</span><span style="color: #900000"> --</span><span style="color: #900000">reconcile</span><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">$</span><span style="color: #dd1144">OUT</span><span style="color: #dd1144">"</span><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">$</span><span style="color: #dd1144">HOME</span><span style="color: #dd1144">/release.pp</span><span style="color: #dd1144">"</span><span style="color: #900000"> </span><span style="color: #005c5c">2</span><strong><span style="color: #333333">>&amp;</span></strong><span style="color: #005c5c">1</span><span style="color: #900000"> </span><span style="color: #900000">\</span>
+    <strong><span style="color: #333333">|</span></strong> <span style="color: #900000">sed</span><span style="color: #900000"> -</span><span style="color: #900000">E</span><span style="color: #900000"> </span><span style="color: #dd1144">'</span><span style="color: #dd1144">s#root=[^ ]*#root=RELEASE#g</span><span style="color: #dd1144">'</span><span style="color: #900000"> </span><span style="color: #900000">\</span>
+    <strong><span style="color: #333333">|</span></strong> <span style="color: #900000">grep</span><span style="color: #900000"> -</span><span style="color: #900000">E</span><span style="color: #900000"> </span><span style="color: #dd1144">'</span><span style="color: #dd1144">compile |create=|update=|delete=</span><span style="color: #dd1144">'</span> <strong><span style="color: #333333">||</span></strong> <span style="color: #900000">true</span>
+}
+
+<span style="color: #900000">echo</span><span style="color: #900000"> </span><span style="color: #dd1144">'</span><span style="color: #dd1144">$ pp --reconcile RELEASE release.pp       # cold release: build and deploy</span><span style="color: #dd1144">'</span>
+<span style="color: #900000">run</span>
+<span style="color: #900000">echo</span><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">release files: </span><span style="color: #dd1144">$</span><span style="color: #dd1144">(</span><span style="color: #900000">find</span><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">$</span><span style="color: #dd1144">OUT</span><span style="color: #dd1144">"</span><span style="color: #900000"> -</span><span style="color: #900000">type</span><span style="color: #900000"> f</span><span style="color: #dd1144"> </span><strong><span style="color: #333333">|</span></strong><span style="color: #dd1144"> </span><span style="color: #900000">sort</span><span style="color: #dd1144"> </span><strong><span style="color: #333333">|</span></strong><span style="color: #dd1144"> </span><span style="color: #900000">sed</span><span style="color: #900000"> </span><span style="color: #dd1144">'</span><span style="color: #dd1144">s#^.*/release/##</span><span style="color: #dd1144">'</span><span style="color: #dd1144"> </span><strong><span style="color: #333333">|</span></strong><span style="color: #dd1144"> </span><span style="color: #900000">tr</span><span style="color: #900000"> </span><span style="color: #dd1144">'</span><span style="color: #dd1144">\n</span><span style="color: #dd1144">'</span><span style="color: #900000"> </span><span style="color: #dd1144">'</span><span style="color: #dd1144"> </span><span style="color: #dd1144">'</span><span style="color: #dd1144"> </span><strong><span style="color: #333333">|</span></strong><span style="color: #dd1144"> </span><span style="color: #900000">sed</span><span style="color: #900000"> </span><span style="color: #dd1144">'</span><span style="color: #dd1144">s/ $//</span><span style="color: #dd1144">'</span><span style="color: #dd1144">)</span><span style="color: #dd1144">"</span>
+
+<span style="color: #900000">echo</span>
+<span style="color: #900000">echo</span><span style="color: #900000"> </span><span style="color: #dd1144">'</span><span style="color: #dd1144">$ pp --reconcile RELEASE release.pp       # warm release: graph is a hit</span><span style="color: #dd1144">'</span>
+<span style="color: #900000">run</span>
+
+<span style="color: #900000">echo</span>
+<span style="color: #900000">echo</span><span style="color: #900000"> </span><span style="color: #dd1144">'</span><span style="color: #dd1144"># Change only main.src; util.o remains reusable.</span><span style="color: #dd1144">'</span>
+<span style="color: #900000">printf</span><span style="color: #900000"> </span><span style="color: #dd1144">'</span><span style="color: #dd1144">main-v2\n</span><span style="color: #dd1144">'</span><span style="color: #900000"> </span><strong><span style="color: #333333">></span></strong><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">$</span><span style="color: #dd1144">SRC</span><span style="color: #dd1144">/main.src</span><span style="color: #dd1144">"</span>
+<span style="color: #900000">echo</span><span style="color: #900000"> </span><span style="color: #dd1144">'</span><span style="color: #dd1144">$ pp --reconcile RELEASE release.pp       # incremental release</span><span style="color: #dd1144">'</span>
+<span style="color: #900000">run</span>
+
+<span style="color: #900000">echo</span>
+<span style="color: #900000">echo</span><span style="color: #900000"> </span><span style="color: #dd1144">'</span><span style="color: #dd1144"># Delete a deployed artifact; the desired tree restores it without rebuilding.</span><span style="color: #dd1144">'</span>
+<span style="color: #900000">rm</span><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">$</span><span style="color: #dd1144">OUT</span><span style="color: #dd1144">/bin/util.o</span><span style="color: #dd1144">"</span>
+<span style="color: #900000">echo</span><span style="color: #900000"> </span><span style="color: #dd1144">'</span><span style="color: #dd1144">$ pp --reconcile RELEASE release.pp       # drift repair</span><span style="color: #dd1144">'</span>
+<span style="color: #900000">run</span>
+
+<span style="color: #900000">echo</span><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">main artifact: </span><span style="color: #dd1144">$</span><span style="color: #dd1144">(</span><span style="color: #900000">cat</span><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">$</span><span style="color: #dd1144">OUT</span><span style="color: #dd1144">/bin/main.o</span><span style="color: #dd1144">"</span><span style="color: #dd1144">)</span><span style="color: #dd1144">"</span>
+<span style="color: #900000">echo</span><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">util artifact: </span><span style="color: #dd1144">$</span><span style="color: #dd1144">(</span><span style="color: #900000">cat</span><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">$</span><span style="color: #dd1144">OUT</span><span style="color: #dd1144">/bin/util.o</span><span style="color: #dd1144">"</span><span style="color: #dd1144">)</span><span style="color: #dd1144">"</span></code></pre><pre class="ex-out">$ pp --reconcile RELEASE release.pp       # cold release: build and deploy
+"compile main"
+"compile util"
+[reconcile:fs] root=RELEASE create=2 update=0 delete=0
+release files: bin/main.o bin/util.o
+
+$ pp --reconcile RELEASE release.pp       # warm release: graph is a hit
+[reconcile:fs] root=RELEASE create=0 update=0 delete=0
+
+# Change only main.src; util.o remains reusable.
+$ pp --reconcile RELEASE release.pp       # incremental release
+"compile main"
+[reconcile:fs] root=RELEASE create=0 update=1 delete=0
+
+# Delete a deployed artifact; the desired tree restores it without rebuilding.
+$ pp --reconcile RELEASE release.pp       # drift repair
+[reconcile:fs] root=RELEASE create=1 update=0 delete=0
+main artifact: main-v2
+compiled
+util artifact: util-v1
+compiled</pre></div><h3>A small example</h3><pre><code data-lang="pp">def compile(source) {
   node { string-append(source, <span style="color: #dd1144">"</span><span style="color: #dd1144">.o</span><span style="color: #dd1144">"</span>) }
 }
 

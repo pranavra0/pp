@@ -38,6 +38,15 @@ Capabilities make authority explicit. Domains apply desired state and repair
 drift. Scheduling chooses where a force runs without changing the program's
 identity.
 
+== One graph, several jobs
+
+This is the scale to keep in mind: source files become cached artifacts, the
+artifacts become desired state, the filesystem domain deploys them, and the
+same graph can be forced again after a source edit or a deleted output.
+
+#example("release-pipeline", sh: true)
+
+
 == A small example
 
 ```pp
