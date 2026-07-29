@@ -4,10 +4,10 @@ open Pp_runtime
 let check condition message = if not condition then failwith message
 
 let tree_value entries =
-  Core_model.VMap [Core_model.VKeyword "tree", Core_model.VMap entries]
+  Value.map [Core_model.VKeyword "tree", Value.map entries]
 
 let file blob mode =
-  Core_model.VMap [
+  Value.map [
     Core_model.VKeyword "kind", Core_model.VKeyword "file";
     Core_model.VKeyword "mode", Core_model.VInt mode;
     Core_model.VKeyword "blob", Core_model.VString blob;
@@ -24,7 +24,7 @@ let () =
   let blob = String.make 64 'a' in
   let tree = tree_value [
     Core_model.VString "bin",
-      Core_model.VMap [
+      Value.map [
         Core_model.VKeyword "kind", Core_model.VKeyword "directory";
         Core_model.VKeyword "mode", Core_model.VInt 0o755;
       ];

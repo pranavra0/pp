@@ -98,6 +98,11 @@ let validate_parents entries =
     Result.bind result (fun () -> parents (path_of_entry entry)))
     (Ok ()) entries
 
+let rec duplicate = function
+  | a :: b :: _ when String.equal a b -> Some a
+  | _ :: rest -> duplicate rest
+  | [] -> None
+
 let of_value = function
   | VMap [VKeyword "tree", VMap entries] ->
       let parsed =
@@ -111,11 +116,6 @@ let of_value = function
        | None ->
            let entries = List.filter_map (function Ok entry -> Some entry | Error _ -> None) parsed in
            let paths = List.map path_of_entry entries |> List.sort String.compare in
-           let rec duplicate = function
-             | a :: b :: _ when a = b -> Some a
-             | _ :: rest -> duplicate rest
-             | [] -> None
-           in
            (match duplicate paths with
             | Some path -> error "duplicate tree path: %s" path
             | None ->
@@ -126,23 +126,39 @@ let of_value = function
 
 let descriptor = function
   | File { mode; blob; _ } ->
-      VMap [VKeyword "kind", VKeyword "file";
-            VKeyword "mode", VInt mode;
-            VKeyword "blob", VString blob]
+      Value.map [VKeyword "kind", VKeyword "file";
+                 VKeyword "mode", VInt mode;
+                 VKeyword "blob", VString blob]
   | Directory { mode; _ } ->
-      VMap [VKeyword "kind", VKeyword "directory";
-            VKeyword "mode", VInt mode]
+      Value.map [VKeyword "kind", VKeyword "directory";
+                 VKeyword "mode", VInt mode]
   | Symlink { target; _ } ->
-      VMap [VKeyword "kind", VKeyword "symlink";
-            VKeyword "target", VString target]
+      Value.map [VKeyword "kind", VKeyword "symlink";
+                 VKeyword "target", VString target]
 
 let to_value entries =
-  VMap [VKeyword "tree",
-    VMap (List.map (fun entry -> VString (path_of_entry entry), descriptor entry) entries)]
+  Value.map [VKeyword "tree",
+    Value.map (List.map (fun entry -> VString (path_of_entry entry), descriptor entry) entries)]
 
 let validate entries =
-  match of_value (to_value entries) with
-  | Ok _ -> ()
+  let invalid_entry =
+    List.find_map (fun candidate ->
+      match entry (path_of_entry candidate) (descriptor candidate) with
+      | Ok _ -> None
+      | Error message -> Some message)
+      entries
+  in
+  let result =
+    match invalid_entry with
+    | Some message -> Error message
+    | None ->
+        let paths = List.map path_of_entry entries |> List.sort String.compare in
+        (match duplicate paths with
+         | Some path -> error "duplicate tree path: %s" path
+         | None -> validate_parents entries)
+  in
+  match result with
+  | Ok () -> ()
   | Error message -> failwith ("invalid artifact tree: " ^ message)
 
 let blob_hashes entries =

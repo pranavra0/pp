@@ -7,3 +7,8 @@
  (libraries pp.app pp.runtime pp.frontend pp.kernel unix)
  ; -no-strict-sequence: same rationale as src/dune — pre-existing style.
  (flags -no-strict-sequence))
+
+(executable
+ (name check_value_constructors)
+ (modules check_value_constructors)
+ (libraries compiler-libs.common))

@@ -3,12 +3,12 @@
 #
 #   ~/.pp/store serializes with a canonical, byte-stable TEXT codec
 #   (src/kernel/codec.ml) instead of OCaml Marshal, stamped by store/VERSION
-#   ("pp-store 1"). The bytes must be identical on any OS/arch/compiler.
+#   ("pp-store 2"). The bytes must be identical on any OS/arch/compiler.
 #
 #   Covers:
 #     (a) golden bytes — a fixed program's stored object file and trace file
 #         are byte-identical (names AND content) to fixtures checked into
-#         tests/fixtures/store-v1/: the single-machine
+#         tests/fixtures/store-v2/: the single-machine
 #         cross-arch proof until Linux CI;
 #     (b) codec round-trip battery — a node result exercising negative ints,
 #         -0.0, 1e308, 0.1, nan, inf, -inf, strings with quotes/backslashes/
@@ -29,7 +29,7 @@
 # Runs under an isolated HOME.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
-FIX="$PWD/tests/fixtures/store-v1"
+FIX="$PWD/tests/fixtures/store-v2"
 
 assert() {  # NAME PATTERN present|absent [FILE]
   local name="$1" pat="$2" mode="$3" file="${4:-$TMP/out}"
@@ -122,7 +122,7 @@ printf 'pp-store 0\n' > "$STORE/VERSION"
 if [ $? -eq 0 ]; then echo "ok   bump-exit-0"
 else echo "FAIL bump-exit-0"; cat "$TMP/out"; fail=1; fi
 assert "bump-recomputes-cold" "COMPUTE" present
-if [ "$(cat "$STORE/VERSION")" = "pp-store 1" ]; then echo "ok   bump-restamped"
+if [ "$(cat "$STORE/VERSION")" = "pp-store 2" ]; then echo "ok   bump-restamped"
 else echo "FAIL bump-restamped: $(cat "$STORE/VERSION" 2>/dev/null)"; fail=1; fi
 [ -f "$STORE/objects/stale-format-leftover" ] \
   && { echo "FAIL bump-wipes-objects: stale file survived"; fail=1; } \
@@ -185,7 +185,7 @@ assert "legacy-recomputes" "COMPUTE" present
 [ -f "$STORE/traces/fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210" ] \
   && { echo "FAIL legacy-wipes-garbage-trace"; fail=1; } \
   || echo "ok   legacy-wipes-garbage-trace"
-if [ "$(cat "$STORE/VERSION" 2>/dev/null)" = "pp-store 1" ]; then echo "ok   legacy-stamped"
+if [ "$(cat "$STORE/VERSION" 2>/dev/null)" = "pp-store 2" ]; then echo "ok   legacy-stamped"
 else echo "FAIL legacy-stamped"; fail=1; fi
 grep -q "pre-migration-audit-line" "$STORE/journal/log" \
   && echo "ok   legacy-keeps-journal" \

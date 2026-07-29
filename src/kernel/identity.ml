@@ -190,6 +190,9 @@ and hash_value (v : value) : string =
   in
   hash_val [] v
 
+let equal_value left right =
+  String.equal (hash_value left) (hash_value right)
+
 let node_key ~(code : expr)
     ~(free_variables : (string * value option) list)
     ~(argument_values : value list) : Identity_types.Node_key.t =

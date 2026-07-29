@@ -70,7 +70,7 @@ let tree_observe (root : string) : value =
     capability ("tree-observe: capability error: no read or write access for " ^ root);
   let hash, files = Observation.tree_snapshot root in
   Observation.record (Cell.Tree root) hash;
-  VMap (List.map (fun (rel, file_hash) ->
+  Value.map (List.map (fun (rel, file_hash) ->
     VString rel, VString file_hash) files)
 
 let rec mkdir_p dir =

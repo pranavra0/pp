@@ -12,10 +12,7 @@ let resolve_free_variables ~(expr : expr) ~(env : env)
   Free_vars.SS.elements (Free_vars.node_free_vars expr)
   |> List.map (fun name ->
        match Environment.lookup env name with
-       | Some value ->
-           (try (name, Some (force value)) with
-            | Error (Capability _) as error -> raise error
-            | _ -> (name, Some value))
+       | Some value -> (name, Some (force value))
        | None -> (name, None))
 
 let authorize_free_variables (free_variables : (string * value option) list) : unit =

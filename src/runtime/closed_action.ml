@@ -174,7 +174,7 @@ let parse_request entries =
   let platform = required "platform" |> string_map ":platform" in
   let policy = match map_get "policy" entries with
     | Some value -> value
-    | None -> Option.value ~default:(VMap []) (manifest_policy ())
+    | None -> Option.value ~default:(Value.map []) (manifest_policy ())
     |> Force_deep.force_deep
   in
   if Codec.encode_value policy = None then
@@ -226,16 +226,16 @@ let run args =
    | false, _ | true, Executor.Cacheable -> ());
   let result = Executor.run executor request in
   Artifact_store.verify result.outputs;
-  VMap [
+  Value.map [
     VKeyword "exit", VInt result.exit_status;
     VKeyword "stdout", VString result.stdout;
     VKeyword "stderr", VString result.stderr;
     VKeyword "outputs",
       Artifact_tree.to_value result.outputs;
     VKeyword "evidence",
-      VMap (List.map (fun (name, hash) ->
+      Value.map (List.map (fun (name, hash) ->
         VString name, VString hash) result.evidence);
     VKeyword "resources",
-      VMap (List.map (fun (name, value) ->
+      Value.map (List.map (fun (name, value) ->
         VString name, VString value) result.resources);
   ]

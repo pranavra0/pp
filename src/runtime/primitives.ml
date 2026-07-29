@@ -48,7 +48,7 @@ let runtime_schedule spec =
 
 let custom_plan_value jobs policy =
   let descriptors = VVector (Array.of_list (List.mapi (fun index job ->
-    VMap [
+    Value.map [
       VKeyword "index", VInt index;
       VKeyword "key", VString (Identity_types.Node_key.to_string job.Scheduler.j_key);
       VKeyword "width", VInt job.Scheduler.j_width
@@ -227,7 +227,7 @@ let register_arith () =
     match args with
     | [] | [_] -> VBool true
     | a :: rest ->
-        VBool (List.for_all (fun b -> try a = b with Invalid_argument _ -> a == b) rest));
+        VBool (List.for_all (Identity.equal_value a) rest));
 
   chained_cmp ~declare "<"  ( < )  ( < );
   chained_cmp ~declare ">"  ( > )  ( > );
@@ -357,20 +357,20 @@ let register_collections () =
       | k :: v :: rest -> (force_val k, v) :: make_pairs rest
       | _ -> failwith "hash-map expects even number of arguments"
     in
-    VMap (make_pairs args));  (* keys forced, values lazy *)
+    Value.map (make_pairs args));  (* keys forced, values lazy *)
 
   register "hash-map-get" (fun args _env ->
     let args = force_args args in
     match args with
     | [VMap kvs; key] ->
-        (match List.find_opt (fun (k, _) -> force_val k = key) kvs with
+        (match List.find_opt (fun (k, _) -> Identity.equal_value (force_val k) key) kvs with
          | Some (_, v) -> v
          | None -> VNil)
     | _ -> failwith "hash-map-get expects a map and a key");
 
   (* Set operations *)
   register "hash-set" (fun args _env ->
-    VSet args);  (* lazy *)
+    Value.set (force_args args));
 
   (* Type predicates — force to check *)
   predicate ~declare "int?"     (function VInt _ -> true | _ -> false);
@@ -599,16 +599,7 @@ let register_stdlib () =
   let register = register ~category:Other in
   (* ---- stdlib primitives ---- *)
 
-  (* (hash-value V) — a canonical, structural content hash of ANY value
-     (Identity.hash_value, force-deep'd first) — order-INDEPENDENT for maps/
-     sets (Identity.hash_value sorts a VMap's entries by encoded-key hash before
-     hashing, exactly like Codec's on-disk canonicalization). Needed because pp's `=` on two maps is
-     plain structural (assoc-list, ORDER-sensitive) list equality: a spec
-     value that round-tripped through `domain-state-get/put` (Codec sorts
-     VMap entries for canonical on-disk text) compares as "different" from
-     the in-memory original via `=` even with identical bindings, purely
-     because of key order — domain-proc.pp's diff needs a comparison that
-     is not fooled by that. *)
+  (* Canonical content hash for any deeply forced value. *)
   register "hash-value" (fun args _env ->
     match args with
     | [v] -> VString (Identity.hash_value (Force_deep.force_deep (force_val v)))
@@ -698,7 +689,7 @@ let register_stdlib () =
         (match force_val m with
          | VMap kvs ->
              let key = force_val k in
-             VMap (List.filter (fun (k', _) -> k' <> key) kvs)
+             Value.map (List.filter (fun (k', _) -> not (Identity.equal_value k' key)) kvs)
          | _ -> failwith "map-remove expects a map and a key")
     | _ -> failwith "map-remove expects a map and a key");
 
@@ -767,20 +758,17 @@ let register_stdlib () =
         (match force_val m with
          | VMap kvs ->
              let key = force_val k in
-             VMap ((key, v) :: List.filter (fun (k', _) -> k' <> key) kvs)
+             Value.map (kvs @ [key, v])
          | _ -> failwith "map-insert expects a map, a key, and a value")
     | _ -> failwith "map-insert expects a map, a key, and a value");
 
-  (* map-merge(a, b) — a with every binding of b inserted; b wins on collision.
-     The lowering target for map spread `{ ...a, ...b }`. Keys in a VMap
-     are already forced values, so structural comparison is exact. *)
+  (* map-merge(a, b) — a with every binding of b inserted; b wins on collision. *)
   register "map-merge" (fun args _env ->
     match args with
     | [a; b] ->
         (match force_val a, force_val b with
          | VMap akvs, VMap bkvs ->
-             let b_has k = List.exists (fun (k', _) -> k' = k) bkvs in
-             VMap (bkvs @ List.filter (fun (k, _) -> not (b_has k)) akvs)
+             Value.map (akvs @ bkvs)
          | _ -> failwith "map-merge expects two maps")
     | _ -> failwith "map-merge expects two maps");
 
@@ -824,7 +812,7 @@ let register_domains () =
                        failwith "configure-runtime: remote schedules require a host configuration"))
                  policy in
              Scheduler.install scheduler handler;
-             Dynamic_scope.record_event (VMap [
+             Dynamic_scope.record_event (Value.map [
                VKeyword "kind", VKeyword "runtime-schedule";
                VKeyword "handler", VString (Scheduler.handler_name handler)
              ])
@@ -842,7 +830,7 @@ let register_domains () =
 
   register "runtime-config" (fun args _env ->
     match args with
-    | [] -> Option.value ~default:(VMap []) (Session.runtime_manifest (session ()))
+    | [] -> Option.value ~default:(Value.map []) (Session.runtime_manifest (session ()))
     | _ -> failwith "runtime-config expects no arguments");
 
   register "register-reporter" (fun args _env ->

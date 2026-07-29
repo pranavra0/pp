@@ -212,17 +212,10 @@ and gen_value_of_tag ~(mode : mode) (st : rng) (depth : int) (tag : value_tag) :
       VVector (Array.init (small st) (fun _ -> g ()))
   | Vt_map ->
       let n = small st in
-      VMap (List.init n (fun _ -> (g (), g ())))
+      Value.map (List.init n (fun _ -> (g (), g ())))
   | Vt_set ->
-      (* Identity.hash_value sorts a set's element hashes, so structural (=) and the
-         hash agree only if the element list is itself canonically ordered and
-         duplicate-free; otherwise a reordering would read as a spurious
-         injectivity collision.  Canonicalize by content hash. *)
       let n = small st in
-      let elts = List.init n (fun _ -> g ()) in
-      let uniq =
-        List.sort_uniq (fun a b -> compare (Identity.hash_value a) (Identity.hash_value b)) elts in
-      VSet uniq
+      Value.set (List.init n (fun _ -> g ()))
   | Vt_closure | Vt_builtin | Vt_capability | Vt_thunk | Vt_envmap
   | Vt_sealed ->
       failwith "gen_value_of_tag: runtime-only value has no syntax"
@@ -261,8 +254,8 @@ let rec embed_deep (st : rng) (k : int) (inner : value) : value =
     match ri st 4 with
     | 0 -> VPair (child, VNil)
     | 1 -> VVector [| VInt (ri st 9); child |]
-    | 2 -> VMap [ (VString "k", child) ]
-    | _ -> VSet [ child ]
+    | 2 -> Value.map [ (VString "k", child) ]
+    | _ -> Value.set [ child ]
 
 (* The capability properties themselves are defined after [fail] (below), in
    the PROPERTIES section, since they report through it. *)
@@ -675,7 +668,8 @@ let session_property () =
       ~f:(fun () -> (Session.core_operations session).eval
           (ELiteral (VInt n)) Environment.empty) ()
   in
-  if evaluate a 1 <> VInt 1 || evaluate b 2 <> VInt 2 then
+  if not (Identity.equal_value (evaluate a 1) (VInt 1))
+     || not (Identity.equal_value (evaluate b 2) (VInt 2)) then
     fail "evaluator-instance" "constructed evaluator operations crossed sessions";
   Dynamic_scope.with_top_level a invocation ~f:(fun () ->
     let read =
@@ -693,10 +687,15 @@ let session_property () =
   Session.set_probe a "probe" (VInt 1);
   Session.set_probe b "probe" (VInt 2);
   Session.begin_pass a;
+  let probe_b_is_two =
+    match Session.find_probe b "probe" with
+    | Some value -> Identity.equal_value value (VInt 2)
+    | None -> false
+  in
   if Session.find_macro b "only-a" <> None
      || Session.find_macro a "only-a" = None
      || Session.find_probe a "probe" <> None
-     || Session.find_probe b "probe" <> Some (VInt 2) then
+     || not probe_b_is_two then
     fail "session-isolation" "independent sessions or pass retention leaked"
 
 let reader_state_property () =

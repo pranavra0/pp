@@ -88,9 +88,9 @@ let run_effect (args : value list) : value =
        | Some _ -> ()
        | None -> failwith ("run: command not found: " ^ cmd));
       let (code, out, err) = exec argv in
-      VMap [ (VString "exit", VInt code);
-             (VString "out",  VString out);
-             (VString "err",  VString err) ]
+      Value.map [ (VString "exit", VInt code);
+                  (VString "out",  VString out);
+                  (VString "err",  VString err) ]
 
 (* ---- write-file with the node/scripting split ----
    Shared by the builtin write-file implementation. Inside a node: a relative
@@ -278,6 +278,6 @@ let http_request ~(method_ : string) ~(url : string) ~(body : string option) : v
           let resp_body = String.sub out 0 i in
           let status_s = String.trim (String.sub out (i + 1) (String.length out - i - 1)) in
           let status = match int_of_string_opt status_s with Some s -> s | None -> 0 in
-          VMap [(VString "status", VInt status); (VString "body", VString resp_body)]
+          Value.map [(VString "status", VInt status); (VString "body", VString resp_body)]
       | None ->
-          VMap [(VString "status", VInt 0); (VString "body", VString out)])
+          Value.map [(VString "status", VInt 0); (VString "body", VString out)])

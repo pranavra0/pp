@@ -48,13 +48,18 @@ let config_absent_hash = Hasher.hash_string "config-cell:absent"
 let builtin_handler_hash = Hasher.hash_string "handler-cell:builtin"
 
 let config_lookup key =
+  let assoc wanted bindings =
+    List.find_map (fun (candidate, value) ->
+      if Identity.equal_value candidate wanted then Some value else None)
+      bindings
+  in
   let rec find = function
     | [] -> None
     | VMap bindings :: rest ->
-        (match List.assoc_opt (VString key) bindings with
+        (match assoc (VString key) bindings with
          | Some value -> Some value
          | None ->
-             (match List.assoc_opt (VKeyword key) bindings with
+             (match assoc (VKeyword key) bindings with
               | Some value -> Some value
               | None -> find rest))
     | _ :: rest -> find rest

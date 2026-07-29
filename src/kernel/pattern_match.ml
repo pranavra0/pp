@@ -6,14 +6,14 @@ let rec match_pattern (v : value) (p : pattern) : (string * value) list option =
   match p with
   | PWildcard -> Some []
   | PVariable name -> Some [(name, v)]
-  | PLiteral lit -> if v = lit then Some [] else None
+  | PLiteral lit -> if Identity.equal_value v lit then Some [] else None
   | PList (pats, rest) ->
       let rec match_list v pats rest =
         match pats, v with
         | [], _ ->
             (match rest with
              | Some r -> match_pattern v r
-             | None -> if v = VNil then Some [] else None)
+             | None -> (match v with VNil -> Some [] | _ -> None))
         | p :: ps, VPair (h, t) ->
             (match match_pattern h p with
              | Some b1 ->
@@ -30,7 +30,7 @@ let rec match_pattern (v : value) (p : pattern) : (string * value) list option =
           let rec match_tagged rest pats =
             match pats, rest with
             | [], VNil -> Some []
-            | [], _ -> Some []
+            | [], _ -> None
             | p :: ps, VPair (h, t) ->
                 (match match_pattern h p with
                  | Some b1 ->

@@ -67,7 +67,7 @@ let build_all_desired cli value =
     (match Cli.reconcile_root cli with Some _ -> [(Core_model.VString "fs", value)] | None -> [])
     @ (if Cli.supervise cli then [(Core_model.VString "proc", value)] else [])
   in
-  if entries = [] then value else Core_model.VMap entries
+  if entries = [] then value else Value.map entries
 
 let compute_desired _ctx cli last =
   match Cli.desired_object cli with

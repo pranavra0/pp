@@ -9,6 +9,8 @@
  (alias runtest)
  (deps
   (source_tree tests)
+  (source_tree src)
+  (source_tree tools)
   (source_tree stdlib)
   (source_tree demo)
   (source_tree examples)
@@ -32,6 +34,7 @@
   tools/api-surface.allow
   tools/check-vertical-slices.sh
   tools/dependency-manifest
+  tools/check_value_constructors.exe
   src/app/main.exe
   tools/fuzz.exe
   tests/unit/kernel_unit.exe
@@ -42,6 +45,7 @@
  (action
  (progn
   (run bash scripts/check-architecture.sh)
+  (run %{dep:tools/check_value_constructors.exe} --root .)
   (run bash scripts/run-focused-tests.sh
     %{dep:tests/unit/kernel_unit.exe}
     %{dep:tests/unit/repository_unit.exe}
@@ -64,8 +68,12 @@
    tools/api-surface.allow tools/check-vertical-slices.sh
    scripts/check-state-inventory.sh
    scripts/state-inventory.allow dune src/kernel/dune src/frontend/dune
-   src/runtime/dune src/app/dune)
- (action (run bash scripts/check-architecture.sh)))
+   src/runtime/dune src/app/dune tools/check_value_constructors.exe
+   (source_tree src) (source_tree tools) (source_tree tests/unit))
+ (action
+  (progn
+   (run bash scripts/check-architecture.sh)
+   (run %{dep:tools/check_value_constructors.exe} --root .))))
 
 (rule
  (alias unit)

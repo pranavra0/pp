@@ -18,24 +18,95 @@ let operations = {
   };
 }
 
+let scope_operations : Evaluator_scope.operations = {
+  eval = (fun expression _ ->
+    match expression with
+    | Core_model.ELiteral value -> value
+    | _ -> failwith "scope test expected a literal");
+  eval_tail = (fun expression _ continuation ->
+    continuation (match expression with
+      | Core_model.ELiteral value -> value
+      | _ -> failwith "scope test expected a literal"));
+  force = Fun.id;
+  apply = (fun function_value arguments env ->
+    match function_value with
+    | Core_model.VBuiltin (_, implementation) -> implementation arguments env
+    | _ -> failwith "scope test expected a builtin");
+}
+
+let check_scope_exit () =
+  let env = Environment.empty in
+  let body = Core_model.ELiteral Core_model.VNil in
+  let frame = Value.map [Core_model.VKeyword "scope", Core_model.VInt 1] in
+  let config_result =
+    try
+      Evaluator_scope.with_config scope_operations
+        (Core_model.ELiteral frame) body env
+        (fun _ -> Core_model.VBool (Dynamic_scope.config () = []))
+    with
+    | effect Dynamic_scope.Get_config, continuation ->
+        Effect.Deep.continue continuation []
+  in
+  check (match config_result with Core_model.VBool true -> true | _ -> false)
+    "with-config ran its caller continuation inside the scope";
+  let outer_capability = Capability.mint ~realpath:Fun.id "process" in
+  let capabilities_result =
+    try
+      Evaluator_scope.with_caps scope_operations
+        (Core_model.ELiteral (Core_model.VCapability Capability.none))
+        body env
+        (fun _ ->
+          Core_model.VBool (
+            match Dynamic_scope.capabilities () with
+            | [capability] ->
+                String.equal (Capability.hash capability)
+                  (Capability.hash outer_capability)
+            | _ -> false))
+    with
+    | effect Dynamic_scope.Get_capabilities, continuation ->
+        Effect.Deep.continue continuation [outer_capability]
+  in
+  check (match capabilities_result with Core_model.VBool true -> true | _ -> false)
+    "with-caps ran its caller continuation inside the scope";
+  let handler = Core_model.VBuiltin ("scope-test", fun _ _ -> Core_model.VNil) in
+  let handler_result =
+    try
+      Evaluator_scope.with_handlers scope_operations
+        ["scope-test", Core_model.ELiteral handler] body env
+        (fun _ ->
+          Core_model.VBool (
+            match Effect.perform (Dynamic_scope.Lookup_handler "scope-test") with
+            | None -> true
+            | Some _ -> false))
+    with
+    | effect (Dynamic_scope.Lookup_handler _), continuation ->
+        Effect.Deep.continue continuation None
+  in
+  check (match handler_result with Core_model.VBool true -> true | _ -> false)
+    "with-handler ran its caller continuation inside the scope"
+
 let () =
+  check_scope_exit ();
   let session = Session.create ~scheduler operations in
-  check (Session.executor session = None)
+  check (Option.is_none (Session.executor session))
     "session installed an ambient executor";
   check (Session.next_gensym session = 1) "session gensym did not start at one";
   Session.preseed_probe session "stable" (Core_model.VInt 7);
   Session.set_probe session "transient" (Core_model.VInt 8);
   Session.add_observation session ("cell", "hash");
   Session.begin_pass session;
-  check (Session.find_probe session "stable" = Some (Core_model.VInt 7))
+  check (match Session.find_probe session "stable" with
+    | Some value -> Identity.equal_value value (Core_model.VInt 7)
+    | None -> false)
     "preseeded probe did not survive pass reset";
-  check (Session.find_probe session "transient" = None) "transient probe survived pass reset";
+  check (Option.is_none (Session.find_probe session "transient"))
+    "transient probe survived pass reset";
   check (Session.observations session = []) "observations survived pass reset";
   ignore (Session.next_gensym session);
   Session.begin_evaluation ~retain_thunks:false session;
   check (Session.next_gensym session = 1) "evaluation did not reset lifecycle counters";
   let observe = Core_model.VBuiltin ("observe", fun _ _ -> Core_model.VNil) in
-  let domain_spec = Core_model.VMap [
+  let domain_spec = Value.map [
     Core_model.VKeyword "name", Core_model.VKeyword "files";
     Core_model.VKeyword "namespace", Core_model.VVector [|Core_model.VString "file:"|];
     Core_model.VKeyword "observe", observe;
@@ -58,7 +129,7 @@ let () =
     inputs = [];
     environment = [];
     platform = ["os", "linux"];
-    policy = Core_model.VMap [];
+    policy = Value.map [];
     outputs = ["a"; "b"];
   } in
   let result outputs evidence resources = {
@@ -103,18 +174,18 @@ let () =
            request with
    | _ -> failwith "executor accepted an invalid output tree"
    | exception Failure _ -> ());
-  let closed_request = Core_model.VMap [
+  let closed_request = Value.map [
     Core_model.VKeyword "tool",
       Artifact_tree.to_value [];
     Core_model.VKeyword "tool-path", Core_model.VString "tool";
     Core_model.VKeyword "args", Core_model.VNil;
     Core_model.VKeyword "inputs",
       Artifact_tree.to_value [];
-    Core_model.VKeyword "env", Core_model.VMap [];
+    Core_model.VKeyword "env", Value.map [];
     Core_model.VKeyword "platform",
-      Core_model.VMap [Core_model.VString "test", Core_model.VString "true"];
+      Value.map [Core_model.VString "test", Core_model.VString "true"];
     Core_model.VKeyword "policy",
-      Core_model.VMap [Core_model.VKeyword "redundancy", Core_model.VInt 3];
+      Value.map [Core_model.VKeyword "redundancy", Core_model.VInt 3];
     Core_model.VKeyword "outputs", Core_model.VNil;
   ] in
   let process_cap = Capability.mint ~realpath:Fun.id "process" in
@@ -137,8 +208,8 @@ let () =
   in
   ignore (run_in_node cacheable);
   check (!executions = 1) "cacheable executor did not run inside a node";
-  check (!classified_policy =
-    Core_model.VMap [Core_model.VKeyword "redundancy", Core_model.VInt 3])
+  check (Identity.equal_value !classified_policy
+    (Value.map [Core_model.VKeyword "redundancy", Core_model.VInt 3]))
     "executor did not receive ordinary request policy";
   let scripting =
     Executor.make

@@ -24,7 +24,7 @@ let reset_volatile t = t.volatile_count <- 0
 let note_volatile t = t.volatile_count <- t.volatile_count + 1
 let short_key key = if String.length key > 12 then String.sub key 0 12 else key
 let event kind key reason =
-  let value = VMap [
+  let value = Value.map [
     VKeyword "kind", VKeyword kind;
     VKeyword "node", VString (short_key key);
     VKeyword "reason", VKeyword reason

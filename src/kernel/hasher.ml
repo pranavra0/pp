@@ -32,7 +32,7 @@ let hash_string (s : string) : string =
    single-site property the kernel-properties generated-AST test
    (src/app/kernel_props.ml) guards forever.  Changing this framing is
    hash-affecting across the whole store — see the golden fixture receipt
-   (tests/fixtures/store-v1). *)
+   (tests/fixtures/store-v2). *)
 let hash_concat (parts : string list) : string =
   let buf = Buffer.create 64 in
   List.iter (fun p ->

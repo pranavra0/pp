@@ -55,7 +55,7 @@ let run_command (spec : value) : value =
       kvs
   in
   match find "run" with
-  | None -> VMap []
+  | None -> Value.map []
   | Some (_, v) ->
       let argv =
         match force v with
@@ -86,9 +86,9 @@ let run_command (spec : value) : value =
              | Some resolved -> Process.exec (resolved :: args)
              | None -> failwith ("fenced: command not found: " ^ cmd))
       in
-      VMap [(VString "exit", VInt exit_code);
-            (VString "out", VString out);
-            (VString "err", VString err)]
+      Value.map [(VString "exit", VInt exit_code);
+                 (VString "out", VString out);
+                 (VString "err", VString err)]
 
 let result_hash (v : value) : string = Identity.hash_value v
 
@@ -136,17 +136,17 @@ let execute_recovery
       ~hash:entry.Journal.fe_spec_hash with
     | None ->
         (* A missing spec cannot be retried safely. *)
-        VMap [(VString "aborted", VBool true);
-              (VString "reason", VString "spec missing from store");
-              (VString "kind", VString entry.Journal.fe_kind);
-              (VString "spec-hash", VString entry.Journal.fe_spec_hash)]
+        Value.map [(VString "aborted", VBool true);
+                   (VString "reason", VString "spec missing from store");
+                   (VString "kind", VString entry.Journal.fe_kind);
+                   (VString "spec-hash", VString entry.Journal.fe_spec_hash)]
     | Some spec ->
         (match decide entry with
          | Retry -> run_command spec
          | Abort ->
-             VMap [(VString "aborted", VBool true);
-                   (VString "kind", VString entry.Journal.fe_kind);
-                   (VString "spec-hash", VString entry.Journal.fe_spec_hash)])
+             Value.map [(VString "aborted", VBool true);
+                        (VString "kind", VString entry.Journal.fe_kind);
+                        (VString "spec-hash", VString entry.Journal.fe_spec_hash)])
   in
   Journal.append (Journal.FencedDone {
     key = entry.Journal.fe_key; result_hash = result_hash result })

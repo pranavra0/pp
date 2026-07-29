@@ -10,7 +10,7 @@ let roots_path () =
   Filename.concat (Store_layout.root Store_layout.default) "gc-roots"
 
 let root_to_value root =
-  VMap [
+  Value.map [
     VKeyword "hash", VString root.gr_hash;
     VKeyword "nodes",
       VVector (Array.of_list (List.map
@@ -20,8 +20,12 @@ let root_to_value root =
 
 let value_to_root = function
   | VMap fields ->
-      (match List.assoc_opt (VKeyword "hash") fields,
-             List.assoc_opt (VKeyword "nodes") fields with
+      let field key =
+        List.find_map (fun (candidate, value) ->
+          if Identity.equal_value candidate key then Some value else None)
+          fields
+      in
+      (match field (VKeyword "hash"), field (VKeyword "nodes") with
        | Some (VString gr_hash), Some (VVector nodes) ->
            let rec decode acc = function
              | [] -> Some (List.rev acc)

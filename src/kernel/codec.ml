@@ -141,9 +141,7 @@ let rec encode (v : value) : string option =
       (match pairs with
        | None -> None
        | Some pairs ->
-        (* stable_sort: VMap is an assoc list that tolerates duplicate keys;
-           stability makes the duplicate-key entry order deterministic across
-           OCaml stdlib versions (List.sort's tie-breaking is unspecified). *)
+        (* Encoded maps are byte-stable independently of their in-memory hash order. *)
         let sorted = List.stable_sort (fun (k1, _) (k2, _) -> String.compare k1 k2) pairs in
         Some (wrap "m" (List.map (fun (k, v) -> "(" ^ k ^ " " ^ v ^ ")") sorted)))
   | VSet vs ->
@@ -243,7 +241,7 @@ let rec parse (s : string) (i : int) : (value * int) option =
                                     | Some next -> Some (VPair (car, cdr), next)
                                     | None -> None)))))
            | 'v' -> parse_seq s j (fun lst -> VVector (Array.of_list lst))
-           | 't' -> parse_seq s j (fun lst -> VSet lst)
+           | 't' -> parse_seq s j Value.set
            | 'm' -> parse_map s j
            | _ -> None)
     | _ -> None
@@ -283,7 +281,7 @@ and parse_seq (s : string) (j : int) (ctor : value list -> value) : (value * int
 
 and parse_map (s : string) (j : int) : (value * int) option =
   let len = String.length s in
-  if j < len && s.[j] = ')' then Some (VMap [], j + 1)
+  if j < len && s.[j] = ')' then Some (Value.map [], j + 1)
   else
     match expect_char s j ' ' with
     | None -> None
@@ -317,7 +315,7 @@ and parse_map (s : string) (j : int) : (value * int) option =
         in
         (match loop j [] with
          | None -> None
-         | Some (kvs, next) -> Some (VMap kvs, next))
+         | Some (kvs, next) -> Some (Value.map kvs, next))
 
 let encode_value (v : value) : string option = encode v
 

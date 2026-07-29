@@ -77,7 +77,7 @@ let atomic_replace path content =
       raise (Error (Store (Write_failed {
         path; message = Unix.error_message error })))
 
-let version = "pp-store 1\n"
+let version = "pp-store 2\n"
 let versioned = [Objects; Traces; Fenced_specs; Procs]
 let nonempty t kind = list t kind <> []
 let wipe t kind =

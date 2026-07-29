@@ -175,7 +175,7 @@ let with_domain (name : string) (cap : Capability.t) (f : unit -> 'a) : 'a =
    never hit an in-memory thunk from a sibling call. *)
 let fresh_nonce_config () : value =
   let n = Session.next_cache_bust (Effect.perform Dynamic_scope.Get_session) in
-  VMap [(VString "__pp_q13_cache_bust", VInt n)]
+  Value.map [(VString "__pp_q13_cache_bust", VInt n)]
 let call_uncached (fn : value) (args : value list) : value =
   Dynamic_scope.with_config (fresh_nonce_config ()) (fun () ->
     Session.call (Effect.perform Dynamic_scope.Get_session)
