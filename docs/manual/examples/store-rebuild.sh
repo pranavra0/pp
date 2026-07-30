@@ -8,7 +8,7 @@ ROOT=$(cd "$HOME" && pwd -P)
 cd "$HOME"
 
 cat > build.pp <<'PP'
-let greeting = node { slurp("greeting.txt") }
+let greeting = node { $file("greeting.txt") }
 print(greeting)
 PP
 echo hello > greeting.txt

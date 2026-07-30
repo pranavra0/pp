@@ -31,9 +31,9 @@ assert() {  # NAME want(miss|hit)
 
 # ---- (a) env observation: absent vs the literal value "absent" ----
 cat > "$TMP/env.pp" <<'EOF'
-perform log(force(node {
-  perform log("COMPUTE")
-  env-get("PPTEST_A1")
+log!(force(node {
+  log!("COMPUTE")
+  $env("PPTEST_A1")
 }))
 EOF
 
@@ -52,9 +52,9 @@ env_case
 
 # ---- (b) argv observation: ["a","b"] vs ["a:b"] ----
 cat > "$TMP/argv.pp" <<'EOF'
-perform log(force(node {
-  perform log("COMPUTE")
-  argv()
+log!(force(node {
+  log!("COMPUTE")
+  $argv()
 }))
 EOF
 

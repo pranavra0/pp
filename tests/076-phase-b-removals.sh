@@ -41,6 +41,18 @@ run_ok() {
   fi
 }
 
+run_unbound() {
+  local name="$1" src="$2" symbol="$3"
+  printf '%s\n' "$src" > "$TMP/case.pp"
+  local out
+  out=$("$PP" "$TMP/case.pp" 2>&1)
+  if [[ "$out" == *"unbound symbol: $symbol"* ]]; then
+    ok "$name"
+  else
+    bad "$name" "expected unbound symbol: $symbol" "out: $out"
+  fi
+}
+
 # ---- @ attributes are rejected as unknown syntax (case B8 below) ----
 run_removed "B8-at-cache-rejected"  '@cache def f() { 1 }'          "not part of the language"
 run_removed "B8-at-needs-rejected"  '@needs(process) node h() { 1 }' "not part of the language"
@@ -83,7 +95,7 @@ run_ok "B7-try-with-plain-let-and-propagation" "$TMP/try-ok.pp" $'(:ok 15)\n(:er
 
 # ---- preserved: the $ family is the one observation surface ----
 # $env observes the world without a path capability; proves the family works
-# after the cell-literal token was removed. ($file/$glob/$secret parse the same
+# after the cell-literal token was removed. ($file/$tree/$secret parse the same
 # way — pinned by tests/066/074.)
 export B1_VAR="observed"
 cat > "$TMP/dollar-env.pp" <<'EOF'
@@ -91,5 +103,15 @@ print($env("B1_VAR"))
 print($env("B1_MISSING", "fallback"))
 EOF
 run_ok "B1-dollar-env-observes" "$TMP/dollar-env.pp" $'"observed"\n"fallback"'
+
+# ---- removed: raw observation callables have no compatibility bindings ----
+run_unbound "raw-slurp-removed"        'slurp("x")'       "slurp"
+run_unbound "raw-env-get-removed"      'env-get("x")'     "env-get"
+run_unbound "raw-probe-removed"        'probe("x")'       "probe"
+run_unbound "raw-config-removed"        'config("x")'      "config"
+run_unbound "raw-argv-removed"         'argv()'           "argv"
+run_unbound "raw-file-exists-removed"  'file-exists?("x")' "file-exists?"
+run_unbound "raw-dir-removed"          'dir?("x")'        "dir?"
+run_unbound "raw-tree-observe-removed" 'tree-observe("x")' "tree-observe"
 
 exit $fail

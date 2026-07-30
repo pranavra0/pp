@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
-# tests/078 — $config joins the observation family.
+# tests/078 — typed $config observations.
 #
-# $config(key[, default]) reads a scoped config value installed by an enclosing
-# `with { config: … }` extent (SPEC law 33), recording a config: trace cell —
-# the $ family now covers every traced read kind. It lowers to the same
-# EConfig node as the bare `config(key)` form, and templates inside
-# quasiquote{} the same way every other $-form does (via the Surface_tables
-# `Config` tmpl node).
+# $config(key[, default]) reads scoped config, records a config: trace cell,
+# and parses directly to EObserve (Config, args). There is no callable
+# `config` compatibility primitive.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 run_one() {
@@ -38,6 +35,13 @@ with { config: { :cc -> "clang" } } {
 EOF
 run_one "config-default" "$TMP/default.pp" '"fallback"'
 
+cat > "$TMP/lazy-default.pp" <<'EOF'
+with { config: { :cc -> "clang" } } {
+  print($config("cc", error("unused fallback")))
+}
+EOF
+run_one "config-default-is-lazy" "$TMP/lazy-default.pp" '"clang"'
+
 # (c) computed key expression: heads take expressions, not just literals.
 cat > "$TMP/computed.pp" <<'EOF'
 with { config: { :cflags -> "-O2" } } {
@@ -46,17 +50,19 @@ with { config: { :cflags -> "-O2" } } {
 EOF
 run_one "config-computed-key" "$TMP/computed.pp" '"-O2"'
 
-# (d) $config lowers to the same value as the bare config(...) form.
-cat > "$TMP/same.pp" <<'EOF'
-with { config: { :k -> "v" } } {
-  print($config("k") = config("k"))
-  print($config("nope", "d") = config("nope", "d"))
-}
+# (d) the removed bare config call is an ordinary unresolved function.
+cat > "$TMP/raw.pp" <<'EOF'
+print(config("k"))
 EOF
-run_one "config-equals-bare-form" "$TMP/same.pp" $'true\ntrue'
+got=$("$PP" "$TMP/raw.pp" 2>&1 || true)
+if echo "$got" | grep -q 'unbound symbol: config'; then
+  ok "bare-config-removed"
+else
+  bad "bare-config-removed" "got: $(printf '%q' "$got")"
+fi
 
 # (e) quasiquote parity: a $config template with an unquoted hole expands to
-# code that evaluates to the same value as the bare form.
+# the same typed observation AST.
 cat > "$TMP/qq.pp" <<'EOF'
 defmacro mk(k) { quasiquote { $config(unquote(k)) } }
 defmacro mkd(k, d) { quasiquote { $config(unquote(k), unquote(d)) } }

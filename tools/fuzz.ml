@@ -478,7 +478,7 @@ let stmt_with_config env d =
   let v = gen_int_lit () in
   let body =
     S [A "print";
-       S [A "+"; S [A "config"; A (":" ^ k); gen_int_lit ()]; gen_int env (d - 1)]] in
+       S [A "+"; S [A "observe"; A "config"; A (":" ^ k); gen_int_lit ()]; gen_int env (d - 1)]] in
   [S [A "with-config"; C [A (":" ^ k); v]; body]]
 
 (* ------- full-grammar statements (audit-divergence probes) ------- *)
@@ -625,25 +625,25 @@ let stmt_config_computed env d =
   let k1 = String.sub k 0 (klen / 2) and k2 = String.sub k (klen / 2) (klen - klen / 2) in
   [S [A "with-config"; C [A (":" ^ k); gen_int_lit ()];
       S [A "print";
-         S [A "config";
+         S [A "observe"; A "config";
             S [A "string-append"; A ("\"" ^ k1 ^ "\""); A ("\"" ^ k2 ^ "\"")];
             gen_int env (d - 1)]]]]
 
 let stmt_perform env d =
-  (* perform log with no handler: builtin logs to stderr, returns nil *)
-  if flip 0.5 then [S [A "perform"; A "log"; gen_string env (d - 1)]]
-  else [S [A "print"; S [A "perform"; A "log"; gen_string env (d - 1)]]]
+  (* Both public paths are strict and share the same log! handler/default. *)
+  if flip 0.5 then [S [A "log!"; gen_string env (d - 1)]]
+  else [S [A "print"; S [A "perform"; A "log!"; gen_string env (d - 1)]]]
 
 let stmt_with_handler env d =
-  (* handler over log returning an int *)
+  (* handler over log! returning an int *)
   let m = fresh "p" in
   let henv = { env with vars = { vname = m; vty = TStr; vne = false } :: env.vars } in
   let hbody =
     if flip 0.5 then gen_int henv (d - 1)
     else S [A "do"; S [A "print"; S [A "string-append"; A "\"h:\""; A m]];
             gen_int henv (d - 1)] in
-  [S [A "with-handler"; V [A "log"; S [A "fn"; S [A m]; hbody]];
-      S [A "print"; S [A "perform"; A "log"; gen_string env (d - 1)]]]]
+  [S [A "with-handler"; V [A "log!"; S [A "fn"; S [A m]; hbody]];
+      S [A "print"; S [A "log!"; gen_string env (d - 1)]]]]
 
 let stmt_handler_leak env d =
   (* with-handler whose body ends in a tail call — the handler must be popped
@@ -653,9 +653,9 @@ let stmt_handler_leak env d =
   let env' = { env with vars = { vname = p; vty = TInt; vne = false } :: env.vars } in
   let m = fresh "p" in
   [S [A "def"; S [A f; A p]; gen_int env' (d - 1)];
-   S [A "with-handler"; V [A "log"; S [A "fn"; S [A m]; A "77"]];
+   S [A "with-handler"; V [A "log!"; S [A "fn"; S [A m]; A "77"]];
       S [A f; gen_int_lit ()]];
-   S [A "print"; S [A "perform"; A "log"; gen_str_lit ()]]]
+   S [A "print"; S [A "perform"; A "log!"; gen_str_lit ()]]]
 
 let stmt_deep_rec _env _d =
   (* deep recursion — stack-safety; tail and non-tail variants *)

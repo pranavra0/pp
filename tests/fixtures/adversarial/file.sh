@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Adversarial world for $file (SPEC LAW 23 / DESIGN §2.1).
-# $file lowers to slurp and records a file: cell. Threats that try to reach a
+# $file records a file: cell. Threats that try to reach a
 # file OUTSIDE the granted scope while LOOKING like an in-scope path:
 #   - a symlink inside the sandbox pointing out of it,
 #   - a `..` traversal,

@@ -23,14 +23,14 @@ run_one() {
 # (a) ordinary with-handler, symbol + keyword names.
 cat > "$TMP/n.pp" <<'EOF'
 def sink(m) { m }
-print(with-handler(log = sink, :warn = sink) { perform log("hi") })
+print(with-handler(log! = sink, :warn = sink) { log!("hi") })
 EOF
 run_one "normal-with-handler" "$TMP/n.pp" '"hi"'
 
 # (b) with-handler quasiquote template expands+runs.
 cat > "$TMP/q.pp" <<'EOF'
 def h(m) { m }
-defmacro mk() { quasiquote { with-handler(log = h) { perform log("hi") } } }
+defmacro mk() { quasiquote { with-handler(log! = h) { log!("hi") } } }
 print(mk())
 EOF
 run_one "qq-with-handler-template" "$TMP/q.pp" '"hi"'
@@ -38,12 +38,12 @@ run_one "qq-with-handler-template" "$TMP/q.pp" '"hi"'
 # (c) trailing comma rejected in BOTH readers (consistency fix).
 cat > "$TMP/tc-normal.pp" <<'EOF'
 def h(m) { m }
-with-handler(log = h,) { perform log("x") }
+with-handler(log! = h,) { log!("x") }
 EOF
 gotn=$("$PP" "$TMP/tc-normal.pp" 2>&1 || true)
 cat > "$TMP/tc-qq.pp" <<'EOF'
 def h(m) { m }
-defmacro mk() { quasiquote { with-handler(log = h,) { 1 } } }
+defmacro mk() { quasiquote { with-handler(log! = h,) { 1 } } }
 print(mk())
 EOF
 gotq=$("$PP" "$TMP/tc-qq.pp" 2>&1 || true)

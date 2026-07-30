@@ -11,25 +11,21 @@ open Pp_kernel
 
 (* ---- observation heads ($KIND) ---------------------------------------- *)
 
-type tmpl =
-    Prim of string
-  | Arg of int
-  | App of tmpl list
-  | If of tmpl * tmpl * tmpl
-  | Perform of string * tmpl list      (* (perform EFFECT args…) — a traced observation *)
-  | Config of tmpl * tmpl option       (* (config KEY [DEFAULT]) — a scoped config read *)
+type arity = {
+  min : int;
+  max : int;
+}
 
 type obs_head = {
+  kind : Core_model.observation_kind;
   head : string;
-  min_args : int;
-  max_args : int;
-  qq_legal : bool;
+  arity : arity;
   doc : string;
-  tmpl : int -> tmpl;
 }
 
 val obs_heads : obs_head list
 val find_head : string -> obs_head option
+val find_kind : Core_model.observation_kind -> obs_head option
 val known_heads_message : unit -> string
 val check_arity : obs_head -> int -> (unit, string) result
 
@@ -59,12 +55,6 @@ type grant_sugar = {
 val grant_sugar : grant_sugar list
 val find_grant_sugar : string -> grant_sugar option
 
-(* ---- observation-exclusivity primitives -------------------------------- *)
-
-(* The bare world-read primitives the `$` family wraps, each paired with the
-   `$` head to suggest instead. `pp lint` flags a bare use outside stdlib. *)
-val observation_primitives : (string * string) list
-val observation_primitive : string -> string option
 
 (* ---- SPEC rendering ---------------------------------------------------- *)
 

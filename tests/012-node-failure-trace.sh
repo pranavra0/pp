@@ -32,7 +32,7 @@ check() {  # NAME  FILE  attempt=present|absent  errsubstr
 rm -rf "$TMP/.pp"
 cat > "$TMP/f.pp" <<'EOF'
 force(node {
-  perform log("ATTEMPT")
+  log!("ATTEMPT")
   car(5)
 })
 EOF
@@ -50,8 +50,8 @@ rm -rf "$TMP/.pp"
 printf 'V1\n' > "$TMP/d.txt"
 cat > "$TMP/fr.pp" <<EOF
 force(node {
-  perform log("ATTEMPT")
-  slurp("$TMP/d.txt")
+  log!("ATTEMPT")
+  \$file("$TMP/d.txt")
   car(5)
 })
 EOF
@@ -65,8 +65,8 @@ rm -rf "$TMP/.pp"
 printf 'bad\n' > "$TMP/n.txt"
 cat > "$TMP/cond.pp" <<EOF
 force(node {
-  perform log("ATTEMPT")
-  if slurp("$TMP/n.txt") = "ok\n" { 42 } else { car(5) }
+  log!("ATTEMPT")
+  if \$file("$TMP/n.txt") = "ok\n" { 42 } else { car(5) }
 })
 EOF
 "$PP" --grant "fs:$TMP:ro" "$TMP/cond.pp" > "$TMP/o" 2>&1; check "cond-fail-first" "$TMP/o" present "car expects a pair"

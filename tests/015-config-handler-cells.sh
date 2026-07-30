@@ -35,16 +35,16 @@ run() { "$PP" "$@" > "$TMP/out" 2>&1; }
 rm -rf "$TMP/.pp"
 cat > "$TMP/a1.pp" <<'EOF'
 with-config({"amb" -> "A"}) {
-  perform log(force(node {
-    perform log("COMPUTE")
+  log!(force(node {
+    log!("COMPUTE")
     42
   }))
 }
 EOF
 cat > "$TMP/a2.pp" <<'EOF'
 with-config({"amb" -> "B"}) {
-  perform log(force(node {
-    perform log("COMPUTE")
+  log!(force(node {
+    log!("COMPUTE")
     42
   }))
 }
@@ -57,17 +57,17 @@ run "$TMP/a2.pp"; assert "cfg-unrelated-still-hit" "COMPUTE" absent
 rm -rf "$TMP/.pp"
 cat > "$TMP/b1.pp" <<'EOF'
 with-config({"k" -> "V1"}) {
-  perform log(force(node {
-    perform log("COMPUTE")
-    config("k")
+  log!(force(node {
+    log!("COMPUTE")
+    $config("k")
   }))
 }
 EOF
 cat > "$TMP/b2.pp" <<'EOF'
 with-config({"k" -> "V2"}) {
-  perform log(force(node {
-    perform log("COMPUTE")
-    config("k")
+  log!(force(node {
+    log!("COMPUTE")
+    $config("k")
   }))
 }
 EOF
@@ -82,16 +82,16 @@ run "$TMP/b1.pp"; assert "cfg-read-revert-hit"  "COMPUTE" absent
 #         providing the key recomputes, then absence hits again ---
 rm -rf "$TMP/.pp"
 cat > "$TMP/c1.pp" <<'EOF'
-perform log(force(node {
-  perform log("COMPUTE")
-  config("k", "DEF")
+log!(force(node {
+  log!("COMPUTE")
+  $config("k", "DEF")
 }))
 EOF
 cat > "$TMP/c2.pp" <<'EOF'
 with-config({"k" -> "V5"}) {
-  perform log(force(node {
-    perform log("COMPUTE")
-    config("k", "DEF")
+  log!(force(node {
+    log!("COMPUTE")
+    $config("k", "DEF")
   }))
 }
 EOF
@@ -107,16 +107,16 @@ run "$TMP/c1.pp"; assert "cfg-absent-revert-hit" "COMPUTE" absent
 rm -rf "$TMP/.pp"
 cat > "$TMP/d1.pp" <<'EOF'
 with-handler(ask = fn(n) { "H1" }) {
-  perform log(force(node {
-    perform log("COMPUTE")
+  log!(force(node {
+    log!("COMPUTE")
     42
   }))
 }
 EOF
 cat > "$TMP/d2.pp" <<'EOF'
 with-handler(ask = fn(n) { "H2" }) {
-  perform log(force(node {
-    perform log("COMPUTE")
+  log!(force(node {
+    log!("COMPUTE")
     42
   }))
 }
@@ -129,16 +129,16 @@ run "$TMP/d2.pp"; assert "hnd-unrelated-still-hit" "COMPUTE" absent
 rm -rf "$TMP/.pp"
 cat > "$TMP/e1.pp" <<'EOF'
 with-handler(ask = fn(n) { "A1" }) {
-  perform log(force(node {
-    perform log("COMPUTE")
+  log!(force(node {
+    log!("COMPUTE")
     perform ask(0)
   }))
 }
 EOF
 cat > "$TMP/e2.pp" <<'EOF'
 with-handler(ask = fn(n) { "A2" }) {
-  perform log(force(node {
-    perform log("COMPUTE")
+  log!(force(node {
+    log!("COMPUTE")
     perform ask(0)
   }))
 }
@@ -155,15 +155,15 @@ run "$TMP/e1.pp"; assert "hnd-sem-revert-hit" "COMPUTE" absent
 rm -rf "$TMP/.pp"
 printf 'REAL\n' > "$TMP/f.txt"
 cat > "$TMP/f-real.pp" <<EOF
-perform log(force(node {
-  perform log("COMPUTE")
+log!(force(node {
+  log!("COMPUTE")
   perform read-file("$TMP/f.txt")
 }))
 EOF
 cat > "$TMP/f-mock.pp" <<EOF
 with-handler(read-file = fn(p) { "MOCKED" }) {
-  perform log(force(node {
-    perform log("COMPUTE")
+  log!(force(node {
+    log!("COMPUTE")
     perform read-file("$TMP/f.txt")
   }))
 }

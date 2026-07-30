@@ -54,7 +54,7 @@ load("stdlib/list.pp")
 load("stdlib/map.pp")
 load("stdlib/string.pp")
 load("stdlib/domain-fs.pp")
-register-fs-domain("$root", cap-restrict(current-capabilities(), "$root", :wo))
+register-fs-domain!("$root", cap-restrict(current-capabilities(), "$root", :wo))
 {"A" -> {"fs" -> {:tree -> {
   "a.txt" -> {:kind -> :file, :mode -> 420, :blob -> blob("from-A")}
 }}},
@@ -115,7 +115,7 @@ load("stdlib/list.pp")
 load("stdlib/map.pp")
 load("stdlib/string.pp")
 load("stdlib/domain-proc.pp")
-register-proc-domain(current-capabilities())
+register-proc-domain!(current-capabilities())
 {"C" -> {"proc" -> {"svc-c" -> {"cmd" -> "$TMP/svc/run.sh", "args" -> ["$TMP/pid-c"], "cwd" -> "$TMP"}}}, "OTHER" -> {"proc" -> {"svc-other" -> {"cmd" -> "$TMP/svc/run.sh", "args" -> ["$TMP/pid-other"], "cwd" -> "$TMP"}}}}
 EOF
 
@@ -161,7 +161,7 @@ load("stdlib/list.pp")
 load("stdlib/map.pp")
 
 def register-kv-domain() {
-  register-domain({:name -> "kv", :namespace -> vec[string-append("file:", "$KV"), string-append("tree:", "$KV")], :observe -> (
+  register-domain!({:name -> "kv", :namespace -> vec[string-append("file:", "$KV"), string-append("tree:", "$KV")], :observe -> (
 
 
 fn() { perform tree-observe("$KV") }), :diff -> (
@@ -169,7 +169,7 @@ fn(observed, desired) { {:items -> map(
 fn(k) { {:kind -> "create", :key -> k, :value -> hash-map-get(desired, k)} }, filter(
 fn(k) { nil?(hash-map-get(observed, k)) }, map-keys(desired))), :summary -> [[:created, "n/a"]]}
   }), :apply -> (
-fn(plan) { each(
+fn(plan) { each!(
 fn(item) {
       perform materialize-file(string-append("$KV/", hash-map-get(item, :key)), hash-map-get(item, :value))
     }, hash-map-get(plan, :items))

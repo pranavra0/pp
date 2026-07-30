@@ -262,7 +262,8 @@ let rec embed_deep (st : rng) (k : int) (inner : value) : value =
 
 (* ============================================================ PATTERNS ==== *)
 
-type pattern_tag = Pt_literal | Pt_variable | Pt_wildcard | Pt_list | Pt_tagged
+type pattern_tag =
+  | Pt_literal | Pt_variable | Pt_wildcard | Pt_list | Pt_tagged | Pt_map
 
 let pattern_kind : pattern -> pattern_tag = function
   | PLiteral _ -> Pt_literal
@@ -270,9 +271,29 @@ let pattern_kind : pattern -> pattern_tag = function
   | PWildcard -> Pt_wildcard
   | PList _ -> Pt_list
   | PTagged _ -> Pt_tagged
+  | PMap _ -> Pt_map
 
-let all_pattern_tags = [ Pt_literal; Pt_variable; Pt_wildcard; Pt_list; Pt_tagged ]
-let () = assert (List.length all_pattern_tags = 5)
+let all_pattern_tags =
+  [ Pt_literal; Pt_variable; Pt_wildcard; Pt_list; Pt_tagged; Pt_map ]
+let () = assert (List.length all_pattern_tags = 6)
+
+let rec gen_pattern_key ~(mode : mode) (st : rng) (depth : int) : value =
+  if depth <= 0 then
+    choose st
+      [VNil; VBool (rb st); VInt (ri st 400 - 200);
+       VFloat (gen_float ~mode st); VString (gen_string ~mode st);
+       VKeyword (gen_name ~mode st); VSymbol (gen_name ~mode st)]
+  else
+    match ri st 9 with
+    | 0 -> VVector (Array.init (small st)
+              (fun _ -> gen_pattern_key ~mode st (depth - 1)))
+    | 1 ->
+        List.fold_right
+          (fun value tail -> VPair (value, tail))
+          (List.init (small st)
+             (fun _ -> gen_pattern_key ~mode st (depth - 1)))
+          VNil
+    | _ -> gen_pattern_key ~mode st 0
 
 let rec gen_pattern ~(mode : mode) (st : rng) (depth : int) : pattern =
   let tag =
@@ -299,6 +320,23 @@ and gen_pattern_of_tag ~(mode : mode) (st : rng) (depth : int) (tag : pattern_ta
          round-trip; only [:tag, p, …] does. Adv keeps 0 for hash coverage. *)
       let n = match mode with Faithful -> 1 + small st | Adv -> small st in
       PTagged (gen_name ~mode st, List.init n (fun _ -> gen_pattern ~mode st d))
+  | Pt_map ->
+      let rec unique_entries entries keys n =
+        if n = 0 then List.rev entries
+        else
+          let key = gen_pattern_key ~mode st d in
+          if List.exists (fun old -> Identity.equal_value old key) keys then
+            unique_entries entries keys n
+          else
+            unique_entries
+              ((key, gen_pattern ~mode st d) :: entries)
+              (key :: keys) (n - 1)
+      in
+      let entries = unique_entries [] [] (small st) in
+      let rest =
+        choose st [Exact; Ignore; Bind (gen_name ~mode st)]
+      in
+      PMap (entries, rest)
 
 (* ============================================================= EXPRS ====== *)
 
@@ -306,8 +344,9 @@ type expr_tag =
   | Et_literal | Et_symbol | Et_if | Et_let | Et_fn | Et_apply | Et_quote
   | Et_force | Et_with_caps | Et_perform | Et_with_handler | Et_delay | Et_node
   | Et_defnode | Et_do | Et_def | Et_defvalue | Et_letstar | Et_module
+  | Et_export
   | Et_import | Et_load | Et_load_module | Et_island | Et_with_config
-  | Et_config | Et_typed | Et_located | Et_match
+  | Et_observe | Et_typed | Et_located | Et_match
 
 let expr_kind : expr -> expr_tag = function
   | ELiteral _ -> Et_literal
@@ -329,12 +368,13 @@ let expr_kind : expr -> expr_tag = function
   | EDefValue _ -> Et_defvalue
   | ELetStar _ -> Et_letstar
   | EModule _ -> Et_module
+  | EExport _ -> Et_export
   | EImport _ -> Et_import
   | ELoad _ -> Et_load
   | ELoadModule _ -> Et_load_module
   | EIsland _ -> Et_island
   | EWithConfig _ -> Et_with_config
-  | EConfig _ -> Et_config
+  | EObserve _ -> Et_observe
   | ETyped _ -> Et_typed
   | ELocated _ -> Et_located
   | EMatch _ -> Et_match
@@ -356,7 +396,8 @@ let neither why = { print_sexpr = false; print_braces = false; why }
 let expr_surface : expr_tag -> expr_surface = function
   | Et_literal | Et_symbol | Et_if | Et_let | Et_fn | Et_apply | Et_quote
   | Et_force | Et_with_caps | Et_perform | Et_with_handler | Et_delay | Et_node
-  | Et_defnode | Et_do | Et_def | Et_defvalue | Et_letstar -> both
+  | Et_defnode | Et_do | Et_def | Et_defvalue | Et_letstar
+  | Et_export -> both
   (* match: the brace surface has both a printer and a reader for it; the
      sexpr surface still has no match spelling defined, so the sexpr
      reader can't re-read a printed match. *)
@@ -365,7 +406,7 @@ let expr_surface : expr_tag -> expr_surface = function
   (* forms with no round-trippable surface spelling on either side *)
   | Et_typed -> neither "a bare (e : ty) has no surface spelling (printer refuses)"
   | Et_located -> neither "location is metadata; quote/print both strip it"
-  | Et_config -> neither "$config is B5 (open); config read has no brace head yet"
+  | Et_observe -> both
   | Et_with_config -> neither "with-config has no settled brace surface yet"
   | Et_module -> neither "module is not a top-level brace form"
   | Et_import -> neither "import has no round-trippable brace head yet"
@@ -376,10 +417,10 @@ let expr_surface : expr_tag -> expr_surface = function
 let all_expr_tags =
   [ Et_literal; Et_symbol; Et_if; Et_let; Et_fn; Et_apply; Et_quote; Et_force;
     Et_with_caps; Et_perform; Et_with_handler; Et_delay; Et_node; Et_defnode;
-    Et_do; Et_def; Et_defvalue; Et_letstar; Et_module; Et_import; Et_load;
-    Et_load_module; Et_island; Et_with_config; Et_config; Et_typed; Et_located;
+    Et_do; Et_def; Et_defvalue; Et_letstar; Et_module; Et_export; Et_import; Et_load;
+    Et_load_module; Et_island; Et_with_config; Et_observe; Et_typed; Et_located;
     Et_match ]
-let () = assert (List.length all_expr_tags = 28)
+let () = assert (List.length all_expr_tags = 29)
 
 (* Faithful mode restricts to forms with a settled surface on the target side
    so the printer round-trip tests reader-image ASTs; injectivity/quote use Adv
@@ -450,13 +491,23 @@ and gen_expr_of_tag ~(mode : mode) (st : rng) (depth : int) (tag : expr_tag) : e
   | Et_defvalue -> EDefValue (fr (), e ())
   | Et_letstar -> ELetStar (bindings (), e ())
   | Et_module -> EModule (List.init (1 + small st) (fun _ -> e ()))
+  | Et_export -> EExport (List.init (1 + small st) (fun _ -> fr ()))
   | Et_import -> EImport (e ())
   | Et_load -> ELoad (gen_string ~mode st)
   | Et_load_module -> ELoadModule (gen_string ~mode st)
   | Et_island ->
       EIsland (gen_string ~mode st, if rb st then Some (gen_string ~mode st) else None)
   | Et_with_config -> EWithConfig (e (), e ())
-  | Et_config -> EConfig (e (), if rb st then Some (e ()) else None)
+  | Et_observe ->
+      let kinds = [| File; Env; Tree; Probe; Secret; Stat; Argv; Config |] in
+      let kind = kinds.(ri st (Array.length kinds)) in
+      let count =
+        match kind with
+        | Argv -> 0
+        | Env | Config -> if rb st then 1 else 2
+        | File | Tree | Probe | Secret | Stat -> 1
+      in
+      EObserve (kind, List.init count (fun _ -> e ()))
   | Et_typed -> ETyped (e (), e ())
   | Et_located ->
       let source = gen_string ~mode st in
@@ -493,9 +544,11 @@ let rec strip_loc (e : expr) : expr =
   | EDefValue (n, x) -> EDefValue (n, strip_loc x)
   | ELetStar (bs, b) -> ELetStar (List.map (fun (n, x) -> (n, strip_loc x)) bs, strip_loc b)
   | EModule xs -> EModule (List.map strip_loc xs)
+  | EExport _ -> e
   | EImport x -> EImport (strip_loc x)
   | EWithConfig (m, b) -> EWithConfig (strip_loc m, strip_loc b)
-  | EConfig (k, d) -> EConfig (strip_loc k, Option.map strip_loc d)
+  | EObserve (kind, arguments) ->
+      EObserve (kind, List.map strip_loc arguments)
   | ETyped (x, t) -> ETyped (strip_loc x, strip_loc t)
   | EMatch (s, arms) -> EMatch (strip_loc s, List.map (fun (p, g, b) -> (p, Option.map strip_loc g, strip_loc b)) arms)
 
@@ -516,7 +569,8 @@ let sub_exprs (e : expr) : expr list =
   | EDefNode (_, _, b) | EDef (_, _, b) -> [b]
   | EDefValue (_, x) -> [x]
   | EDo xs | EModule xs -> xs
-  | EConfig (k, d) -> k :: (match d with Some x -> [x] | None -> [])
+  | EExport _ -> []
+  | EObserve (_, arguments) -> arguments
   | ETyped (x, t) -> [x; t]
   | ELocated (_, x) -> [x]
   | EMatch (s, arms) ->
@@ -552,6 +606,14 @@ let rec dbg_pat (p : pattern) : string =
   | PList (ps, r) -> "[" ^ String.concat " " (List.map dbg_pat ps)
                      ^ (match r with Some x -> " ..." ^ dbg_pat x | None -> "") ^ "]"
   | PTagged (t, ps) -> "[:" ^ t ^ " " ^ String.concat " " (List.map dbg_pat ps) ^ "]"
+  | PMap (entries, rest) ->
+      let es = List.map (fun (key, pat) -> dbg_value key ^ "->" ^ dbg_pat pat) entries in
+      let suffix = match rest with
+        | Exact -> ""
+        | Ignore -> " ..."
+        | Bind name -> " ..." ^ name
+      in
+      "{" ^ String.concat ", " es ^ suffix ^ "}"
 let rec dbg (e : expr) : string =
   let l = String.concat " " in
   match e with
@@ -574,12 +636,16 @@ let rec dbg (e : expr) : string =
   | EDefValue (n, x) -> Printf.sprintf "(def %s %s)" n (dbg x)
   | ELetStar (bs, b) -> Printf.sprintf "(let* [%s] %s)" (l (List.map (fun (n, x) -> n ^ "=" ^ dbg x) bs)) (dbg b)
   | EModule xs -> "(module " ^ l (List.map dbg xs) ^ ")"
+  | EExport names -> "(export " ^ l names ^ ")"
   | EImport x -> "(import " ^ dbg x ^ ")"
   | ELoad p -> Printf.sprintf "(load %S)" p
   | ELoadModule p -> Printf.sprintf "(load-module %S)" p
   | EIsland (u, p) -> Printf.sprintf "(island %S %s)" u (match p with Some s -> "\"" ^ s ^ "\"" | None -> "nil")
   | EWithConfig (m, b) -> Printf.sprintf "(with-config %s %s)" (dbg m) (dbg b)
-  | EConfig (k, d) -> Printf.sprintf "(config %s %s)" (dbg k) (match d with Some x -> dbg x | None -> "-")
+  | EObserve (kind, arguments) ->
+      Printf.sprintf "(observe %s %s)"
+        (Core_model.string_of_observation_kind kind)
+        (l (List.map dbg arguments))
   | ETyped (x, t) -> Printf.sprintf "(: %s %s)" (dbg x) (dbg t)
   | ELocated (range, x) ->
       Printf.sprintf "@%s%s" (Source_range.format range) (dbg x)

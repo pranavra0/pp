@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Adversarial world for $glob (SPEC LAW 23 / DESIGN §2.1).
-# $glob lowers to (perform tree-observe path) and records a tree: cell. A tree
+# Adversarial world for $tree.
+# $tree records a tree: cell directly. A tree
 # observation is fs-read-gated on the ROOT, so the same escapes as $file must be
 # defeated: a `..` traversal to an ungranted parent, and a symlink whose target
 # is outside the grant. The observation must be denied (never returns a listing
@@ -33,11 +33,11 @@ deny() {  # NAME  EXPR
   fi
 }
 # Positive control: an in-scope tree observation works.
-out=$("$PP" --grant "fs:$SB:ro" -e "print(\$glob(\"$SB/sub\"))" 2>&1 || true)
+out=$("$PP" --grant "fs:$SB:ro" -e "print(\$tree(\"$SB/sub\"))" 2>&1 || true)
 printf '%s' "$out" | grep -q "inside.txt" || { echo "FAIL positive-control: $out"; fail=1; }
 echo "ok   positive-control"
 
-deny dotdot-escape  "print(\$glob(\"$SB/../$OUT_BASE\"))"
-deny symlink-escape "print(\$glob(\"$SB/link-dir\"))"
+deny dotdot-escape  "print(\$tree(\"$SB/../$OUT_BASE\"))"
+deny symlink-escape "print(\$tree(\"$SB/link-dir\"))"
 
 exit $fail

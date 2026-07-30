@@ -1,4 +1,8 @@
+type map_rest = Exact | Ignore | Bind of string
+
 type closure_kind = Function | Node
+
+type observation_kind = File | Env | Tree | Probe | Secret | Stat | Argv | Config
 
 type env = {
   env_id : int;
@@ -6,14 +10,13 @@ type env = {
   bindings : (string * value) list;
 }
 
-
-(* ---- Patterns for match expressions ---- *)
 and pattern =
   | PLiteral of value       (* 42, "hello", true, nil *)
   | PVariable of string     (* x — matches anything, binds *)
   | PWildcard               (* _ — matches anything, no bind *)
   | PList of pattern list * pattern option  (* [a, b, ...rest] *)
   | PTagged of string * pattern list  (* [:ok, v] or [:err, e] *)
+  | PMap of (value * pattern) list * map_rest
 
 (* ---- Expressions — the AST produced by the reader ---- *)
 
@@ -38,12 +41,13 @@ and expr =
   | EDefValue of string * expr  (* eager value binding *)
   | ELetStar of (string * expr) list * expr  (* sequential let — desugared by reader *)
   | EModule of expr list        (* (module body...) — thunk producing an env *)
+  | EExport of string list      (* (export name...) — module export declaration *)
   | EImport of expr             (* (import mod-expr) — force module, merge env *)
   | ELoad of string             (* (load "file.pp") — eval file in current env *)
   | ELoadModule of string       (* (load-module "file.pp") — eval file as module *)
   | EIsland of string * string option  (* (island <uri> [version]) — remote import *)
   | EWithConfig of expr * expr     (* (with-config {map} body) — ambient config *)
-  | EConfig of expr * expr option  (* (config key [default]) — read config *)
+  | EObserve of observation_kind * expr list
   | ETyped of expr * expr          (* (the-expr : type) — type annotation *)
   | ELocated of Source_range.t * expr  (* source-located expression *)
   | EMatch of expr * (pattern * expr option * expr) list
@@ -101,3 +105,24 @@ and thunk_status =
   | Unevaluated
   | Evaluating
   | Evaluated of value
+
+let string_of_observation_kind = function
+  | File -> "file"
+  | Env -> "env"
+  | Tree -> "tree"
+  | Probe -> "probe"
+  | Secret -> "secret"
+  | Stat -> "stat"
+  | Argv -> "argv"
+  | Config -> "config"
+
+let observation_kind_of_string = function
+  | "file" -> Some File
+  | "env" -> Some Env
+  | "tree" -> Some Tree
+  | "probe" -> Some Probe
+  | "secret" -> Some Secret
+  | "stat" -> Some Stat
+  | "argv" -> Some Argv
+  | "config" -> Some Config
+  | _ -> None

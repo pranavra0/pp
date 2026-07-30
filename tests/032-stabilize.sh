@@ -33,20 +33,20 @@ fi
 # Write the 4-node program — use unquoted heredoc so $TMP expands to literal paths.
 cat > "$TMP/stab.pp" <<EOF
 let (a = node {
-  perform log("A")
-  slurp("$TMP/f1")
+  log!("A")
+  \$file("$TMP/f1")
 }, b = node {
-  perform log("B")
+  log!("B")
   do {
     force(a)
-    slurp("$TMP/f2")
+    \$file("$TMP/f2")
   }
 }, c = node {
-  perform log("C")
+  log!("C")
   force(b)
 }, d = node {
-  perform log("D")
-  slurp("$TMP/f3")
+  log!("D")
+  \$file("$TMP/f3")
 }) {
   force(c)
   force(d)

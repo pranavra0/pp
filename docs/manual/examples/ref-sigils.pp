@@ -1,13 +1,14 @@
-# Observation sigils read the world and record trace cells.
-# Each is a $ prefixed form that lowers to the corresponding builtin.
+# Observation sigils are the complete world-read surface. Each lowers to a
+# typed observation node and records the corresponding trace cell.
 #
-# $file("path")      -> slurp, records file: cell
-# $env("VAR")        -> env-get, records env: cell
-# $glob("pattern")   -> perform tree-observe, records tree: cell
-# $probe("name")     -> probe, records probe: cell
-# $config(:key)       -> config, records config: cell
-# $secret("path")    -> slurp under secret grant, records sealed: cell
+# $file("path")       -> file: or sealed:
+# $env("VAR")         -> env:
+# $tree("root")       -> tree:
+# $probe("name")      -> probe:
+# $secret("path")     -> sealed:
+# $stat("path")       -> stat:
+# $argv()             -> argv:
+# $config(:key)       -> config:
 #
-# (These require the appropriate --grant at the command line;
-#  this example only demonstrates the syntax, not actual execution.)
-print("sigils: $file, $env, $config, $probe, $secret")
+# Appropriate command-line grants are required where applicable.
+print("sigils: $file, $env, $tree, $probe, $secret, $stat, $argv, $config")

@@ -67,6 +67,10 @@ let rec quote_to_value (e : expr) : value =
       let qexprs = List.map quote_to_value exprs in
       VPair (VSymbol "module",
         List.fold_right (fun a acc -> VPair (a, acc)) qexprs VNil)
+  | EExport names ->
+      VPair (VSymbol "export",
+        List.fold_right (fun name acc ->
+          VPair (VSymbol name, acc)) names VNil)
   | EImport mod_expr ->
       VPair (VSymbol "import", VPair (quote_to_value mod_expr, VNil))
   | ELoad path ->
@@ -80,10 +84,14 @@ let rec quote_to_value (e : expr) : value =
   | EWithConfig (map_expr, body) ->
       VPair (VSymbol "with-config",
         VPair (quote_to_value map_expr, VPair (quote_to_value body, VNil)))
-  | EConfig (key_expr, default) ->
-      let default_v = match default with Some d -> quote_to_value d | None -> VNil in
-      VPair (VSymbol "config",
-        VPair (quote_to_value key_expr, VPair (default_v, VNil)))
+  | EObserve (kind, arguments) ->
+      VPair
+        (VSymbol "observe",
+         VPair
+           (VSymbol (Core_model.string_of_observation_kind kind),
+            List.fold_right
+              (fun argument tail -> VPair (quote_to_value argument, tail))
+              arguments VNil))
   | ETyped (e, ty) ->
       VPair (VSymbol ":",
         VPair (quote_to_value e, VPair (quote_to_value ty, VNil)))
@@ -120,6 +128,20 @@ and quote_pattern (p : pattern) : value =
       VPair (VSymbol "tagged",
         VPair (VString tag,
                List.fold_right (fun p acc -> VPair (p, acc)) q_pats VNil))
+  | PMap (entries, rest_kind) ->
+      let q_entries =
+        List.fold_right
+          (fun (key, pat) acc ->
+             VPair (VPair (key, VPair (quote_pattern pat, VNil)), acc))
+          entries VNil
+      in
+      let q_rest =
+        match rest_kind with
+        | Exact -> VSymbol "exact"
+        | Ignore -> VSymbol "ignore"
+        | Bind name -> VPair (VSymbol "bind", VPair (VString name, VNil))
+      in
+      VPair (VSymbol "map", VPair (q_entries, VPair (q_rest, VNil)))
 
 let rec value_to_expr (v : value) : expr =
   match v with
@@ -255,6 +277,8 @@ and expr_of_list (items : value list) : expr =
   | [VSymbol "with-handler"; handlers; body] ->
       EWithHandler (binding_pairs handlers, value_to_expr body)
   | (VSymbol "module") :: rest -> EModule (List.map value_to_expr rest)
+  | (VSymbol "export") :: names ->
+      EExport (List.map symbol_name names)
   | [VSymbol "import"; e] -> EImport (value_to_expr e)
   | [VSymbol "load"; VString path] -> ELoad path
   | [VSymbol "load-module"; VString path] -> ELoadModule path
@@ -264,7 +288,10 @@ and expr_of_list (items : value list) : expr =
         | VString p -> Some p
         | _ -> failwith "value_to_expr: island pin must be a string"))
   | [VSymbol "with-config"; m; b] -> EWithConfig (value_to_expr m, value_to_expr b)
-  | [VSymbol "config"; k; d] -> EConfig (value_to_expr k, Some (value_to_expr d))
+  | (VSymbol "observe") :: VSymbol name :: arguments ->
+      (match Core_model.observation_kind_of_string name with
+       | Some kind -> EObserve (kind, List.map value_to_expr arguments)
+       | None -> failwith ("value_to_expr: unknown observation kind " ^ name))
   | [VSymbol ":"; e; ty] -> ETyped (value_to_expr e, value_to_expr ty)
   | (VSymbol "do") :: rest -> EDo (List.map value_to_expr rest)
   (* match, mirroring quote_to_value's EMatch encoding one-for-one:
@@ -276,6 +303,7 @@ and expr_of_list (items : value list) : expr =
   | [VSymbol "match"; scrutinee; arms] ->
       (match value_list_opt arms with
        | Some arm_items ->
+
            let arms' = List.map (fun item ->
              match value_list_opt item with
              | Some [pat_v; body_v] ->
@@ -307,5 +335,25 @@ and value_to_pattern (v : value) : pattern =
       (match value_list_opt pats_v with
        | Some items -> PTagged (tag, List.map value_to_pattern items)
        | None -> failwith "value_to_expr: malformed tagged pattern")
+  | VPair (VSymbol "map", VPair (entries_v, VPair (rest_v, VNil))) ->
+      let entries =
+        match value_list_opt entries_v with
+        | None -> failwith "value_to_expr: malformed map pattern entries"
+        | Some items ->
+            List.map
+              (function
+                | VPair (key, VPair (pat_v, VNil)) ->
+                    (key, value_to_pattern pat_v)
+                | _ -> failwith "value_to_expr: malformed map pattern entry")
+              items
+      in
+      let rest_kind =
+        match rest_v with
+        | VSymbol "exact" -> Exact
+        | VSymbol "ignore" -> Ignore
+        | VPair (VSymbol "bind", VPair (VString name, VNil)) -> Bind name
+        | _ -> failwith "value_to_expr: malformed map pattern rest"
+      in
+      PMap (entries, rest_kind)
   | other -> failwith (Printf.sprintf
       "value_to_expr: cannot convert %s to a pattern" (string_of_value other))

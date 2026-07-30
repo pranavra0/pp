@@ -22,7 +22,7 @@ GRANT=(--grant "fs:$T:ro")
 
 # --- positive: three needs spellings, all read the same granted file --------
 cat > "$T/prog.pp" <<EOF
-def rd() { string-trim(slurp("$T/data.txt")) }
+def rd() { string-trim(\$file("$T/data.txt")) }
 
 # (a) descriptor sugar
 node via-sugar() needs fs.read("$T") { rd() }
@@ -53,11 +53,11 @@ fi
 #     (the value, not the reader, restricts) -----
 cat > "$T/neg.pp" <<EOF
 let narrow = cap-restrict(current-capabilities(), "$T/other", :ro)
-node blocked() needs narrow { slurp("$T/data.txt") }
+node blocked() needs narrow { \$file("$T/data.txt") }
 print(blocked())
 EOF
 neg=$("$PP" "${GRANT[@]}" "$T/neg.pp" 2>&1)
-if echo "$neg" | grep -q "permission denied" \
+if echo "$neg" | grep -qE "permission denied|not granted" \
    && echo "$neg" | grep -q "data.txt"; then
   ok "named-grant-narrows-denies"
 else

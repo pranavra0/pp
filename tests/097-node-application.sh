@@ -11,7 +11,7 @@ count() { grep -c "$1" "$TMP/out" 2>/dev/null || true; }
 
 cat > "$TMP/repeat.pp" <<'EOF'
 node double(x) {
-  perform log("BODY")
+  log!("BODY")
   x * 2
 }
 print(double(21))
@@ -31,7 +31,7 @@ run "$TMP/repeat.pp"
 
 cat > "$TMP/arguments.pp" <<'EOF'
 node identity(x) {
-  perform log("BODY")
+  log!("BODY")
   x
 }
 print(identity(1))
@@ -49,7 +49,7 @@ run "$TMP/arguments.pp"
 cat > "$TMP/free-value.pp" <<'EOF'
 let base = 10
 node add(x) {
-  perform log("BODY")
+  log!("BODY")
   base + x
 }
 print(add(1))
@@ -70,11 +70,11 @@ run "$TMP/free-value.pp"
 
 cat > "$TMP/forced-arguments.pp" <<'EOF'
 node use(x) {
-  perform log("BODY")
+  log!("BODY")
   x
 }
 def argument() {
-  perform log("ARGUMENT")
+  log!("ARGUMENT")
   7
 }
 print(use(argument()))
@@ -90,12 +90,12 @@ body_line=$(grep -n 'BODY' "$TMP/out" | cut -d: -f1)
 
 cat > "$TMP/map.pp" <<'EOF'
 node increment(x) {
-  perform log("BODY")
+  log!("BODY")
   x + 1
 }
 let inputs = list(
-  node { perform log("ARGUMENT-1"); 1 },
-  node { perform log("ARGUMENT-2"); 2 })
+  node { log!("ARGUMENT-1"); 1 },
+  node { log!("ARGUMENT-2"); 2 })
 let results = force-deep(map(increment, inputs))
 print(results)
 EOF

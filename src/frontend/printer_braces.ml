@@ -69,7 +69,7 @@ let is_digit c = c >= '0' && c <= '9'
    As bare symbols they print parenthesized — `(if)` — so no following token
    can ever complete them into their form. *)
 let reserved = [
-  "and"; "assert"; "config"; "def"; "defmacro"; "delay"; "do"; "else"; "fn";
+  "and"; "assert"; "def"; "defmacro"; "delay"; "do"; "else"; "export"; "fn";
   "force"; "if"; "import"; "island"; "let"; "let*"; "load"; "load-module";
   "mod"; "module"; "needs"; "node"; "or"; "perform"; "quasiquote"; "quote";
   "reconcile"; "splice"; "unquote"; "with-caps"; "with-config"; "with-handler";
@@ -82,7 +82,7 @@ let reserved = [
 let unsafe_call_heads = [
   "fn"; "def"; "if"; "do"; "node"; "module"; "perform"; "with-caps";
   "with-config"; "with-handler"; "let"; "let*"; "island"; "load";
-  "load-module"; "config"; "assert"; "import"; "force"; "delay";
+  "load-module"; "assert"; "import"; "force"; "delay"; "export";
   "and"; "or"; "defmacro";
 ]
 
@@ -150,6 +150,7 @@ type st = {
                                     comments keep lines of their own *)
   src : string;      (* location file every ELocated must carry *)
   strict : bool;     (* false: best-effort, ignore location constraints *)
+  mutable allow_export : bool;
 }
 
 let emit st s =
@@ -261,6 +262,31 @@ let defmacro_shape (e : expr) : (string * string list) option =
    scale; lvl_any everywhere unconstrained, 0 in annotation-type positions —
    the reader parses those at postfix level, so any infix there must be
    parenthesized). Only the infix case consults it. *)
+
+let rec print_pattern_key st (v : value) : unit =
+  match v with
+  | VNil | VBool _ | VInt _ | VFloat _ | VString _ | VKeyword _ ->
+      emit st (literal v)
+  | VSymbol s ->
+      if not (name_ok s) then
+        unpr "map pattern symbol key %s has no brace spelling" s;
+      emit st s
+  | VVector values ->
+      emit st "vector(";
+      Array.iteri (fun i value ->
+        if i > 0 then (emit st ","; emit st " ");
+        print_pattern_key st value) values;
+      emit st ")"
+  | VPair _ ->
+      (match Presentation.value_list_opt v with
+       | None -> unpr "map pattern list key is improper"
+       | Some values ->
+           emit st "list(";
+           List.iteri (fun i value ->
+             if i > 0 then (emit st ","; emit st " ");
+             print_pattern_key st value) values;
+           emit st ")")
+  | _ -> unpr "map pattern key is not a closed literal"
 
 let rec print_expr st ~brk ?(lvl = lvl_any) (e : expr) : unit =
   match e with
@@ -383,7 +409,17 @@ let rec print_expr st ~brk ?(lvl = lvl_any) (e : expr) : unit =
       print_arglist st args
   | EModule stmts ->
       emit st "module ";
-      print_block st stmts
+      print_block ~allow_export:true st stmts
+  | EExport names ->
+      if not st.allow_export then
+        unpr "export is only valid as a module statement";
+      emit st "export ";
+      List.iteri (fun i name ->
+        if i > 0 then emit st ", ";
+        if not (name_ok name) then
+          unpr "export name %s has no brace spelling" name;
+        emit st name)
+        names
   | EImport e -> emit st "import("; print_expr st ~brk:true e; emit st ")"
   | ELoad p -> emit st "load("; emit st (string_lit p); emit st ")"
   | ELoadModule p -> emit st "load-module("; emit st (string_lit p); emit st ")"
@@ -394,13 +430,14 @@ let rec print_expr st ~brk ?(lvl = lvl_any) (e : expr) : unit =
        | Some p -> emit st ", "; emit st (string_lit p)
        | None -> ());
       emit st ")"
-  | EConfig (k, d) ->
-      emit st "config(";
-      print_expr st ~brk:true k;
-      (match d with
-       | Some d -> emit st ", "; print_expr st ~brk:true d
-       | None -> ());
-      emit st ")"
+  | EObserve (kind, arguments) ->
+      let observation =
+        match Surface_tables.find_kind kind with
+        | Some observation -> observation
+        | None -> assert false
+      in
+      emit st ("$" ^ observation.head);
+      print_arglist st arguments
   | EMatch (scrutinee, arms) ->
       emit st "match ";
       print_expr st ~brk:false scrutinee;
@@ -458,6 +495,26 @@ and print_pattern st (p : pattern) : unit =
         print_pattern st p
       ) pats;
       emit st ")"
+  | PMap (entries, rest_kind) ->
+      emit st "{";
+      List.iteri
+        (fun i (key, pat) ->
+           if i > 0 then emit st ", ";
+           print_pattern_key st key;
+           emit st " -> ";
+           print_pattern st pat)
+        entries;
+      (match rest_kind with
+       | Exact -> ()
+       | Ignore ->
+           if entries <> [] then emit st ", ";
+           emit st "..._"
+       | Bind name ->
+           if not (name_ok name) then
+             unpr "map pattern rest variable %s has no brace spelling" name;
+           if entries <> [] then emit st ", ";
+           emit st "..."; emit st name);
+      emit st "}"
 
 and print_apply st ~brk ~lvl fn args =
   ignore brk;
@@ -629,41 +686,44 @@ and print_ret st (ret : expr option) : unit =
    - a genuine [Unprintable] inside the pretty attempt rolls everything
      back (buffer truncation) and reprints packed — which reproduces the
      error if it was real rather than layout-induced. *)
-and print_block st (stmts : expr list) : unit =
-  match stmts with
-  | [] -> emit st "{ }"
-  | _ when not st.strict -> print_block_packed st stmts
-  | stmts ->
-      let save_len = Buffer.length st.buf in
-      let save_line = st.line in
-      let save_col = st.col in
-      let save_anch = st.anch in
-      let save_ind = st.indent in
-      let rollback () =
-        Buffer.truncate st.buf save_len;
-        st.line <- save_line;
-        st.col <- save_col;
-        st.anch <- save_anch;
-        st.indent <- save_ind
-      in
-      let packed_narrow_ok () =
-        match stmts with
-        | [_] ->
-            (try
-               print_block_packed st stmts;
-               (* a keeper only if it genuinely stayed a narrow ONE-liner
-                  (nested blocks may have broken the line themselves) *)
-               if st.line = save_line && st.col <= max_width then true
-               else (rollback (); false)
-             with Unprintable _ -> rollback (); false)
-        | _ -> false
-      in
-      if not (packed_narrow_ok ()) then begin
-        try print_block_pretty st stmts
-        with Unprintable _ ->
-          rollback ();
-          print_block_packed st stmts
-      end
+and print_block ?(allow_export = false) st (stmts : expr list) : unit =
+  let old_allow_export = st.allow_export in
+  st.allow_export <- allow_export;
+  Fun.protect
+    (fun () ->
+      match stmts with
+      | [] -> emit st "{ }"
+      | _ when not st.strict -> print_block_packed st stmts
+      | stmts ->
+          let save_len = Buffer.length st.buf in
+          let save_line = st.line in
+          let save_col = st.col in
+          let save_anch = st.anch in
+          let save_ind = st.indent in
+          let rollback () =
+            Buffer.truncate st.buf save_len;
+            st.line <- save_line;
+            st.col <- save_col;
+            st.anch <- save_anch;
+            st.indent <- save_ind
+          in
+          let packed_narrow_ok () =
+            match stmts with
+            | [_] ->
+                (try
+                   print_block_packed st stmts;
+                   if st.line = save_line && st.col <= max_width then true
+                   else (rollback (); false)
+                 with Unprintable _ -> rollback (); false)
+            | _ -> false
+          in
+          if not (packed_narrow_ok ()) then begin
+            try print_block_pretty st stmts
+            with Unprintable _ ->
+              rollback ();
+              print_block_packed st stmts
+          end)
+    ~finally:(fun () -> st.allow_export <- old_allow_export)
 
 (* One statement per line, 2-space indentation, closing brace on its own
    line. Located statements pad to their exact line (then indent); an
@@ -725,11 +785,11 @@ and print_seq st (stmts : expr list) : unit =
 
 (* Print a whole program (the reader's top-level form list) as brace text
    whose re-read yields structurally identical, identically-located forms.
-   Two passes: pass 1 (non-strict, packed) records the anchor stream in
-   demand order; pass 2 prints strictly against it (see the file header).
+   Two passes: pass 1 (non-strict, packed) records the anchor stream; pass 2
+   prints strictly against it (see the file header).
    [reserved] lists comment-occupied source lines (`pp fmt`'s side channel,
-   src/frontend/comments.ml): pretty layout skips them when breaking, so standalone
-   comments splice back onto lines of their own. *)
+   src/frontend/comments.ml): pretty layout skips them when breaking, so
+   standalone comments splice back onto lines of their own. *)
 let print_program ?(source : string = "<?>") ?(reserved : int list = [])
     (forms : expr list) : string =
   let resv = Hashtbl.create 16 in
@@ -737,11 +797,11 @@ let print_program ?(source : string = "<?>") ?(reserved : int list = [])
   let demands = ref [] in
   let st1 = { buf = Buffer.create 1024; line = 1; col = 0; indent = 0;
               anch = []; record = Some demands; resv;
-              src = source; strict = false } in
+              src = source; strict = false; allow_export = true } in
   print_seq st1 forms;
   let st = { buf = Buffer.create 1024; line = 1; col = 0; indent = 0;
              anch = List.rev !demands; record = None; resv;
-             src = source; strict = true } in
+             src = source; strict = true; allow_export = true } in
   print_seq st forms;
   if forms <> [] then newline st;
   Buffer.contents st.buf
@@ -751,6 +811,6 @@ let print_program ?(source : string = "<?>") ?(reserved : int list = [])
 let print_expr_string (e : expr) : string =
   let st = { buf = Buffer.create 256; line = 1; col = 0; indent = 0;
              anch = []; record = None; resv = Hashtbl.create 1;
-             src = ""; strict = false } in
+             src = ""; strict = false; allow_export = false } in
   print_expr st ~brk:true e;
   Buffer.contents st.buf

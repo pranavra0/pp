@@ -60,6 +60,7 @@ open Pp_kernel
    syntax, not the macro's. *)
 
 open Core_model
+open Pp_frontend
 open Source_error
 
 type services = {
@@ -216,20 +217,142 @@ let rec expand_expr services session expansion_count (loc : Source_range.t optio
   | EDef (name, params, body) -> EDef (name, params, expand_expr loc body)
   | EDefValue (name, e) -> EDefValue (name, expand_expr loc e)
   | EDo exprs -> EDo (List.map (expand_expr loc) exprs)
-  | EModule exprs -> EModule (List.map (expand_expr loc) exprs)
+  | EModule exprs ->
+      let expanded, _ =
+        expand_module services session expansion_count loc exprs
+      in
+      EModule expanded
+  | EExport _ -> e
   | EWithCaps (c, b) -> EWithCaps (expand_expr loc c, expand_expr loc b)
   | EPerform (n, args) -> EPerform (n, List.map (expand_expr loc) args)
   | EWithHandler (hs, b) ->
       EWithHandler (List.map (fun (n, h) -> (n, expand_expr loc h)) hs, expand_expr loc b)
-  | EImport e -> EImport (expand_expr loc e)
+  | EImport e ->
+      let arg_loc, arg = match e with
+        | ELocated (l, inner) -> (Some l, inner)
+        | _ -> (None, e)
+      in
+      let expanded_arg =
+        match arg with
+        | EModule body ->
+            let expanded, _ =
+              expand_module services session expansion_count loc body
+            in
+            EModule expanded
+        | ELoadModule path ->
+            expand_static_file services session expansion_count
+              ?source:(Option.map Source_range.source loc) path;
+            ELoadModule path
+        | EIsland (uri, pin) ->
+            expand_static_island services session expansion_count
+              ?source:(Option.map Source_range.source loc) uri pin;
+            EIsland (uri, pin)
+        | _ -> expand_expr loc e
+      in
+      EImport (match arg_loc with
+        | Some l -> ELocated (l, expanded_arg)
+        | None -> expanded_arg)
   | ELoad _ | ELoadModule _ | EIsland _ -> e
   | EWithConfig (m, b) -> EWithConfig (expand_expr loc m, expand_expr loc b)
-  | EConfig (k, d) -> EConfig (expand_expr loc k, Option.map (expand_expr loc) d)
+  | EObserve (kind, arguments) ->
+      EObserve (kind, List.map (expand_expr loc) arguments)
   | ETyped (e, ty) -> ETyped (expand_expr loc e, ty)
   | EMatch (scrutinee, arms) ->
       EMatch (expand_expr loc scrutinee,
               List.map (fun (p, guard, body) ->
                 (p, Option.map (expand_expr loc) guard, expand_expr loc body)) arms)
+
+and expand_module ?(install_exports = true)
+    services session expansion_count loc body_exprs =
+  let saved = Session.snapshot_macros session in
+  Session.clear_macros session;
+  let restore () = Session.restore_macros session saved in
+  try
+    let rec loop acc = function
+      | [] -> List.rev acc
+      | form :: rest ->
+          let form_loc, inner = match form with
+            | ELocated (l, i) -> (Some l, i)
+            | _ -> (None, form)
+          in
+          (match match_defmacro inner with
+           | Some (name, params, body) ->
+               if Option.is_some (Session.find_macro session name) then
+                 failwith ("duplicate module macro: " ^ name);
+               Session.set_macro session name (params, body);
+               loop (relocate form_loc (EQuote (ESymbol name)) :: acc) rest
+           | None ->
+               let expanded =
+                 relocate form_loc
+                   (expand_expr services session expansion_count loc inner)
+               in
+               loop (expanded :: acc) rest)
+    in
+    let expanded = loop [] body_exprs in
+    let export_names =
+      List.filter_map (fun form ->
+        match form with
+        | ELocated (_, EExport names) -> Some names
+        | EExport names -> Some names
+        | _ -> None)
+        expanded
+    in
+    let names =
+      match export_names with
+      | [] -> []
+      | [names] -> names
+      | _ -> failwith "module has more than one export declaration"
+    in
+    let exported_macros =
+      List.filter_map (fun name ->
+        Option.map (fun binding -> (name, binding))
+          (Session.find_macro session name))
+        names
+    in
+    let runtime_names = Hashtbl.create 8 in
+    List.iter (fun form ->
+      match form with
+      | ELocated (_, (EDef (name, _, _) | EDefNode (name, _, _)
+                      | EDefValue (name, _)))
+      | (EDef (name, _, _) | EDefNode (name, _, _)
+         | EDefValue (name, _)) ->
+          Hashtbl.replace runtime_names name ()
+      | _ -> ())
+      expanded;
+    List.iter (fun (name, _) ->
+      if Hashtbl.mem runtime_names name then
+        failwith ("module exports both runtime and macro name: " ^ name))
+      exported_macros;
+    Session.set_module_macro_exports session
+      (Identity.hash_expr (EModule expanded))
+      (List.map fst exported_macros);
+    restore ();
+    if install_exports then
+      List.iter (fun (name, binding) -> Session.set_macro session name binding)
+        exported_macros;
+    (expanded, exported_macros)
+  with exn ->
+    restore ();
+    raise exn
+
+and expand_static_file ?source services session expansion_count path =
+  let resolved = Loader.resolve ?source path in
+  let contents = Loader.read resolved in
+  let forms = Reader_braces.read_dispatch ~source:resolved ~path:resolved contents in
+  ignore (expand_module services session expansion_count None forms)
+
+and expand_static_island ?source:_ services session expansion_count uri pin =
+  let tree = Island.resolve ~uri ~pin in
+  expand_static_file services session expansion_count (Island.entry_file tree)
+
+let expand_module_file services ~path source =
+  let session = Effect.perform Dynamic_scope.Get_session in
+  let expansion_count = ref 0 in
+  let forms = Reader_braces.read_dispatch ~source:path ~path source in
+  let expanded, exported =
+    expand_module ~install_exports:false services session expansion_count None forms
+  in
+  (expanded, List.map fst exported)
 
 (* The shared top-level expansion: every call site that turns a fresh
    `Reader.read_string` result into a list the evaluator is about to process

@@ -4,10 +4,13 @@ open Core_model
 open Effect
 
 type _ Effect.t += Get_session : Session.t Effect.t
+type _ Effect.t += Get_source : string Effect.t
 
 let capabilities () = Effect.perform Get_capabilities
 let config () = Effect.perform Get_config
 let domain () = Effect.perform Get_domain
+
+let source () = Effect.perform Get_source
 
 let with_capabilities (capabilities : Capability.t list) f =
   try f () with
@@ -32,6 +35,10 @@ let with_domain (name : string) f =
   try f () with
   | effect Get_domain, k -> Effect.Deep.continue k (Some name)
 
+
+let with_source (source : string) f =
+  try f () with
+  | effect Get_source, k -> Effect.Deep.continue k source
 let without_observation_collection f =
   try f () with
   | effect Get_observe_all, k -> Effect.Deep.continue k false
@@ -98,3 +105,5 @@ let with_top_level (session : Session.t) (invocation : Invocation.t) ~f x =
   | effect Current_sandbox, k -> Effect.Deep.continue k None
   | effect Get_domain, k -> Effect.Deep.continue k None
   | effect Get_observe_all, k -> Effect.Deep.continue k true
+  | effect Get_source, k ->
+      Effect.Deep.continue k (Sys.getcwd ())

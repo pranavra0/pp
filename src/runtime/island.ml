@@ -287,21 +287,15 @@ let resolve ~(uri : string) ~(pin : string option) : string =
             end
       end
 
-(* The module root inside a pinned tree. entry.pp is brace surface
-   (the default), entry.ppb a permanent brace alias, entry.ppl the sexpr/AST
-   surface — all fully supported; entry.pp wins when several exist. The
-   reader is chosen by extension (Reader_braces.read_dispatch), so a pinned
-   tree may ship whichever surface it was authored in. *)
+(* The module root inside a pinned tree. `entry.pp` is brace surface and
+   `entry.ppl` is the sexpr surface. *)
 let entry_file (tree_dir : string) : string =
   let e = Filename.concat tree_dir "entry.pp" in
   if Sys.file_exists e then e
   else
-    let eb = Filename.concat tree_dir "entry.ppb" in
-    if Sys.file_exists eb then eb
-    else
-      let el = Filename.concat tree_dir "entry.ppl" in
-      if Sys.file_exists el then el
-      else failwith ("island: pinned tree has no entry.pp: " ^ tree_dir)
+    let el = Filename.concat tree_dir "entry.ppl" in
+    if Sys.file_exists el then el
+    else failwith ("island: pinned tree has no entry.pp: " ^ tree_dir)
 
 (* ---- Syntactic walk: every island form in an expression ---- *)
 
@@ -318,13 +312,14 @@ let rec islands_in (e : expr) : (string * string option) list =
   | EForce e | EDelay e | ENode e | EDefValue (_, e) | EImport e
   | ELocated (_, e) -> islands_in e
   | EDo es | EModule es -> List.concat_map islands_in es
+  | EExport _ -> []
   | EWithCaps (a, b) | EWithConfig (a, b) | ETyped (a, b) ->
       islands_in a @ islands_in b
   | EPerform (_, args) -> List.concat_map islands_in args
   | EWithHandler (hs, b) ->
       List.concat_map (fun (_, h) -> islands_in h) hs @ islands_in b
-  | EConfig (k, d) ->
-      islands_in k @ (match d with Some d -> islands_in d | None -> [])
+  | EObserve (_, arguments) ->
+      List.concat_map islands_in arguments
   | EMatch (scrutinee, arms) ->
       islands_in scrutinee @ List.concat_map (fun (_, guard, body) ->
         (match guard with Some g -> islands_in g | None -> []) @ islands_in body) arms

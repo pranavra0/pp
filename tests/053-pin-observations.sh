@@ -3,12 +3,12 @@
 # standalone --pin-file/--dump-pins pair that generalizes the existing
 # --remote-node pin machinery (src/runtime/remote.ml's preseed_pins_from_file /
 # parse_pin_line) used for forked workers, plus a new `(pin-probe "NAME"
-# <codec-value>)` line kind that pins a register-probe's OWN value
+# <codec-value>)` line kind that pins a register-probe!'s OWN value
 # directly into the session's probe cache, short-circuiting its observe-fn
 # entirely (Primitives.probe_value_for consults probe_values FIRST,
 # unconditionally, before ever calling a registered probe's fn).
 #
-# demo/volatile-deploy.pp folds `(probe "replica-count")` directly into its
+# demo/volatile-deploy.pp folds `$probe("replica-count")` directly into its
 # returned desired-state value, so the published hash tracks
 # metrics-file's CURRENT content whenever the probe is left unpinned — the
 # one shape that makes "probe cells are pinned inputs" falsifiable.

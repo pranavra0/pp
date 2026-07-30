@@ -58,6 +58,8 @@ let rec hash_expr (e : expr) : string =
       Hasher.hash_concat ("let_star" :: bparts @ [hash_expr body])
   | EModule exprs ->
       Hasher.hash_concat ("module" :: List.map hash_expr exprs)
+  | EExport names ->
+      Hasher.hash_concat ("export" :: names)
   | EImport mod_expr ->
       Hasher.hash_concat ["import"; hash_expr mod_expr]
   | ELoad path ->
@@ -75,8 +77,10 @@ let rec hash_expr (e : expr) : string =
       Hasher.hash_concat ["island"; uri; pin_part]
   | EWithConfig (map_expr, body) ->
       Hasher.hash_concat ["with_config"; hash_expr map_expr; hash_expr body]
-  | EConfig (key_expr, default) ->
-      Hasher.hash_concat ["config"; hash_expr key_expr; (match default with Some d -> hash_expr d | None -> "")]
+  | EObserve (kind, arguments) ->
+      Hasher.hash_concat
+        ("observe" :: Core_model.string_of_observation_kind kind
+         :: List.map hash_expr arguments)
   | ETyped (e, ty) ->
       Hasher.hash_concat ["typed"; hash_expr e; hash_expr ty]
   | ELocated (range, e) ->
@@ -107,6 +111,19 @@ and hash_pattern (p : pattern) : string =
   | PTagged (tag, pats) ->
       let ph = Hasher.hash_concat (List.map hash_pattern pats) in
       Hasher.hash_concat ["p_tagged"; tag; ph]
+  | PMap (entries, rest_kind) ->
+      let entry_hashes =
+        List.map
+          (fun (key, pat) -> Hasher.hash_concat [hash_value key; hash_pattern pat])
+          entries
+      in
+      let rest_hash =
+        match rest_kind with
+        | Exact -> "exact"
+        | Ignore -> "ignore"
+        | Bind name -> Hasher.hash_concat ["bind"; name]
+      in
+      Hasher.hash_concat ("p_map" :: rest_hash :: entry_hashes)
 
 and hash_value (v : value) : string =
   let rec lookup bindings name =

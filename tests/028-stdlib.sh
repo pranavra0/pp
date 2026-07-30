@@ -2,13 +2,12 @@
 # tests/028 — stdlib oracle: expected VALUES for the new primitives, plus
 # the pieces that need process-level setup:
 #   (a) string/number primitives produce the right values (not just parity);
-#   (b) argv: everything after `--` on the CLI is (argv), a list of strings;
-#   (c) env-get reads the environment, nil when absent;
+#   (b) `$argv`: everything after `--` on the CLI is a list of strings;
+#   (c) `$env` reads the environment, nil when absent;
 #   (d) exit-code control: (exit N) terminates the run with code N;
 #   (e) assert failures report the failing form and its file:line;
-#   (f) file-exists?/dir? are capability-gated observations: recorded as
-#       stat: trace cells inside nodes (create/delete invalidates), and
-#       denied without an fs grant.
+#   (f) `$stat` is a capability-gated observation recorded as a stat: trace
+#       cell inside nodes; create/delete invalidates, and no grant denies.
 # Isolated HOME.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
@@ -34,19 +33,19 @@ assert_out "string-prims" ""           "$TMP/a.pp" "$expected"
 
 # ---- (b) argv ----
 cat > "$TMP/b.pp" <<'EOF'
-print(argv())
+print($argv())
 EOF
 expected='("x" "y z" "3")'
 assert_out "argv" ""           "$TMP/b.pp" "$expected" -- x "y z" 3
 assert_out "argv-empty" ""     "$TMP/b.pp" "nil"
 
-# ---- (c) env-get ----
+# ---- (c) environment observation ----
 cat > "$TMP/c.pp" <<'EOF'
-print(env-get("PP_TEST_VAR"))
-print(env-get("PP_DEFINITELY_UNSET_VAR"))
+print($env("PP_TEST_VAR"))
+print($env("PP_DEFINITELY_UNSET_VAR"))
 EOF
 expected=$'"hello"\nnil'
-PP_TEST_VAR=hello assert_out "env-get" ""           "$TMP/c.pp" "$expected"
+PP_TEST_VAR=hello assert_out "env-observation" ""    "$TMP/c.pp" "$expected"
 
 # ---- (d) exit-code control ----
 cat > "$TMP/d.pp" <<'EOF'
@@ -80,9 +79,9 @@ else bad "assert-custom-msg" "stderr: $(cat "$TMP/err")"; fi
 # ---- (f) file predicates: gated + stat: trace cells ----
 cat > "$TMP/f.pp" <<EOF
 print(force(node {
-  perform log("COMPUTE"); file-exists?("$TMP/probe") }))
-print(dir?("$TMP"))
-print(dir?("$TMP/probe"))
+  log!("COMPUTE"); not(nil?(\$stat("$TMP/probe"))) }))
+print(\$stat("$TMP") = :directory)
+print(\$stat("$TMP/probe") = :directory)
 EOF
 G=(--grant "fs:$TMP:ro")
 rm -rf "$TMP/.pp" "$TMP/probe"
@@ -107,7 +106,7 @@ else bad "stat-run4-absent-trace-rehits" "$(cat "$TMP/o")" "$(cat "$TMP/errf")";
 # no grant ⇒ capability error naming the operation
 if "$PP" "$TMP/f.pp" >"$TMP/o" 2>"$TMP/errf"; then
   bad "stat-no-grant-denied" "expected failure"
-elif grep -q "file-exists?: capability error" "$TMP/errf"; then
+elif grep -q '\$stat: filesystem read not granted' "$TMP/errf"; then
   ok "stat-no-grant-denied"
 else bad "stat-no-grant-denied" "$(cat "$TMP/errf")"; fi
 

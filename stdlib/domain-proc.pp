@@ -5,7 +5,7 @@
 # MECHANICS (fork/exec/reap, TERM->poll->KILL, per-domain state
 # persistence) are OCaml primitives (src/runtime/domain_prims.ml): proc-spawn,
 # proc-alive?, proc-stop, proc-reap, domain-state-get/put. main.ml's
-# `--supervise` auto-loads this file and calls `register-proc-domain`.
+# `--supervise` auto-loads this file and calls `register-proc-domain!`.
 #
 # The old procs/ state-file directory is replaced by domain-state-get/put
 # — generic, per-domain-scoped persistent storage. This domain maintains
@@ -44,7 +44,7 @@
 # repeat calls WITHIN one of those two, which is what bit here.) The
 # general, robust fix is mechanical: never call an argument-free
 # domain-state accessor more than once per dynamic extent — read the
-# known-set ONCE (proc-apply, below) and thread it through explicitly as
+# known-set ONCE (proc-apply!, below) and thread it through explicitly as
 # an ordinary function argument, exactly like any other value a fold
 # carries — parameterized calls (proc-state-key NAME) are immune by
 # construction, since a differing argument value changes the callee's
@@ -56,7 +56,7 @@ def proc-known-names() {
     if nil?(v) { nil } else { v }
   } }
 # Pure with respect to `known` (returns the updated list; the ONE caller,
-# proc-apply, does the ONE write) — still performs the per-service state
+# proc-apply!, does the ONE write) — still performs the per-service state
 # write, which is fine (apply is not required to be pure, only diff is)
 # and immune to the memoization trap above (its key is parameterized by
 # `name`).
@@ -148,8 +148,8 @@ def proc-stop-current!(name) {
     if nil?(st) { nil } else { perform proc-stop(name, st[:pid]) }
   } }
 # (proc-apply-item known item) -> updated known-list, folded across every
-# plan item by proc-apply (below) — the known-set is read ONCE (the
-# fold's seed) and written ONCE (proc-apply's own single domain-state-put
+# plan item by proc-apply! (below) — the known-set is read ONCE (the
+# fold's seed) and written ONCE (proc-apply!'s own single domain-state-put
 # after the fold completes), never re-queried mid-pass.
 def proc-apply-item(known, item) {
   let (kind = item[:kind], name = item[:name]) {
@@ -162,12 +162,12 @@ def proc-apply-item(known, item) {
         proc-remember!(name, pid, spec, known)
       }
     } } }
-def proc-apply(plan) {
+def proc-apply!(plan) {
   perform domain-state-put("known-services", foldl(proc-apply-item, proc-known-names(), plan[:items]))
 }
 
 # ---- registration ----
 
-def register-proc-domain(write-cap) {
-  register-domain({:name -> "proc", :namespace -> vec["proc:"], :observe -> proc-observe, :diff -> proc-diff, :apply -> proc-apply, :write-cap -> write-cap})
+def register-proc-domain!(write-cap) {
+  register-domain!({:name -> "proc", :namespace -> vec["proc:"], :observe -> proc-observe, :diff -> proc-diff, :apply -> proc-apply!, :write-cap -> write-cap})
 }

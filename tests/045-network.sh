@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # `--grant net:<host>[:<port>]` mints CapNetwork {host; port}. `(perform
-# http-get url)` / `(perform http-post url body)` fork curl (no new OCaml
+# http-get url)` / `(http-post! url body)` fork curl (no new OCaml
 # networking/TLS surface) but are AUTHORIZED against CapNetwork
 # host[:port] — never CapProcess. Banned inside node bodies (trace_stack
 # guard, mirroring `fenced`/`write-file`'s node arm). Result shape:
@@ -85,7 +85,7 @@ URL="http://127.0.0.1:$PORT/"
 # (1) no net grant → Capability_error, no request made.
 # =====================================================================
 cat > "$TMP/get.pp" <<EOF
-print(perform http-get("$URL"))
+print(http-get!("$URL"))
 EOF
 "$PP" "$TMP/get.pp" > "$TMP/out" 2>&1
 assert "no-capability-error" "capability error" present
@@ -108,7 +108,7 @@ assert "wildcard-grant-marker" "GET-MARKER-abc123" present
 # (4) http-post: right grant, body actually reaches the server (echoed
 #     back), status 201.
 cat > "$TMP/post.pp" <<EOF
-print(perform http-post("$URL", "hello-from-pp"))
+print(http-post!("$URL", "hello-from-pp"))
 EOF
 "$PP" --grant "net:127.0.0.1:$PORT" "$TMP/post.pp" > "$TMP/out" 2>&1
 assert "post-echoes-body" "hello-from-pp" present
@@ -118,7 +118,7 @@ assert "post-status-201"  '"status" 201' present
 #     from node bodies (SPEC law 31).
 # =====================================================================
 cat > "$TMP/in-node.pp" <<EOF
-force(node { perform http-get("$URL") })
+force(node { http-get!("$URL") })
 EOF
 "$PP" --grant "net:127.0.0.1:$PORT" "$TMP/in-node.pp" > "$TMP/out" 2>&1
 assert "in-node-body-denied" "may not appear inside node bodies" present

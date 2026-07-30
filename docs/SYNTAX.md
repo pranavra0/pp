@@ -27,8 +27,8 @@ never overload them.
 
 | Sigil | Meaning | Where |
 |-------|---------|-------|
-| `$`   | observes the world | `$file(...)`, `$env(...)`, `$glob(...)`, `$probe(...)`, `$secret(...)`, `$config(...)` |
-| `!`   | performs an effect (suffix) | `run!`, `write!`, `log!` — uniformly, no exceptions |
+| `$`   | observes the world | `$file(...)`, `$env(...)`, `$tree(...)`, `$probe(...)`, `$secret(...)`, `$stat(...)`, `$argv()`, `$config(...)` |
+| `!`   | performs an effect (suffix) | `run!`, `run-closed!`, `write!`, `log!`, `http-get!`, `http-post!`, `configure-runtime!`, `register-domain!` |
 | `?`   | returns a bool (name suffix only) | `nil?`, `open?` — never a postfix operator |
 | `->`  | "key has value" in data; type conversion in names | map literals `{k -> v}`, `reconcile {}` bodies; `string->number` |
 | `=>`  | "pattern yields" | `match` arms |
@@ -46,7 +46,7 @@ annotations `x: ty`; the kind slot in `fenced :email`. Any braces that
 survive to runtime as a first-class map value use `->` instead.
 
 The test is mechanical: if the lowering emits `hash-map`/`map-insert`, the
-surface is `->`. So `register-domain` takes an ordinary `->` map, as
+surface is `->`. So `register-domain!` takes an ordinary `->` map, as
 `stdlib/domain-fs.pp` already writes it, and a `fenced` body is an ordinary
 `->` map — only `fenced`'s `:kind` slot is grammar.
 
@@ -111,7 +111,9 @@ records its trace cell and returns the observed value.
 $file("src/main.c")          # file content        → cell file:<canonical-path>
 $env("CC")                   # env var (nil if unset) → cell env:CC
 $env("CC", "gcc")            # with default
-$glob("src/*.c")             # matching paths      → cell tree:/glob manifest
+$tree("src")                 # relative paths/hashes → cell tree:<canonical-root>
+$stat("src/main.c")          # :file/:directory/nil → cell stat:<canonical-path>
+$argv()                      # invocation arguments → cell argv:
 $probe("clock")              # volatile observation → cell probe:clock
 $secret("/run/secrets/key")  # sealed read          → cell sealed:<path>
 $config("cc", "gcc")         # scoped config read   → cell config:cc
@@ -122,11 +124,10 @@ This family is real, not decorative:
 - Arguments are arbitrary expressions, not just string literals:
   `$file(string-append(root, "/greeting.txt"))` is legal. A family that
   cannot spell computed paths cannot be the exclusive observation surface.
-- `$` is the only way to read the world in user code. The underlying
-  primitives (`slurp`, `env-get`, `list-dir`, `probe`, `config`) still
-  exist — `$` lowers to them — but `pp lint` warns on bare primitive reads
-  outside the stdlib, so `grep '\$[a-z]'` over a program gives a complete
-  audit of its world-surface.
+- `$` is the only way to read the world in user code. Each head lowers to a
+  typed observation AST node; the raw world-read callables do not exist.
+  Searching for `\$[a-z]` therefore finds the complete user-visible
+  observation surface.
 - `$secret` returns a sealed value. `unseal(v)` is the one sanctioned,
   greppable escape. The node-boundary bans (no capabilities or sealed
   values in free vars or results) apply unchanged.
@@ -140,8 +141,8 @@ This family is real, not decorative:
   open-instances principle). The heads are closed because trace
   verification must know how to re-observe each cell kind — a
   user-injected head would put user code inside the cache soundness
-  argument. User-level extension goes one level up: `register-probe`/
-  `register-domain` mint new observations with free-form names, read
+  argument. User-level extension goes one level up: `register-probe!`/
+  `register-domain!` mint new observations with free-form names, read
   through `$probe(...)` like any other cell. The head set is defined
   once, as a typed table over the runtime's `Cell.t` variant
   (`surface_tables`). The readers, quasiquote grammar, lint, fuzzer, and
@@ -184,7 +185,7 @@ log!(f"building {src}")
 exceptions, so every effect wrapper in stdlib and the manual carries it.
 Pure functions carry no suffix.
 
-Ambient `run` is scripting-tier only. `run-closed!` may execute inside a node
+Ambient `run!` is scripting-tier only. `run-closed!` may execute inside a node
 only when the installed trusted executor classifies that exact immutable
 request as cacheable. The bundled Linux executor classifies its requests as
 scripting-only because some semantic inputs remain ambient. Provider-specific
@@ -198,7 +199,7 @@ current script before evaluating nodes:
 
 ```pp
 load("stdlib/runtime.pp")
-configure-runtime({
+configure-runtime!({
   :schedule -> schedule-parallel(4),
   :build-policy -> build-policy({:toolchain -> "clang"}),
   :execution-policy -> execution-policy({:network -> false}),
@@ -214,7 +215,7 @@ def schedule-policy(jobs) {
   {:mode -> :parallel, :width -> 4,
    :batches -> vec[vec[0], vec[1], vec[2]]}
 }
-configure-runtime({:schedule -> schedule-custom(schedule-policy)})
+configure-runtime!({:schedule -> schedule-custom(schedule-policy)})
 ```
 
 The runtime rejects missing, duplicate, or out-of-range indexes. The policy
@@ -292,11 +293,11 @@ reconcile {
 }
 ```
 
-`register-domain` takes an ordinary `->` map (see "grammar, not data",
+`register-domain!` takes an ordinary `->` map (see "grammar, not data",
 above):
 
 ```pp
-register-domain({
+register-domain!({
   :name -> "my-fs",
   :observe -> fn() { tree-observe!("/srv/www") },
   :diff -> fn(observed, desired) { fs-diff(observed, desired) },
@@ -317,7 +318,7 @@ composed, and passed around like any other value.
 with {
   caps: narrow-cap,
   config: { :cc -> "clang", :cflags -> ["-O2", "-Wall"] },
-  handlers: { :log -> fn(msg) { print(msg) },
+  handlers: { :log! -> fn(msg) { print(msg) },
               :read-file -> mock-read }
 } {
   body

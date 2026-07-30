@@ -193,7 +193,7 @@ OUT<strong><span style="color: #333333">=</span></strong><span style="color: #dd
 <span style="color: #dd1144">def compile(path, name) {</span>
 <span style="color: #dd1144">  node {</span>
 <span style="color: #dd1144">    print(string-append("compile ", name))</span>
-<span style="color: #dd1144">    blob(string-append(slurp(path), "compiled</span><span style="color: #005c5c">\\</span><span style="color: #dd1144">n"))</span>
+<span style="color: #dd1144">    blob(string-append(</span><span style="color: #005c5c">\$</span><span style="color: #dd1144">file(path), "compiled</span><span style="color: #005c5c">\\</span><span style="color: #dd1144">n"))</span>
 <span style="color: #dd1144">  }</span>
 <span style="color: #dd1144">}</span>
 

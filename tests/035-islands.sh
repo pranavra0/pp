@@ -75,7 +75,7 @@ else echo "FAIL pin-stable: identical trees pinned differently ($PIN vs $PIN2)";
 # --- (5) island import is a node boundary (cold run, hit, cache reuse) ---
 cat > nprog.pp <<EOF
 import(island("file:./lib", "$PIN"))
-perform log(force(node { perform log("RUN"); number->string(isl-x * 2) }))
+log!(force(node { log!("RUN"); number->string(isl-x * 2) }))
 EOF
 rm -rf "$TMP/.pp/store"
 "$PP" nprog.pp > "$TMP/out" 2>&1

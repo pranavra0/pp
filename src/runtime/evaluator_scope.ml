@@ -48,11 +48,3 @@ let with_config operations map_expr body env k =
         operations body env k
   | _ -> failwith "with-config expects a map"
 
-let read_config operations key_name default env k =
-  Observation.record_config key_name;
-  match Dynamic_scope.config_lookup key_name with
-  | Some value -> k value
-  | None ->
-      (match default with
-       | Some default -> operations.eval_tail default env k
-       | None -> k VNil)

@@ -1,53 +1,57 @@
 open Pp_runtime
 open Pp_kernel
 open Source_error
+open Core_model
 let read_file path =
   let ic = open_in path in
   Fun.protect ~finally:(fun () -> close_in_noerr ic)
     (fun () -> really_input_string ic (in_channel_length ic))
 
-let pp_quote s =
-  let buf = Buffer.create (String.length s + 2) in
-  Buffer.add_char buf '"';
-  String.iter (fun c ->
-    if c = '\\' then Buffer.add_string buf "\\\\"
-    else if c = '"' then Buffer.add_string buf "\\\""
-    else Buffer.add_char buf c) s;
-  Buffer.add_char buf '"';
-  Buffer.contents buf
 
 let uses_domains cli =
   Cli.reconcile_root cli <> None || Cli.supervise cli
 
+let string_value s = ELiteral (VString s)
+let call name args = EApply (ESymbol name, args)
+let load path = ELoad path
+
 let stdlib_glue_sources cli =
   if not (uses_domains cli) then []
   else match World_path.stdlib_root () with
-    | None -> command "pp: could not locate the stdlib/ directory next to the running executable (needed for --reconcile/--supervise's domain-fs.pp/domain-proc.pp)"
+    | None ->
+        command "pp: could not locate the stdlib/ directory next to the running executable (needed for --reconcile/--supervise's domain-fs.pp/domain-proc.pp)"
     | Some root ->
         let common = List.map (fun file ->
-          ("<stdlib:" ^ file ^ ">", Printf.sprintf "(load %s)\n" (pp_quote (Filename.concat root file))))
+          ("<stdlib:" ^ file ^ ">",
+           [load (Filename.concat root file)]))
           ["list.pp"; "map.pp"; "string.pp"]
         in
         let fs = match Cli.reconcile_root cli with
           | None -> []
           | Some root_path ->
-              let canonical = World_path.canonical root_path in
-              [("<domain-glue:fs>", Printf.sprintf
-                "(load %s)\n(register-fs-domain %s (cap-restrict (current-capabilities) %s :wo))\n"
-                (pp_quote (Filename.concat root "domain-fs.pp"))
-                (pp_quote (canonical :> string)) (pp_quote (canonical :> string)))]
+              let canonical = (World_path.canonical root_path :> string) in
+              [("<domain-glue:fs>",
+                [load (Filename.concat root "domain-fs.pp");
+                 call "register-fs-domain!"
+                   [string_value canonical;
+                    call "cap-restrict"
+                      [call "current-capabilities" [];
+                       string_value canonical;
+                       ELiteral (VKeyword "wo")]]])]
         in
         let proc = if Cli.supervise cli then
-          [("<domain-glue:proc>", Printf.sprintf
-            "(load %s)\n(register-proc-domain (current-capabilities))\n"
-            (pp_quote (Filename.concat root "domain-proc.pp")))]
+          [("<domain-glue:proc>",
+            [load (Filename.concat root "domain-proc.pp");
+             call "register-proc-domain!" [call "current-capabilities" []]])]
         else [] in
         common @ fs @ proc
 
 let run_files ?(retain_thunks = false) ctx cli files =
   if uses_domains cli then
-    let sources = stdlib_glue_sources cli @ List.map (fun f -> (f, read_file f)) files in
-    match List.rev (Repl.execute_sources ~retain_thunks sources) with
+    let sources = List.map (fun f -> (f, read_file f)) files in
+    let prefix = stdlib_glue_sources cli in
+    match List.rev
+      (Repl.execute_sources_with_prelude ~retain_thunks prefix sources) with
     | value :: _ -> Some value
     | [] -> None
   else

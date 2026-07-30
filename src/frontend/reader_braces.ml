@@ -434,7 +434,7 @@ let err_block ps msg = parse_error ps msg
    expected opener does not follow parses as its symbol, exactly as an sexpr
    symbol in non-car position does). *)
 let _reserved = [
-  "and"; "assert"; "config"; "def"; "defmacro"; "delay"; "do"; "else"; "fn";
+  "and"; "assert"; "def"; "defmacro"; "delay"; "do"; "else"; "fn";
   "force"; "if"; "import"; "island"; "let"; "let*"; "load"; "load-module";
   "mod"; "module"; "needs"; "node"; "or"; "perform"; "quasiquote"; "quote";
   "reconcile"; "splice"; "unquote"; "with-caps"; "with-config"; "with-handler";
@@ -457,27 +457,6 @@ let expect ps ~nl (t : btok) (what : string) =
   if k.t = t then advance ps
   else parse_error ps (Printf.sprintf "expected %s, got %s" what (string_of_btok k.t))
 
-(* Interpret an observation-head lowering template (Surface_tables.tmpl) into
-   real AST nodes for the normal reader. The quasiquote reader has its own
-   interpreter (interp_head_qq) walking the SAME template into quoted
-   list-building data, so both stay in lockstep. [args] are the user-supplied
-   argument expressions, already arity-checked. *)
-let rec interp_head_normal (args : expr list) (t : Surface_tables.tmpl) : expr =
-  match t with
-  | Surface_tables.Prim s -> ESymbol s
-  | Surface_tables.Arg i -> List.nth args i
-  | Surface_tables.App (fn :: rest) ->
-      EApply (interp_head_normal args fn, List.map (interp_head_normal args) rest)
-  | Surface_tables.App [] -> assert false
-  | Surface_tables.If (c, th, el) ->
-      EIf (interp_head_normal args c,
-           interp_head_normal args th,
-           interp_head_normal args el)
-  | Surface_tables.Perform (eff, ts) ->
-      EPerform (eff, List.map (interp_head_normal args) ts)
-  | Surface_tables.Config (k, d) ->
-      EConfig (interp_head_normal args k,
-               Option.map (interp_head_normal args) d)
 
 (* An infix-operator occurrence: a TName in [ops], with whitespace on BOTH
    sides (§B.1's frozen rule; `a ->b` is the identifier `->b`, and `(a)+ b`
@@ -538,6 +517,7 @@ type 'a pattern_builder = {
   mk_pvar : string -> 'a;
   mk_plist : 'a list -> 'a option -> 'a;    (* elements, optional ...rest *)
   mk_ptagged : string -> 'a list -> 'a;     (* (:tag pats…) *)
+  mk_pmap : (value * 'a) list -> map_rest -> 'a;
   pb_reject_unquote : bool;
 }
 
@@ -547,10 +527,101 @@ let normal_pattern_builder : Core_model.pattern pattern_builder = {
   mk_pvar = (fun n -> Core_model.PVariable n);
   mk_plist = (fun pats rest -> Core_model.PList (pats, rest));
   mk_ptagged = (fun tag pats -> Core_model.PTagged (tag, pats));
+  mk_pmap = (fun entries rest -> Core_model.PMap (entries, rest));
   pb_reject_unquote = false;
 }
+let rec parse_pattern_key ps : value =
+  match (cur ps).t with
+  | TName "nil" -> advance ps; VNil
+  | TName "true" -> advance ps; VBool true
+  | TName "false" -> advance ps; VBool false
+  | TName ("list" | "vector") as t when (peek2 ps).t = TLParen ->
+      let name = match t with TName name -> name | _ -> assert false in
+      advance ps;
+      advance ps;
+      let rec args acc =
+        skip_nl ps;
+        match (cur ps).t with
+        | TRParen -> advance ps; List.rev acc
+        | _ ->
+            let value = parse_pattern_key ps in
+            skip_nl ps;
+            (match (cur ps).t with
+             | TComma -> advance ps; args (value :: acc)
+             | TRParen -> advance ps; List.rev (value :: acc)
+             | t -> parse_error ps
+               (Printf.sprintf "expected ',' or ')', got %s" (string_of_btok t)))
+      in
+      let values = args [] in
+      if name = "vector" then VVector (Array.of_list values)
+      else List.fold_right (fun value tail -> VPair (value, tail)) values VNil
+  | TName name -> advance ps; VSymbol name
+  | TInt i -> advance ps; VInt i
+  | TFloat f -> advance ps; VFloat f
+  | TString s -> advance ps; VString s
+  | TKeyword kw -> advance ps; VKeyword kw
+  | TLBracket ->
+      advance ps;
+      let rec elems acc =
+        skip_nl ps;
+        match (cur ps).t with
+        | TRBracket -> advance ps; List.rev acc
+        | _ ->
+            let value = parse_pattern_key ps in
+            skip_nl ps;
+            (match (cur ps).t with
+             | TComma -> advance ps; elems (value :: acc)
+             | TRBracket -> advance ps; List.rev (value :: acc)
+             | t -> parse_error ps
+               (Printf.sprintf "expected ',' or ']', got %s" (string_of_btok t)))
+      in
+      VVector (Array.of_list (elems []))
+  | t -> parse_error ps ("map pattern key must be a closed literal, got "
+                         ^ string_of_btok t)
 
-let rec parse_pattern_generic ps (pb : 'a pattern_builder) : 'a =
+and parse_map_pattern_generic ps (pb : 'a pattern_builder) : 'a =
+  advance ps;
+  skip_nl ps;
+  let rec loop acc =
+    match (cur ps).t with
+    | TRBrace ->
+        advance ps;
+        pb.mk_pmap (List.rev acc) Exact
+    | TName s when is_spread_prefix s ->
+        advance ps;
+        let rest_name =
+          if String.length s > 3 then String.sub s 3 (String.length s - 3)
+          else
+            (match (cur ps).t with
+             | TName name -> advance ps; name
+             | _ -> parse_error ps "map pattern spread needs a name or '_'")
+        in
+        if rest_name = "" then
+          parse_error ps "map pattern spread needs a name or '_'";
+        skip_nl ps;
+        expect ps ~nl:true TRBrace "'}' after map pattern rest";
+        pb.mk_pmap (List.rev acc)
+          (if rest_name = "_" then Ignore else Bind rest_name)
+    | _ ->
+        let key = parse_pattern_key ps in
+        (match peek_infix ps ~nl:true ["->"] with
+         | Some _ -> advance ps
+         | None -> parse_error ps "map pattern entries require '->");
+        skip_nl ps;
+        let pat = parse_pattern_generic ps pb in
+        if List.exists (fun (old_key, _) -> Identity.equal_value old_key key) acc then
+          parse_error ps "map pattern contains duplicate keys";
+        skip_nl ps;
+        (match (cur ps).t with
+         | TComma -> advance ps; skip_nl ps; loop ((key, pat) :: acc)
+         | TRBrace -> advance ps; pb.mk_pmap (List.rev ((key, pat) :: acc)) Exact
+         | t -> parse_error ps
+           (Printf.sprintf "expected ',' or '}', got %s" (string_of_btok t)))
+  in
+  loop []
+
+
+and parse_pattern_generic ps (pb : 'a pattern_builder) : 'a =
   let k = cur ps in
   match k.t with
   | TName "_" -> advance ps; pb.mk_pwild
@@ -566,6 +637,7 @@ let rec parse_pattern_generic ps (pb : 'a pattern_builder) : 'a =
   | TFloat f -> advance ps; pb.mk_plit (VFloat f)
   | TString s -> advance ps; pb.mk_plit (VString s)
   | TKeyword kw -> advance ps; pb.mk_plit (VKeyword kw)
+  | TLBrace -> parse_map_pattern_generic ps pb
   | TLBracket ->
       (* List pattern: [p1, p2, ...rest] *)
       advance ps;
@@ -669,8 +741,8 @@ let parse_match_arms_generic ps ~(parse_pat : ps -> 'p)
    the single dispatch still enumerates the whole set. Builder methods that build
    a block take [ps] because the normal reader validates block definitions and
    wraps the body, work the quasiquote reader (which splices raw items) does not.
-   Several quasiquote arms (config/load/island/assert) deliberately parse a
-   coarse argument list rather than the normal reader's structured grammar, so a
+   Several quasiquote arms (load/island/assert) deliberately parse a coarse
+   argument list rather than the normal reader's structured grammar, so a
    macro can splice `unquote(...)` where the normal reader requires a literal;
    for those the whole per-reader parse lives in the builder method. *)
 type head_builder = {
@@ -679,6 +751,7 @@ type head_builder = {
   hb_block_items : ps -> expr list;     (* the statements of a `{ }` block *)
   hb_handler_pairs : ps -> (hname * expr) list;
   mk_one : string -> expr -> expr;                       (* force/delay/import *)
+  mk_import_string : string -> expr;                    (* import "path" *)
   mk_with : ps -> string -> expr -> expr list -> expr;   (* with-caps/with-config *)
   mk_with_handler : ps -> (hname * expr) list -> expr list -> expr;
   mk_perform : string -> expr list -> expr;
@@ -690,8 +763,8 @@ type head_builder = {
   mk_let : ps -> string -> expr;                         (* let/let* (binds) { } *)
   mk_quote : ps -> expr;                                 (* quote { } *)
   mk_reconcile : ps -> expr;                             (* reconcile { } *)
-  (* config/load/load-module/island/assert: the normal reader parses each's
-     structured grammar; the quasiquote reader a coarse argument list (so a
+  (* load/load-module/island/assert: the normal reader parses each's structured
+     grammar; the quasiquote reader uses a coarse argument list (so a
      macro can splice unquote where the normal reader wants a literal). *)
   mk_arglist_form : ps -> string -> expr;
   mk_if : ps -> expr;
@@ -1037,7 +1110,7 @@ and parse_primary ps c : expr =
            let args = parse_args ps in
            let n = List.length args in
            (match Surface_tables.check_arity spec n with
-            | Ok () -> interp_head_normal args (spec.Surface_tables.tmpl n)
+            | Ok () -> EObserve (spec.kind, args)
             | Error msg -> parse_error ps msg))
   | TName n -> parse_head ps c n
 
@@ -1232,6 +1305,13 @@ and parse_ret_ty ps : expr option =
 and parse_head_ctx ps (hb : head_builder) (n : string) : expr option =
   let next_t = (peek2 ps).t in
   match n with
+  | "import" when (match next_t with TString _ -> true | _ -> false) ->
+      advance ps;
+      let path = match (cur ps).t with
+        | TString path -> advance ps; path
+        | _ -> assert false
+      in
+      Some (hb.mk_import_string path)
   | ("force" | "delay" | "import") when next_t = TLParen ->
       advance ps; advance ps; skip_nl ps;
       let e = hb.hb_expr ps in
@@ -1270,7 +1350,7 @@ and parse_head_ctx ps (hb : head_builder) (n : string) : expr option =
       advance ps; Some (hb.mk_let ps n)
   | "quote" when next_t = TLBrace -> advance ps; Some (hb.mk_quote ps)
   | "reconcile" when next_t = TLBrace -> advance ps; Some (hb.mk_reconcile ps)
-  | ("config" | "load" | "load-module" | "island" | "assert") when next_t = TLParen ->
+  | ("load" | "load-module" | "island" | "assert") when next_t = TLParen ->
       advance ps; advance ps;
       Some (hb.mk_arglist_form ps n)
   | "if" when starts_expr next_t -> Some (hb.mk_if ps)
@@ -1294,6 +1374,7 @@ and normal_head_builder : head_builder = {
   mk_one = (fun n e -> match n with
     | "force" -> EForce e | "delay" -> EDelay e | "import" -> EImport e
     | _ -> assert false);
+  mk_import_string = (fun path -> EImport (ELoadModule path));
   mk_with = (fun ps n e items -> match n with
     | "with-caps" -> EWithCaps (e, block_body_of ps items)
     | "with-config" -> EWithConfig (e, block_body_of ps items)
@@ -1342,17 +1423,6 @@ and normal_head_builder : head_builder = {
     | _ -> parse_error ps "quote { ... } must contain exactly one form");
   mk_reconcile = (fun ps -> parse_map_literal ps);
   mk_arglist_form = (fun ps n -> match n with
-    | "config" ->
-        skip_nl ps;
-        let key = parse_expr ps free_ctx in
-        (match (peek ps ~nl:true).t with
-         | TComma ->
-             advance ps; skip_nl ps;
-             let d = parse_expr ps free_ctx in
-             expect ps ~nl:true TRParen "')'";
-             EConfig (key, Some d)
-         | TRParen -> advance ps; EConfig (key, None)
-         | t -> parse_error ps ("expected ',' or ')', got " ^ string_of_btok t))
     | "assert" ->
         skip_nl ps;
         let cond = parse_expr ps free_ctx in
@@ -1417,6 +1487,10 @@ and qq_head_builder : head_builder = {
   hb_block_items = (fun ps -> parse_qq_block_items ps);
   hb_handler_pairs =
     (fun ps -> parse_handler_pairs ps ~parse_value:(fun () -> parse_qq ps));
+  mk_import_string = (fun path ->
+    qq_chain
+      [qq_sym "import";
+       qq_chain [qq_sym "load-module"; EQuote (ELiteral (VString path))]]);
   mk_one = (fun n e -> qq_chain [qq_sym n; e]);
   mk_with = (fun _ps n e items -> qq_chain (qq_sym n :: e :: items));
   mk_with_handler = (fun _ps pairs items ->
@@ -1686,6 +1760,8 @@ and parse_head ps c (n : string) : expr =
         (Printf.sprintf
            "`%s` attributes are not part of the language; use `node` for caching and `needs` for authority"
            n)
+ | "export" when (match next_t with TName _ -> true | _ -> false) ->
+     parse_export_names ps
   | "let" ->
       (match next_t with
        | TName "=" ->
@@ -1749,6 +1825,29 @@ and parse_head ps c (n : string) : expr =
       advance ps;
       ESymbol n
 
+
+and parse_export_names ps =
+  advance ps;
+  let name () =
+    match (cur ps).t with
+    | TName name -> advance ps; name
+    | t ->
+        parse_error ps
+          ("export names must be names, got " ^ string_of_btok t)
+  in
+  let rec loop acc =
+    let name = name () in
+    match (cur ps).t with
+    | TComma ->
+        advance ps;
+        loop (name :: acc)
+    | TNewline | TSemi | TRBrace | TEOF ->
+        EExport (List.rev (name :: acc))
+    | t ->
+        parse_error ps
+          ("expected ',' after export name, got " ^ string_of_btok t)
+  in
+  loop []
 and needs_restrict (e : expr) (mode : string) : expr =
   EApply (ESymbol "cap-restrict",
           [EApply (ESymbol "current-capabilities", []); e;
@@ -1954,7 +2053,7 @@ and parse_binding_group ps ~(allow_ty : bool) : (string * expr) list =
    Coverage: atoms, names (reserved words included), calls, the infix operator
    levels, grouping, list literals, maps, quote/quasiquote nesting, fn/def/if/
    let/let*/do/perform/with-caps/with-config/with-handler/module/import/force/
-   delay/config/load/load-module/island/assert/node and cell literals,
+   delay/load/load-module/island/assert/node and observation forms,
    try { ... } (parse_qq_try_stmts/qq_lower_try_block, the same
    nested let/if data lower_try_block builds as real nodes), match E { pat
    => body; ... } (parse_qq_match_arms/parse_qq_pattern, the same arm/
@@ -2008,27 +2107,6 @@ and qq_chain_tail (items : expr list) (tail : expr) : expr =
 
 and qq_sym (s : string) : expr = EQuote (ESymbol s)
 
-(* Quasiquote counterpart of interp_head_normal: the SAME Surface_tables.tmpl,
-   walked into quoted list-building data instead of AST nodes. An application
-   `App [f; a; b]` becomes the cons-chain `(f a b)` (qq_chain), and `If` becomes
-   `(if c t e)` — exactly the data shapes the normal lowering's EApply/EIf
-   reconstruct after macro expansion, so a `$file(...)` written inside a
-   quasiquote template builds a value `=` to the one the bare form lowers to. *)
-and interp_head_qq (args : expr list) (t : Surface_tables.tmpl) : expr =
-  match t with
-  | Surface_tables.Prim s -> qq_sym s
-  | Surface_tables.Arg i -> List.nth args i
-  | Surface_tables.App ts -> qq_chain (List.map (interp_head_qq args) ts)
-  | Surface_tables.If (c, th, el) ->
-      qq_chain [qq_sym "if"; interp_head_qq args c;
-                interp_head_qq args th; interp_head_qq args el]
-  | Surface_tables.Perform (eff, ts) ->
-      qq_chain (qq_sym "perform" :: qq_sym eff :: List.map (interp_head_qq args) ts)
-  | Surface_tables.Config (k, d) ->
-      (* Mirror Quotation.quote_to_value (EConfig …): `(config KEY DEFAULT-or-nil)` — a
-         3-element form so Quotation.value_to_expr reconstructs an EConfig after expansion. *)
-      let default = match d with Some d -> interp_head_qq args d | None -> qq_nil in
-      qq_chain [qq_sym "config"; interp_head_qq args k; default]
 
 and parse_qq ps : expr =
   climb_pipe (qq_spine ()) ps
@@ -2218,23 +2296,24 @@ and parse_qq_head ps (n : string) : expr =
   match n with
   | ("defmacro" | "needs") ->
       parse_error ps (n ^ " is not representable inside quasiquote { ... }")
-  | _ when String.length n > 0 && n.[0] = '$'
-           && (match Surface_tables.find_head (String.sub n 1 (String.length n - 1)) with
-               | Some h -> h.Surface_tables.qq_legal | None -> false) ->
-      (* $KIND(args) inside quasiquote, same table, same template as the
-         normal reader, so a head added once exists in both by construction.
-         args routed through parse_qq so unquote/splice work in argument
-         position; the built value equals what the bare form lowers to. *)
-      let kind = String.sub n 1 (String.length n - 1) in
-      let spec = match Surface_tables.find_head kind with
-        | Some h -> h | None -> assert false in
+  | _ when String.length n > 0 && n.[0] = '$' ->
+      let head = String.sub n 1 (String.length n - 1) in
       advance ps;
-      expect ps ~nl:true TLParen (Printf.sprintf "'(' after $%s" kind);
-      let args = parse_qq_args ps in
-      let cnt = List.length args in
-      (match Surface_tables.check_arity spec cnt with
-       | Ok () -> interp_head_qq args (spec.Surface_tables.tmpl cnt)
-       | Error msg -> parse_error ps msg)
+      (match Surface_tables.find_head head with
+       | None ->
+           parse_error ps
+             (Printf.sprintf "unknown observation head $%s; %s"
+                head (Surface_tables.known_heads_message ()))
+       | Some observation ->
+           expect ps ~nl:true TLParen (Printf.sprintf "'(' after $%s" head);
+           let arguments = parse_qq_args ps in
+           (match Surface_tables.check_arity observation (List.length arguments) with
+            | Error message -> parse_error ps message
+            | Ok () ->
+                qq_chain
+                  (qq_sym "observe"
+                   :: qq_sym (Core_model.string_of_observation_kind observation.kind)
+                   :: arguments)))
   | _ ->
       advance ps;
       EQuote (ESymbol n)
@@ -2280,6 +2359,18 @@ and qq_pattern_builder () : expr pattern_builder = {
               (match rest with Some r -> r | None -> qq_nil)]);
   mk_ptagged = (fun tag pats ->
     qq_chain (qq_sym "tagged" :: EQuote (ELiteral (VString tag)) :: pats));
+  mk_pmap = (fun entries rest ->
+    let q_entries =
+      qq_chain (List.map (fun (key, pat) ->
+        qq_chain [EQuote (ELiteral key); pat]) entries)
+    in
+    let q_rest =
+      match rest with
+      | Exact -> qq_sym "exact"
+      | Ignore -> qq_sym "ignore"
+      | Bind name -> qq_chain [qq_sym "bind"; EQuote (ELiteral (VString name))]
+    in
+    qq_chain [qq_sym "map"; q_entries; q_rest]);
   pb_reject_unquote = true;
 }
 
@@ -2339,41 +2430,27 @@ let read state (input : string) : expr list =
   loop ();
   List.rev !result
 
-let read_string ?(source : string = "<?>") input =
+let read_string ?(source = "<?>") input =
   read (create ~source ()) input
 
-(* ---- Extension dispatch ----
-
-   `.pp` and `.ppb` read with the brace reader (`.pp` is the default
-   surface; `.ppb` remains a permanent alias).
-   `.ppl` ("the AST form") reads with the sexpr reader — sexpr is demoted
-   from "the syntax" to "the AST", still fully supported forever (it is the
-   macro layer: `quote`/`defmacro` still traffic in sexpr data). The reader's
-   own "<?>" default label — reached ONLY by `pp -e` (repl.ml's
-   execute_string, called with no ~source, i.e. no
-   real file at all) — also reads braces. Synthetic glue source tags command_run.ml builds for itself
-   (e.g. "<stdlib:list.pp>", "<domain-glue:fs>" — literally sexpr text,
-   `(load ...)`) are NOT this label and keep falling through to the sexpr
-   reader untouched. The interactive REPL no longer reaches this dispatcher
-   at all (repl.ml calls the brace reader directly; see needs_more_input
-   below for its multi-line-continuation counterpart).
-   [path] chooses the reader; [source] is the location label (when
-   omitted, both readers' "<?>" default applies, preserving e.g.
-   load-module's existing label behavior). *)
+(* `.pp` reads with the brace reader and `.ppl` with the sexpr reader.
+   There is no extension fallthrough: synthetic sources and the REPL call
+   the reader they intend directly. *)
 
 let file_uses_braces (path : string) : bool =
-  Filename.check_suffix path ".pp" || Filename.check_suffix path ".ppb"
-  || path = "<?>"
+  Filename.check_suffix path ".pp"
 
 let read_dispatch ?(source : string option) ~(path : string) (input : string)
     : expr list =
-  match source with
-  | Some s ->
-      if file_uses_braces path then read_string ~source:s input
-      else Reader.read_string ~source:s input
-  | None ->
-      if file_uses_braces path then read_string input
-      else Reader.read_string input
+  let source = Option.value ~default:"<?>" source in
+  if Filename.check_suffix path ".pp" then
+    read_string ~source input
+  else if Filename.check_suffix path ".ppl" then
+    Reader.read_string ~source input
+  else
+    failwith
+      ("cannot infer source surface from path " ^ path ^
+       " (expected .pp or .ppl)")
 
 (* ---- REPL multi-line continuation ----
 

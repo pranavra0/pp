@@ -33,7 +33,7 @@ assert() {  # NAME  secret=leaked|safe  access=ok|denied
   local name="$1" smode="$2" amode="$3"
   local leaked denied
   if grep -q "SECRETDATA" "$TMP/o"; then leaked=leaked; else leaked=safe; fi
-  if grep -qE "permission denied|apability" "$TMP/o"; then denied=denied; else denied=ok; fi
+  if grep -qE "permission denied|apability|not granted" "$TMP/o"; then denied=denied; else denied=ok; fi
   if [ "$leaked" = "$smode" ] && [ "$denied" = "$amode" ]; then
     echo "ok   $name"
   else
@@ -47,8 +47,8 @@ assert() {  # NAME  secret=leaked|safe  access=ok|denied
 # =====================================================================
 cat > "$TMP/direction-a.pp" <<EOF
 let narrow = cap-restrict(current-capabilities(), "$TMP/other", :ro)
-let n = with-caps(narrow) { node { slurp("$TMP/secret/data.txt") } }
-perform log(force(n))
+let n = with-caps(narrow) { node { \$file("$TMP/secret/data.txt") } }
+log!(force(n))
 EOF
 
 rm -rf "$TMP/.pp"
@@ -60,8 +60,8 @@ assert "plain-narrowed-creation-denied-at-broad-force"  safe denied
 # =====================================================================
 cat > "$TMP/direction-b.pp" <<EOF
 let narrow = cap-restrict(current-capabilities(), "$TMP/other", :ro)
-let m = node { slurp("$TMP/secret/data.txt") }
-with-caps(narrow) { perform log(force(m)) }
+let m = node { \$file("$TMP/secret/data.txt") }
+with-caps(narrow) { log!(force(m)) }
 EOF
 
 rm -rf "$TMP/.pp"
@@ -69,34 +69,34 @@ rm -rf "$TMP/.pp"
 assert "plain-broad-creation-succeeds-under-narrowed-force"  leaked ok
 
 # =====================================================================
-# with-caps basic narrowing: slurp (scripting tier, no node)
+# with-caps basic narrowing: $file (scripting tier, no node)
 # =====================================================================
-cat > "$TMP/wc-slurp-denied.pp" <<EOF
+cat > "$TMP/wc-file-denied.pp" <<EOF
 with-caps(cap-restrict(current-capabilities(), "$TMP/other", :ro)) {
-  print(slurp("$TMP/secret/data.txt"))
+  print(\$file("$TMP/secret/data.txt"))
 }
 EOF
-cat > "$TMP/wc-slurp-allowed.pp" <<EOF
+cat > "$TMP/wc-file-allowed.pp" <<EOF
 with-caps(cap-restrict(current-capabilities(), "$TMP/other", :ro)) {
-  print(slurp("$TMP/other/x.txt"))
+  print(\$file("$TMP/other/x.txt"))
 }
 EOF
 
-"$PP" --grant "fs:$TMP:ro" "$TMP/wc-slurp-denied.pp" > "$TMP/o" 2>&1
-assert "plain-wc-slurp-narrowed-denied" safe denied
-"$PP" --grant "fs:$TMP:ro" "$TMP/wc-slurp-allowed.pp" > "$TMP/o" 2>&1
-if grep -q "OK-OTHER" "$TMP/o"; then echo "ok   plain-wc-slurp-narrowed-allowed"
-else echo "FAIL plain-wc-slurp-narrowed-allowed: expected OK-OTHER"; cat "$TMP/o"; fail=1; fi
+"$PP" --grant "fs:$TMP:ro" "$TMP/wc-file-denied.pp" > "$TMP/o" 2>&1
+assert "plain-wc-file-narrowed-denied" safe denied
+"$PP" --grant "fs:$TMP:ro" "$TMP/wc-file-allowed.pp" > "$TMP/o" 2>&1
+if grep -q "OK-OTHER" "$TMP/o"; then echo "ok   plain-wc-file-narrowed-allowed"
+else echo "FAIL plain-wc-file-narrowed-allowed: expected OK-OTHER"; cat "$TMP/o"; fail=1; fi
 # fs-only restrict — CapRestrict narrows filesystem authority only;
 # non-fs channels pass through transparently).
 # =====================================================================
 cat > "$TMP/wc-run-restricted.pp" <<EOF
 with-caps(cap-restrict(current-capabilities(), "$TMP", :ro)) {
-  print(hash-map-get(perform run("echo", "hi"), "out"))
+  print(hash-map-get(run!("echo", "hi"), "out"))
 }
 EOF
 cat > "$TMP/wc-run-unrestricted.pp" <<EOF
-print(hash-map-get(perform run("echo", "hi"), "out"))
+print(hash-map-get(run!("echo", "hi"), "out"))
 EOF
 
 "$PP" --grant process --grant "fs:$TMP:ro" "$TMP/wc-run-restricted.pp" > "$TMP/o" 2>&1

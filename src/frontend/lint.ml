@@ -37,7 +37,7 @@ let starts_with_is (s : string) : bool =
    no such closed-set table to derive from, so a rename here is a manual edit,
    just a findable one. *)
 let bool_returning_prims = ["not"; "="; "nil?"]
-let effect_prims = ["perform"; "slurp"; "run!"; "write!"]
+let effect_prims = ["run!"; "run-closed!"; "write!"; "log!"; "http-get!"; "http-post!"]
 let vector_prims = ["vector-get"; "vector-length"]
 let list_head_prims = ["car"; "cdr"; "first"; "rest"]
 
@@ -61,10 +61,11 @@ let rec looks_bool (e : expr) : bool =
   | _ -> false
 
 (** Does [e] contain effectful operations?
-    Looks for `perform`, `!`-suffixed calls, `slurp`, `run!`, `write!`. *)
+    Looks for observations, `perform`, and `!`-suffixed calls. *)
 let rec has_effect (e : expr) : bool =
   match strip e with
   | EPerform _ -> true
+  | EObserve _ -> true
   | EApply (fn, _) -> (
       match strip fn with
       | ESymbol s -> ends_with_char s '!' || List.mem s effect_prims
@@ -329,6 +330,7 @@ and recurse ~line file (node : expr) : unit =
         (match guard with Some g -> check_expr ~line file g | None -> ());
         check_expr ~line file body) arms
   | EModule exprs -> List.iter (check_expr ~line file) exprs
+  | EExport _ -> ()
   | EImport e -> check_expr ~line file e
   | EQuote e -> check_expr ~line file e
   | EForce e -> check_expr ~line file e
@@ -336,63 +338,13 @@ and recurse ~line file (node : expr) : unit =
   | EWithConfig (cfg, body) ->
       check_expr ~line file cfg;
       check_expr ~line file body
-  | EConfig (key, default) ->
-      check_expr ~line file key;
-      (match default with Some d -> check_expr ~line file d | None -> ())
+  | EObserve (_, arguments) ->
+      List.iter (check_expr ~line file) arguments
   | ETyped (e, t) ->
       check_expr ~line file e;
       check_expr ~line file t
   | ELocated (_, e') -> check_expr ~line file e'
   | ESymbol _ | ELiteral _ | ELoad _ | ELoadModule _ | EIsland (_, _) -> ()
-
-(* ---- Observation-exclusivity (a PRE-lowering token scan) ---- *)
-
-(** Does [path] live under a `stdlib/` directory? The `$` family lowers to the
-    bare primitives, and stdlib is where those primitives are legitimately
-    used, so the exclusivity check is suppressed there. *)
-let is_stdlib_path (path : string) : bool =
-  let re_has sub =
-    let ls = String.length sub and lp = String.length path in
-    let rec go i = i + ls <= lp && (String.sub path i ls = sub || go (i + 1)) in
-    go 0
-  in
-  re_has "stdlib/" || re_has "/stdlib"
-
-(** Warn on a bare world-read primitive (`slurp`, `env-get`, `probe`,
-    `config`, `perform tree-observe`) used outside `stdlib/`, pointing at the
-    `$` head. This MUST run pre-lowering: after lowering, `$file` and a bare
-    `slurp` are the identical AST, so the distinction only exists in the token
-    stream. The primitive set is derived from [Surface_tables] (single source).
-    A primitive is flagged when it is a call head (next token `(`) or a
-    performed effect (previous token `perform`); `config:` (a `with` clause,
-    next token `:`) is therefore not flagged. *)
-let check_observation_exclusivity file (src : string) : unit =
-  if is_stdlib_path file then ()
-  else
-    let toks =
-      try Array.of_list (Reader_braces.lex ~file src) with _ -> [||]
-    in
-    let n = Array.length toks in
-    Array.iteri (fun i (tk : Reader_braces.tok) ->
-      match tk.Reader_braces.t with
-      | Reader_braces.TName name ->
-          (match Surface_tables.observation_primitive name with
-           | None -> ()
-           | Some suggestion ->
-               let next_is_lparen =
-                 i + 1 < n && toks.(i + 1).Reader_braces.t = Reader_braces.TLParen
-               in
-               let prev_is_perform =
-                 i > 0 &&
-                 (match toks.(i - 1).Reader_braces.t with
-                  | Reader_braces.TName "perform" -> true | _ -> false)
-               in
-               if next_is_lparen || prev_is_perform then
-                 warn file tk.Reader_braces.tline
-                   (Printf.sprintf
-                      "bare `%s` reads the world directly — use `%s` (world \
-                       observations go through the $ family; B4)" name suggestion))
-      | _ -> ()) toks
 
 (* ---- Public API ---- *)
 
@@ -404,8 +356,6 @@ let lint_file (path : string) : unit =
   let len = in_channel_length ch in
   let src = really_input_string ch len in
   close_in ch;
-  (* Pre-lowering token scan (before the reader lowers $file -> slurp). *)
-  check_observation_exclusivity path src;
   (* Parse *)
   let forms =
     try Reader_braces.read_string ~source:path src

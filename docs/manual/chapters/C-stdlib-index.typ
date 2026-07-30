@@ -132,25 +132,27 @@ Each takes one argument, forces it, and returns a boolean.
   [`not(x)`], [Logical negation; `nil` counts as false.],
   [`error(msg)`], [Raise an error with string message `msg`.],
   [`exit([n])`], [Terminate the run with status `n` (default 0).],
-  [`slurp(path)`], [Read a file to a string. Needs an `fs` read grant (or a `secret` grant, which yields a sealed value); capability-free inside a node's scratch sandbox.],
-  [`argv()`], [The program arguments after `--`, as a list of strings. Recorded as an `argv:` observation.],
-  [`env-get(name)`], [The environment variable `name`, or `nil`. Recorded as an `env:` observation.],
 )
 
-=== Filesystem observation
+=== Observations
 
-Capability-gated presence checks, recorded as `stat:` cells so a node
-recomputes exactly when the path appears, disappears, or changes kind — never
-reading contents.
+Observation forms are syntax, not stdlib callables. They are capability-gated
+where applicable and each records the named trace-cell kind.
 
 #table(
   columns: (auto, 1fr),
   inset: (x: 6pt, y: 4pt),
   align: (left, left),
   stroke: (x: none, y: 0.5pt + luma(220)),
-  table.header([*Signature*], [*Description*]),
-  [`file-exists?(path)`], [True if anything exists at `path`. Needs an `fs` read grant.],
-  [`dir?(path)`], [True if `path` is a directory. Needs an `fs` read grant.],
+  table.header([*Form*], [*Description*]),
+  [`$file(path)`], [Read file contents, or a sealed value when only secret authority covers `path`; node scratch reads are unrecorded.],
+  [`$env(name[, default])`], [Read an environment variable, evaluating `default` only when absent.],
+  [`$tree(root)`], [Read the exact relative-path/content-hash map below `root`.],
+  [`$probe(name)`], [Read a registered volatile probe value pinned once per pass.],
+  [`$secret(path)`], [Read a sealed value under secret authority.],
+  [`$stat(path)`], [Return `:file`, `:directory`, or `nil` without reading contents.],
+  [`$argv()`], [Return the invocation arguments after `--`.],
+  [`$config(key[, default])`], [Read scoped configuration, evaluating `default` only when absent.],
 )
 
 === Hashing and the content store
@@ -185,7 +187,7 @@ reading contents.
 
 `stdlib/runtime.pp` provides `schedule-serial`, `schedule-parallel`,
 `schedule-race`, `schedule-custom`, `runtime-manifest`, reporter constructors,
-and policy helpers. `configure-runtime` installs a manifest at script scope.
+and policy helpers. `configure-runtime!` installs a manifest at script scope.
 `stdlib/domain.pp` provides generic domain and probe registration helpers.
 
 #table(
@@ -194,8 +196,17 @@ and policy helpers. `configure-runtime` installs a manifest at script scope.
   align: (left, left),
   stroke: (x: none, y: 0.5pt + luma(220)),
   table.header([*Signature*], [*Description*]),
-  [`register-domain({…})`], [Register a write-domain from a spec map (`:name`, `:namespace`, `:observe`, `:diff`, `:apply`, `:write-cap`). Script-tier only — not inside a node body.],
-  [`register-probe(name, observe-fn, read-cap)`], [Register a read-only probe: a domain with no write authority. Script-tier only.],
+  [`run!(cmd, args…)`], [Run a process under the granted process capability.],
+  [`run-closed!(request)`], [Run an immutable closed action through the trusted executor.],
+  [`write!(path, content)`], [Write a file in the scripting tier or node scratch.],
+  [`log!(message)`], [Emit an ephemeral log effect.],
+  [`http-get!(url)`], [Fetch a URL under the granted network capability.],
+  [`http-post!(url, body)`], [Post a request under the granted network capability.],
+  [`configure-runtime!(spec)`], [Install runtime scheduling and reporting policy at script scope.],
+  [`register-reporter!(fn)`], [Register a runtime event reporter at script scope.],
+  [`emit-event!(event)`], [Record a runtime event at script scope.],
+  [`register-domain!({…})`], [Register a write-domain from a spec map (`:name`, `:namespace`, `:observe`, `:diff`, `:apply`, `:write-cap`). Script-tier only — not inside a node body.],
+  [`register-probe!(name, observe-fn, read-cap)`], [Register a read-only probe: a domain with no write authority. Script-tier only.],
   [`probe(name)`], [Read a registered probe's value, pinned once per pass and recorded as a `probe:` cell.],
   [`fenced(kind, spec)`], [Register a non-convergent (fenced) action for the reconciler to drain after convergent state is applied.],
   [`collect(results)`], [Partition `[:ok, value]` and `[:err, error]` results into one aggregate result.],
@@ -233,7 +244,7 @@ scheduler's fan-out point.
   [`drop(n, lst)`], [`lst` without its first `n` elements.],
   [`nth(n, lst)`], [Zero-based element access; `nil` past the end.],
   [`length(lst)`], [Element count (strict — forces the whole list).],
-  [`each(f, lst)`], [Apply `f` to each element for effect; returns `nil`.],
+  [`each!(f, lst)`], [Apply `f` to each element for effect; returns `nil`.],
   [`append(a, b)`], [Concatenate two lists (lazy in `b`).],
   [`reverse(lst)`], [Strict reversal.],
   [`member?(x, lst)`], [Structural membership test.],
@@ -287,8 +298,8 @@ The one entry point you call directly:
   align: (left, left),
   stroke: (x: none, y: 0.5pt + luma(220)),
   table.header([*Signature*], [*Description*]),
-  [`register-fs-domain(root, write-cap)`], [Register the filesystem domain rooted at `root`, converging a canonical tree value.],
-  [`register-proc-domain(write-cap)`], [Register the process domain, converging a `{name → spec}` map (spec: `cmd`/`args`/`env`/`cwd`).],
+  [`register-fs-domain!(root, write-cap)`], [Register the filesystem domain rooted at `root`, converging a canonical tree value.],
+  [`register-proc-domain!(write-cap)`], [Register the process domain, converging a `{name → spec}` map (spec: `cmd`/`args`/`env`/`cwd`).],
 )
 
 === Filesystem policy internals (`domain-fs.pp`)
@@ -328,5 +339,5 @@ The one entry point you call directly:
   [`proc-diff(observed, desired)`], [The pure diff: start / restart / stop by spec change.],
   [`proc-stop-current!(name)`], [Stop a service at its currently-recorded pid.],
   [`proc-apply-item(known, item)`], [Apply one plan item, returning the updated known set.],
-  [`proc-apply(plan)`], [Fold every plan item, then persist the known set once.],
+  [`proc-apply!(plan)`], [Fold every plan item, then persist the known set once.],
 )

@@ -11,7 +11,7 @@ mkdir -p "$A" "$B" "$SHARED"
 
 cat > "$HOME/node.pp" <<'PP'
 print(force(node {
-  perform log("building greeter.o")
+  log!("building greeter.o")
   6 * 7
 }))
 PP

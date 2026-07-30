@@ -5,15 +5,15 @@ set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 
 cat > "$TMP/ephemeral.pp" <<'EOF'
-let delayed = delay(do { perform log("DELAYED"); 5 })
+let delayed = delay(do { log!("DELAYED"); 5 })
 print(force(delayed))
 print(force(delayed))
 
-print(force(delay(do { perform log("FRESH"); 6 })))
-print(force(delay(do { perform log("FRESH"); 6 })))
+print(force(delay(do { log!("FRESH"); 6 })))
+print(force(delay(do { log!("FRESH"); 6 })))
 
 def twice() {
-  let (x = do { perform log("EPHEMERAL"); 7 }) { x }
+  let (x = do { log!("EPHEMERAL"); 7 }) { x }
 }
 print(twice())
 print(twice())

@@ -1,5 +1,5 @@
 # Runtime policy constructors. These return ordinary data consumed by
-# configure-runtime; they do not grant authority or execute host work.
+# configure-runtime!; they do not grant authority or execute host work.
 
 def schedule-serial() {
   { :kind -> :serial }

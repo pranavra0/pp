@@ -13,10 +13,10 @@ fi
 
 cat > "$TMP/inline.pp" <<EOF
 force(node {
-  perform log("PARENT")
+  log!("PARENT")
   force(node {
-    perform log("CHILD")
-    do { slurp("$TMP/input"); "stable" }
+    log!("CHILD")
+    do { \$file("$TMP/input"); "stable" }
   })
 })
 EOF

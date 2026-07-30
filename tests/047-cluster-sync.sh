@@ -73,9 +73,9 @@ NODEA="$TMP/nodeA"; NODEB="$TMP/nodeB"; NODEC="$TMP/nodeC"
 mkdir -p "$NODEA" "$NODEB" "$NODEC"
 
 cat > "$TMP/prog.pp" <<EOF
-perform log(force(node {
-  perform log("COMPUTE")
-  slurp("${WORK}/data.txt")
+log!(force(node {
+  log!("COMPUTE")
+  \$file("${WORK}/data.txt")
 }))
 EOF
 
@@ -235,7 +235,7 @@ assert "T1-trace-corruption-message" "tampered in transit" present
 mkdir -p "$TMP/secret"
 printf 'TOPSECRETVALUE\n' > "$TMP/secret/s.txt"
 cat > "$TMP/sealed.pp" <<EOF
-force(node { slurp("$TMP/secret/s.txt") })
+force(node { \$secret("$TMP/secret/s.txt") })
 EOF
 HOME="$NODEA" "$PP" --grant "secret:${TMP}/secret" "$TMP/sealed.pp" > "$TMP/out" 2>&1
 CODE=$?

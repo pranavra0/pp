@@ -1,6 +1,7 @@
 open Pp_kernel
 type _ Effect.t +=
   | Get_session : Session.t Effect.t
+  | Get_source : string Effect.t
   | Get_invocation : Invocation.t Effect.t
   | Get_capabilities : Capability.t list Effect.t
   | Get_config : Core_model.value list Effect.t
@@ -16,6 +17,7 @@ type _ Effect.t +=
 
 val capabilities : unit -> Capability.t list
 val config : unit -> Core_model.value list
+val source : unit -> string
 val domain : unit -> string option
 val with_capabilities : Capability.t list -> (unit -> 'a) -> 'a
 val with_config : Core_model.value -> (unit -> 'a) -> 'a
@@ -24,6 +26,7 @@ val with_handlers :
   (unit -> 'a) -> 'a
 val with_domain : string -> (unit -> 'a) -> 'a
 val without_observation_collection : (unit -> 'a) -> 'a
+val with_source : string -> (unit -> 'a) -> 'a
 val record_event : Core_model.value -> unit
 val record_read : string -> string -> unit
 val config_lookup : string -> Core_model.value option

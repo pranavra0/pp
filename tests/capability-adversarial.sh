@@ -31,15 +31,15 @@ echo "pp-cap-allowed" > "$TMP/allowed.txt"
 cp "$TMP/allowed.txt" /tmp/pp-cap-test-file 2>/dev/null || true
 
 cat > "$TMP/read-allowed.pp" <<'EOF'
-print(slurp("/tmp/pp-cap-test-file"))
+print($file("/tmp/pp-cap-test-file"))
 EOF
 run_case read-allowed "pp-cap-allowed" "$TMP/read-allowed.pp" --grant fs:/tmp:ro
 
 # Negative: path-component scope — /tmp must NOT grant /tmpevil.
 cat > "$TMP/read-denied.pp" <<'EOF'
-print(slurp("/tmpevil/secret"))
+print($file("/tmpevil/secret"))
 EOF
-run_case path-component-denied "slurp: permission denied" "$TMP/read-denied.pp" --grant fs:/tmp:ro
+run_case path-component-denied "filesystem read not granted" "$TMP/read-denied.pp" --grant fs:/tmp:ro
 
 # Negative: capability constructors removed from user code.
 run_case constructor-filesystem "unbound.*filesystem" -e 'print(filesystem("/", :rw))'
@@ -87,10 +87,10 @@ mkdir -p "$TMP/cdnr/a" "$TMP/cdnr/b" "$TMP/cdnr/secret"
 printf 'SECRETDATA\n' > "$TMP/cdnr/secret/x.txt"
 cat > "$TMP/compose-no-resurrect.pp" <<EOF
 with-caps(cap-compose(cap-restrict(current-capabilities(), "$TMP/cdnr/a", :ro), cap-restrict(current-capabilities(), "$TMP/cdnr/b", :ro))) {
-  print(slurp("$TMP/cdnr/secret/x.txt"))
+  print(\$file("$TMP/cdnr/secret/x.txt"))
 }
 EOF
-run_case compose-does-not-resurrect "permission denied" "$TMP/compose-no-resurrect.pp" --grant "fs:$TMP/cdnr:ro"
+run_case compose-does-not-resurrect "permission denied|not granted" "$TMP/compose-no-resurrect.pp" --grant "fs:$TMP/cdnr:ro"
 
 # --- cap-restrict-mode-widen-rejected: requesting :rw on a cap that only
 #     holds :ro at that scope is a Capability_error, never a silent widen. ---
@@ -132,12 +132,12 @@ run_repl_case() {  # NAME  INPUT  EXPECTED_REGEX  [extra pp args...]
 }
 
 WC_EXC_INPUT="with-caps(cap-restrict(current-capabilities(), \"$TMP/wcex/a\", :ro)) { error(\"boom\") }
-print(slurp(\"$TMP/wcex/secret/s.txt\"))"
+print(\$file(\"$TMP/wcex/secret/s.txt\"))"
 run_repl_case with-caps-exception-safe "$WC_EXC_INPUT" "SECRETDATA" --grant "fs:$TMP/wcex:ro"
 
 WC_TAIL_INPUT="def id(x) { x }
 with-caps(cap-restrict(current-capabilities(), \"$TMP/wcex/a\", :ro)) { id(1) }
-print(slurp(\"$TMP/wcex/secret/s.txt\"))"
+print(\$file(\"$TMP/wcex/secret/s.txt\"))"
 run_repl_case with-caps-tail-safe "$WC_TAIL_INPUT" "SECRETDATA" --grant "fs:$TMP/wcex:ro"
 
 # --- node-cap-capture-direct (layer 1: free-var ban, import side): a node

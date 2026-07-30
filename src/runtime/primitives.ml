@@ -562,21 +562,6 @@ let register_metaeval () =
 
 let register_io () =
   let register = register ~category:Observations in
-  (* ---- slurp: read file to string ---- *)
-
-  register "slurp" (fun args _env ->
-    let args = force_args args in
-    match args with
-    | [VString path] ->
-        (* Node-local sandbox scratch reads are capability-free and unrecorded.
-           Scratch is the node's working memory. Outside a
-           sandbox: an fs-read grant returns plain data (CAS-ingested,
-           pinned for the run), a CapSecret-only grant returns VSealed —
-           bytes pinned in-memory, NEVER the CAS; see Process.read_dispatch. *)
-        Process.read_dispatch ~tag:"slurp"
-          ~cap_err:(fun p -> "slurp: permission denied for " ^ p) path
-    | _ -> failwith "slurp expects a file path string"
-  );
 
   register "blob" (fun args _env ->
     let args = force_args args in
@@ -595,6 +580,20 @@ let register_io () =
     | _ -> failwith "blob-get expects a blob identity string");
   ()
 
+let register_effects () =
+  let register_effect ~shape name =
+    register ~shape ~category:Effects name (fun args _env ->
+      let arguments = force_args args in
+      let application = (core_operations ()).apply in
+      Evaluator_effects.perform ~application name arguments)
+  in
+  register_effect ~shape:(Range (1, None)) "run!";
+  register_effect ~shape:(Exact 1) "run-closed!";
+  register_effect ~shape:(Exact 2) "write!";
+  register_effect ~shape:(Range (1, Some 2)) "log!";
+  register_effect ~shape:(Exact 1) "http-get!";
+  register_effect ~shape:(Exact 2) "http-post!"
+
 let register_stdlib () =
   let register = register ~category:Other in
   (* ---- stdlib primitives ---- *)
@@ -605,11 +604,8 @@ let register_stdlib () =
     | [v] -> VString (Identity.hash_value (Force_deep.force_deep (force_val v)))
     | _ -> failwith "hash-value expects one argument");
 
-  (* (hash-string S) — SHA-256 hex digest of S's raw bytes, the SAME
-     algorithm Observation.hash_file uses for a file's content hash (Core_model.
-     Hasher.hash_string) — needed so a domain's `diff` (domain-fs.pp) can compute a content hash from a string PURELY (no
-     capability, no store I/O — unlike `blob`, this never touches
-     ~/.pp/store) and compare it against what `tree-observe` observed. *)
+  (* SHA-256 over raw string bytes, used by filesystem domains to compare
+     desired content with the hashes returned by `$tree`. *)
   register "hash-string" (fun args _env ->
     match force_args args with
     | [VString s] -> VString (Hasher.hash_string s)
@@ -693,42 +689,6 @@ let register_stdlib () =
          | _ -> failwith "map-remove expects a map and a key")
     | _ -> failwith "map-remove expects a map and a key");
 
-  (* File predicates: capability-gated observations recorded as `stat:` trace
-     cells — presence/kind only, never contents, so a node that probed
-     existence recomputes exactly when the path appears/disappears/changes
-     kind. *)
-  let stat_primitive name want_dir =
-    register name (fun args _env ->
-      match force_args args with
-      | [VString path] ->
-          if not (List.exists (fun cap -> Capability.check_fs_read cap (World_path.canonical path))
-                    (Effect.perform Dynamic_scope.Get_capabilities)) then
-            capability (name ^ ": capability error: no read access for " ^ path);
-          let kind = Observation.stat_kind path in
-          Observation.record (Observation.stat path) (Observation.stat_hash kind);
-          VBool (if want_dir then kind = "dir" else kind <> "absent")
-      | _ -> failwith (name ^ " expects a path string"))
-  in
-  stat_primitive "file-exists?" false;
-  stat_primitive "dir?" true;
-
-  (* (argv) — program arguments after `--`, an `argv:` observation. *)
-  register "argv" (fun args _env ->
-    match args with
-    | [] ->
-        let av = Invocation.program_argv (Effect.perform Dynamic_scope.Get_invocation) in
-        Observation.record Cell.Argv (Observation.argv_hash av);
-        List.fold_right (fun s acc -> VPair (VString s, acc)) av VNil
-    | _ -> failwith "argv takes no arguments");
-
-  (* (env-get NAME) — environment variable or nil, an `env:` observation. *)
-  register "env-get" (fun args _env ->
-    match force_args args with
-    | [VString name] ->
-        let v = Sys.getenv_opt name in
-        Observation.record (Cell.Env name) (Observation.env_hash v);
-        (match v with Some s -> VString s | None -> VNil)
-    | _ -> failwith "env-get expects a variable name string");
 
   (* (exit [N]) — terminate the run with status N (default 0). *)
   register "exit" (fun args _env ->
@@ -789,9 +749,9 @@ let register_stdlib () =
 
 let register_domains () =
   let register = register ~category:Domains in
-  register "configure-runtime" (fun args _env ->
+  register "configure-runtime!" (fun args _env ->
     if Effect.perform Dynamic_scope.In_node then
-      failwith "configure-runtime: may not be called inside a node body";
+      failwith "configure-runtime!: may not be called inside a node body";
     match args with
     | [spec] ->
         let fields = map_fields spec in
@@ -809,7 +769,7 @@ let register_domains () =
                  ~remote_dispatch:(match Session.remote_dispatch (session ()) with
                    | Some dispatch -> dispatch
                    | None -> (fun ~member:_ _ ->
-                       failwith "configure-runtime: remote schedules require a host configuration"))
+                       failwith "configure-runtime!: remote schedules require a host configuration"))
                  policy in
              Scheduler.install scheduler handler;
              Dynamic_scope.record_event (Value.map [
@@ -826,31 +786,31 @@ let register_domains () =
                   Presentation.string_of_value value))
          | None -> ());
         VNil
-    | _ -> failwith "configure-runtime expects one map argument");
+    | _ -> failwith "configure-runtime! expects one map argument");
 
   register "runtime-config" (fun args _env ->
     match args with
     | [] -> Option.value ~default:(Value.map []) (Session.runtime_manifest (session ()))
     | _ -> failwith "runtime-config expects no arguments");
 
-  register "register-reporter" (fun args _env ->
+  register "register-reporter!" (fun args _env ->
     if Effect.perform Dynamic_scope.In_node then
-      failwith "register-reporter: may not be called inside a node body";
+      failwith "register-reporter!: may not be called inside a node body";
     match args with
     | [reporter] ->
         (match force_val reporter with
          | (VClosure _ | VBuiltin _) as value ->
              Session.register_reporter (session ()) value; VNil
-         | value -> failwith ("register-reporter expects a function, got " ^
+         | value -> failwith ("register-reporter! expects a function, got " ^
              Presentation.string_of_value value))
-    | _ -> failwith "register-reporter expects one function");
+    | _ -> failwith "register-reporter! expects one function");
 
-  register "emit-event" (fun args _env ->
+  register "emit-event!" (fun args _env ->
     if Effect.perform Dynamic_scope.In_node then
-      failwith "emit-event: may not be called inside a node body";
+      failwith "emit-event!: may not be called inside a node body";
     match args with
     | [event] -> Dynamic_scope.record_event (force_val event); VNil
-    | _ -> failwith "emit-event expects one event map");
+    | _ -> failwith "emit-event! expects one event map");
 
   (* ---- fenced: register a non-convergent action for reconciliation.
      It may not appear inside a node body. The action is not
@@ -867,21 +827,21 @@ let register_domains () =
         VNil
     | _ -> failwith "fenced expects a kind string and a spec map");
 
-  (* ---- register-domain / register-probe ----
+  (* ---- register-domain! / register-probe! ----
 
-     `(register-domain {:name :namespace :observe :diff :apply :write-cap
+     `(register-domain! {:name :namespace :observe :diff :apply :write-cap
      [:observe-cell]})` — script-tier only (trace_stack guard, the same
      pattern Fenced.register uses): ordinary primitive, root/script
      scope. `:write-cap` is consumed into the session's domain registry, never
      re-exposed to user code — the core-side registry IS the authority
      boundary. `:diff`/`:apply` are REQUIRED for a full domain (a domain
-     with ⊥ write authority is a PROBE — register-probe below, a distinct,
+     with ⊥ write authority is a PROBE — register-probe! below, a distinct,
      simpler entry point); `:namespace` is a list of cell-id string
      PREFIXES this domain owns (stratification);
      `:observe-cell` is optional. Returns nil. *)
-  register "register-domain" (fun args _env ->
+  register "register-domain!" (fun args _env ->
     if Effect.perform Dynamic_scope.In_node then
-      failwith "register-domain: may not be called inside a node body (script-tier only, like fenced)";
+      failwith "register-domain!: may not be called inside a node body (script-tier only, like fenced)";
     match args with
     | [spec] ->
         (match Domain_config.decode_domain ~force:force_val spec with
@@ -890,15 +850,15 @@ let register_domains () =
                registration.name registration.entry;
              VNil
          | Error message -> failwith message)
-    | _ -> failwith "register-domain expects one map argument");
+    | _ -> failwith "register-domain! expects one map argument");
 
-  (* `(register-probe name observe-fn read-cap)` — sugar over register-domain
+  (* `(register-probe! name observe-fn read-cap)` — sugar over register-domain!
      for the ⊥-write-authority case: dm_namespace = [] (nothing to
      stratify, core never converges it), dm_diff/dm_apply = None. Same
      surface and error text as a standalone probe registry. *)
-  register "register-probe" (fun args _env ->
+  register "register-probe!" (fun args _env ->
     if Effect.perform Dynamic_scope.In_node then
-      failwith "register-probe: may not be called inside a node body (script-tier only, like fenced)";
+      failwith "register-probe!: may not be called inside a node body (script-tier only, like fenced)";
     match args with
     | [name; observe; capability] ->
         (match Domain_config.decode_probe ~force:force_val name observe capability with
@@ -907,27 +867,7 @@ let register_domains () =
                registration.name registration.entry;
              VNil
          | Error message -> failwith message)
-    | _ -> failwith "register-probe expects a name, an observe-fn, and a read capability");
-  (* ---- `probe` primitive: one-time evaluated lazy read of a registered probe ----
-     a pass evaluates observe-fn (via Observation.probe_value, above: OUTSIDE the
-     trace stack, under exactly the registered read-cap) and pins the
-     result in the session for the rest of the pass; every read
-     (first or not) records ONLY the `probe:<name>` cell into the caller's
-     trace, via the Observation.record path every other cell-observing
-     primitive uses (slurp's `file:`, env-get's `env:`, …) — capability-free
-     at THIS call site, because the read-cap's authority was already spent
-     evaluating the probe, not reading its pinned result. An unregistered
-     name is a hard error naming it, on every read (never silently nil). *)
-  register "probe" (fun args _env ->
-    let args = force_args args in
-    match args with
-    | [VString name] | [VKeyword name] ->
-        (match Observation.probe_value name with
-         | None -> failwith ("probe: no such probe registered: " ^ name)
-         | Some v ->
-             Observation.record (Cell.Probe name) (Identity.hash_value v);
-             v)
-    | _ -> failwith "probe expects a probe name string");
+    | _ -> failwith "register-probe! expects a name, an observe-fn, and a read capability");
   ()
 
 let register_collect_and_sealed () =
@@ -1066,6 +1006,7 @@ let () =
   register_caps ();
   register_metaeval ();
   register_io ();
+  register_effects ();
   register_stdlib ();
   register_domains ();
   register_collect_and_sealed ();

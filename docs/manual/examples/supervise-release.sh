@@ -16,7 +16,7 @@ SH
 chmod +x "$HOME/service.sh"
 
 cat > "$HOME/supervise.pp" <<EOF
-let release = slurp("$CFG")
+let release = \$file("$CFG")
 {"web" -> {
   "cmd" -> "$HOME/service.sh",
   "args" -> ["$PID"],

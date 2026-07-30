@@ -60,14 +60,14 @@ do { let y = 1; print(y + 10) }
 let* (a = 1, a = a + 1) { print(a) }
 let (p = 1,
      q = 2) { print(p + q) }
-with-handler(log = fn(msg) { 99 }) { print(perform log("zzz")) }
-with-config({:k -> 5}) { print(config(:k, 0)) }
+with-handler(log! = fn(msg) { 99 }) { print(log!("zzz")) }
+with-config({:k -> 5}) { print(\$config(:k, 0)) }
 defmacro twice(e) { list(quote { + }, e, e) }
 print(twice(21))
 def a-b(z) { z - 1 }        # whitespace rule: z - 1 subtracts; a-b is a name
 print(a-b(3))
 if 1 < 2 { print("lt") } else if 1 = 2 { print("eq") } else { print("ge") }
-import(module { def helper(n) { n * 5 } })
+import(module { export helper; def helper(n) { n * 5 } })
 print(helper(10))
 EOF
 expected='14

@@ -37,7 +37,7 @@ run_iter() {  # I
   local i="$1"
   cat > "$TMP/d.pp" <<EOF
 let (v = force(node {
-  perform log("COMPUTE")
+  log!("COMPUTE")
   number->string($i)
 })) { {:tree -> {
   "cur.txt" -> {:kind -> :file, :mode -> 420, :blob -> blob(v)},
@@ -141,7 +141,7 @@ fi
 rm -rf "$TMP/.pp" "$OUT"; mkdir -p "$OUT"
 TRIGGER="$TMP/trigger.txt"; echo "0" > "$TRIGGER"
 cat > "$TMP/watch.pp" <<EOF
-let (n = slurp("$TRIGGER"), v = force(node {
+let (n = \$file("$TRIGGER"), v = force(node {
   n
 })) {
   {:tree -> {

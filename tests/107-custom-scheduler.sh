@@ -13,7 +13,7 @@ fi
 cat > "$TMP/bad.pp" <<'EOF'
 load("stdlib/runtime.pp")
 def choose(jobs) {{:mode -> :serial, :batches -> vec[vec[0], vec[0]]}}
-configure-runtime({:schedule -> schedule-custom(choose)})
+configure-runtime!({:schedule -> schedule-custom(choose)})
 node value() { 1 }
 print(value())
 EOF

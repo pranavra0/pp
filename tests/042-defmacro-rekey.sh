@@ -35,12 +35,12 @@ assert() {  # NAME FILE PATTERN present|absent
 # byte-identical in both files.
 cat > "$TMP/v1.pp" <<'EOF'
 defmacro build-step() {
-  quote { do { perform log("COMPUTE"); 1 } } }
+  quote { do { log!("COMPUTE"); 1 } } }
 print(force(node { build-step() }))
 EOF
 cat > "$TMP/v2.pp" <<'EOF'
 defmacro build-step() {
-  quote { do { perform log("COMPUTE"); 2 } } }
+  quote { do { log!("COMPUTE"); 2 } } }
 print(force(node { build-step() }))
 EOF
 
@@ -50,11 +50,11 @@ EOF
 # produced it: every existing macro test passes authored in either
 # surface.
 cat > "$TMP/v1.ppl" <<'EOF'
-(defmacro (build-step) '(do (perform log "COMPUTE") 1))
+(defmacro (build-step) '(do (log! "COMPUTE") 1))
 (print (force (node (build-step))))
 EOF
 cat > "$TMP/v2.ppl" <<'EOF'
-(defmacro (build-step) '(do (perform log "COMPUTE") 2))
+(defmacro (build-step) '(do (log! "COMPUTE") 2))
 (print (force (node (build-step))))
 EOF
 

@@ -27,6 +27,13 @@ val find_thunk : t -> string -> Core_model.thunk option
 val add_thunk : t -> string -> Core_model.thunk -> unit
 val find_macro : t -> string -> (string list * Core_model.expr) option
 val set_macro : t -> string -> string list * Core_model.expr -> unit
+val snapshot_macros :
+  t -> (string * (string list * Core_model.expr)) list
+val restore_macros :
+  t -> (string * (string list * Core_model.expr)) list -> unit
+val clear_macros : t -> unit
+val set_module_macro_exports : t -> string -> string list -> unit
+val find_module_macro_exports : t -> string -> string list option
 val next_gensym : t -> int
 val find_domain : t -> string -> domain_entry option
 val register_domain : t -> string -> domain_entry -> unit

@@ -12,7 +12,7 @@ cd "$HOME"
 
 # (1) A sealed value prints redacted — the bytes never reach the terminal.
 cat > show.pp <<'PP'
-print(slurp("vault/token"))
+print($secret("vault/token"))
 PP
 echo '$ pp --grant secret:vault show.pp'
 "$PP" --grant secret:vault show.pp 2>&1
@@ -21,7 +21,7 @@ echo '$ pp --grant secret:vault show.pp'
 #     store, then scan the whole store for the plaintext.
 echo
 cat > derive.pp <<'PP'
-print(force(node { string-length(unseal(slurp("vault/token"))) }))
+print(force(node { string-length(unseal($secret("vault/token"))) }))
 PP
 echo '$ pp --grant secret:vault derive.pp     # length of the secret'
 "$PP" --grant secret:vault derive.pp 2>&1

@@ -17,23 +17,23 @@ let builtin name args =
            Process.read_dispatch ~tag:"read-file"
              ~cap_err:(fun p -> "read-file: capability error: no read access for " ^ p) path
        | _ -> failwith "read-file expects a string path")
-  | "write-file" ->
+  | "write!" ->
       (match args with
        | [VString path; VString content] ->
            Process.write_file_effect ~has_cap:has_fs_write path content
-       | _ -> failwith "write-file expects path and content strings")
-  | "run" -> Process.run_effect args
+       | _ -> failwith "write! expects path and content strings")
+  | "run!" -> Process.run_effect args
   | "run-closed!" -> Closed_action.run args
-  | "http-get" ->
+  | "http-get!" ->
       (match args with
        | [VString url] -> Process.http_request ~method_:"GET" ~url ~body:None
-       | _ -> failwith "http-get expects a url string")
-  | "http-post" ->
+       | _ -> failwith "http-get! expects a url string")
+  | "http-post!" ->
       (match args with
        | [VString url; VString body] ->
            Process.http_request ~method_:"POST" ~url ~body:(Some body)
-       | _ -> failwith "http-post expects a url string and a body string")
-  | "log" ->
+       | _ -> failwith "http-post! expects a url string and a body string")
+  | "log!" ->
       (match args with
        | [VString level; VString msg] ->
            Printf.eprintf "[%s] %s\n%!" level msg;
@@ -41,7 +41,7 @@ let builtin name args =
        | [VString msg] ->
            Printf.eprintf "[info] %s\n%!" msg;
            VNil
-       | _ -> failwith "log expects a message string")
+       | _ -> failwith "log! expects a message string")
   | "tree-observe" ->
       (match args with
        | [VString root] -> Domain_prims.tree_observe root

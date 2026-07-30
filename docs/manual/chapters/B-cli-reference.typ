@@ -68,9 +68,9 @@ authority checks and cell identities see one spelling.
   [`process`], [Spawn, signal, and reap child processes.],
 )
 
-Usage: `pp --grant fs:/tmp/build:rw --grant process <file.pp>`. Any of the
-world-touching primitives (`slurp`, the `fs`/`proc` domains, network effects)
-raises a capability error if the matching grant is absent.
+Usage: `pp --grant fs:/tmp/build:rw --grant process <file.pp>`. Observation
+forms, the `fs`/`proc` domains, and network effects raise a capability error
+when the matching grant is absent.
 
 == The store and auditing
 

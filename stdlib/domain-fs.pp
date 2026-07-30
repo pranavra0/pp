@@ -3,17 +3,16 @@
 # This is the POLICY half of the domain: what counts as
 # create/update/delete and how a blob identity resolves to bytes,
 # single-writer deletion. The TRUSTED MECHANICS (atomic materialize/remove,
-# whole-tree observation) are OCaml primitives (src/runtime/domain_prims.ml),
-# reached only via `perform`. main.ml's `--reconcile ROOT` auto-loads this
+# whole-tree observation) are OCaml runtime operations.
 # file (after stdlib/list.pp, map.pp, string.pp) and calls
-# `register-fs-domain` with ROOT and a write-cap already narrowed via
+# `register-fs-domain!` with ROOT and a write-cap already narrowed via
 # `cap-restrict`.
 #
-# observe = perform tree-observe(root)   -> {relpath -> content-hash}
+# observe = perform tree-observe(root) -> {relpath -> content-hash}
 # desired = {:tree -> {relpath -> file descriptor}}
 # diff    = create/update/delete by content hash, PURE — its only
 # inputs are `observed`/`desired` plus `root` (captured
-# lexically by register-fs-domain, not threaded as a diff
+# lexically by register-fs-domain!, not threaded as a diff
 # argument — Q13's diff signature stays (observed, desired))
 # apply   = materialize-file / remove-file per item
 
@@ -33,7 +32,7 @@ def fs-validate-rel(rel) {
   if rel = "" { error("reconcile: empty path in desired tree") } else if starts-with?(rel, "/") {
     error(string-append("reconcile: desired paths must be relative to the domain root: ", rel))
   } else {
-    each(
+    each!(
 
 fn(part) { fs-validate-rel-part(rel, part) }, string-split(rel, "/"))
   }
@@ -50,7 +49,7 @@ def fs-plan-item(kind, rel, content) {
 def fs-diff-for(root) {
   fn(observed, desired) {
     let (entries = desired[:tree]) {
-    each(fs-validate-rel, map-keys(entries))
+    each!(fs-validate-rel, map-keys(entries))
     let (dkeys = filter(fn(rel) { entries[rel][:kind] = :file }, map-keys(entries)), okeys = map-keys(observed), creates = filter(
 
 
@@ -94,12 +93,12 @@ def fs-apply-item(root, item) {
 }
 
 def fs-apply-for(root) {
-  fn(plan) { each(fn(item) { fs-apply-item(root, item) }, plan[:items])
+  fn(plan) { each!(fn(item) { fs-apply-item(root, item) }, plan[:items])
   }
 # ---- registration ----
 }
-def register-fs-domain(root, write-cap) {
-  register-domain({:name -> "fs", :namespace -> vec[string-append("file:", root), string-append("tree:", root), string-append("stat:", root)], :observe -> (
+def register-fs-domain!(root, write-cap) {
+  register-domain!({:name -> "fs", :namespace -> vec[string-append("file:", root), string-append("tree:", root), string-append("stat:", root)], :observe -> (
 
 
 

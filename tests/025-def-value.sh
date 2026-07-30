@@ -79,7 +79,7 @@ assert_err "block-duplicate-def" ""           "$TMP/c3.pp" "duplicate definition
 
 # ---- (d) defnode binds the node thunk; forcing caches in the store ----
 cat > "$TMP/d.pp" <<'EOF'
-let n = node { perform log("COMPUTE"); 42 }
+let n = node { log!("COMPUTE"); 42 }
 print(1)
 print(force(n))
 EOF

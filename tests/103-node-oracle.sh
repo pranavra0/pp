@@ -41,11 +41,11 @@ write_program() {
   cat >"$TMP/oracle.pp" <<EOF
 with-handler(ask = fn(_) { "$handler_result" }) {
   print(force(node {
-    perform log("COMPUTE")
+    log!("COMPUTE")
     let child = force(node {
-      string-append("child:", slurp("$TMP/right"))
+      string-append("child:", \$file("$TMP/right"))
     })
-    let observed = slurp("$TMP/left")
+    let observed = \$file("$TMP/left")
     if observed = "fail\n" {
       car(5)
     } else {

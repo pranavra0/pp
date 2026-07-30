@@ -3,7 +3,7 @@ open Core_model
 
 type shape = Any | Exact of int | Range of int * int option
 type category =
-  | Arithmetic | Collections | Strings | Capabilities | Observations
+  | Arithmetic | Collections | Strings | Capabilities | Observations | Effects
   | Process | Domains | Diagnostics | Metaprogramming | Other
 
 type descriptor = {
@@ -64,6 +64,7 @@ let category_string = function
   | Strings -> "strings"
   | Capabilities -> "capabilities"
   | Observations -> "observations"
+  | Effects -> "effects"
   | Process -> "process"
   | Domains -> "domains"
   | Diagnostics -> "diagnostics"

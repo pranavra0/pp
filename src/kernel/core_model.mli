@@ -1,4 +1,8 @@
+type map_rest = Exact | Ignore | Bind of string
+
 type closure_kind = Function | Node
+
+type observation_kind = File | Env | Tree | Probe | Secret | Stat | Argv | Config
 
 type env = {
   env_id : int;
@@ -12,6 +16,7 @@ and pattern =
   | PWildcard
   | PList of pattern list * pattern option
   | PTagged of string * pattern list
+  | PMap of (value * pattern) list * map_rest
 
 and expr =
   | ELiteral of value
@@ -33,12 +38,13 @@ and expr =
   | EDefValue of string * expr
   | ELetStar of (string * expr) list * expr
   | EModule of expr list
+  | EExport of string list
   | EImport of expr
   | ELoad of string
   | ELoadModule of string
   | EIsland of string * string option
   | EWithConfig of expr * expr
-  | EConfig of expr * expr option
+  | EObserve of observation_kind * expr list
   | ETyped of expr * expr
   | ELocated of Source_range.t * expr
   | EMatch of expr * (pattern * expr option * expr) list
@@ -90,3 +96,6 @@ and thunk = {
 }
 
 and thunk_status = Unevaluated | Evaluating | Evaluated of value
+
+val string_of_observation_kind : observation_kind -> string
+val observation_kind_of_string : string -> observation_kind option

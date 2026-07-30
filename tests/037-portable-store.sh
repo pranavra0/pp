@@ -81,7 +81,7 @@ golden_check "golden"
 # printf embeds REAL control bytes (\x01, \x7f) and raw UTF-8 in the source
 # string. The map literal is written in the codec's canonical key order so
 # a decoded (hit) value prints byte-identically to the freshly computed one.
-printf 'let (inf = 1.e+308 * 10.) {\n  print(force(node {\n    perform log("COMPUTE")\n    [0 - 5, -1. * 0., 1.e+308, 0.1, inf, 0. - inf, inf - inf, "q\\"b\\\\s nl\\n tab\\t ctrl\x01\x7f uni\xc3\xa9", :akey, quote { asym }, [1, [2, [3]]], {1 -> "i", :k -> 2, {"m" -> 1} -> 3, "s" -> 4}, hash-set(1, 2, 3), cons(1, 2)]\n  }))\n}\n' \
+printf 'let (inf = 1.e+308 * 10.) {\n  print(force(node {\n    log!("COMPUTE")\n    [0 - 5, -1. * 0., 1.e+308, 0.1, inf, 0. - inf, inf - inf, "q\\"b\\\\s nl\\n tab\\t ctrl\x01\x7f uni\xc3\xa9", :akey, quote { asym }, [1, [2, [3]]], {1 -> "i", :k -> 2, {"m" -> 1} -> 3, "s" -> 4}, hash-set(1, 2, 3), cons(1, 2)]\n  }))\n}\n' \
   > "$TMP/battery.pp"
 
 battery() {  # LABEL COLD-FLAGS... — cold store, then re-run cross-process
@@ -136,8 +136,8 @@ grep -q "audit-sentinel-line" "$STORE/journal/log" \
 # --- (d) closure-valued node: no object stored, recompute is clean, and a
 #         data node in the same program still hits cross-process ---
 cat > "$TMP/closure.pp" <<'EOF'
-let datan = node { perform log("COMPUTE-DATA"); "data-42" }
-let fnnode = node { perform log("COMPUTE-FN"); fn(x) { x } }
+let datan = node { log!("COMPUTE-DATA"); "data-42" }
+let fnnode = node { log!("COMPUTE-FN"); fn(x) { x } }
 print(force(datan))
 print((force(fnnode))("applied"))
 EOF

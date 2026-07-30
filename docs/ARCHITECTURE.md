@@ -150,16 +150,16 @@ The main effect paths are:
 
 | Effect | Owner | Result or rule |
 |---|---|---|
-| `read-file`, `write-file`, `slurp` | `observation.ml`, `process.ml`, and evaluator effects | Capability check and cell recording; node writes stay in node scratch space |
-| `run` | `process.ml` | Scripting-only ambient process |
+| `$file`, `$secret`, `read-file`, `write!` | `observation.ml`, `process.ml`, and evaluator effects | Capability check and cell recording; node writes stay in node scratch space |
+| `run!` | `process.ml` | Scripting-only ambient process |
 | `run-closed!` | `closed_action.ml`, `executor.ml` | Session-owned executor over immutable request/result values; provider classifies each request as cacheable or scripting-only before execution |
-| `http-get`, `http-post` | evaluator effect path | Network capability; not valid inside a persistent node |
-| `probe` | `session.ml` and `observation.ml` | One pinned observation per pass |
+| `http-get!`, `http-post!` | evaluator effect path | Network capability; not valid inside a persistent node |
+| `$probe` | `session.ml` and `observation.ml` | One pinned observation per pass |
 | `fenced` | `fenced.ml`, `journal.ml`, and reconciliation | Intent/done journal with an explicit recovery policy |
 
 Host substitution happens outside the evaluator. The application installs the
 result-transparent scheduler and the optional closed-action executor in the
-session. A program may also call `configure-runtime` with an ordinary
+session. A program may also call `configure-runtime!` with an ordinary
 manifest map: its schedule selects the existing local scheduler handler, its
 reporter receives immutable runtime events after evaluation, and its build and
 execution policies remain canonical data for library adapters. CLI schedule
@@ -246,7 +246,7 @@ the filesystem and process domains is in `stdlib/domain-fs.pp` and
 
 `stdlib/runtime.pp` contains constructors for runtime manifests, schedules,
 reporters, and policy data. The constructors do not grant authority or invoke
-host services. `configure-runtime` validates the manifest at script scope and
+host services. `configure-runtime!` validates the manifest at script scope and
 installs only generic runtime services. A custom scheduler receives only
 data-closed job descriptors and returns validated batches; the runtime still
 owns execution, cancellation, and remote transport. A custom domain remains a

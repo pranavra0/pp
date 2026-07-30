@@ -3,12 +3,12 @@
 # running under core-enforced discipline, not privileged OCaml code. This
 # suite proves that with a THIRD-PARTY toy domain ("kv": a directory of
 # one-file-per-key values) that pp's OWN stdlib never defines — proving
-# register-domain/domains.ml are genuinely generic, not fs/proc
+# register-domain!/domains.ml are genuinely generic, not fs/proc
 # special-cased. The kv domain is defined entirely
-# inside each test program below via `register-domain`; it reuses the
-# same trusted primitives (tree-observe/materialize-file/remove-file)
-# domain-fs.pp uses, because those are generic fs-write-gated mechanics,
-# not "belongs to the fs domain".
+# inside each test program below via `register-domain!`; it reuses the
+# domain-only `tree-observe` effect and trusted materialize-file/remove-file
+# mechanics. Those write primitives are generic filesystem mechanics, not
+# special behavior for the bundled filesystem domain.
 #
 # Exercises: plan caching (a repeated pass across separate process runs
 # hits the plan cache — proved via `pp why`); stratification rejection
@@ -72,7 +72,7 @@ fn(k) { {:kind -> "delete", :key -> k, :value -> nil} }, deletes)))) {
 }
 
 
-def kv-apply(plan) { each(
+def kv-apply(plan) { each!(
 fn(item) {
     let (k = hash-map-get(item, :key), path = string-append("$dir/", k)) {
       if hash-map-get(item, :kind) = "delete" { perform remove-file(path) } else {
@@ -82,7 +82,7 @@ fn(item) {
   }, hash-map-get(plan, :items))
 }
 def register-kv-domain() {
-  register-domain({:name -> "kv", :namespace -> vec[string-append("file:", "$dir"), string-append("tree:", "$dir")], :observe -> (
+  register-domain!({:name -> "kv", :namespace -> vec[string-append("file:", "$dir"), string-append("tree:", "$dir")], :observe -> (
 
 
 fn() { perform tree-observe("$dir") }), :diff -> kv-diff, :apply -> kv-apply, :write-cap -> cap-restrict(current-capabilities(), "$dir", :wo)})
@@ -159,7 +159,7 @@ printf 'seed' > "$KV3/seed"
   cat <<EOF
 do {
   register-kv-domain()
-  {"kv" -> {"a" -> slurp("$KV3/seed")}}
+  {"kv" -> {"a" -> \$file("$KV3/seed")}}
 }
 EOF
 } > "$TMP/strat.pp"
@@ -178,7 +178,7 @@ KV4="$TMP/kv4"
 { kv_domain_source "$KV4"
   cat <<EOF
 def register-broken-kv-domain() {
-  register-domain({:name -> "kv", :namespace -> vec[string-append("file:", "$KV4"), string-append("tree:", "$KV4")], :observe -> (
+  register-domain!({:name -> "kv", :namespace -> vec[string-append("file:", "$KV4"), string-append("tree:", "$KV4")], :observe -> (
 
 
 fn() { perform tree-observe("$KV4") }), :diff -> kv-diff, :apply -> (

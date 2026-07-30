@@ -86,8 +86,8 @@ else
 fi
 
 out=$(repl_input \
-  'with-config({:mode -> "scoped"}) { print(config(:mode, "default")) }' \
-  'print(config(:mode, "default"))')
+  'with-config({:mode -> "scoped"}) { print($config(:mode, "default")) }' \
+  'print($config(:mode, "default"))')
 if printf '%s\n' "$out" | grep -q '^"scoped"$' \
    && printf '%s\n' "$out" | grep -q '^"default"$'; then
   ok "config-does-not-survive-repl-input"
@@ -96,8 +96,8 @@ else
 fi
 
 out=$(repl_input \
-  'with-handler(log = fn(x) { print("handled", x) }) { perform log("first") }' \
-  'perform log("second")' 2>"$TMP/handler-err")
+  'with-handler(log! = fn(x) { print("handled", x) }) { log!("first") }' \
+  'log!("second")' 2>"$TMP/handler-err")
 if printf '%s\n' "$out" | grep -q '^"handled""first"$' \
    && ! grep -q 'handled.*second' "$TMP/handler-err" \
    && grep -q '^\[info\] second$' "$TMP/handler-err"; then
@@ -117,7 +117,7 @@ fi
 
 out=$(repl_input \
   'with-config({:mode -> "scoped"}) { error("boom") }' \
-  'print(config(:mode, "default"))')
+  'print($config(:mode, "default"))')
 if printf '%s\n' "$out" | grep -q '^Error: boom' \
    && printf '%s\n' "$out" | grep -q '^"default"$'; then
   ok "config-unwinds-after-error"
@@ -126,8 +126,8 @@ else
 fi
 
 out=$(repl_input \
-  'with-handler(log = fn(x) { print("handled", x) }) { error("boom") }' \
-  'perform log("after")' 2>"$TMP/handler-error-err")
+  'with-handler(log! = fn(x) { print("handled", x) }) { error("boom") }' \
+  'log!("after")' 2>"$TMP/handler-error-err")
 if printf '%s\n' "$out" | grep -q '^Error: boom' \
    && ! grep -q 'handled.*after' "$TMP/handler-error-err" \
    && grep -q '^\[info\] after$' "$TMP/handler-error-err"; then

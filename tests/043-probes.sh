@@ -3,8 +3,8 @@
 # must be declared (SPEC law 37), and a probe's volatility stays contained
 # and in-memory only (SPEC law 38).
 #
-# A probe is registered once (`register-probe name observe-fn read-cap`,
-# script-tier) and read inside a node via `(probe name)`. The observe-fn runs
+# A probe is registered once (`register-probe! name observe-fn read-cap`,
+# script-tier) and read inside a node via `$probe(name)`. The observe-fn runs
 # OUTSIDE the reading node's trace stack, under exactly the registered
 # read-cap; the reading node records only a `probe:<name>` cell (hash of the
 # observed value), via ordinary record_read — so the node caches and
@@ -13,7 +13,7 @@
 #
 # Two SEPARATE `pp` invocations exercise "the same probe cell changing across
 # passes" for most of this suite: each run re-executes the whole program, so
-# `register-probe` re-registers, `(probe "counter")` re-evaluates the
+# `register-probe!` re-registers, `$probe("counter")` re-evaluates the
 # observe-fn fresh, and the node's stored trace is re-verified against
 # whatever the counter says NOW. Section (6) below additionally proves the
 # SAME mechanism live under one long-running `pp --watch` process: probe
@@ -49,12 +49,12 @@ assert() {  # NAME PATTERN present|absent  [FILE]
 # (1) basic register+read, cache/re-force across two runs
 # =====================================================================
 cat > "$TMP/prog.pp" <<EOF
-register-probe("counter",
-fn() { string-trim(slurp("$COUNTER")) }, cap-restrict(current-capabilities(), "$COUNTER", :ro))
+register-probe!("counter",
+fn() { string-trim(\$file("$COUNTER")) }, cap-restrict(current-capabilities(), "$COUNTER", :ro))
 
-perform log(force(node {
-  perform log("COMPUTE")
-  probe("counter")
+log!(force(node {
+  log!("COMPUTE")
+  \$probe("counter")
 }))
 EOF
 
@@ -90,7 +90,7 @@ assert "run4-value-1"            "\\[info\\] 1$" present
 #     value; the reading node here returns a fixed string, never the
 #     payload itself, so objects/ has no legitimate way to contain it
 #     either. (blobs/ is deliberately EXCLUDED from this check: the
-#     observe-fn reads the payload file via ordinary `slurp`, which
+#     observe-fn reads the payload via `$file`, which
 #     content-addresses it into blobs/ exactly as any fs read would — every
 #     file read is content-addressed on the way in, so this is orthogonal
 #     to and unaffected by the probe mechanism; only `secret:`-covered
@@ -100,11 +100,11 @@ PAYLOAD="PROBE-PAYLOAD-9f3d2a1c"
 rm -rf "$TMP/.pp"
 printf '%s\n' "$PAYLOAD" > "$TMP/payload.txt"
 cat > "$TMP/prog-payload.pp" <<EOF
-register-probe("secretish",
-fn() { string-trim(slurp("$TMP/payload.txt")) }, cap-restrict(current-capabilities(), "$TMP/payload.txt", :ro))
+register-probe!("secretish",
+fn() { string-trim(\$file("$TMP/payload.txt")) }, cap-restrict(current-capabilities(), "$TMP/payload.txt", :ro))
 
-perform log(force(node {
-  probe("secretish")
+log!(force(node {
+  \$probe("secretish")
   "checked"
 }))
 EOF
@@ -117,15 +117,15 @@ else
 fi
 
 # =====================================================================
-# (3) unread probe never fires — a registered-but-never-`(probe ...)`-read
+# (3) unread probe never fires — a registered-but-never-`$probe(...)`-read
 #     probe's observe-fn (a side-effecting `log` marker, capability-free)
 #     must never run.
 # =====================================================================
 rm -rf "$TMP/.pp"
 cat > "$TMP/prog-unread.pp" <<EOF
-register-probe("counter", fn() { string->number(string-trim(slurp("$COUNTER"))) }, cap-restrict(current-capabilities(), "$COUNTER", :ro))
-register-probe("unused", fn() { perform log("PROBE-FIRED"); 0 }, cap-none())
-perform log(force(node { probe("counter") }))
+register-probe!("counter", fn() { string->number(string-trim(\$file("$COUNTER"))) }, cap-restrict(current-capabilities(), "$COUNTER", :ro))
+register-probe!("unused", fn() { log!("PROBE-FIRED"); 0 }, cap-none())
+log!(force(node { \$probe("counter") }))
 EOF
 printf '1\n' > "$COUNTER"
 "$PP" --grant "fs:$TMP:ro" "$TMP/prog-unread.pp" > "$TMP/out" 2>&1
@@ -139,16 +139,16 @@ fi
 # (4) unregistered probe errors, naming it
 # =====================================================================
 cat > "$TMP/prog-unreg.pp" <<'EOF'
-print(probe("no-such-probe"))
+print($probe("no-such-probe"))
 EOF
 rm -rf "$TMP/.pp"
 "$PP" "$TMP/prog-unreg.pp" > "$TMP/out" 2>&1
-assert "unregistered-probe-errors" "no such probe registered: no-such-probe" present
+assert "unregistered-probe-errors" '\$probe: unregistered probe: no-such-probe' present
 # =====================================================================
-# (5) register-probe is script-tier only (trace_stack guard)
+# (5) register-probe! is script-tier only (trace_stack guard)
 # =====================================================================
 cat > "$TMP/prog-in-node.pp" <<EOF
-force(node { register-probe("x", fn() { 1 }, cap-none()) })
+force(node { register-probe!("x", fn() { 1 }, cap-none()) })
 EOF
 rm -rf "$TMP/.pp"
 "$PP" "$TMP/prog-in-node.pp" > "$TMP/out" 2>&1

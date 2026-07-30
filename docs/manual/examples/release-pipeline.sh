@@ -14,7 +14,7 @@ cat > "$HOME/release.pp" <<EOF
 def compile(path, name) {
   node {
     print(string-append("compile ", name))
-    blob(string-append(slurp(path), "compiled\\n"))
+    blob(string-append(\$file(path), "compiled\\n"))
   }
 }
 

@@ -346,12 +346,13 @@ and parse_special_form ps car_sym =
   | "perform" -> parse_perform ps
   | "with-handler" -> parse_with_handler ps
   | "module" -> parse_module ps
+  | "export" -> parse_export ps
   | "import" -> parse_import ps
   | "load" -> parse_load ps
   | "load-module" -> parse_load_module ps
   | "island" -> parse_island ps
   | "with-config" -> parse_with_config ps
-  | "config" -> parse_config ps
+  | "observe" -> parse_observe ps
   | "match" -> parse_match ps
   | "assert" -> parse_assert ps
   | _ ->
@@ -696,6 +697,23 @@ and parse_module ps =
   let body = parse_rest ps in
   EModule (check_block_defs ps body)
 
+(* (export name other) — declare the names a module exposes. *)
+and parse_export ps =
+  let rec names acc =
+    match peek ps with
+    | TokRParen ->
+        advance ps;
+        if acc = [] then parse_error ps "export requires at least one name";
+        EExport (List.rev acc)
+    | TokSymbol name ->
+        advance ps;
+        names (name :: acc)
+    | t ->
+        parse_error ps
+          ("export names must be symbols, got " ^ string_of_token t)
+  in
+  names []
+
 (* (import mod-expr) — force a module thunk and merge its bindings *)
 and parse_import ps =
   let mod_expr = parse_expr ps in
@@ -745,14 +763,23 @@ and parse_with_config ps =
   let body = block_body ps (parse_rest ps) in
   EWithConfig (map_expr, body)
 
-(* (config key [default]) — read ambient config key *)
-and parse_config ps =
-  let key_expr = parse_expr ps in
-  let default_opt = match peek ps with
-    | TokRParen -> None
-    | _ -> Some (parse_expr ps) in
-  advance ps;  (* consume ) *)
-  EConfig (key_expr, default_opt)
+(* (observe KIND args...) — canonical observation AST surface. *)
+and parse_observe ps =
+  let head =
+    match next ps with
+    | TokSymbol name -> name
+    | _ -> parse_error ps "observe expects an observation kind"
+  in
+  let arguments = parse_rest ps in
+  match Surface_tables.find_head head with
+  | None ->
+      parse_error ps
+        ("unknown observation kind " ^ head ^ "; "
+         ^ Surface_tables.known_heads_message ())
+  | Some observation ->
+      (match Surface_tables.check_arity observation (List.length arguments) with
+       | Ok () -> EObserve (observation.kind, arguments)
+       | Error message -> parse_error ps message)
 
 (* (match scrutinee (pat [if guard] body) ...) — the sexpr surface for
    match, the exact grammar Printer_sexpr emits so match-using files round-trip
@@ -782,6 +809,49 @@ and parse_match ps =
 
 (* Printer_sexpr.print_pattern's inverse (dotted rest is a bare `.` symbol —
    this reader lexes `.` as an ordinary symbol, never TokDot). *)
+and pattern_key_value_of_expr ps (e : expr) : value =
+  match e with
+  | ELocated (_, inner) -> pattern_key_value_of_expr ps inner
+  | ELiteral (VNil | VBool _ | VInt _ | VFloat _ | VString _ | VKeyword _) as e ->
+      (match e with ELiteral value -> value | _ -> assert false)
+  | ESymbol name -> VSymbol name
+  | EApply (ESymbol "vector", values) ->
+      VVector (Array.of_list (List.map (pattern_key_value_of_expr ps) values))
+  | EApply (ESymbol "list", values) ->
+      List.fold_right
+        (fun value tail -> VPair (pattern_key_value_of_expr ps value, tail))
+        values VNil
+  | _ -> parse_error ps "map pattern keys must be closed literals"
+
+and parse_sexpr_map_pattern ps : pattern =
+  let rec finish entries rest_kind =
+    match peek ps with
+    | TokRParen -> advance ps; PMap (List.rev entries, rest_kind)
+    | _ -> parse_error ps "map pattern rest must be last"
+  and entries acc =
+    match peek ps with
+    | TokSymbol "exact" -> advance ps; finish acc Exact
+    | TokSymbol "ignore" -> advance ps; finish acc Ignore
+    | TokLParen ->
+        advance ps;
+        (match peek ps with
+         | TokSymbol "bind" ->
+             advance ps;
+             let name = expect_symbol ps in
+             (match peek ps with
+              | TokRParen -> advance ps; finish acc (Bind name)
+              | _ -> parse_error ps "map pattern bind must be (bind name)")
+         | _ ->
+             let key = pattern_key_value_of_expr ps (parse_expr ps) in
+             let pat = parse_sexpr_pattern ps in
+             (match peek ps with
+              | TokRParen -> advance ps; entries ((key, pat) :: acc)
+              | _ -> parse_error ps "map pattern entry must be (key pattern)"))
+    | TokRParen -> parse_error ps "map pattern requires an explicit rest mode"
+    | _ -> parse_error ps "map pattern entries must be (key pattern)"
+  in
+  entries []
+
 and parse_sexpr_pattern ps : pattern =
   match peek ps with
   | TokSymbol "_" -> advance ps; PWildcard
@@ -820,6 +890,9 @@ and parse_sexpr_pattern ps : pattern =
              | _ -> let p = parse_sexpr_pattern ps in elems (p :: acc)
            in
            PTagged (tag, elems [])
+       | TokSymbol "map" ->
+           advance ps;
+           parse_sexpr_map_pattern ps
        | _ -> parse_error ps "pattern list must be (list ...) or (tagged ...)")
   | t -> parse_error ps ("unexpected token in pattern: " ^ string_of_token t)
 

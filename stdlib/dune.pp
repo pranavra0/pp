@@ -5,8 +5,8 @@ def dune-file(path, name, mode) {
 }
 
 def dune-working-tree(spec) {
-  $glob(spec[:root])
-  let result = perform run(
+  $tree(spec[:root])
+  let result = run!(
     "dune", "build", "--root", spec[:root], spec[:target]
   )
   if result["exit"] = 0 {
@@ -38,7 +38,7 @@ def dune-closed-request(spec) {
 }
 
 def dune-closed-source(spec) {
-  perform run-closed!(dune-closed-request(spec))
+  run-closed!(dune-closed-request(spec))
 }
 
 def dune-build(adapter, spec) {

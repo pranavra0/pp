@@ -30,14 +30,14 @@ rm -rf "$TMP/.pp"
 cat > "$TMP/a1.pp" <<'EOF'
 let unrelated = 1
 force(node {
-  perform log("COMPUTE")
+  log!("COMPUTE")
   42
 })
 EOF
 cat > "$TMP/a2.pp" <<'EOF'
 let unrelated = 99999
 force(node {
-  perform log("COMPUTE")
+  log!("COMPUTE")
   42
 })
 EOF
@@ -49,7 +49,7 @@ rm -rf "$TMP/.pp"
 cat > "$TMP/c1.pp" <<'EOF'
 let (x = 1) {
   force(node {
-    perform log("COMPUTE")
+    log!("COMPUTE")
     x
   })
 }
@@ -57,7 +57,7 @@ EOF
 cat > "$TMP/c2.pp" <<'EOF'
 let (x = 2) {
   force(node {
-    perform log("COMPUTE")
+    log!("COMPUTE")
     x
   })
 }
@@ -72,7 +72,7 @@ cat > "$TMP/f.pp" <<'EOF'
 let unused = 1
 let (x = 1) {
   let (f = fn() { x }) {
-    force(node { perform log("COMPUTE"); f() })
+    force(node { log!("COMPUTE"); f() })
   }
 }
 EOF
@@ -80,7 +80,7 @@ cat > "$TMP/f1-noise.pp" <<'EOF'
 let unused = 99999
 let (x = 1) {
   let (f = fn() { x }) {
-    force(node { perform log("COMPUTE"); f() })
+    force(node { log!("COMPUTE"); f() })
   }
 }
 EOF
@@ -88,7 +88,7 @@ cat > "$TMP/f2.pp" <<'EOF'
 let unused = 1
 let (x = 2) {
   let (f = fn() { x }) {
-    force(node { perform log("COMPUTE"); f() })
+    force(node { log!("COMPUTE"); f() })
   }
 }
 EOF
@@ -105,8 +105,8 @@ rm -rf "$TMP/.pp"
 printf 'DATA\n' > "$TMP/f.txt"
 cat > "$TMP/cap.pp" <<EOF
 force(node {
-  perform log("COMPUTE")
-  slurp("$TMP/f.txt")
+  log!("COMPUTE")
+  \$file("$TMP/f.txt")
 })
 EOF
 "$PP" --grant "fs:$TMP:ro"  "$TMP/cap.pp" > "$TMP/o" 2>&1; assert "cap-narrow-miss" "$TMP/o" present

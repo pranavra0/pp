@@ -165,14 +165,10 @@ let with_domain (name : string) (cap : Capability.t) (f : unit -> 'a) : 'a =
    closure env and an unchanged ambient (the SAME dm_cap both times,
    with_domain), that key is IDENTICAL across the two calls a single pass
    makes, so the SECOND call silently replayed the FIRST call's memoized
-   `perform` results (a `perform domain-state-get`/`tree-observe` never
-   re-ran) instead of re-observing reality — exactly the staleness "fresh
-   every pass, never cached" was written to rule out, just via a mechanism
-   one layer further down than the plan cache. Fix: push a fresh, unique
-   config-stack layer before each call — invisible to any real `(config
-   ...)` read (a key no program would query) but folded into
-   make_thunk_ca's cfg_hash, so every call gets a distinct key and can
-   never hit an in-memory thunk from a sibling call. *)
+   observations instead of re-observing reality. Push a fresh, unique
+   config-stack layer before each call. It is invisible to real config reads
+   but changes make_thunk_ca's config hash, preventing sibling calls from
+   sharing an in-memory thunk. *)
 let fresh_nonce_config () : value =
   let n = Session.next_cache_bust (Effect.perform Dynamic_scope.Get_session) in
   Value.map [(VString "__pp_q13_cache_bust", VInt n)]
@@ -281,7 +277,7 @@ let run_pass (pass : pass) : unit =
   record_epoch pass.invocation pass.forced_desired
 
 (* Whether at least one registered domain can actually be converged — used
-   by command_reconcile.ml to decide whether a bare register-domain-only program (no
+   by command_reconcile.ml to decide whether a bare register-domain!-only program (no
    --reconcile/--supervise flag) should still run the generic pass. *)
 let any_write_domain_registered () : bool =
   Session.fold_domains (Effect.perform Dynamic_scope.Get_session) (fun _ entry acc ->

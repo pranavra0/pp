@@ -49,10 +49,13 @@ let free_vars_with_capabilities ~(include_capabilities : bool) (e : expr) : SS.t
     | EDo exprs | EModule exprs ->
         let bound' = add_all (block_binders exprs) bound in
         List.fold_left (fun a e -> SS.union a (fv bound' e)) SS.empty exprs
+    | EExport _ -> SS.empty
     | EImport mod_expr -> fv bound mod_expr
     | EWithConfig (m, body) -> SS.union (fv bound m) (fv bound body)
-    | EConfig (k, d) ->
-        SS.union (fv bound k) (match d with Some e -> fv bound e | None -> SS.empty)
+    | EObserve (_, arguments) ->
+        List.fold_left
+          (fun free argument -> SS.union free (fv bound argument))
+          SS.empty arguments
     | ETyped (e, _) -> fv bound e
     | ELocated (_, e) -> fv bound e
     | EMatch (scrutinee, arms) ->
@@ -63,6 +66,10 @@ let free_vars_with_capabilities ~(include_capabilities : bool) (e : expr) : SS.t
               (match rest with Some r -> SS.union pv (pat_vars r) | None -> pv)
           | PTagged (_, pats) ->
               List.fold_left (fun a p -> SS.union a (pat_vars p)) SS.empty pats
+          | PMap (entries, rest) ->
+              let pv = List.fold_left
+                (fun a (_, p) -> SS.union a (pat_vars p)) SS.empty entries in
+              (match rest with Bind s -> SS.add s pv | Exact | Ignore -> pv)
           | PLiteral _ | PWildcard -> SS.empty
         in
         let arm_bound = List.fold_left (fun a (p, _, _) ->

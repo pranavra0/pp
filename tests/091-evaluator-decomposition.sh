@@ -7,6 +7,7 @@ set -uo pipefail
 cat > "$TMP/evaluator.pp" <<'EOF'
 def add-one(x) { x + 1 }
 let (m = module {
+  export twice
   def twice(x) { x * 2 }
 }) {
   import(m)

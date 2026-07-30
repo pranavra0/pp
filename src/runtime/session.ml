@@ -10,6 +10,7 @@ type domain_entry = {
 type evaluation_state = {
   thunks : (string, Core_model.thunk) Hashtbl.t;
   macros : (string, string list * Core_model.expr) Hashtbl.t;
+  module_macro_exports : (string, string list) Hashtbl.t;
   mutable gensym : int;
   node_thunks : (Identity_types.Node_key.t, Core_model.thunk) Hashtbl.t;
   node_keys : (string, Identity_types.Node_key.t) Hashtbl.t;
@@ -63,8 +64,12 @@ let create ?executor ?remote_dispatch ?(schedule_locked = false) ~scheduler oper
   remote_dispatch;
   schedule_locked;
   evaluation = {
-    thunks = Hashtbl.create 1024; macros = Hashtbl.create 16; gensym = 0;
-    node_thunks = Hashtbl.create 256; node_keys = Hashtbl.create 256;
+    thunks = Hashtbl.create 1024;
+    macros = Hashtbl.create 16;
+    module_macro_exports = Hashtbl.create 16;
+    gensym = 0;
+    node_thunks = Hashtbl.create 256;
+    node_keys = Hashtbl.create 256;
     node_dependents = Hashtbl.create 256;
     eval_depth = 0; force_depth = 0;
     force_path = [];
@@ -120,8 +125,9 @@ let begin_evaluation ~retain_thunks t =
     Hashtbl.clear t.evaluation.node_keys;
     Hashtbl.clear t.evaluation.node_dependents
   end;
-  Hashtbl.clear t.evaluation.macros; t.evaluation.gensym <- 0;
-  Hashtbl.clear t.domains.domains;
+  Hashtbl.clear t.evaluation.macros;
+  Hashtbl.clear t.evaluation.module_macro_exports;
+  t.evaluation.gensym <- 0;
   t.evaluation.eval_depth <- 0; t.evaluation.force_depth <- 0;
   t.evaluation.force_path <- [];
   t.evaluation.cache_bust <- 0;
@@ -138,6 +144,23 @@ let find_thunk t = Hashtbl.find_opt t.evaluation.thunks
 let add_thunk t = Hashtbl.replace t.evaluation.thunks
 let find_macro t = Hashtbl.find_opt t.evaluation.macros
 let set_macro t = Hashtbl.replace t.evaluation.macros
+
+let snapshot_macros t =
+  Hashtbl.fold (fun name binding acc -> (name, binding) :: acc)
+    t.evaluation.macros []
+
+let restore_macros t snapshot =
+  Hashtbl.clear t.evaluation.macros;
+  List.iter (fun (name, binding) -> Hashtbl.replace t.evaluation.macros name binding)
+    snapshot
+
+let clear_macros t = Hashtbl.clear t.evaluation.macros
+
+let set_module_macro_exports t key names =
+  Hashtbl.replace t.evaluation.module_macro_exports key names
+
+let find_module_macro_exports t key =
+  Hashtbl.find_opt t.evaluation.module_macro_exports key
 let next_gensym t =
   t.evaluation.gensym <- t.evaluation.gensym + 1;
   t.evaluation.gensym

@@ -175,7 +175,7 @@ and node_key_of (t : thunk) : Identity_types.Node_key.t =
 
    VBuiltin is a documented, necessary carve-out to the literal codec
    check: `Primitives.initial_env` binds EVERY primitive into the base
-   env (repl.ml), so an ordinary reference to `slurp`/`string-append`/etc.
+   env (repl.ml), so an ordinary reference to a primitive such as `string-append`
    — present in nearly every real node body — resolves via [Environment.lookup]
    exactly like a captured user value would, and forcing it yields a
    VBuiltin, which [Codec.encode_value] correctly refuses (it is code, the
@@ -324,6 +324,8 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
   | EModule body_exprs ->
       k (Evaluator_forms.module_expr { eval; eval_tail; force } body_exprs)
 
+  | EExport _ ->
+      failwith "export is only valid directly in a module body"
   | EImport mod_expr ->
       let mod_val = force (eval mod_expr env) in
       k mod_val
@@ -335,9 +337,11 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
       k (Evaluator_forms.module_file { eval; eval_tail; force } path)
 
   | ELocated (loc, ETyped (e, ty)) ->
-      (* A located annotation becomes a typed thunk carrying the location. *)
-      k (make_thunk_ca_typed e ty (Some loc) env)
-  | ELocated (_, e) -> eval_tail e env k
+      Dynamic_scope.with_source (Source_range.source loc) (fun () ->
+        k (make_thunk_ca_typed e ty (Some loc) env))
+  | ELocated (loc, e) ->
+      Dynamic_scope.with_source (Source_range.source loc) (fun () ->
+        eval_tail e env k)
   | ETyped (e, ty) ->
       (* Type annotations defer evaluation into a thunk whose result is
          checked at force time. *)
@@ -353,13 +357,9 @@ and eval_tail (e : expr) (env : env) (k : value -> value) : value =
   | EWithConfig (map_expr, body) ->
       Evaluator_scope.with_config { eval; eval_tail; force; apply }
         map_expr body env k
-  | EConfig (key_expr, default_opt) ->
-      let key_val = force (eval key_expr env) in
-      let key_name = match key_val with
-        | VString s | VKeyword s | VSymbol s -> s
-        | _ -> failwith "config key must be a string, keyword, or symbol" in
-      Evaluator_scope.read_config { eval; eval_tail; force; apply }
-        key_name default_opt env k
+  | EObserve (kind, arguments) ->
+      Evaluator_observation.eval { eval; eval_tail; force; apply }
+        kind arguments env k
 
   | EMatch (scrutinee, arms) ->
       let v = force (eval scrutinee env) in
@@ -485,14 +485,19 @@ and eval_machine (e : expr) (env : env) (k : continuation) : value =
       eval_machine body scope k
   | EModule body ->
       continue k (Evaluator_forms.module_expr { eval; eval_tail; force } body)
+  | EExport _ ->
+      failwith "export is only valid directly in a module body"
   | EImport expression -> eval_machine expression env (Force k)
   | ELoad path ->
       continue k (Evaluator_forms.load { eval; eval_tail; force } path env)
   | ELoadModule path ->
       continue k (Evaluator_forms.module_file { eval; eval_tail; force } path)
   | ELocated (location, ETyped (expression, ty)) ->
-      continue k (make_thunk_ca_typed expression ty (Some location) env)
-  | ELocated (_, expression) -> eval_machine expression env k
+      Dynamic_scope.with_source (Source_range.source location) (fun () ->
+        continue k (make_thunk_ca_typed expression ty (Some location) env))
+  | ELocated (location, expression) ->
+      Dynamic_scope.with_source (Source_range.source location) (fun () ->
+        eval_machine expression env k)
   | ETyped (expression, ty) ->
       continue k (make_thunk_ca_typed expression ty None env)
   | EIsland (uri, pin) ->
@@ -504,13 +509,15 @@ and eval_machine (e : expr) (env : env) (k : continuation) : value =
         { eval; eval_tail = (fun e env next -> eval_machine e env Stop |> next);
           force; apply }
         config body env (continue k)
-  | EConfig (key, default) ->
-      let key = force (eval_machine key env Stop) in
-      let name = match key with
-        | VString value | VKeyword value | VSymbol value -> value
-        | _ -> failwith "config key must be a string, keyword, or symbol" in
-      Evaluator_scope.read_config { eval; eval_tail; force; apply }
-        name default env (continue k)
+  | EObserve (kind, arguments) ->
+      Evaluator_observation.eval
+        { eval = (fun expression scope -> eval_machine expression scope Stop);
+          eval_tail =
+            (fun expression scope next ->
+              eval_machine expression scope Stop |> next);
+          force;
+          apply }
+        kind arguments env (continue k)
   | EMatch (scrutinee, arms) ->
       let value = force (eval_machine scrutinee env Stop) in
       Evaluator_match.eval ~force ~eval

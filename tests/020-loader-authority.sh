@@ -37,7 +37,7 @@ run() { (cd "$RUNDIR" && "$PP" "$@" > "$TMP/out" 2>&1); }
 printf 'let libval = "LIBVAL"\n' > "$APP/lib.pp"
 cat > "$APP/main.pp" <<EOF
 load("$APP/lib.pp")
-perform log(libval)
+log!(libval)
 EOF
 run "$APP/main.pp"
 assert "beside-program-loads" "LIBVAL" present
@@ -46,7 +46,7 @@ assert "beside-program-loads" "LIBVAL" present
 printf 'let evil = "EVIL"\n' > "$ELSEWHERE/evil.pp"
 cat > "$APP/esc.pp" <<EOF
 load("$ELSEWHERE/evil.pp")
-perform log(evil)
+log!(evil)
 EOF
 run "$APP/esc.pp"
 assert "outside-refused"        "source root" present
@@ -58,8 +58,8 @@ assert "outside-refused-despite-grant" "source root" present
 #         validity yes, authority requirement no ---
 printf 'let libval = "V1"\n' > "$APP/lib.pp"
 cat > "$APP/node.pp" <<EOF
-perform log(force(node {
-  perform log("COMPUTE")
+log!(force(node {
+  log!("COMPUTE")
   do {
     load("$APP/lib.pp")
     libval
@@ -83,7 +83,7 @@ mkdir -p "$RUNDIR/stdlib"
 printf 'let stdval = "STDLIB-OK"\n' > "$RUNDIR/stdlib/x.pp"
 cat > "$APP/std.pp" <<'EOF'
 load("stdlib/x.pp")
-perform log(stdval)
+log!(stdval)
 EOF
 run "$APP/std.pp"
 assert "cwd-relative-load" "STDLIB-OK" present

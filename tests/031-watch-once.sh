@@ -37,11 +37,11 @@ assert() {  # NAME PATTERN present|absent  (matches named file or $TMP/out)
 # Build a simple two-node program: compile reads a.c, link depends on compile.
 cat > "$TMP/build.pp" <<EOF
 let (obj = force(node {
-  perform log("COMPILE")
-  do { slurp("$TMP/a.c") }
+  log!("COMPILE")
+  do { \$file("$TMP/a.c") }
 })) {
-  perform log(force(node {
-    perform log("LINK")
+  log!(force(node {
+    log!("LINK")
     string-append("linked:", obj)
   }))
 }
@@ -117,11 +117,11 @@ wait $WATCH_PID 2>/dev/null || true
 rm -rf "$TMP/.pp"
 cat > "$TMP/lifecycle.pp" <<EOF
 defmacro stale(x) { 1 }
-print(string-trim(slurp("$TMP/lifecycle-phase")))
+print(string-trim(\$file("$TMP/lifecycle-phase")))
 print(stale(7))
 print(gensym("g"))
-with-config({:mode -> "scoped"}) { print(config(:mode, "default")) }
-with-handler(log = fn(x) { print("handled", x) }) { perform log("first") }
+with-config({:mode -> "scoped"}) { print(\$config(:mode, "default")) }
+with-handler(log! = fn(x) { print("handled", x) }) { log!("first") }
 EOF
 printf 'one\n' > "$TMP/lifecycle-phase"
 timeout 12 "$PP" --watch --watch-interval 0.1 --grant "fs:$TMP:ro" \
@@ -135,11 +135,11 @@ new_watch_pass "evaluation-one-handler" '^"handled""first"$' 1 "$TMP/lifecycle-o
 
 cat > "$TMP/lifecycle.pp" <<EOF
 def stale(x) { 9 }
-print(string-trim(slurp("$TMP/lifecycle-phase")))
+print(string-trim(\$file("$TMP/lifecycle-phase")))
 print(stale(7))
 print(gensym("g"))
-print(config(:mode, "default"))
-perform log("second")
+print(\$config(:mode, "default"))
+log!("second")
 EOF
 printf 'two\n' > "$TMP/lifecycle-phase"
 new_watch_pass "evaluation-two" '^"two"$' 1 "$TMP/lifecycle-out"
@@ -157,11 +157,11 @@ rm -rf "$TMP/.pp"
 printf 'one\n' > "$TMP/observation-phase"
 printf 'old-one\n' > "$TMP/obsolete"
 cat > "$TMP/observations-one.pp" <<EOF
-print(string-trim(slurp("$TMP/observation-phase")))
-print(string-trim(slurp("$TMP/obsolete")))
+print(string-trim(\$file("$TMP/observation-phase")))
+print(string-trim(\$file("$TMP/obsolete")))
 EOF
 cat > "$TMP/observations-two.pp" <<EOF
-print(string-trim(slurp("$TMP/observation-phase")))
+print(string-trim(\$file("$TMP/observation-phase")))
 EOF
 timeout 12 "$PP" --watch --watch-interval 0.1 --grant "fs:$TMP:ro" \
   "$TMP/observations-one.pp" > "$TMP/observations-out" 2> "$TMP/observations-err" &
@@ -180,13 +180,13 @@ wait $WATCH_PID 2>/dev/null || true
 # only the first source registered.
 rm -rf "$TMP/.pp"
 cat > "$TMP/registry-one.pp" <<EOF
-register-probe("stale", fn() { 1 }, cap-none())
-print(string-trim(slurp("$TMP/registry-phase")))
-print(probe("stale"))
+register-probe!("stale", fn() { 1 }, cap-none())
+print(string-trim(\$file("$TMP/registry-phase")))
+print(\$probe("stale"))
 EOF
 cat > "$TMP/registry-two.pp" <<EOF
-print(string-trim(slurp("$TMP/registry-phase")))
-print(probe("stale"))
+print(string-trim(\$file("$TMP/registry-phase")))
+print(\$probe("stale"))
 EOF
 printf 'one\n' > "$TMP/registry-phase"
 timeout 12 "$PP" --watch --watch-interval 0.1 --grant "fs:$TMP:ro" \
@@ -196,7 +196,7 @@ WATCH_PID=$!
 new_watch_pass "registry-evaluation-one" '^1$' 1 "$TMP/registry-out"
 cp "$TMP/registry-two.pp" "$TMP/registry-one.pp"
 printf 'two\n' > "$TMP/registry-phase"
-wait_for 8 grep -q 'no such probe registered: stale' "$TMP/registry-err" \
+wait_for 8 grep -q '\$probe: unregistered probe: stale' "$TMP/registry-err" \
   && ok "registry-evaluation-two-resets-probe-domain" \
   || bad "registry-evaluation-two-resets-probe-domain" "$(cat "$TMP/registry-err")"
 wait $WATCH_PID 2>/dev/null || true
@@ -207,12 +207,12 @@ mkdir -p "$TMP/world"
 printf '1\n' > "$TMP/world/counter"
 printf 'aa\n' > "$TMP/secret"
 cat > "$TMP/pass-state.pp" <<EOF
-register-probe("counter", fn() {
-  string-trim(slurp("$TMP/world/counter"))
+register-probe!("counter", fn() {
+  string-trim(\$file("$TMP/world/counter"))
 }, cap-restrict(current-capabilities(), "$TMP/world/counter", :ro))
-print(probe("counter"))
-print(probe("counter"))
-print(string-length(unseal(slurp("$TMP/secret"))))
+print(\$probe("counter"))
+print(\$probe("counter"))
+print(string-length(unseal(\$secret("$TMP/secret"))))
 EOF
 timeout 12 "$PP" --watch --watch-interval 0.1 --grant "fs:$TMP/world:ro" \
   --grant "secret:$TMP/secret" "$TMP/pass-state.pp" \
@@ -230,7 +230,7 @@ wait $WATCH_PID 2>/dev/null || true
 rm -rf "$TMP/.pp"
 # Program that returns a canonical desired tree.
 cat > "$TMP/reconcile.pp" <<EOF
-{:tree -> {"file.txt" -> {:kind -> :file, :mode -> 420, :blob -> blob(slurp("$TMP/a.c"))}}}
+{:tree -> {"file.txt" -> {:kind -> :file, :mode -> 420, :blob -> blob(\$file("$TMP/a.c"))}}}
 EOF
 echo "RECONCILE-CONTENT" > "$TMP/a.c"
 OUTROOT="$TMP/outroot"

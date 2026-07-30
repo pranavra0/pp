@@ -5,7 +5,7 @@ set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 
 cat > "$TMP/argv.pp" <<'EOF'
-print(argv())
+print($argv())
 EOF
 out=$(new_command --grant process "$TMP/argv.pp" -- alpha --beta)
 if [ "$out" = '("alpha" "--beta")' ]; then ok "program-argv-separated"

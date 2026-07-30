@@ -52,11 +52,11 @@ def length(lst) { if nil?(lst) { 0 } else { 1 + length(cdr(lst)) } }
 
 
 
-# each(f, lst) — apply f to each element for its effects, return nil
-def each(f, lst) {
+# each!(f, lst) — apply f to each element for its effects, return nil
+def each!(f, lst) {
   if nil?(lst) { nil } else {
     f(car(lst))
-    each(f, cdr(lst))
+    each!(f, cdr(lst))
   } }
 # append(a, b) — concatenate two lists (lazy in b)
 def append(a, b) { if nil?(a) { b } else { cons(car(a), append(cdr(a), b)) } }

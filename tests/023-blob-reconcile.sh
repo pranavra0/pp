@@ -50,7 +50,7 @@ assert "blob-null"    "create=0" present
 #         deleting the materialized tree does not rerun the node ---
 cat > "$TMP/b.pp" <<'EOF'
 let (obj = force(node {
-  perform log("COMPILE")
+  log!("COMPILE")
   blob("TOOL-OUT")
 })) { {:tree -> {"a.o" -> {:kind -> :file, :mode -> 420, :blob -> obj}}} }
 EOF

@@ -3,6 +3,17 @@ open Pp_frontend
 
 let check condition message = if not condition then failwith message
 
+let rec unlocated = function
+  | Core_model.ELocated (_, expression) -> unlocated expression
+  | expression -> expression
+
+let observation_kind = function
+  | [expression] ->
+      (match unlocated expression with
+       | Core_model.EObserve (kind, [_]) -> kind
+       | _ -> failwith "reader did not lower an observation to EObserve")
+  | _ -> failwith "observation source did not contain one form"
+
 let () =
   let sexpr = Reader.read_string "(if true 1 2)" in
   let braces = Reader_braces.read_string "if true { 1 } else { 2 }" in
@@ -14,6 +25,10 @@ let () =
   let brace_text = Printer_braces.print_program braces in
   check (List.length (Reader_braces.read_string brace_text) = 1)
     "brace printer did not re-read";
+  check
+    (observation_kind (Reader.read_string "(observe env \"A\")") = Core_model.Env
+     && observation_kind (Reader_braces.read_string "$env(\"A\")") = Core_model.Env)
+    "readers did not lower observations to the typed AST";
   let located = List.hd (Reader.read_string ~source:"range.ppl" "(print 1)") in
   let range = match located with
     | Core_model.ELocated (range, _) -> range

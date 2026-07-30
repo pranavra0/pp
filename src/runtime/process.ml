@@ -125,7 +125,7 @@ let write_file_effect ~(has_cap : string -> bool) (path : string)
          with Sys_error msg -> failwith ("write-file: " ^ msg))
       end
 
-(* ---- capability-free sandbox read, shared by slurp/read-file ----
+(* ---- capability-free sandbox read, shared by `$file` and `read-file` ----
    Returns Some contents when [path] resolves into the innermost node's
    scratch (relative path, sandbox exists); such reads are node-local and
    deliberately unrecorded. *)
@@ -140,21 +140,10 @@ let sandbox_read (path : string) : string option =
        with Sys_error _ | Unix.Unix_error _ | End_of_file -> None)
   | None -> None
 
-(* ---- Sealed cells: read dispatch shared by slurp/read-file ----
-
-   Sandbox scratch (above) takes precedence, unchanged. Outside a sandbox,
-   the GRANT decides the shape of the result, never the program text —
-   program text stays deployment-agnostic; only what a given deployment's
-   `--grant` set covers determines whether a path reads as a plain string or
-   a sealed one:
-     - covered by a CapFilesystem read grant (with or without ALSO a
-       CapSecret grant) → ordinary VString. Both-grants deliberately
-       resolves to plain fs behavior: the deployment that also handed out an
-       fs grant over the same path is saying "not secret HERE".
-     - covered by CapSecret and NOT by CapFilesystem → VSealed, read via
-       Cell_repository.read_sealed (bytes pinned in the session,
-       in-memory only — store_blob/the CAS is never called for this path).
-     `read-file` each keep their own message text via [cap_err]). *)
+(* Runtime dispatch for `(perform read-file path)`. Sandbox scratch takes
+   precedence. Outside a sandbox, filesystem authority returns a string;
+   otherwise secret authority returns a sealed value whose bytes remain
+   session-local. *)
 let read_dispatch ~(tag : string) ~(cap_err : string -> string) (path : string) : value =
   match sandbox_read path with
   | Some content -> VString content
@@ -177,7 +166,7 @@ let read_dispatch ~(tag : string) ~(cap_err : string -> string) (path : string) 
         else
           capability (cap_err path)
 
-(* ---- Network: `(perform http-get url)` / `(perform http-post url body)` ----
+(* ---- Network: `(http-get! url)` / `(http-post! url body)` ----
 
    Implemented by forking curl via [exec] above (zero new OCaml
    networking/TLS surface) but AUTHORIZED against CapNetwork host[:port] —

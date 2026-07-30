@@ -36,14 +36,14 @@ printf 'BODY\n' > "$TMP/a.c"
 
 cat > "$TMP/build.pp" <<EOF
 let (obj = force(node {
-  perform log("COMPILE")
+  log!("COMPILE")
   do {
-    slurp("$TMP/h.h")
-    slurp("$TMP/a.c")
+    \$file("$TMP/h.h")
+    \$file("$TMP/a.c")
   }
 })) {
-  perform log(force(node {
-    perform log("LINK")
+  log!(force(node {
+    log!("LINK")
     string-append("linked:", obj)
   }))
 }

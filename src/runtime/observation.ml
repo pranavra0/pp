@@ -1,5 +1,6 @@
 open Pp_kernel
 open Core_model
+open Source_error
 
 let canonical path = (World_path.canonical path :> string)
 let file path = Cell.File (canonical path)
@@ -7,6 +8,8 @@ let stat path = Cell.Stat (canonical path)
 let sealed path = Cell.Sealed (canonical path)
 let tool path = Cell.Tool (canonical path)
 let tree path = Cell.Tree (canonical path)
+
+let record cell hash = Dynamic_scope.record_read (Cell.serialize cell) hash
 let node id = Cell.Node id
 
 let hash_file path =
@@ -86,6 +89,157 @@ let probe_value name =
            Session.set_probe session name value;
            Some value)
 
+let read_file_cell path =
+  let cell = file path in
+  let serialized = Cell.serialize cell in
+  let serve content hash =
+    record cell hash;
+    content
+  in
+  let session = Effect.perform Dynamic_scope.Get_session in
+  match Session.find_run_pin session serialized with
+  | Some hash ->
+      (match Blob_repository.get Blob_repository.default hash with
+       | Some content -> serve content hash
+       | None ->
+           let content =
+             match Store_layout.read path with
+             | Some content -> content
+             | None ->
+                 raise
+                   (Error
+                      (Store
+                         (Read_failed
+                            { path; message = "file is missing or unreadable" })))
+           in
+           let hash = Blob_repository.put Blob_repository.default content in
+           Session.set_run_pin session serialized hash;
+           serve content hash)
+  | None ->
+      let content =
+        match Store_layout.read path with
+        | Some content -> content
+        | None ->
+            raise
+              (Error
+                 (Store
+                    (Read_failed
+                       { path; message = "file is missing or unreadable" })))
+      in
+      let hash = Blob_repository.put Blob_repository.default content in
+      Session.set_run_pin session serialized hash;
+      serve content hash
+
+let read_sealed_cell path =
+  let cell = sealed path in
+  let serialized = Cell.serialize cell in
+  let session = Effect.perform Dynamic_scope.Get_session in
+  match Session.find_sealed_pin session serialized with
+  | Some bytes ->
+      record cell (Hasher.hash_string bytes);
+      bytes
+  | None ->
+      let bytes =
+        match Store_layout.read path with
+        | Some content -> content
+        | None ->
+            raise
+              (Error
+                 (Store
+                    (Read_failed
+                       { path; message = "file is missing or unreadable" })))
+      in
+      Session.set_sealed_pin session serialized bytes;
+      record cell (Hasher.hash_string bytes);
+      bytes
+
+let require_fs_read head path =
+  let canonical_path = World_path.canonical path in
+  if
+    not
+      (List.exists
+         (fun capability -> Capability.check_fs_read capability canonical_path)
+         (Effect.perform Dynamic_scope.Get_capabilities))
+  then
+    capability
+      (Printf.sprintf "$%s: filesystem read not granted: %s" head path);
+  (canonical_path :> string)
+
+let read_file path =
+  match Sandbox.resolve ~create:false path with
+  | Some scratch ->
+      (match Store_layout.read scratch with
+       | Some content -> VString content
+       | None -> failwith ("$file: file is missing or unreadable: " ^ path))
+  | None ->
+      let canonical_path = World_path.canonical path in
+      let capabilities = Effect.perform Dynamic_scope.Get_capabilities in
+      if List.exists (fun cap -> Capability.check_fs_read cap canonical_path) capabilities then
+        VString (read_file_cell (canonical_path :> string))
+      else if List.exists (fun cap -> Capability.check_secret cap canonical_path) capabilities then
+        VSealed (read_sealed_cell (canonical_path :> string))
+      else
+        capability
+          (Printf.sprintf "$file: filesystem or secret read not granted: %s" path)
+
+let read_secret path =
+  let canonical_path = World_path.canonical path in
+  if
+    not
+      (List.exists
+         (fun capability -> Capability.check_secret capability canonical_path)
+         (Effect.perform Dynamic_scope.Get_capabilities))
+  then
+    capability (Printf.sprintf "$secret: secret read not granted: %s" path);
+  VSealed (read_sealed_cell (canonical_path :> string))
+
+let read_tree path =
+  let canonical_path = require_fs_read "tree" path in
+  let hash, files =
+    try tree_snapshot canonical_path
+    with Sys_error message | Unix.Unix_error (_, _, message) ->
+      failwith ("$tree: " ^ message)
+  in
+  record (Cell.Tree canonical_path) hash;
+  Value.map
+    (List.map
+       (fun (relative_path, content_hash) ->
+         VString relative_path, VString content_hash)
+       files)
+
+let read_stat path =
+  let canonical_path = require_fs_read "stat" path in
+  let kind = stat_kind canonical_path in
+  record (Cell.Stat canonical_path) (stat_hash kind);
+  match kind with
+  | "file" -> VKeyword "file"
+  | "dir" -> VKeyword "directory"
+  | "absent" -> VNil
+  | _ -> assert false
+
+let read_argv () =
+  let arguments =
+    Invocation.program_argv (Effect.perform Dynamic_scope.Get_invocation)
+  in
+  record Cell.Argv (argv_hash arguments);
+  List.fold_right (fun argument tail -> VPair (VString argument, tail)) arguments VNil
+
+let read_env name =
+  let value = Sys.getenv_opt name in
+  record (Cell.Env name) (env_hash value);
+  Option.map (fun contents -> VString contents) value
+
+let read_probe name =
+  match probe_value name with
+  | None -> None
+  | Some value ->
+      record (Cell.Probe name) (Identity.hash_value value);
+      Some value
+
+let read_config key =
+  record (Cell.Config key) (Dynamic_scope.observe_config key);
+  Dynamic_scope.config_lookup key
+
 let observe_domain name sub =
   let session = Effect.perform Dynamic_scope.Get_session in
   match Session.find_domain session name with
@@ -164,7 +318,6 @@ let observe cell = observe_seen KeySet.empty cell
 let observe_id (id : Identity_types.Cell_id.t) =
   Option.map Identity_types.Observed_hash.of_digest
     (observe (Cell.parse (Identity_types.Cell_id.to_string id)))
-let record cell hash = Dynamic_scope.record_read (Cell.serialize cell) hash
 let record_config key = record (Cell.Config key) (Dynamic_scope.observe_config key)
 let record_handler name = record (Cell.Handler name) (Dynamic_scope.observe_handler name)
 let replay reads =

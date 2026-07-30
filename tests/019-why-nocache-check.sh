@@ -32,9 +32,9 @@ run() { "$PP" "$@" > "$TMP/out" 2>&1; }
 
 printf 'V1\n' > "$WORK/data.txt"
 cat > "$TMP/p.pp" <<EOF
-perform log(force(node {
-  perform log("COMPUTE")
-  slurp("$WORK/data.txt")
+log!(force(node {
+  log!("COMPUTE")
+  \$file("$WORK/data.txt")
 }))
 EOF
 
@@ -53,9 +53,9 @@ assert "why-stale-names-cell" "data\.txt"        present
 # --- (b) why is capability-filtered: an unauthorized cell is redacted ---
 printf 'SECRETPATHCONTENT\n' > "$PRIV/secret-name.txt"
 cat > "$TMP/q.pp" <<EOF
-perform log(force(node {
-  perform log("COMPUTE")
-  slurp("$PRIV/secret-name.txt")
+log!(force(node {
+  log!("COMPUTE")
+  \$file("$PRIV/secret-name.txt")
 }))
 EOF
 rm -rf "$TMP/.pp"

@@ -29,9 +29,9 @@ print("quote let =>", quote { let (a = 1) { a } })
 
 print("")
 print("=== LAW 13/14: do orders effects; undemanded effects don't fire ===")
-let (silent = perform log("never")) {
-  perform log("a")
-  perform log("b")
+let (silent = log!("never")) {
+  log!("a")
+  log!("b")
   print("do value =>", 1)
 }
 print("")
@@ -45,7 +45,7 @@ print("")
 print("=== LAW 33: config dynamic scope ===")
 with-config({"k" -> 1}) {
   with-config({"k" -> 2}) {
-    print("computed config k =>", config(string-append("", "k")))
+    print("computed config k =>", $config(string-append("", "k")))
   } }
 print("")
 print("=== ALL TESTS PASSED ===")

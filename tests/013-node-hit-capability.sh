@@ -22,12 +22,12 @@ mkdir -p "$TMP/secret" "$TMP/other"
 printf 'SECRETDATA\n' > "$TMP/secret/data.txt"
 printf 'ok\n' > "$TMP/other/x.txt"
 
-# out contains SECRETDATA?  denied?  (permission-denied error)
+# out contains SECRETDATA? denied?
 assert() {  # NAME  secret=leaked|safe  access=ok|denied
   local name="$1" smode="$2" amode="$3"
   local leaked denied
   if grep -q "SECRETDATA" "$TMP/o"; then leaked=leaked; else leaked=safe; fi
-  if grep -q "permission denied" "$TMP/o"; then denied=denied; else denied=ok; fi
+  if grep -qE "permission denied|not granted" "$TMP/o"; then denied=denied; else denied=ok; fi
   if [ "$leaked" = "$smode" ] && [ "$denied" = "$amode" ]; then
     echo "ok   $name"
   else
@@ -38,7 +38,7 @@ assert() {  # NAME  secret=leaked|safe  access=ok|denied
 
 # --- direct: node reads the secret ---
 cat > "$TMP/direct.pp" <<EOF
-perform log(force(node { slurp("$TMP/secret/data.txt") }))
+log!(force(node { \$file("$TMP/secret/data.txt") }))
 EOF
 rm -rf "$TMP/.pp"
 "$PP" --grant "fs:$TMP:ro"        "$TMP/direct.pp" > "$TMP/o" 2>&1; assert "broad-run-caches"     leaked ok
@@ -47,9 +47,9 @@ rm -rf "$TMP/.pp"
 
 # --- transitive: outer node forces an inner node that reads the secret ---
 cat > "$TMP/nest.pp" <<EOF
-perform log(force(node {
-  perform log("OUTER")
-  force(node { slurp("$TMP/secret/data.txt") })
+log!(force(node {
+  log!("OUTER")
+  force(node { \$file("$TMP/secret/data.txt") })
 }))
 EOF
 rm -rf "$TMP/.pp"

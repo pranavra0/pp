@@ -11,7 +11,7 @@ The special forms — the syntax the reader treats specially, rather than
 ordinary function calls — are: `if`, `do`, `let`, `let*`, `fn`, `def`, `node`,
 `match`, `quote`, `quasiquote` with `unquote` and `splice`, `and`, `or`,
 `delay`, `force`, `perform`, `with-handler`, `with-caps`, `with-config`,
-`config`, `assert`, `module`, `import`, `load`, `load-module`, `island`,
+`observe`, `assert`, `module`, `import`, `load`, `load-module`, `island`,
 `reconcile`, `try`, and the `:` type annotation. `defmacro` is recognized
 structurally at the top level; `needs` modifies a named `node` definition.
 Everything else is a function. In the s-expression surface, named node forms
@@ -19,8 +19,8 @@ are represented as `defnode`, and `splice` is represented as
 `unquote-splicing`.
 
 The brace surface also supplies infix operators, pipelines (`|>`), f-strings,
-spread (`...`), observation sigils (`$file`, `$env`, `$glob`, `$probe`,
-`$secret`, `$config`), and the `with { caps: ..., config: ..., handlers: ... }
+spread (`...`), observation sigils (`$file`, `$env`, `$tree`, `$probe`,
+`$secret`, `$stat`, `$argv`, `$config`), and the `with { caps: ..., config: ..., handlers: ... }
 { ... }` clause form. Their exact lowerings are listed in the syntax appendix
 of `SPEC.md`.
 
@@ -151,8 +151,8 @@ on non-thunks.
 `perform` dispatches an effect to the nearest handler installed by
 `with-handler`. The clause form `with { handlers: { :name -> fn(...) { ... } } }
 { ... }` installs the same handler map. Handling an effect yourself needs no
-capability. Built-in world effects include `read-file`, `write-file`, `run`,
-`run-closed!`, `http-get`, `http-post`, `log`, `tree-observe`, the
+capability. Built-in world effects include `read-file`, `write!`, `run!`,
+`run-closed!`, `http-get!`, `http-post!`, `log!`, `tree-observe`, the
 process effects, and the domain-state effects; user handlers may define
 additional effect names. Ambient process and network effects are
 scripting-tier. `run-closed!` is cacheable only when its installed provider
@@ -429,13 +429,15 @@ the corresponding trace cell, making it visible to the cache-validity system.
   inset: (x: 6pt, y: 4pt),
   align: (left, left, left),
   stroke: (x: none, y: 0.5pt + luma(220)),
-  table.header([*Form*], [*Lowering*], [*Trace cell*]),
-  [`$file("path")`], [`slurp("path")`], [`file:`],
-  [`$env("VAR")`], [`env-get("VAR")`], [`env:`],
-  [`$env("VAR", "default")`], [`if nil?(env-get("VAR")) "default" env-get("VAR")`], [`env:`],
-  [`$glob("pattern")`], [`perform tree-observe("pattern")`], [`tree:`],
-  [`$probe("name")`], [`probe("name")`], [`probe:`],
-  [`$secret("path")`], [`slurp("path")`], [`sealed:`],
+  table.header([*Form*], [*AST*], [*Trace cell*]),
+  [`$file("path")`], [`(observe file "path")`], [`file:` or `sealed:`],
+  [`$env("VAR", "default")`], [`(observe env "VAR" "default")`], [`env:`],
+  [`$tree("root")`], [`(observe tree "root")`], [`tree:`],
+  [`$probe("name")`], [`(observe probe "name")`], [`probe:`],
+  [`$secret("path")`], [`(observe secret "path")`], [`sealed:`],
+  [`$stat("path")`], [`(observe stat "path")`], [`stat:`],
+  [`$argv()`], [`(observe argv)`], [`argv:`],
+  [`$config(:key, default)`], [`(observe config :key default)`], [`config:`],
 )
 
 #example("ref-sigils")

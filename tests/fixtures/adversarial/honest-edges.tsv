@@ -1,4 +1,5 @@
 # observation head	trust assumption
+argv	The command owns the invocation argument list.
 config	The command owns the session configuration.
 env	The host owns the process environment.
 probe	The probe owner supplies one volatile value per pass.

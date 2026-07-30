@@ -98,7 +98,7 @@ if grep -q -- '"--root" "/in"' "$TMP/closed.out" \
   ok "dune-closed-immutable-request"
 else bad "dune-closed-immutable-request" "$(cat "$TMP/closed.out")"; fi
 
-if ! rg -n -i 'dune' src/runtime --glob '*.ml' --glob '*.mli' \
+if ! grep -Rni --include='*.ml' --include='*.mli' 'dune' src/runtime \
     >"$TMP/core-dune"; then
   ok "dune-policy-outside-core"
 else bad "dune-policy-outside-core" "$(cat "$TMP/core-dune")"; fi

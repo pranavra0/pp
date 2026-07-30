@@ -88,7 +88,7 @@ React's render/effects split, Excel's formulas/macros split.
   and distributable. A node (`node` / `defnode`) is the unit of persistence
   and caching. To be cacheable it must be pure and analyzable. This tier is
   where the build, DevOps, and distribution work happens.
-- the scripting tier: dynamic, imperative, REPL glue. `write-file` wherever
+- the scripting tier: dynamic, imperative, REPL glue. `write!` wherever
   you like, with full dynamism and no restrictions. Not cached, not
   distributed, not keyed.
 
@@ -367,7 +367,7 @@ tree-walker; eval in the tree-walker; exercised by the fuzzer's `core`
 grammar.
 
 Test: `if true { 1 } else { undefined-symbol }` evaluates to `1`; the untaken
-branch's `perform log(…)` produces no stderr.
+branch's `log!(…)` produces no stderr.
 
 ### [LAW 10] Tail calls run in constant stack
 
@@ -458,7 +458,7 @@ sequential sublanguage instead of leaking ordering into everything.
 metamorphic oracle compares stderr (the `log` effect stream) for each
 program and its semantics-preserving twin.
 
-Test: `do { perform log("a"); perform log("b"); 1 }` writes `a` then `b`
+Test: `do { log!("a"); log!("b"); 1 }` writes `a` then `b`
 to stderr, identically .
 
 ### [LAW 14] Undemanded values fire no effects
@@ -477,7 +477,7 @@ exactly the ambient, order-by-accident world pp exists to replace.
 `perform` does not fire, . Its interaction with LAW 6's
 strictness follows by construction, since node arguments are demanded.
 
-Test: `let (x = perform log("never")) { 1 }` evaluates to `1` with empty
+Test: `let (x = log!("never")) { 1 }` evaluates to `1` with empty
 stderr .
 
 ### [LAW 15] Ordering never comes from capabilities
@@ -522,7 +522,7 @@ feature.
 opt-in and cached persistently: the same
 node forced in two processes runs once, the store serves
 the second, and a scripting-tier expression is never cached (`tests/010`,
-`tests/014`). `$glob` records the tree snapshot it returns (`tests/100`).
+`tests/014`). `$tree` records the tree snapshot it returns (`tests/100`).
 Node writes are confined to per-node sandbox scratch and absolute node writes
 error (LAW 18, `tests/017`). Ambient `run` is scripting-tier only because it
 cannot produce a complete trace. `run-closed!` accepts an immutable request
@@ -547,8 +547,8 @@ forced twice runs twice.
 
 ### [LAW 17] A cache hit does not replay ephemeral effects
 
-A hit returns the stored result; `log`/stdout emitted during the original run
-are not re-emitted. A hit and a miss may differ only in ephemeral output and
+A hit returns the stored result; `log!`/stdout emitted during the original
+run are not re-emitted. A hit and a miss may differ only in ephemeral output and
 wall-clock time. Any observable difference beyond that is a caching-soundness
 bug.
 
@@ -558,35 +558,34 @@ pretending otherwise would make hits observable and caching unsound in the
 other direction.
 
 **Status: holds** (for the node tier) — a `node { e }` hit
-serves the stored result and does not re-emit the `log`/stdout produced on
+serves the stored result and does not re-emit the `log!`/stdout produced on
 the miss. This is verified in the tree-walker (`tests/010`) and the tree-walker
 (`tests/014`), where a node's in-body `COMPUTE` log fires only on the miss.
-
 Test: force a logging `node { e }` twice, the second run in a fresh
-process: the result is identical, and the log is emitted exactly once, on
+process: the result is identical, and the `log!` is emitted exactly once, on
 the miss, .
 
 ### [LAW 18] A cached node's writes are sandbox-scratch only
 
-Inside a node, `write-file` targets a sandbox-local scratch path; only output
+Inside a node, `write!` targets a sandbox-local scratch path; only output
 blob hashes escape. Writes to any reconciled domain go exclusively through
-the reconciler (LAW 28). In the scripting tier, `write-file` is free.
+the reconciler (LAW 28). In the scripting tier, `write!` is free.
 
 Grounding: this is Nix and Bazel-style sandboxing — the build writes wherever
 it likes inside a throwaway directory, and only content-addressed outputs
 exist afterward. Without this, "single writer" (LAW 28) is only a slogan.
 
 **Status: holds** — the node/scripting split and output boundary are enforced.
-Inside a node, a relative `write-file` targets the node's sandbox scratch, a
+Inside a node, a relative `write!` targets the node's sandbox scratch,
 lazily created temp directory deleted when the node's frame pops; reads and
-writes there are capability-free and unrecorded. An absolute `write-file`
+writes there are capability-free and unrecorded. An absolute `write!`
 errors, even with a read-write grant. The scripting tier is unchanged
 (`tests/017`). The reconciled-domain write path is now generic: filesystem and
 process domains apply desired state through the single writer
 (`stdlib/domain-fs.pp`, `stdlib/domain-proc.pp`), while a tool's own absolute-
 path writes remain outside the sandbox's control.
 
-Test: a node calling `perform write-file("/abs/x", …)` errors and the file is
+Test: a node calling `write!("/abs/x", …)` errors and the file is
 not written; the same call in scripting tier
 succeeds; a node's scratch write never appears outside its sandbox
 (`tests/017`).
@@ -722,7 +721,7 @@ node key, so a fresh process can recursively validate a parent hit and can
 reconstruct a stale inline child by rerunning the parent (`tests/032`,
 `tests/101`). Push stabilization dirties direct trace readers first; an
 evaluated parent checks its child-result cells and is dirtied only when a child
-result hash changes. `$glob` records an exact tree cell, and `run`
+result hash changes. `$tree` records an exact tree cell, and `run`
 records the resolved tool binary plus coarse readable-tree cells; changes and
 reverts are covered by `tests/100`. Legacy `run` dynamic-library closure
 tracking remains coarse.
@@ -764,8 +763,8 @@ Test: the adversarial suite (`tests/capability-adversarial.sh`) checks
 that no program, through any user-code surface, reads or writes a path it was
 not granted, and that evaluating `filesystem("/", :rw)` is an unbound-symbol
 error . `tests/045-network.sh` checks that no `net:` grant,
-or a `net:` grant for a different host, denies `perform http-get(…)`/
-`perform http-post(…)`, while a covering grant (an exact host, or `net:*`)
+or a `net:` grant for a different host, denies `http-get!(…)`/
+`http-post!(…)`, while a covering grant (an exact host, or `net:*`)
 allows it, aware of both host and port — a grant for one host or port never
 authorises another.
 
@@ -944,11 +943,10 @@ identity and traces; scheduler stress covers their result transparency
 (`tests/038`), and the kernel property
 suite checks installation, cancellation, redundant width, and session
 isolation.
-`http-get`/`http-post` are newer builtin, semantic-class effects, dispatched
+`http-get!`/`http-post!` are newer builtin, semantic-class effects, dispatched
 through the same `perform_effect`/`handler:<effect>` machinery as
-`read-file`/`run` — no new handler category. Network and process builtins are banned inside node
-bodies outright, by a trace-stack guard shaped like `fenced`/`write-file`'s
-node-body ban, rather than given a trace cell: a network read is not the
+`read-file`/`run!` — no new handler category. Network and process builtins are banned inside node
+bodies outright, by a trace-stack guard shaped like `fenced`/`write!`'s
 declared-nondeterminism mechanism (LAW 37/38's probes are that mechanism) and
 is not convergent, so it has no sound node-cached meaning at all. It is legal
 only in probe observe functions, in domain observe/apply functions (a later
@@ -973,7 +971,7 @@ of try/finally are the floor here, not a nicety.
 capabilities, handlers, and config on normal return, exception, and tail
 call. Handler invocation saves and restores the operand stack.
 
-Test: `do { with-handler(log = h) { tail-loop() } ; perform log("x") }` —
+Test: `do { with-handler(log! = h) { tail-loop() } ; log!("x") }` —
 the final `log` uses the builtin, not `h`, ; an error raised
 inside `effect` leaves the capability set exactly as it was before entry.
 
@@ -1054,7 +1052,7 @@ feeding a domain's desired state may not read that domain's own cells —
 stratification — because otherwise reconciling would loop forever.
 
 Runtime policies are also available to pp libraries through
-`configure-runtime`. A manifest may select built-in schedules, install a
+`configure-runtime!`. A manifest may select built-in schedules, install a
 reporter, and provide canonical build/execution policy data. A custom schedule
 function receives only data-closed job descriptors and returns validated
 batches; it cannot execute a thunk or obtain authority. CLI schedule options
@@ -1070,7 +1068,7 @@ with reality re-observed rather than trusted from a state file.
 **Status: holds** (the full form, with per-domain stratification) — the
 write-discipline law is now enforced generically, for any registered domain,
 not hardwired to the filesystem. A domain is an `observe`/`diff`/`apply`
-triple of ordinary pp functions (`register-domain`, scripting tier), and
+triple of ordinary pp functions (`register-domain!`, scripting tier), and
 core (`src/runtime/domains.ml`) wraps every domain's `apply` in the same journal
 bracket, `observed_all` suspension, plan cache, and verify-after-write,
 regardless of what the domain converges. The trusted mechanics —
@@ -1120,7 +1118,7 @@ byte).
 
 A third-party domain unrelated to the filesystem or process domains — the
 toy "kv" domain in `tests/046-domains.sh`, registered from an ordinary pp
-program via `register-domain` with neither `--reconcile` nor `--supervise`
+program via `register-domain!` with neither `--reconcile` nor `--supervise`
 — proves the protocol is genuinely generic: plan caching across separate
 process invocations (proved via `pp why`), stratification, capability
 threading (`cap-restrict` itself refuses before the domain ever runs),
@@ -1394,7 +1392,7 @@ Every other law's cache-soundness quietly depends on it. Hidden entropy is a
 hidden input, which is the one thing content-addressing cannot forgive.
 
 **Status: holds** — `random` remains removed; the sanctioned nondeterministic
-dependency is now the probe (`register-probe(name, observe-fn, read-cap)`,
+dependency is now the probe (`register-probe!(name, observe-fn, read-cap)`,
 scripting tier; `probe(name)`, inside or outside nodes). The observe function
 runs at most once per pass, outside any node's trace stack, so its own reads
 never contaminate the reading node's trace, under exactly the registered
@@ -1428,7 +1426,7 @@ node is otherwise dead, and the store grows without bound along that cone.
 `pp --check` runs every missed node's body twice, compares result hashes,
 and flags a divergence as volatile (`tests/019`). The containment half is
 now the same probe mechanism as LAW 37: wrapping a volatile read as
-`register-probe(name, observe-fn, read-cap)`/`probe(name)` moves it out of
+`register-probe!(name, observe-fn, read-cap)`/`probe(name)` moves it out of
 the node body and into its own `probe:<name>` cell, observed and pinned once
 per pass, exactly the cell treatment this law asked for. So a node reading
 it re-forces only when the probe's value actually changes, and its
@@ -1524,14 +1522,14 @@ migration.
 | LAW 27 | exception/tail-safe dynamic extent | holds | save-stack restore on every exit |
 | LAW 28 | failure traces, error memoization | holds | evaluative failures use the same durable trace lifecycle as successes and are re-served until a recorded read changes; authority denials and internal exceptions remain uncached (`tests/012`, `tests/014`, `tests/103`) |
 | LAW 29 | source locations in errors | holds | every top-level form's location is appended to unlocated runtime errors ; arity/capability errors name the callee/operation; `pp: error:` single-line reporting; a loaded file's own forms are individually located and decorated with that file's location before the error can unwind past the `load` (`tests/027`, including case (g)) |
-| LAW 30 | desired-state plus single writer | holds | `register-domain` and `src/runtime/domains.ml` enforce plan, journal, atomic apply, verify, and stratification for any registered domain; `stdlib/domain-fs.pp` and `stdlib/domain-proc.pp` hold filesystem and process policy (`tests/018`, `tests/023`, `tests/033`, `tests/046`) |
+| LAW 30 | desired-state plus single writer | holds | `register-domain!` and `src/runtime/domains.ml` enforce plan, journal, atomic apply, verify, and stratification for any registered domain; `stdlib/domain-fs.pp` and `stdlib/domain-proc.pp` hold filesystem and process policy (`tests/018`, `tests/023`, `tests/033`, `tests/046`) |
 | LAW 31 | fenced effects, intent journal | holds | scripting-tier `fenced(KIND, SPEC)`, `--fenced-policy retry|abort|ask`, intent/done journal, recovery without silent retry; `tests/034` |
 | LAW 32 | gradual types, strictest oracle | holds | the engine enforces; tests 004/005 restored; `tests/007-phase0-laws.pp` |
 | LAW 33 | config: computed keys, tail-safe scoping | holds | computed keys and tail-safe scoping ; config reads inside nodes are `config:<key>` trace cells, ambient config out of the node key (`tests/015`) |
 | LAW 34 | no location surface / scheduler exists | holds | the language has no location form; local process-pool scheduling, host-qualified domains, and explicit GC are implemented (`tests/038`, `tests/049`, `tests/050`) |
 | LAW 35 | run-on-N-take-first as handler | holds | `race:N` process-pool fan-out lands (`tests/038`) |
 | LAW 36 | evaluator correctness | holds | catalogued divergences are closed; signed literals agree across readers and formatting (`tests/105`); `core` and `full` fuzzing are green; macro expansion is shared ahead of evaluation |
-| LAW 37 | declared nondeterminism | holds | `register-probe`/`probe` are the one sanctioned nondeterministic dependency, evaluated at most once per pass outside the reading node's trace stack, exposed only as a `probe:<name>` cell (`tests/043-probes.sh`) |
+| LAW 37 | declared nondeterminism | holds | `register-probe!`/`probe` are the one sanctioned nondeterministic dependency, evaluated at most once per pass outside the reading node's trace stack, exposed only as a `probe:<name>` cell (`tests/043-probes.sh`) |
 | LAW 38 | volatile-node containment | holds | `--check` double-run detection unchanged (`tests/019`); containment is the same probe mechanism as LAW 37 — a volatile read wrapped as a probe is observed and pinned once per pass as its own cell, in-memory only, never written to `~/.pp/store` (`tests/043-probes.sh`) |
 | LAW 39 | sealed cells | holds | `CapSecret`/`VSealed`: confidential reads redact on print, exclude from the content-addressed store, ban at the node boundary both directions, gate hits on a covering grant; `unseal(v)` is the explicit boundary (`tests/044-sealed.sh`) |
 
@@ -1831,38 +1829,34 @@ Creation-time narrowing stays expressible by composition:
 
 | # | Brace form | Reads as |
 |---|---|---|
-| L41 | `perform name(a, …)` | `(perform name a …)` — for every effect: `read-file` `write-file` `run` `run-closed!` `http-get` `http-post` `log` `tree-observe` `materialize-file` `remove-file` `proc-spawn` `proc-alive?` `proc-stop` `proc-reap` `domain-state-get` `domain-state-put` (the `!` marks effect names that expose the suffix directly) |
+| L41 | `perform name(a, …)` | `(perform name a …)` — for every effect: `read-file` `write!` `run!` `run-closed!` `http-get!` `http-post!` `log!` `tree-observe` `materialize-file` `remove-file` `proc-spawn` `proc-alive?` `proc-stop` `proc-reap` `domain-state-get` `domain-state-put` (the `!` marks effect names that expose the suffix directly) |
 | L42 | `with-handler(n1 = h1, n2 = h2) { body… }` | `(with-handler [n1 h1 n2 h2] body…)` — a handler name may also be a keyword literal, as in sexprs |
 | L43 | `with-caps(E) { body… }` | `(with-caps E body…)` |
 | L44 | `with-config(E) { body… }` | `(with-config E body…)` — `E` is any expression, typically a map literal `{:k -> v}` |
-| L45 | `config(K)`; `config(K, D)` | `(config K)`; `(config K D)` — computed keys legal, LAW 33 |
 | L46 | `assert(C)`; `assert(C, M)` | `(assert C)`; `(assert C M)` — the shared desugar to `if` plus `error`, with a structured source diagnostic attached at evaluation time (see B.4) |
 
 Capability values need no rows of their own: `current-capabilities()`,
 `cap-restrict(c, scope, :ro)`, `cap-compose(a, b)`, `cap-none()`,
 `capability?(c)` are ordinary calls (L19), as are every other primitive
-(`slurp`, `blob`, `blob-get`, `unseal`, `probe`, `register-probe`,
-`register-domain`, `fenced`, `argv`, `env-get`, `file-exists?`, `dir?`,
+(`blob`, `blob-get`, `unseal`, `register-probe!`, `register-domain!`, `fenced`,
 `hash-string`, `hash-value`, `gensym`, …).
 
 #### Cells
 
-World-reads are the `$` family, the one observation surface. The
-head set and lowerings are the generated table in B.8. An earlier revision
-removed the fused cell-literal tokens `file:"P"`/`env:"N"`/`tree:"R"`, which
-could not spell a default or a computed path.
+World reads use the `$` family exclusively. Every head lowers to `EObserve`;
+there are no compatibility callables beneath it. The generated table in B.8 is
+the exhaustive source for names, arities, and meanings.
 
 | # | Brace form | Reads as |
 |---|---|---|
-| L47 | `$file(P)` | `(slurp P)` — a `file:` (or, under a `secret:` grant, `sealed:`) observation |
-| L48 | `$env(N[, default])` | `(env-get N)` — an `env:` observation |
-| L49 | `$glob(R)` | `(perform tree-observe R)` — a `tree:` observation |
-| L50 | *(no `$` head for `stat:` cells)* `file-exists?("p")`, `dir?("p")` | predicate observations keep the call form — they observe predicates, not path contents |
-
-An earlier design sketch's `glob:"src/*.c"` is not frozen here: no
-glob-observing form exists in core (the manifest read that exists is
-`tree-observe`, L49), and minting one is new semantics — out of scope for
-this annex, by the same grammar-creep rule as `needs proc`.
+| L47 | `$file(P)` | `(observe file P)` — a `file:` cell, or a `sealed:` cell when only secret authority covers the path |
+| L48 | `$env(N[, D])` | `(observe env N D)` — an `env:` cell; `D` is evaluated only when the variable is absent |
+| L49 | `$tree(R)` | `(observe tree R)` — a `tree:` cell and exact relative-path/content-hash map |
+| L50 | `$probe(N)` | `(observe probe N)` — a volatile `probe:` cell pinned once per pass |
+| L50a | `$secret(P)` | `(observe secret P)` — a sealed `sealed:` cell |
+| L50b | `$stat(P)` | `(observe stat P)` — `:file`, `:directory`, or `nil` from a `stat:` cell |
+| L50c | `$argv()` | `(observe argv)` — the invocation arguments and `argv:` cell |
+| L50d | `$config(K[, D])` | `(observe config K D)` — a scoped `config:` cell; `D` is lazy |
 
 #### Modules, loading, islands
 
@@ -2078,14 +2072,16 @@ markers by hand.
 <!-- BEGIN GENERATED surface-tables -->
 #### Observation heads — `$KIND(args…)`
 
-| head | arity | qq | lowering | meaning |
-|---|---|---|---|---|
-| `$file` | 1 | yes | `(slurp $1)` | $file(path) — read a file's contents (records a file: cell) |
-| `$env` | 1..2 | yes | `(if (nil? (env-get $1)) $2 (env-get $1))` | $env(name[, default]) — read an environment variable (records an env: cell); the optional default is used when the variable is unset |
-| `$glob` | 1 | yes | `(perform tree-observe $1)` | $glob(path) — observe a directory tree (records a tree: cell) |
-| `$probe` | 1 | yes | `(probe $1)` | $probe(name) — read an observer-written volatile probe cell |
-| `$secret` | 1 | yes | `(slurp $1)` | $secret(path) — read a sealed (confidential) file |
-| `$config` | 1..2 | yes | `(config $1 $2)` | $config(key[, default]) — read a scoped config value (records a config: cell); the optional default is used when the key is unset |
+| head | arity | AST | meaning |
+|---|---|---|---|
+| `$file` | 1 | `(observe file $1)` | read file contents, sealed when only secret authority covers the path |
+| `$env` | 1..2 | `(observe env $1 $2)` | read an environment variable, optionally defaulting when absent |
+| `$tree` | 1 | `(observe tree $1)` | read a directory tree as relative paths mapped to content hashes |
+| `$probe` | 1 | `(observe probe $1)` | read an observer-written volatile probe cell |
+| `$secret` | 1 | `(observe secret $1)` | read confidential bytes as a sealed value |
+| `$stat` | 1 | `(observe stat $1)` | read a path kind as :file, :directory, or nil |
+| `$argv` | 0 | `(observe argv)` | read the invocation argument list |
+| `$config` | 1..2 | `(observe config $1 $2)` | read scoped configuration, optionally defaulting when absent |
 
 #### `with { }` clauses
 

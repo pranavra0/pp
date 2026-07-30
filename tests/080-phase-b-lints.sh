@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
 # tests/080 — lints from `pp lint`:
-#   observation exclusivity (case B4 below) — bare slurp/env-get/probe/config/
-#       tree-observe outside stdlib/ warn, pointing at the $ form. Runs
-#       PRE-lowering (a token scan): after lowering, $file and bare slurp are
-#       the same AST.
 #   dot-identifier (case B11 below) — an identifier containing '.' (a
 #       dot-method trap); grant descriptors (fs.read) lower away, so they
 #       never trip it.
@@ -34,22 +30,6 @@ no_needle() {
   else bad "$name" "did not expect '$needle'" "got: $out"; fi
 }
 
-# ---- observation exclusivity (case B4) ----
-printf 'def read-it(p) { slurp(p) }\n'          > "$TMP/b4-slurp.pp"
-warns "B4-bare-slurp"  "$TMP/b4-slurp.pp"  "bare \`slurp\` reads the world"
-printf 'def cc() { env-get("CC") }\n'           > "$TMP/b4-env.pp"
-warns "B4-bare-env-get" "$TMP/b4-env.pp"   "\$env"
-printf 'def ls(r) { perform tree-observe(r) }\n' > "$TMP/b4-tree.pp"
-warns "B4-perform-tree-observe" "$TMP/b4-tree.pp" "\$glob"
-printf 'def read-it(p) { $file(p) }\n'          > "$TMP/b4-dollar.pp"
-clean "B4-dollar-file-clean" "$TMP/b4-dollar.pp"
-# with { config: ... } is a clause, not a bare read — must not warn.
-printf 'def w() { with { config: { :k -> 1 } } { $config("k") } }\n' > "$TMP/b4-clause.pp"
-clean "B4-config-clause-clean" "$TMP/b4-clause.pp"
-# stdlib/ path is exempt.
-mkdir -p "$TMP/stdlib"
-printf 'def read-it(p) { slurp(p) }\n' > "$TMP/stdlib/x.pp"
-no_needle "B4-stdlib-exempt" "$TMP/stdlib/x.pp" "reads the world"
 
 # ---- dot-identifier (case B11) ----
 printf 'def f(src) { src.replace-ext(".o") }\n' > "$TMP/b11-dot.pp"

@@ -31,10 +31,3 @@ val with_config :
   (Core_model.value -> Core_model.value) ->
   Core_model.value
 
-val read_config :
-  operations ->
-  string ->
-  Core_model.expr option ->
-  Core_model.env ->
-  (Core_model.value -> Core_model.value) ->
-  Core_model.value

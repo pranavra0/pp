@@ -21,7 +21,7 @@ open Pp_kernel
    Spelling decisions, each load-bearing for hash preservation:
    - every reader.ml special-form keyword (def/fn/if/let/let*/and/or/quote/
      force/delay/node/defnode/do/with-caps/perform/with-handler/module/
-     import/load/load-module/island/with-config/config/assert) is recognized
+     import/load/load-module/island/with-config/observe/assert) is recognized
      ONLY as the car of a literal list in reader.ml — a bare occurrence of
      the symbol (unapplied) reads back as an ordinary `ESymbol`, so (unlike
      printer_braces) no reserved-word wrapping is needed for symbols standing
@@ -67,7 +67,7 @@ let is_symbol_char c =
 let special_form_heads = [
   "def"; "fn"; "if"; "let"; "let*"; "and"; "or"; "quote"; "force"; "delay";
   "node"; "defnode"; "do"; "with-caps"; "perform"; "with-handler"; "module";
-  "import"; "load"; "load-module"; "island"; "with-config"; "config"; "assert";
+  "import"; "load"; "load-module"; "island"; "with-config"; "observe"; "assert";
 ]
 
 let name_ok (s : string) : bool =
@@ -158,6 +158,29 @@ let sep_before st (s : string) (e : expr) =
   | _ -> emit st s
 
 (* ---- the printer ---- *)
+
+let rec print_pattern_key st (v : value) : unit =
+  match v with
+  | VNil | VBool _ | VInt _ | VFloat _ | VString _ | VKeyword _ ->
+      emit st (literal v)
+  | VSymbol s ->
+      if not (name_ok s) then
+        unpr "map pattern symbol key %s has no sexpr spelling" s;
+      emit st s
+  | VVector values ->
+      emit st "[";
+      Array.iteri (fun i value ->
+        if i > 0 then emit st " ";
+        print_pattern_key st value) values;
+      emit st "]"
+  | VPair _ ->
+      (match Presentation.value_list_opt v with
+       | None -> unpr "map pattern list key is improper"
+       | Some values ->
+           emit st "(list";
+           List.iter (fun value -> emit st " "; print_pattern_key st value) values;
+           emit st ")")
+  | _ -> unpr "map pattern key is not a closed literal"
 
 let rec print_expr st (e : expr) : unit =
   match e with
@@ -264,6 +287,10 @@ let rec print_expr st (e : expr) : unit =
       List.iter (fun a -> sep_before st " " a; print_expr st a) args;
       emit st ")"
   | EModule stmts -> emit st "(module"; print_body_stmts st stmts; emit st ")"
+  | EExport names ->
+      emit st "(export";
+      List.iter (fun name -> emit st " "; emit st name) names;
+      emit st ")"
   | EImport e -> emit st "(import "; print_expr st e; emit st ")"
   | ELoad p -> emit st "(load "; emit st (string_lit p); emit st ")"
   | ELoadModule p -> emit st "(load-module "; emit st (string_lit p); emit st ")"
@@ -274,13 +301,13 @@ let rec print_expr st (e : expr) : unit =
        | Some p -> emit st " "; emit st (string_lit p)
        | None -> ());
       emit st ")"
-  | EConfig (k, d) ->
-      emit st "(config";
-      sep_before st " " k;
-      print_expr st k;
-      (match d with
-       | Some d -> sep_before st " " d; print_expr st d
-       | None -> ());
+  | EObserve (kind, arguments) ->
+      emit st "(observe ";
+      emit st (Core_model.string_of_observation_kind kind);
+      List.iter (fun argument ->
+        sep_before st " " argument;
+        print_expr st argument)
+        arguments;
       emit st ")"
   | EMatch (scrutinee, arms) ->
       emit st "(match ";
@@ -304,6 +331,7 @@ let rec print_expr st (e : expr) : unit =
   | EApply (fn, args) -> print_apply st fn args
 
 
+
 and print_pattern st (p : pattern) : unit =
   match p with
   | PLiteral v -> emit st (literal v)
@@ -322,6 +350,24 @@ and print_pattern st (p : pattern) : unit =
       emit st "(tagged";
       emit st " "; emit st tag;
       List.iter (fun p -> emit st " "; print_pattern st p) pats;
+      emit st ")"
+  | PMap (entries, rest_kind) ->
+      emit st "(map";
+      List.iter
+        (fun (key, pat) ->
+           emit st " (";
+           print_pattern_key st key;
+           emit st " ";
+           print_pattern st pat;
+           emit st ")")
+        entries;
+      (match rest_kind with
+       | Exact -> emit st " exact"
+       | Ignore -> emit st " ignore"
+       | Bind name ->
+           if not (name_ok name) then
+             unpr "map pattern rest variable %s has no sexpr spelling" name;
+           emit st " (bind "; emit st name; emit st ")");
       emit st ")"
 and print_apply st (fn : expr) (args : expr list) : unit =
   match fn, args with

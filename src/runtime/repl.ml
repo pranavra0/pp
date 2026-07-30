@@ -57,20 +57,19 @@ let process_exprs (exprs : expr list) : value list =
     (Effect.perform Dynamic_scope.Get_invocation) ~f:(fun () ->
     Evaluator.eval_expressions_list exprs global_env) ()
 
-(* Tree-walker: execute a source string. The WHOLE file's forms
-   are expanded together, in order, before any of them is evaluated — a
-   `defmacro` earlier in the string must be visible to a use later in the
-   SAME string, even though process_expr below evaluates one form at a
-   time. *)
+(* Tree-walker: execute a source string. The WHOLE file is parsed first, but
+   expansion and evaluation stay sequential: a `load` can install macros that
+   later forms in this source use. *)
 let execute_string ?(retain_thunks = false) ?(source : string = "<?>") (input : string) : value list =
   init ~retain_thunks (Effect.perform Dynamic_scope.Get_session);
-  (* `.ppb` sources read with the brace reader (Reader_braces
-     dispatches on the extension; every other source uses the
-     sexpr reader). *)
-  let exprs =
-    Macro.expand_toplevel_list (macro_services ())
-      (Reader_braces.read_dispatch ~source ~path:source input) in
-  process_exprs exprs
+  let forms =
+    if source = "<?>" then Reader_braces.read_string ~source input
+    else Reader_braces.read_dispatch ~source ~path:source input
+  in
+  List.concat_map (fun form ->
+    let expanded = Macro.expand_toplevel_list (macro_services ()) [form] in
+    process_exprs expanded)
+    forms
 
 (* Tree-walker: execute a source file *)
 let execute_file ?(retain_thunks = false) (path : string) : value list =
@@ -87,9 +86,9 @@ let execute_file ?(retain_thunks = false) (path : string) : value list =
    unconditionally — correct for a single top-level run, but `init()`
    resets the session's domain registry (Evaluator.init, alongside thunk memo/
    handler_stack/macro table), so two SEPARATE calls would make the second
-   wipe out a `register-domain` a first call just performed. command_run.ml's
+   wipe out a `register-domain!` a first call just performed. command_run.ml's
    --reconcile/--supervise auto-wiring needs exactly that: a small glue
-   snippet that loads stdlib/domain-fs.pp and calls register-domain, THEN
+   snippet that loads stdlib/domain-fs.pp and calls register-domain!, THEN
    the user's program — sharing one registry, one macro table, one
    thunk_store. This is init() once, then each source processed in order
    (mirroring what execute_string does internally,
@@ -98,11 +97,35 @@ let execute_file ?(retain_thunks = false) (path : string) : value list =
 let execute_sources ?(retain_thunks = false) (sources : (string * string) list) : value list =
   init ~retain_thunks (Effect.perform Dynamic_scope.Get_session);
   List.concat_map (fun (source, input) ->
-    let exprs =
-      Macro.expand_toplevel_list (macro_services ())
-        (Reader_braces.read_dispatch ~source ~path:source input) in
-    process_exprs exprs)
+    let forms = Reader_braces.read_dispatch ~source ~path:source input in
+    List.concat_map (fun form ->
+      let expanded = Macro.expand_toplevel_list (macro_services ()) [form] in
+      process_exprs expanded)
+      forms)
     sources
+
+let execute_sources_with_prelude ?(retain_thunks = false)
+    (prefix : (string * expr list) list)
+    (sources : (string * string) list) : value list =
+  init ~retain_thunks (Effect.perform Dynamic_scope.Get_session);
+  let prefix_values =
+    List.concat_map (fun (_source, forms) ->
+      List.concat_map (fun form ->
+        let expanded = Macro.expand_toplevel_list (macro_services ()) [form] in
+        process_exprs expanded)
+        forms)
+      prefix
+  in
+  let source_values =
+    List.concat_map (fun (source, input) ->
+      let forms = Reader_braces.read_dispatch ~source ~path:source input in
+      List.concat_map (fun form ->
+        let expanded = Macro.expand_toplevel_list (macro_services ()) [form] in
+        process_exprs expanded)
+        forms)
+      sources
+  in
+  prefix_values @ source_values
 
 (* =================================================================== *)
 (*  Input machinery                                                     *)

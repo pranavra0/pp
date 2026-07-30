@@ -2,7 +2,7 @@
 # tests/066 — observation `$KIND` heads are table-driven (Surface_tables)
 # and parse arbitrary expression arguments.
 #
-# `$file`/`$env`/`$glob`/`$secret`/`$probe` accepted a STRING LITERAL only;
+# `$file`/`$env`/`$tree`/`$secret`/`$probe` accept computed expressions.
 # real code computes paths/names. All heads now parse an ordinary expression
 # list, so a computed name/default works.
 #
@@ -38,6 +38,11 @@ cat > "$TMP/def.pp" <<'EOF'
 print($env("A6_MISSING", string-append("de", "fault")))
 EOF
 run_both "env-computed-default" "$TMP/def.pp" '"default"'
+
+cat > "$TMP/lazy-default.pp" <<'EOF'
+print($env("A6_VAR", error("unused fallback")))
+EOF
+run_both "env-default-is-lazy" "$TMP/lazy-default.pp" '"present"'
 
 # (c) Arity is enforced from the table (env takes 1 or 2 args).
 cat > "$TMP/arity.pp" <<'EOF'

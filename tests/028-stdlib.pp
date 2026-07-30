@@ -44,7 +44,7 @@ print(nth(1, list(10, 20, 30)))
 print(drop(2, list(1, 2, 3, 4)))
 print(member?(3, list(1, 2, 3)))
 print(member?(9, list(1, 2, 3)))
-print(each(fn(x) { print(x) }, list(7, 8)))
+print(each!(fn(x) { print(x) }, list(7, 8)))
 
 # ---- assert: passing form returns nil ----
 print(if 1 = 1 { nil } else { error("assertion failed: (= 1 1) at tests/028-stdlib.pp:51") })

@@ -4,7 +4,7 @@
 #
 # Two facts about the persistent node cache (~/.pp/store) motivated this:
 #   1. it was tree-walker-only (no store of its own existed), and
-#   2. it served STALE results: `(node (slurp path))` returned the old file
+#   2. it served STALE results: `node { $file(path) }` returned the old file
 #      contents after the file changed, because the node key hashes the path
 #      STRING, not what was read.
 #
@@ -26,9 +26,9 @@ PROG="$TMP/prog.pp"
 # is skipped and — per SPEC law 17 — "COMPUTE" is NOT replayed. The outer log always
 # emits the resulting content, so we can read the served value every run.
 cat > "$PROG" <<EOF
-perform log(force(node {
-  perform log("COMPUTE")
-  slurp("$DATA")
+log!(force(node {
+  log!("COMPUTE")
+  \$file("$DATA")
 }))
 EOF
 

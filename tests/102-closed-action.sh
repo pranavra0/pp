@@ -9,7 +9,7 @@ set -uo pipefail
 run() { "$PP" "$@" >"$TMP/out" 2>&1; }
 
 cat >"$TMP/no-cap.pp" <<'EOF'
-let result = perform run-closed!({
+let result = run-closed!({
   :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob("not-a-tool")}}},
   :tool-path -> "tool",
   :args -> [],
@@ -24,7 +24,7 @@ if grep -q "no process authority" "$TMP/out"; then ok "closed-no-cap"
 else bad "closed-no-cap" "$(cat "$TMP/out")"; fi
 
 cat >"$TMP/traversal.pp" <<'EOF'
-perform run-closed!({
+run-closed!({
   :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob("not-a-tool")}}},
   :tool-path -> "tool",
   :args -> [],
@@ -39,7 +39,7 @@ if grep -q "non-canonical tree path" "$TMP/out"; then ok "closed-input-traversal
 else bad "closed-input-traversal" "$(cat "$TMP/out")"; fi
 
 cat >"$TMP/output-traversal.pp" <<'EOF'
-perform run-closed!({
+run-closed!({
   :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob("not-a-tool")}}},
   :tool-path -> "tool",
   :args -> [],
@@ -54,7 +54,7 @@ if grep -q "rejects non-canonical output path" "$TMP/out"; then ok "closed-outpu
 else bad "closed-output-traversal" "$(cat "$TMP/out")"; fi
 
 cat >"$TMP/platform.pp" <<'EOF'
-perform run-closed!({
+run-closed!({
   :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob("not-a-tool")}}},
   :tool-path -> "tool",
   :args -> [],
@@ -69,7 +69,7 @@ if grep -q "requires :platform" "$TMP/out"; then ok "closed-platform-denied"
 else bad "closed-platform-denied" "$(cat "$TMP/out")"; fi
 
 cat >"$TMP/environment.pp" <<'EOF'
-perform run-closed!({
+run-closed!({
   :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob("not-a-tool")}}},
   :tool-path -> "tool",
   :args -> [],
@@ -84,7 +84,7 @@ if grep -q "invalid environment name" "$TMP/out"; then ok "closed-environment-de
 else bad "closed-environment-denied" "$(cat "$TMP/out")"; fi
 
 cat >"$TMP/policy.pp" <<'EOF'
-perform run-closed!({
+run-closed!({
   :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob("not-a-tool")}}},
   :tool-path -> "tool",
   :args -> [],
@@ -104,7 +104,7 @@ fi
 
 cat >"$TMP/node.pp" <<'EOF'
 force(node {
-  perform run-closed!({
+  run-closed!({
     :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob("not-a-tool")}}},
     :tool-path -> "tool",
     :args -> [],
@@ -129,8 +129,8 @@ done
 
 if [ -n "$tool" ]; then
   cat >"$TMP/execute.pp" <<EOF
-let result = perform run-closed!({
-  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob(slurp("$tool"))}}},
+let result = run-closed!({
+  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob(\$file("$tool"))}}},
   :tool-path -> "tool",
   :args -> ["--help"],
   :inputs -> {:tree -> {}},
@@ -157,8 +157,8 @@ if command -v go >/dev/null 2>&1; then
     "$(dirname "$0")/fixtures/closed-hostile.go"
 
   cat >"$TMP/hostile.pp" <<EOF
-let result = perform run-closed!({
-  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob(slurp("$TMP/hostile"))}}},
+let result = run-closed!({
+  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob(\$file("$TMP/hostile"))}}},
   :tool-path -> "tool",
   :args -> ["report"],
   :inputs -> {:tree -> {"input" -> {:kind -> :file, :mode -> 292, :blob -> blob("input")}}},
@@ -197,7 +197,7 @@ EOF
     TOOL_HASH=$(sha256sum "$TMP/hostile" | cut -d' ' -f1)
     INPUT_HASH=$(printf portable-tree-input | sha256sum | cut -d' ' -f1)
     cat >"$TMP/ingest.pp" <<EOF
-blob(slurp("$TMP/hostile"))
+blob(\$file("$TMP/hostile"))
 blob("portable-tree-input")
 EOF
     HOME="$ORIGIN" "$PP" --grant "fs:$TMP/hostile:ro" "$TMP/ingest.pp" >/dev/null
@@ -206,7 +206,7 @@ EOF
     HOME="$DESTINATION" "$PP" --transport-pull blob "$TOOL_HASH" "$SHARED" >/dev/null
     HOME="$DESTINATION" "$PP" --transport-pull blob "$INPUT_HASH" "$SHARED" >/dev/null
     cat >"$TMP/portable.pp" <<EOF
-let result = perform run-closed!({
+let result = run-closed!({
   :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> "$TOOL_HASH"}}},
   :tool-path -> "tool",
   :args -> ["copy"],
@@ -228,8 +228,8 @@ EOF
     fi
 
     cat >"$TMP/escape.pp" <<EOF
-let result = perform run-closed!({
-  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob(slurp("$TMP/hostile"))}}},
+let result = run-closed!({
+  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob(\$file("$TMP/hostile"))}}},
   :tool-path -> "tool",
   :args -> ["escape"],
   :inputs -> {:tree -> {"input" -> {:kind -> :file, :mode -> 292, :blob -> blob("input")}}},
@@ -247,8 +247,8 @@ EOF
     fi
 
     cat >"$TMP/signal.pp" <<EOF
-let result = perform run-closed!({
-  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob(slurp("$TMP/hostile"))}}},
+let result = run-closed!({
+  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob(\$file("$TMP/hostile"))}}},
   :tool-path -> "tool",
   :args -> ["signal"],
   :inputs -> {:tree -> {}},

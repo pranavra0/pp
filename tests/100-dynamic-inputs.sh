@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # pins: LAW-16 LAW-18 LAW-21
-# Glob observations invalidate on content changes and reuse old traces.
+# Tree observations invalidate on content changes and reuse old traces.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -13,23 +13,23 @@ assert() {
 
 mkdir -p "$TMP/tree"
 printf 'one\n' > "$TMP/tree/a"
-cat > "$TMP/glob.pp" <<EOF
+cat > "$TMP/tree.pp" <<EOF
 force(node {
-  perform log("GLOB")
-  \$glob("$TMP/tree")
+  log!("TREE")
+  \$tree("$TMP/tree")
 })
 EOF
 
-run_glob() {
-  "$PP" --grant "fs:$TMP/tree:ro" "$TMP/glob.pp" > "$TMP/out" 2>&1
+run_tree() {
+  "$PP" --grant "fs:$TMP/tree:ro" "$TMP/tree.pp" > "$TMP/out" 2>&1
 }
 
-run_glob; assert "glob-cold" "GLOB" present
-run_glob; assert "glob-hit" "GLOB" absent
+run_tree; assert "tree-cold" "TREE" present
+run_tree; assert "tree-hit" "TREE" absent
 printf 'two\n' > "$TMP/tree/b"
-run_glob; assert "glob-add-invalidates" "GLOB" present
+run_tree; assert "tree-add-invalidates" "TREE" present
 rm "$TMP/tree/b"
-run_glob; assert "glob-revert-hits-old-trace" "GLOB" absent
+run_tree; assert "tree-revert-hits-old-trace" "TREE" absent
 
 if [ "$fail" -eq 0 ]; then echo "=== DYNAMIC INPUTS TEST PASSED ==="; fi
 exit "$fail"

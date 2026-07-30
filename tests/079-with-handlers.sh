@@ -23,11 +23,11 @@ run_one() {
 cat > "$TMP/multi.pp" <<'EOF'
 with {
   handlers: {
-    :log -> fn(msg) { print(string-append("LOG: ", msg)) },
+    :log! -> fn(msg) { print(string-append("LOG: ", msg)) },
     :ask -> fn(n) { n * 10 }
   }
 } {
-  perform log("hi")
+  log!("hi")
   print(perform ask(5))
 }
 EOF
@@ -45,9 +45,9 @@ run_one "handlers-map-single" "$TMP/one.pp" '42'
 cat > "$TMP/combo.pp" <<'EOF'
 with {
   config: { :prefix -> "> " },
-  handlers: { :log -> fn(m) { print(string-append($config("prefix"), m)) } }
+  handlers: { :log! -> fn(m) { print(string-append($config("prefix"), m)) } }
 } {
-  perform log("done")
+  log!("done")
 }
 EOF
 run_one "handlers-with-config" "$TMP/combo.pp" '"> done"'
@@ -55,7 +55,7 @@ run_one "handlers-with-config" "$TMP/combo.pp" '"> done"'
 # (d) the removed two-token `handler NAME:` key errors, with a
 # message listing the table's clause keywords.
 cat > "$TMP/old.pp" <<'EOF'
-with { handler log: fn(m) { print(m) } } { perform log("x") }
+with { handler log: fn(m) { print(m) } } { log!("x") }
 EOF
 got=$("$PP" "$TMP/old.pp" 2>&1 || true)
 if [[ "$got" == *"handlers:"* ]]; then
@@ -67,7 +67,7 @@ fi
 # (e) handlers: must take a map literal, not a bare expression.
 cat > "$TMP/notmap.pp" <<'EOF'
 let h = 5
-with { handlers: h } { perform log("x") }
+with { handlers: h } { log!("x") }
 EOF
 got=$("$PP" "$TMP/notmap.pp" 2>&1 || true)
 if [[ "$got" == *"map literal"* ]]; then

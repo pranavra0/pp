@@ -73,7 +73,7 @@ brace-to-s-expression mapping.
   `domain:<name>:<sub>` for child computations and registered domains.
 - probe (real): the sanctioned way to depend on something nondeterministic
   (SPEC laws 37 and 38). A script-tier call to
-  `register-probe(name, observe-fn, read-cap)` registers an observer;
+  `register-probe!(name, observe-fn, read-cap)` registers an observer;
   `probe(name)` reads it from anywhere. The observe function runs at most
   once per pass, under exactly `read-cap`, recording only a
   capability-free `probe:<name>` cell. pp never persists this:
@@ -85,7 +85,7 @@ brace-to-s-expression mapping.
   sealed value on print, excludes it from the store, and bans it at the
   node boundary like a capability; `unseal(v)` is the explicit, greppable
   way back to a `VString`.
-- `run`, or the process effect: `perform run(CMD, ARG…)` executes an
+- `run!`, or the process effect: `run!(CMD, ARG…)` executes an
   external command under `--grant process`, and returns
   `{"exit","out","err"}`. It is scripting-tier only because an ambient
   process cannot produce a complete validating trace (`tests/017`).
@@ -97,8 +97,8 @@ brace-to-s-expression mapping.
   Provider policy is optional canonical pp data in the request; the core does
   not interpret it.
 - sandbox, or per-node scratch: a throwaway directory that pp creates
-  lazily for each node force and deletes when it completes (`slurp` and
-  `write-file` resolve there, capability-free and
+  lazily for each node force and deletes when it completes (`$file` and
+  `write!` resolve there, capability-free and
   unrecorded); an absolute path in a node write is an error instead (SPEC
   law 18) — hygiene, not soundness; traces make the system sound.
 - desired-state value: the pure, hashable value a pp
@@ -121,7 +121,7 @@ brace-to-s-expression mapping.
 - domain (real): a slice of external state under single ownership, such
   as an output subtree or a set of processes (the third-party example is
   `tests/046`). It is registered with
-  `register-domain({:name :namespace :observe :diff :apply :write-cap})`.
+  `register-domain!({:name :namespace :observe :diff :apply :write-cap})`.
   A probe (see above) is a domain with no write authority: one registry,
   owned by `Session`, serving both roles.
 
@@ -151,17 +151,17 @@ brace-to-s-expression mapping.
 - `cap-restrict` and `cap-compose`: the only capability operations user
   code can perform: narrowing a capability's scope, or combining two
   already held.
-- `CapNetwork`, `http-get`, and `http-post` (real): a
+- `CapNetwork`, `http-get!`, and `http-post!` (real): a
   `CapNetwork {host; port option}`, granted with
   `--grant net:<host>[:<port>]` and wildcarded with `host = "*"`,
-  authorizes `perform http-get(url)` and `perform http-post(url, body)`.
+  authorizes `http-get!(url)` and `http-post!(url, body)`.
   These fork `curl` instead of adding OCaml networking code, and return
   `{"status" INT "body" STRING}`. pp bans them inside node bodies:
   a network call is not convergent; nondeterminism belongs to `probe`.
 
 ### Effects
 
-- effect, or `perform`: a named operation, such as `read-file` or `log`,
+- effect, or `perform`: a named operation, such as `read-file` or `log!`,
   dispatched dynamically. pp resolves it against the handler stack; an
   unhandled effect falls back to a builtin.
 - handler, or `with-handler`: an installation, active for a dynamic

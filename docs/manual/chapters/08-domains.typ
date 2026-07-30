@@ -94,13 +94,13 @@ stops removed ones, and restarts a service whose spec changed. It also restarts
 one killed out from under it, within a poll interval. It requires
 `--grant process` and refuses stratification on its own `proc:` cells, exactly
 as the fs domain does. A from-scratch third-party domain is anything with an
-observe/diff/apply triple registered via `register-domain`. It gets the same
+observe/diff/apply triple registered via `register-domain!`. It gets the same
 journal bracket, plan cache, verify-after-write, and stratification for free.
 The protocol is generic, not filesystem-shaped.
 
 Load `stdlib/domain.pp` for composition helpers such as `domain(spec)`,
-`probe(name, observe, cap)`, and `register-domains(domains)`. These are ordinary
-pp functions and do not bypass the generic lifecycle.
+`register-probe!(name, observe, cap)`, and `register-domains!(domains)`. These
+are ordinary pp functions and do not bypass the generic lifecycle.
 
 == Fenced effects
 

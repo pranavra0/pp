@@ -83,7 +83,7 @@ mkdir -p "$TMP/cfg"
 echo "v1" > "$TMP/cfg/env.txt"
 
 cat > "$TMP/supervise.pp" <<EOF
-let (cfg = slurp("$TMP/cfg/env.txt")) {
+let (cfg = \$file("$TMP/cfg/env.txt")) {
   {"svc-a" -> {"cmd" -> "$TMP/svc/run.sh", "args" -> ["$TMP/pid-a"], "cwd" -> "$TMP", "env" -> {"MARKER" -> cfg}}, "svc-b" -> {"cmd" -> "$TMP/svc/run.sh", "args" -> ["$TMP/pid-b"], "cwd" -> "$TMP", "env" -> {"MARKER" -> "stable"}}}
 }
 EOF

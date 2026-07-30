@@ -22,7 +22,8 @@ val do_block :
   (Core_model.value -> Core_model.value) ->
   Core_model.value
 
-val module_expr : operations -> Core_model.expr list -> Core_model.value
+val module_expr :
+  ?macro_names:string list -> operations -> Core_model.expr list -> Core_model.value
 
 val module_file : operations -> string -> Core_model.value
 

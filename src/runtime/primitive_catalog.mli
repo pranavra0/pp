@@ -2,7 +2,7 @@ open Pp_kernel
 
 type shape = Any | Exact of int | Range of int * int option
 type category =
-  | Arithmetic | Collections | Strings | Capabilities | Observations
+  | Arithmetic | Collections | Strings | Capabilities | Observations | Effects
   | Process | Domains | Diagnostics | Metaprogramming | Other
 
 type t

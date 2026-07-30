@@ -49,14 +49,14 @@ run() { "$PP" "$@" > "$TMP/out" 2>&1; }
 printf 'let libval = "LIBVAL"\n' > "$SRC/lib.pp"
 cat > "$SRC/via-link.pp" <<EOF
 load("$LINK/lib.pp")
-perform log(libval)
+log!(libval)
 EOF
 run "$SRC/via-link.pp"          # invoked via the REAL path; loads via the SYMLINK
 assert "loader-real-invoke-symlink-load" "LIBVAL" present
 
 cat > "$SRC/via-real.pp" <<EOF
 load("$SRC/lib.pp")
-perform log(libval)
+log!(libval)
 EOF
 run "$LINK/via-real.pp"         # invoked via the SYMLINK path; loads via the REAL
 assert "loader-symlink-invoke-real-load" "LIBVAL" present
@@ -65,9 +65,9 @@ assert "loader-symlink-invoke-real-load" "LIBVAL" present
 #          different spelling than the read that produced the trace ---
 printf 'DATA1\n' > "$SRC/in.txt"
 cat > "$TMP/build.pp" <<EOF
-perform log(force(node {
-  perform log("RUN")
-  slurp("$SRC/in.txt")
+log!(force(node {
+  log!("RUN")
+  \$file("$SRC/in.txt")
 }))
 EOF
 
@@ -100,9 +100,9 @@ REALVARDIR=$(cd "$VARDIR" && pwd -P)
 if [ "$REALVARDIR" != "$VARDIR" ]; then
   printf 'DATA2\n' > "$VARDIR/varin.txt"
   cat > "$TMP/varbuild.pp" <<EOF
-perform log(force(node {
-  perform log("RUN")
-  slurp("$VARDIR/varin.txt")
+log!(force(node {
+  log!("RUN")
+  \$file("$VARDIR/varin.txt")
 }))
 EOF
   rm -rf "$TMP/.pp"
@@ -136,7 +136,7 @@ NEWDIR="$TMP/newdir"
 mkdir -p "$NEWDIR"
 TARGET="$NEWDIR/newfile.txt"
 cat > "$TMP/stat.pp" <<EOF
-force(node { file-exists?("$TARGET") })
+force(node { not(nil?(\$stat("$TARGET"))) })
 EOF
 
 rm -rf "$TMP/.pp"

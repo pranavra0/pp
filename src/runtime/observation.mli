@@ -15,6 +15,16 @@ val argv_hash : string list -> string
 val observe : Cell.t -> string option
 val observe_id : Identity_types.Cell_id.t -> Identity_types.Observed_hash.t option
 val record : Cell.t -> string -> unit
+val read_file_cell : string -> string
+val read_sealed_cell : string -> string
+val read_file : string -> Core_model.value
+val read_secret : string -> Core_model.value
+val read_tree : string -> Core_model.value
+val read_stat : string -> Core_model.value
+val read_argv : unit -> Core_model.value
+val read_env : string -> Core_model.value option
+val read_probe : string -> Core_model.value option
+val read_config : string -> Core_model.value option
 val record_config : string -> unit
 val record_handler : string -> unit
 val replay :

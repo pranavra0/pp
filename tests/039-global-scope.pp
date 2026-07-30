@@ -16,6 +16,7 @@
 
 # ---- (b) module-body sibling references ----
 import(module {
+  export base, double, a, b
   def base(n) { n + 1 }
   def double(n) { 2 * base(n) }
   let a = 10

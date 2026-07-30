@@ -95,7 +95,7 @@ fi
 
 # --- (g) stratification: desired state may not read its own domain (SPEC law 30) ---
 cat > "$TMP/strat.pp" <<EOF
-{:tree -> {"a.txt" -> {:kind -> :file, :mode -> 420, :blob -> blob(slurp("$OUT/a.txt"))}}}
+{:tree -> {"a.txt" -> {:kind -> :file, :mode -> 420, :blob -> blob(\$file("$OUT/a.txt"))}}}
 EOF
 run --grant "fs:$OUT:rw" --grant "fs:$OUT:ro" --reconcile "$OUT" "$TMP/strat.pp"
 assert "stratification-error" "tratification" present

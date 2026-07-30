@@ -3,10 +3,10 @@
 # Sealed cells: a confidential read is a distinct value kind, banned at the
 # node boundary in both directions (SPEC law 39).
 #
-# `--grant secret:<path>` mints CapSecret. A read covered by CapSecret and
-# NOT by CapFilesystem returns VSealed instead of VString: print redacts
-# ("#<sealed>"), the bytes pin in-memory only in the session, never
-# store_blob/the CAS), and the node boundary bans VSealed both directions
+# `--grant secret:<path>` mints CapSecret. `$secret(path)` always returns
+# VSealed, even when a filesystem grant also covers the path: print redacts
+# ("#<sealed>"), the bytes pin in-memory only in the session, never enter
+# store_blob/the CAS, and the node boundary bans VSealed both directions
 # exactly like VCapability. `(unseal v)` is the one explicit way out to
 # VString — a Vault/SOPS-style boundary, not dataflow tainting: unsealing
 # INSIDE a node makes the result ordinary data again, by design (a
@@ -35,10 +35,10 @@ SECRET="$TMP/secret/data.txt"
 # (1) sealed read redacts on print; unseal round-trips
 # =====================================================================
 cat > "$TMP/print-sealed.pp" <<EOF
-print(slurp("$SECRET"))
+print(\$secret("$SECRET"))
 EOF
 cat > "$TMP/print-unsealed.pp" <<EOF
-print(unseal(slurp("$SECRET")))
+print(unseal(\$secret("$SECRET")))
 EOF
 rm -rf "$TMP/.pp"
 "$PP" --grant "secret:$TMP/secret" "$TMP/print-sealed.pp" > "$TMP/out" 2>&1
@@ -47,6 +47,13 @@ assert "sealed-print-no-leak"      "SECRETDATA" absent
 rm -rf "$TMP/.pp"
 "$PP" --grant "secret:$TMP/secret" "$TMP/print-unsealed.pp" > "$TMP/out" 2>&1
 assert "unseal-round-trips"        "SECRETDATA" present
+
+cat > "$TMP/file-under-secret.pp" <<EOF
+print(\$file("$SECRET"))
+EOF
+"$PP" --grant "secret:$TMP/secret" "$TMP/file-under-secret.pp" > "$TMP/out" 2>&1
+assert "file-secret-authority-redacts" "#<sealed>" present
+assert "file-secret-authority-no-leak" "SECRETDATA" absent
 
 # =====================================================================
 # (2) secret bytes NEVER under ~/.pp/store (recursive grep, whole store —
@@ -58,13 +65,13 @@ assert "unseal-round-trips"        "SECRETDATA" present
 rm -rf "$TMP/.pp"
 cat > "$TMP/read-only.pp" <<EOF
 force(node {
-  slurp("$SECRET")
+  \$secret("$SECRET")
   "read-but-not-returned"
 })
 EOF
 "$PP" --grant "secret:$TMP/secret" "$TMP/read-only.pp" > "$TMP/out" 2>&1
 cat > "$TMP/unseal-script-tier.pp" <<EOF
-print(string-length(unseal(slurp("$SECRET"))))
+print(string-length(unseal(\$secret("$SECRET"))))
 EOF
 "$PP" --grant "secret:$TMP/secret" "$TMP/unseal-script-tier.pp" >> "$TMP/out" 2>&1
 if grep -rq "SECRETDATA" "$TMP/.pp/store" 2>/dev/null; then
@@ -78,11 +85,11 @@ fi
 # (3) node boundary ban: free-var side and result side, both directions
 # =====================================================================
 cat > "$TMP/ban-freevar.pp" <<EOF
-let s = slurp("$SECRET")
+let s = \$secret("$SECRET")
 force(node { s })
 EOF
 cat > "$TMP/ban-result.pp" <<EOF
-force(node { slurp("$SECRET") })
+force(node { \$secret("$SECRET") })
 EOF
 
 for case_name in ban-freevar ban-result; do
@@ -98,9 +105,9 @@ rm -rf "$TMP/.pp"
 mkdir -p "$TMP/rot"
 printf 'V1\n' > "$TMP/rot/secret.txt"
 cat > "$TMP/rotate.pp" <<EOF
-perform log(force(node { perform log("COMPUTE-A"); slurp("$TMP/rot/secret.txt"); "done-a" }))
-perform log(force(node {
-  perform log("COMPUTE-B")
+log!(force(node { log!("COMPUTE-A"); \$secret("$TMP/rot/secret.txt"); "done-a" }))
+log!(force(node {
+  log!("COMPUTE-B")
   "done-b"
 }))
 EOF
@@ -127,24 +134,30 @@ assert "rotate-run3-rotated-b-still-hit"  "COMPUTE-B" absent
 # =====================================================================
 rm -rf "$TMP/.pp"
 cat > "$TMP/narrow.pp" <<EOF
-perform log(force(node { unseal(slurp("$SECRET")) }))
+log!(force(node { unseal(\$secret("$SECRET")) }))
 EOF
 "$PP" --grant "secret:$TMP/secret" "$TMP/narrow.pp" > "$TMP/out" 2>&1
 assert "narrow-populate-succeeds" "SECRETDATA" present
 "$PP" "$TMP/narrow.pp" > "$TMP/out" 2>&1
 assert "narrow-caller-no-leak"   "SECRETDATA" absent
-assert "narrow-caller-denied"    "(apability|permission denied)"  present
+assert "narrow-caller-denied"    "(apability|permission denied|not granted)"  present
 
 # =====================================================================
-# (6) both grants (secret AND fs) → ordinary fs behavior wins.
+# (6) both grants still produce a sealed value.
 # =====================================================================
 rm -rf "$TMP/.pp"
 cat > "$TMP/both-grants.pp" <<EOF
-print(slurp("$SECRET"))
+print(\$secret("$SECRET"))
 EOF
 "$PP" --grant "secret:$TMP/secret" --grant "fs:$TMP/secret:ro" "$TMP/both-grants.pp" > "$TMP/out" 2>&1
-assert "both-grants-plain-fs"       "SECRETDATA" present
-assert "both-grants-not-redacted"   "#<sealed>"  absent
+assert "both-grants-redacted" "#<sealed>" present
+assert "both-grants-no-leak"  "SECRETDATA" absent
+
+cat > "$TMP/file-both-grants.pp" <<EOF
+print(\$file("$SECRET"))
+EOF
+"$PP" --grant "secret:$TMP/secret" --grant "fs:$TMP/secret:ro" "$TMP/file-both-grants.pp" > "$TMP/out" 2>&1
+assert "file-both-grants-prefers-filesystem" "SECRETDATA" present
 
 rm -rf "$TMP"
 if [ "$fail" -eq 0 ]; then echo "=== SEALED CELLS (M4) TEST PASSED ==="; fi

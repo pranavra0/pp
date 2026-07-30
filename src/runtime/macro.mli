@@ -14,3 +14,8 @@ val expand_toplevel_list : services -> Core_model.expr list -> Core_model.expr l
     [(defmacro (name params...) body...)] at the top level, registers the
     macro, and replaces it with [(quote name)]. Every other form is
     recursively expanded. *)
+
+val expand_module_file :
+  services -> path:string -> string -> Core_model.expr list * string list
+(** Expand a module file in an isolated user-macro scope.  The returned names
+    are macro exports; none of them are installed in the caller's scope. *)

@@ -18,7 +18,7 @@ assert() {  # NAME  file  present|absent
 rm -rf "$TMP/.pp"
 cat > "$TMP/pure.pp" <<'EOF'
 force(node {
-  perform log("COMPUTE")
+  log!("COMPUTE")
   42
 })
 EOF
@@ -29,8 +29,8 @@ EOF
 rm -rf "$TMP/.pp"; printf 'V1\n' > "$TMP/d.txt"
 cat > "$TMP/rd.pp" <<EOF
 force(node {
-  perform log("COMPUTE")
-  slurp("$TMP/d.txt")
+  log!("COMPUTE")
+  \$file("$TMP/d.txt")
 })
 EOF
 "$PP" --grant "fs:$TMP:ro" "$TMP/rd.pp" > "$TMP/o" 2>&1; assert "read-run1-miss" "$TMP/o" present
@@ -43,14 +43,14 @@ rm -rf "$TMP/.pp"
 cat > "$TMP/g1.pp" <<'EOF'
 let unrelated = 1
 force(node {
-  perform log("COMPUTE")
+  log!("COMPUTE")
   7
 })
 EOF
 cat > "$TMP/g2.pp" <<'EOF'
 let unrelated = 2
 force(node {
-  perform log("COMPUTE")
+  log!("COMPUTE")
   7
 })
 EOF
@@ -59,7 +59,7 @@ EOF
 cat > "$TMP/v1.pp" <<'EOF'
 let (x = 1) {
   force(node {
-    perform log("COMPUTE")
+    log!("COMPUTE")
     x
   })
 }
@@ -67,7 +67,7 @@ EOF
 cat > "$TMP/v2.pp" <<'EOF'
 let (x = 2) {
   force(node {
-    perform log("COMPUTE")
+    log!("COMPUTE")
     x
   })
 }
@@ -80,7 +80,7 @@ rm -rf "$TMP/.pp"
 rm -rf "$TMP/.pp"
 cat > "$TMP/fail.pp" <<'EOF'
 force(node {
-  perform log("COMPUTE")
+  log!("COMPUTE")
   car(5)
 })
 EOF
@@ -92,12 +92,12 @@ if ! grep -q "COMPUTE" "$TMP/o" && grep -q "car expects a pair" "$TMP/o"; then e
 # --- (5) hit-time capability gate (no secret leak) ---
 rm -rf "$TMP/.pp"; mkdir -p "$TMP/secret" "$TMP/other"; printf 'SECRETDATA\n' > "$TMP/secret/s.txt"
 cat > "$TMP/sec.pp" <<EOF
-perform log(force(node { slurp("$TMP/secret/s.txt") }))
+log!(force(node { \$file("$TMP/secret/s.txt") }))
 EOF
 "$PP" --grant "fs:$TMP:ro"       "$TMP/sec.pp" > "$TMP/o" 2>&1
 if grep -q "SECRETDATA" "$TMP/o"; then echo "ok   cap-broad-caches"; else echo "FAIL cap-broad-caches"; cat "$TMP/o"; fail=1; fi
 "$PP" --grant "fs:$TMP/other:ro" "$TMP/sec.pp" > "$TMP/o" 2>&1
-if ! grep -q "SECRETDATA" "$TMP/o" && grep -q "permission denied" "$TMP/o"; then echo "ok   cap-narrow-denied"; else echo "FAIL cap-narrow-denied"; cat "$TMP/o"; fail=1; fi
+if ! grep -q "SECRETDATA" "$TMP/o" && grep -qE "permission denied|not granted" "$TMP/o"; then echo "ok   cap-narrow-denied"; else echo "FAIL cap-narrow-denied"; cat "$TMP/o"; fail=1; fi
 
 
 rm -rf "$TMP"

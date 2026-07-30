@@ -11,11 +11,11 @@ count() { grep -c "$1" "$TMP/out" 2>/dev/null || true; }
 cat > "$TMP/spine.pp" <<'EOF'
 let base = 10
 node add(x) {
-  perform log("BODY")
+  log!("BODY")
   base + x
 }
 def argument() {
-  perform log("ARGUMENT")
+  log!("ARGUMENT")
   1
 }
 print(add(argument()))

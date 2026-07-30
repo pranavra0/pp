@@ -2,7 +2,7 @@ open Pp_kernel
 (* pp domain primitives.
 
    A domain is an observe/diff/apply triple of ordinary pp functions
-   (registered via `register-domain`) running under core-enforced discipline;
+   (registered via `register-domain!`) running under core-enforced discipline;
    these are the TRUSTED MECHANICS that used to live in reconciler.ml/
    supervisor.ml:
    atomic file materialization, fork/exec/reap, and domain-private state
@@ -10,11 +10,11 @@ open Pp_kernel
    start/stop/restart decision; those live in stdlib/domain-fs.pp and
    stdlib/domain-proc.pp as real pp source, calling these primitives via
    `perform`. Every primitive that writes is trace_stack-guarded out of node
-   bodies (the fenced/write-file pattern) and capability-gated against
-   the ambient dynamic capability scope — during a domain's own
+   bodies (the fenced/write! pattern) and capability-gated against the
+   ambient dynamic capability scope — during a domain's own
    observe/apply, that ambient is exactly the domain's registered write-cap
    (Domains.with_domain / the with_ref current_capabilities [write_cap]
-   threading), so these checks are the SAME mechanism `write-file`/`run`
+   threading), so these checks are the SAME mechanism `write!`/`run!`
    already use, not a new authority path. *)
 
 open Core_model
@@ -27,13 +27,30 @@ let require_no_node_body (who : string) : unit =
   if Effect.perform Dynamic_scope.In_node then
     failwith (who ^ ": may not be called inside a node body (writes are domain-apply-only)")
 
-let has_fs_read path =
-  List.exists (fun cap -> Capability.check_fs_read cap (World_path.canonical path))
-    (Effect.perform Dynamic_scope.Get_capabilities)
 
 let has_fs_write path =
   List.exists (fun cap -> Capability.check_fs_write cap (World_path.canonical path))
     (Effect.perform Dynamic_scope.Get_capabilities)
+
+let has_fs_read path =
+  List.exists (fun cap -> Capability.check_fs_read cap (World_path.canonical path))
+    (Effect.perform Dynamic_scope.Get_capabilities)
+
+let tree_observe root =
+  require_no_node_body "tree-observe";
+  if Dynamic_scope.domain () = None then
+    failwith "tree-observe: available only while observing a domain";
+  let canonical_root = World_path.canonical root in
+  let root = (canonical_root :> string) in
+  if not (has_fs_read root || has_fs_write root) then
+    capability ("tree-observe: capability error: no access for " ^ root);
+  let hash, files = Observation.tree_snapshot root in
+  Observation.record (Cell.Tree root) hash;
+  Value.map
+    (List.map
+       (fun (relative_path, content_hash) ->
+         VString relative_path, VString content_hash)
+       files)
 (* Capabilities.check_process recurses through CapCompose (and so, via
    check_process's own CapCompose arm, through however many levels a
    domain's registered cap is typically exactly that round-trip (command_run.ml's
@@ -52,26 +69,6 @@ let has_process_cap () =
    see actual leaves, not unevaluated thunks — the same plain structural walk
    used by the other trusted callers, with this caller's force operation. *)
 
-(* ---- tree-observe: {relpath -> content-hash}, fs-read-gated ----
-   Moved from Reconciler.observed_files; returns a pp VMap instead of an
-   assoc list (the diff runs in pp, over pp values) and canonicalizes root
-   the same way every other filesystem boundary does. *)
-let tree_observe (root : string) : value =
-  let root_canon = World_path.canonical root in
-  let root = (root_canon :> string) in
-  (* A write-only domain grant (`fs:ROOT:wo`) must still be able
-     to observe its OWN managed tree — the single writer reading its own
-     domain to converge is not a new authority concern (there is no other
-     reader involved); the old OCaml reconciler's internal tree scan was
-     never gated on read at all. Accepting EITHER read or write keeps this
-     "capability-gated" (a grant with NEITHER is refused) without demanding
-     authority a write-only domain was never meant to need. *)
-  if not (has_fs_read root || has_fs_write root) then
-    capability ("tree-observe: capability error: no read or write access for " ^ root);
-  let hash, files = Observation.tree_snapshot root in
-  Observation.record (Cell.Tree root) hash;
-  Value.map (List.map (fun (rel, file_hash) ->
-    VString rel, VString file_hash) files)
 
 let rec mkdir_p dir =
   if not (Sys.file_exists dir) then begin
