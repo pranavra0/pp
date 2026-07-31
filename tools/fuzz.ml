@@ -7,7 +7,7 @@ open Pp_runtime
    single-engine metamorphic + roundtrip oracle.
 
    Every generated program is pushed through `pp f` (the tree-walker),
-   AND through `pp --roundtrip-braces f`, which (in one process)
+   AND through `pp --check-roundtrip f`, which (in one process)
    reads the sexpr AST, prints it as location-preserving brace text
    (src/frontend/printer_braces.ml), re-reads that with the brace reader
    MISMATCH (`roundtrip:*` signature), shrunk like any other.
@@ -1089,9 +1089,8 @@ let shrink_candidates (forms : sx list) : sx list list =
 (* `.pp` dispatches to the brace reader; every program this
    fuzzer generates is sexpr text (the `sx` tree's printer emits classic
    S-expressions), so the scratch file keeps the `.ppl` extension — the
-   sexpr surface is still fully supported, just no longer the default for
-   `.pp`. `--roundtrip-braces` (below) also relies on this: it refuses a
-   file whose extension already dispatches to the brace reader. *)
+   sexpr surface is still fully supported. `--check-roundtrip` performs
+   the reader/printer gate on this file. *)
 let prog_file = lazy (Filename.temp_file "ppfuzz" ".ppl")
 
 (* The reader round-trip check (sexpr -> braces -> re-read; AST +
@@ -1100,7 +1099,7 @@ let run_roundtrip (src : string) : outcome =
   let f = Lazy.force prog_file in
   let ch = open_out f in
   output_string ch src; close_out ch;
-  run_pp ["--roundtrip-braces"] f
+  run_pp ["--check-roundtrip"] f
 
 (* Single walker run — writes the program file and runs `pp f`. *)
 let run_walker (src : string) : outcome =

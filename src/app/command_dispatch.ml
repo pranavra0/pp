@@ -1,9 +1,11 @@
 open Pp_runtime
 let run host cli =
   if Command_developer.run_early cli then exit 0;
+  if Command_project.run_early host cli then exit 0;
   if Command_frontend.run cli then exit 0;
   let ctx = App_context.create host cli in
   let dispatch () =
+    if Command_project.run ctx cli then exit 0;
     Command_cluster.prepare ctx cli;
     Command_reconcile.recover ctx cli;
     if Command_developer.run_runtime ctx cli then exit 0;

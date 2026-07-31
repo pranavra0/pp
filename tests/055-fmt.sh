@@ -18,14 +18,11 @@
 #   (c) idempotence: `fmt --to-braces`/`--to-sexpr` is deterministic — run
 #       twice on the same input, byte-identical stdout;
 #   (d) the whole-tree sweep (every .pp in tests/, stdlib/, build.pp,
-#       demo/, examples/, docs/manual/**): `to-braces` then `to-sexpr`,
-#       in place (same path both hops — mutates the dune-sandboxed copy
-#       tests run against, never the developer's real tree; restored
-#       immediately after each file so later tests in this same run see
-#       pristine sources), preserves every top-level form's hash. The
-#       brace intermediate re-reading to the same hash as the sexpr
-#       original is the same property tests/054's whole-tree
-#       `--roundtrip-braces` loop already gates.
+#       demo/, examples/, docs/manual/**): canonical same-surface rewrite
+#       plus stdout-only `to-braces`/`to-sexpr` conversions preserve every
+#       top-level form's hash. The brace intermediate re-reading to the same
+#       hash as the sexpr original is the same property tests/054's
+#       `--check-roundtrip` loop already gates.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 ROOT="$PWD"
@@ -62,69 +59,98 @@ cp "$TMP/a/fix.ppl" "$TMP/a/fix.orig.ppl"
 expected_run=$("$PP" "$TMP/a/fix.ppl" 2>&1)
 
 # functional + comment chain (separately-named files at each hop, so the
-# extension-based run dispatch — braces need `.ppb` — still works; the
+# extension-based run dispatch — braces use `.pp` — still works; the
 # in-place/same-path hash check is done on its own copy below)
-if ! "$PP" fmt --to-braces "$TMP/a/fix.ppl" > "$TMP/a/fix.ppb" 2>"$TMP/a/e1"; then
+if ! "$PP" fmt --to-braces "$TMP/a/fix.ppl" > "$TMP/a/fix.pp" 2>"$TMP/a/e1"; then
   bad "fixture-a-to-braces" "$(cat "$TMP/a/e1")"
 else
   ok "fixture-a-to-braces"
 fi
-if ! "$PP" fmt --to-sexpr "$TMP/a/fix.ppb" > "$TMP/a/fix2.ppl" 2>"$TMP/a/e2"; then
+if ! "$PP" fmt --to-sexpr "$TMP/a/fix.pp" > "$TMP/a/fix2.ppl" 2>"$TMP/a/e2"; then
   bad "fixture-a-to-sexpr" "$(cat "$TMP/a/e2")"
 else
   ok "fixture-a-to-sexpr"
 fi
 
-got_ppb=$("$PP" "$TMP/a/fix.ppb" 2>&1)
+got_pp=$("$PP" "$TMP/a/fix.pp" 2>&1)
 got_pp2=$("$PP" "$TMP/a/fix2.ppl" 2>&1)
-if [ "$got_ppb" = "$expected_run" ] && [ "$got_pp2" = "$expected_run" ]; then
+if [ "$got_pp" = "$expected_run" ] && [ "$got_pp2" = "$expected_run" ]; then
   ok "fixture-a-runs-identically"
 else
-  bad "fixture-a-runs-identically" "orig: $expected_run" "braces: $got_ppb" "sexpr2: $got_pp2"
+  bad "fixture-a-runs-identically" "orig: $expected_run" "braces: $got_pp" "sexpr2: $got_pp2"
 fi
 
 c_orig=$(comment_texts sexpr "$TMP/a/fix.ppl")
-c_ppb=$(comment_texts brace "$TMP/a/fix.ppb")
+c_pp=$(comment_texts brace "$TMP/a/fix.pp")
 c_pp2=$(comment_texts sexpr "$TMP/a/fix2.ppl")
 n_orig=$(printf '%s\n' "$c_orig" | grep -c .)
-if [ "$c_orig" = "$c_ppb" ] && [ "$c_orig" = "$c_pp2" ] && [ "$n_orig" -ge 8 ]; then
+if [ "$c_orig" = "$c_pp" ] && [ "$c_orig" = "$c_pp2" ] && [ "$n_orig" -ge 8 ]; then
   ok "fixture-a-comments-preserved ($n_orig comments)"
 else
   bad "fixture-a-comments-preserved" \
-    "orig ($n_orig):" "$c_orig" "braces:" "$c_ppb" "sexpr2:" "$c_pp2"
+    "orig ($n_orig):" "$c_orig" "braces:" "$c_pp" "sexpr2:" "$c_pp2"
 fi
 
 # delimiter conversion: the `;;` banner must come out as a SINGLE `#`
 # with the delimiter run stripped — a stacked `# ;` means the scan kept
 # the source delimiter inside the text (hash gates can't catch this;
 # hashes ignore comments by construction)
-if grep -q '^# a leading double-semicolon banner comment$' "$TMP/a/fix.ppb" \
-   && ! grep -qE '(^|[[:space:]])# ;' "$TMP/a/fix.ppb"; then
+if grep -q '^# a leading double-semicolon banner comment$' "$TMP/a/fix.pp" \
+   && ! grep -qE '(^|[[:space:]])# ;' "$TMP/a/fix.pp"; then
   ok "fixture-a-delimiter-stripped"
 else
-  bad "fixture-a-delimiter-stripped" "$(head -3 "$TMP/a/fix.ppb")"
+  bad "fixture-a-delimiter-stripped" "$(head -3 "$TMP/a/fix.pp")"
 fi
 # noise: no line of the brace output may end in whitespace (which is also
 # where a trailing '; ' separator would show up)
-if grep -qE '[[:blank:]]$' "$TMP/a/fix.ppb"; then
-  bad "fixture-a-no-trailing-noise" "$(grep -nE '[[:blank:]]$' "$TMP/a/fix.ppb" | head -3)"
+if grep -qE '[[:blank:]]$' "$TMP/a/fix.pp"; then
+  bad "fixture-a-no-trailing-noise" "$(grep -nE '[[:blank:]]$' "$TMP/a/fix.pp" | head -3)"
 else
   ok "fixture-a-no-trailing-noise"
 fi
 
-# strict same-path (-i) hash check
+# strict canonical same-surface rewrite (atomic and hash-preserving)
 cp "$TMP/a/fix.orig.ppl" "$TMP/a/work.ppl"
-if "$PP" fmt --to-braces "$TMP/a/work.ppl" -i 2>"$TMP/a/e3" \
-   && "$PP" fmt --to-sexpr "$TMP/a/work.ppl" -i 2>>"$TMP/a/e3" \
+if "$PP" fmt "$TMP/a/work.ppl" >"$TMP/a/fmt.out" 2>"$TMP/a/e3" \
    && "$PP" --compare-hash "$TMP/a/work.ppl" "$TMP/a/fix.orig.ppl" >"$TMP/a/e3" 2>&1; then
   ok "fixture-a-hash-preserved"
 else
   bad "fixture-a-hash-preserved" "$(cat "$TMP/a/e3")"
 fi
 
+# CLI surface guards: canonical in-place formatting is `fmt FILE`, explicit
+# conversion is stdout-only, and the round-trip checker/help alias are stable.
+if "$PP" --check-roundtrip "$TMP/a/fix.ppl" >"$TMP/a/check.out" 2>"$TMP/a/check.err"; then
+  ok "check-roundtrip"
+else
+  bad "check-roundtrip" "$(cat "$TMP/a/check.err")"
+fi
+if "$PP" fmt --to-braces "$TMP/a/fix.pp" >"$TMP/a/reject.out" 2>"$TMP/a/reject.err"; then
+  bad "to-braces-rejects-brace-input"
+else
+  ok "to-braces-rejects-brace-input"
+fi
+if "$PP" fmt --to-sexpr "$TMP/a/fix.ppl" >"$TMP/a/reject.out" 2>"$TMP/a/reject.err"; then
+  bad "to-sexpr-rejects-sexpr-input"
+else
+  ok "to-sexpr-rejects-sexpr-input"
+fi
+if "$PP" fmt --to-braces "$TMP/a/fix.ppl" -i >"$TMP/a/reject.out" 2>"$TMP/a/reject.err"; then
+  bad "formatter-rejects-in-place-option"
+else
+  ok "formatter-rejects-in-place-option"
+fi
+"$PP" --help >"$TMP/help-long"
+"$PP" -h >"$TMP/help-short"
+if cmp -s "$TMP/help-long" "$TMP/help-short"; then
+  ok "help-alias"
+else
+  bad "help-alias" "$(diff "$TMP/help-long" "$TMP/help-short" | head -10)"
+fi
+
 # ---- (b) the same, brace-authored (`#` comments) ----
 mkdir -p "$TMP/b"
-cat > "$TMP/b/fix.ppb" <<'EOF'
+cat > "$TMP/b/fix.pp" <<'EOF'
 # a leading standalone comment
 def f(x) { # trailing on the def's own head line
   # a standalone comment nested inside a multi-statement body
@@ -144,67 +170,59 @@ print(f(1)) # trailing on the final statement
 print(g(2, 3))
 # a trailing standalone comment at the very end of the file
 EOF
-cp "$TMP/b/fix.ppb" "$TMP/b/fix.orig.ppb"
-expected_run_b=$("$PP" "$TMP/b/fix.ppb" 2>&1)
+cp "$TMP/b/fix.pp" "$TMP/b/fix.orig.pp"
+expected_run_b=$("$PP" "$TMP/b/fix.pp" 2>&1)
 
-if ! "$PP" fmt --to-sexpr "$TMP/b/fix.ppb" > "$TMP/b/fix.ppl" 2>"$TMP/b/e1"; then
+if ! "$PP" fmt --to-sexpr "$TMP/b/fix.pp" > "$TMP/b/fix.ppl" 2>"$TMP/b/e1"; then
   bad "fixture-b-to-sexpr" "$(cat "$TMP/b/e1")"
 else
   ok "fixture-b-to-sexpr"
 fi
-if ! "$PP" fmt --to-braces "$TMP/b/fix.ppl" > "$TMP/b/fix2.ppb" 2>"$TMP/b/e2"; then
+if ! "$PP" fmt --to-braces "$TMP/b/fix.ppl" > "$TMP/b/fix2.pp" 2>"$TMP/b/e2"; then
   bad "fixture-b-to-braces" "$(cat "$TMP/b/e2")"
 else
   ok "fixture-b-to-braces"
 fi
 
 got_pp=$("$PP" "$TMP/b/fix.ppl" 2>&1)
-got_ppb2=$("$PP" "$TMP/b/fix2.ppb" 2>&1)
-if [ "$got_pp" = "$expected_run_b" ] && [ "$got_ppb2" = "$expected_run_b" ]; then
+got_pp2=$("$PP" "$TMP/b/fix2.pp" 2>&1)
+if [ "$got_pp" = "$expected_run_b" ] && [ "$got_pp2" = "$expected_run_b" ]; then
   ok "fixture-b-runs-identically"
 else
-  bad "fixture-b-runs-identically" "orig: $expected_run_b" "sexpr: $got_pp" "braces2: $got_ppb2"
+  bad "fixture-b-runs-identically" "orig: $expected_run_b" "sexpr: $got_pp" "braces2: $got_pp2"
 fi
 
-c_orig_b=$(comment_texts brace "$TMP/b/fix.ppb")
+c_orig_b=$(comment_texts brace "$TMP/b/fix.pp")
 c_pp_b=$(comment_texts sexpr "$TMP/b/fix.ppl")
-c_ppb2=$(comment_texts brace "$TMP/b/fix2.ppb")
+c_pp2=$(comment_texts brace "$TMP/b/fix2.pp")
 n_orig_b=$(printf '%s\n' "$c_orig_b" | grep -c .)
-if [ "$c_orig_b" = "$c_pp_b" ] && [ "$c_orig_b" = "$c_ppb2" ] && [ "$n_orig_b" -ge 8 ]; then
+if [ "$c_orig_b" = "$c_pp_b" ] && [ "$c_orig_b" = "$c_pp2" ] && [ "$n_orig_b" -ge 8 ]; then
   ok "fixture-b-comments-preserved ($n_orig_b comments)"
 else
   bad "fixture-b-comments-preserved" \
-    "orig ($n_orig_b):" "$c_orig_b" "sexpr:" "$c_pp_b" "braces2:" "$c_ppb2"
+    "orig ($n_orig_b):" "$c_orig_b" "sexpr:" "$c_pp_b" "braces2:" "$c_pp2"
 fi
 
 # ---- (c) idempotence: deterministic output, run twice ----
-"$PP" fmt --to-braces "$TMP/a/fix.orig.ppl" > "$TMP/a/out1.ppb" 2>/dev/null
-"$PP" fmt --to-braces "$TMP/a/fix.orig.ppl" > "$TMP/a/out2.ppb" 2>/dev/null
-if diff -q "$TMP/a/out1.ppb" "$TMP/a/out2.ppb" >/dev/null; then
+"$PP" fmt --to-braces "$TMP/a/fix.orig.ppl" > "$TMP/a/out1.pp" 2>/dev/null
+"$PP" fmt --to-braces "$TMP/a/fix.orig.ppl" > "$TMP/a/out2.pp" 2>/dev/null
+if diff -q "$TMP/a/out1.pp" "$TMP/a/out2.pp" >/dev/null; then
   ok "idempotent-to-braces"
 else
-  bad "idempotent-to-braces" "$(diff "$TMP/a/out1.ppb" "$TMP/a/out2.ppb" | head -10)"
+  bad "idempotent-to-braces" "$(diff "$TMP/a/out1.pp" "$TMP/a/out2.pp" | head -10)"
 fi
-"$PP" fmt --to-sexpr "$TMP/b/fix.orig.ppb" > "$TMP/b/out1.ppl" 2>/dev/null
-"$PP" fmt --to-sexpr "$TMP/b/fix.orig.ppb" > "$TMP/b/out2.ppl" 2>/dev/null
+"$PP" fmt --to-sexpr "$TMP/b/fix.orig.pp" > "$TMP/b/out1.ppl" 2>/dev/null
+"$PP" fmt --to-sexpr "$TMP/b/fix.orig.pp" > "$TMP/b/out2.ppl" 2>/dev/null
 if diff -q "$TMP/b/out1.ppl" "$TMP/b/out2.ppl" >/dev/null; then
   ok "idempotent-to-sexpr"
 else
   bad "idempotent-to-sexpr" "$(diff "$TMP/b/out1.ppl" "$TMP/b/out2.ppl" | head -10)"
 fi
 
-# ---- (d) whole-tree sweep (the tree is brace-authored, so the direction
-#      is to-sexpr + to-braces). Each file is round-tripped as a private
-#      COPY under $TMP, never in the shared tree: this suite runs
-#      concurrently with the expected-output .pp cases and tests/054's own
-#      whole-tree read, so mutating a source file in place — even
-#      mutate-then-restore — would expose a torn/wrong-surface file to
-#      those readers. law-20 per-form hashes are path-independent, so a
-#      copy's round-trip proves the identical hash-preservation property
-#      the real file would; the "before" copy (never round-tripped) is the
-#      hash reference. Comment COUNT + TEXT (delimiter/whitespace-agnostic)
-#      are checked at BOTH hops too: hashes ignore comments by construction,
-#      so hash equality alone can't catch a dropped one. ----
+# ---- (d) whole-tree sweep (canonical rewrite plus both stdout conversions)
+# Each file is round-tripped as a private COPY under $TMP, never in the
+# shared tree. The canonical rewrite exercises atomic same-surface formatting;
+# the two explicit targets exercise stdout-only conversion. ----
 sweep_fail=0
 sweep_count=0
 sweep_comments=0
@@ -216,37 +234,44 @@ for f in "$ROOT"/tests/[0-9]*.pp \
   sweep_count=$((sweep_count + 1))
   work="$TMP/sweep-work-$sweep_count.pp"
   backup="$TMP/sweep-orig-$sweep_count.pp"
+  mid="$TMP/sweep-mid-$sweep_count.ppl"
+  after="$TMP/sweep-after-$sweep_count.pp"
   cp "$f" "$work"; cp "$f" "$backup"
-  # dune's sandboxed source_tree deps are read-only; cp carries that mode onto
-  # the work copy, so make it writable for the in-place round-trip below.
   chmod u+w "$work"
   c_before=$(comment_texts brace "$work")
-  # count every comment, including delimiter-only lines whose content is
-  # empty after stripping (`#` separators) — those still must survive
   n_before=$("$PP" --list-comments brace "$work" 2>/dev/null | wc -l | tr -d ' ')
-  if ! "$PP" fmt --to-sexpr "$work" -i 2>"$TMP/sweep.err"; then
+  if ! "$PP" fmt "$work" >"$TMP/sweep-format.out" 2>"$TMP/sweep.err"; then
+    bad "sweep-canonical ($f)" "$(cat "$TMP/sweep.err")"; sweep_fail=1; continue
+  fi
+  c_canonical=$(comment_texts brace "$work")
+  if [ "$c_before" != "$c_canonical" ]; then
+    bad "sweep-canonical-comments ($f)" \
+      "before ($n_before):" "$c_before" "after:" "$c_canonical"
+    sweep_fail=1
+  fi
+  if ! "$PP" fmt --to-sexpr "$work" >"$mid" 2>"$TMP/sweep.err"; then
     bad "sweep-to-sexpr ($f)" "$(cat "$TMP/sweep.err")"; sweep_fail=1; continue
   fi
-  c_mid=$(comment_texts sexpr "$work")
-  if ! "$PP" fmt --to-braces "$work" -i 2>"$TMP/sweep.err"; then
+  c_mid=$(comment_texts sexpr "$mid")
+  if ! "$PP" fmt --to-braces "$mid" >"$after" 2>"$TMP/sweep.err"; then
     bad "sweep-to-braces ($f)" "$(cat "$TMP/sweep.err")"; sweep_fail=1; continue
   fi
   # brace-output quality gates: no line ends in whitespace (also where a
   # trailing '; ' would appear), no stacked '# ;' delimiter
-  if grep -qE '[[:blank:]]$' "$work"; then
-    bad "sweep-noise ($f)" "$(grep -nE '[[:blank:]]$' "$work" | head -2)"; sweep_fail=1
+  if grep -qE '[[:blank:]]$' "$after"; then
+    bad "sweep-noise ($f)" "$(grep -nE '[[:blank:]]$' "$after" | head -2)"; sweep_fail=1
   fi
-  if grep -qE '^# ;|^#;;' "$work"; then
-    bad "sweep-stacked-delimiter ($f)" "$(grep -nE '^# ;|^#;;' "$work" | head -2)"; sweep_fail=1
+  if grep -qE '^# ;|^#;;' "$after"; then
+    bad "sweep-stacked-delimiter ($f)" "$(grep -nE '^# ;|^#;;' "$after" | head -2)"; sweep_fail=1
   fi
-  c_after=$(comment_texts brace "$work")
+  c_after=$(comment_texts brace "$after")
   if [ "$c_before" != "$c_mid" ] || [ "$c_before" != "$c_after" ]; then
     bad "sweep-comments ($f)" \
-      "before ($n_before):" "$c_before" "braces:" "$c_mid" "after:" "$c_after"
+      "before ($n_before):" "$c_before" "sexpr:" "$c_mid" "braces:" "$c_after"
     sweep_fail=1
   fi
   sweep_comments=$((sweep_comments + n_before))
-  if ! "$PP" --compare-hash "$work" "$backup" >"$TMP/sweep.err" 2>&1; then
+  if ! "$PP" --compare-hash "$after" "$backup" >"$TMP/sweep.err" 2>&1; then
     bad "sweep-hash ($f)" "$(cat "$TMP/sweep.err")"; sweep_fail=1
   fi
 done

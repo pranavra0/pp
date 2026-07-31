@@ -2,6 +2,9 @@ open Pp_runtime
 open Pp_kernel
 open Source_error
 type fmt_target = To_braces | To_sexpr
+type project_command = Project_init | Project_add | Project_update
+  | Project_remove | Project_build | Project_test
+
 
 type t = {
   command_argv : string list;
@@ -9,6 +12,9 @@ type t = {
   files : string list;
   grants : string list;
   eval_string : string option;
+  project_command : project_command option;
+  project_file : string option;
+  project_verbose : bool;
   reconcile_root : string option;
   supervise : bool;
   member_name : string option;
@@ -27,9 +33,8 @@ type t = {
   fetch_islands : bool;
   pin_file : string option;
   dump_pins_file : string option;
-  emit_braces_file : string option;
-  roundtrip_braces_file : string option;
-  fmt : (fmt_target * string * bool) option;
+  check_roundtrip_file : string option;
+  fmt : (fmt_target option * string) option;
   compare_hash : (string * string) option;
   list_comments : ([ `Sexpr | `Brace ] * string) option;
   why : bool;
@@ -65,6 +70,9 @@ type raw = {
   files : string list ref;
   grants : string list ref;
   eval_string : string option ref;
+  project_command : project_command option ref;
+  project_file : string option ref;
+  project_verbose : bool ref;
   reconcile_root : string option ref;
   supervise : bool ref;
   member_name : string option ref;
@@ -83,9 +91,8 @@ type raw = {
   fetch_islands : bool ref;
   pin_file : string option ref;
   dump_pins_file : string option ref;
-  emit_braces_file : string option ref;
-  roundtrip_braces_file : string option ref;
-  fmt : (fmt_target * string * bool) option ref;
+  check_roundtrip_file : string option ref;
+  fmt : (fmt_target option * string) option ref;
   compare_hash : (string * string) option ref;
   list_comments : ([ `Sexpr | `Brace ] * string) option ref;
   why : bool ref;
@@ -110,7 +117,9 @@ type raw = {
 
 let new_raw command_argv = {
   command_argv; program_argv = ref []; files = ref []; grants = ref [];
-  eval_string = ref None; reconcile_root = ref None; supervise = ref false;
+  eval_string = ref None; project_command = ref None;
+  project_file = ref None; project_verbose = ref false;
+  reconcile_root = ref None; supervise = ref false;
   member_name = ref None; desired_object = ref None;
   publish_object_root = ref None; watch = ref false;
   watch_interval = ref "1.0"; stabilize = ref false;
@@ -119,8 +128,8 @@ let new_raw command_argv = {
   gc_grace_seconds = ref (string_of_float Store_gc.default_grace_seconds);
   gc = ref false; update_islands = ref false;
   fetch_islands = ref false; pin_file = ref None;
-  dump_pins_file = ref None; emit_braces_file = ref None;
-  roundtrip_braces_file = ref None; fmt = ref None; compare_hash = ref None;
+  dump_pins_file = ref None; check_roundtrip_file = ref None;
+  fmt = ref None; compare_hash = ref None;
   list_comments = ref None; why = ref false; no_cache = ref false;
   check = ref false; graph = ref false; lint_file = ref None;
   island_pins = ref None; cluster_init = ref false; mint_token = ref None;
@@ -160,19 +169,31 @@ let opt5 name f =
       | _ -> command (name ^ " requires five arguments") }
 
 let parse_fmt raw rest =
-  let to_braces = ref None and to_sexpr = ref None and in_place = ref false in
+  let target = ref None and file = ref None in
+  let set_target value =
+    match !target with
+    | None -> target := Some value
+    | Some _ -> command "pp fmt: specify at most one output surface"
+  in
+  let set_file value =
+    match !file with
+    | None -> file := Some value
+    | Some _ -> command "pp fmt: specify exactly one file"
+  in
   let rec loop = function
-    | "--to-braces" :: file :: more -> to_braces := Some file; loop more
-    | "--to-sexpr" :: file :: more -> to_sexpr := Some file; loop more
-    | ("-i" | "--in-place") :: more -> in_place := true; loop more
+    | "--to-braces" :: path :: more ->
+        set_target To_braces; set_file path; loop more
+    | "--to-sexpr" :: path :: more ->
+        set_target To_sexpr; set_file path; loop more
+    | path :: more when path <> "" && path.[0] <> '-' ->
+        set_file path; loop more
     | [] -> ()
     | bad :: _ -> command ("pp fmt: unrecognized argument: " ^ bad)
   in
   loop rest;
-  raw.fmt := (match !to_braces, !to_sexpr with
-    | Some file, None -> Some (To_braces, file, !in_place)
-    | None, Some file -> Some (To_sexpr, file, !in_place)
-    | _ -> command "pp fmt: specify exactly one of --to-braces or --to-sexpr");
+  raw.fmt := (match !target, !file with
+    | target, Some file -> Some (target, file)
+    | _, None -> command "pp fmt: requires a source file");
   []
 
 let parse_kernel_props raw rest =
@@ -195,8 +216,32 @@ let parse_kernel_props raw rest =
 let flags raw =
   let set_fenced value = raw.fenced_policy := value in
   let set_schedule spec = raw.schedule := spec; raw.schedule_explicit := true in
+  let set_project_command command_name =
+    match !(raw.project_command) with
+    | None -> raw.project_command := Some command_name
+    | Some _ -> command "only one project command may be specified"
+  in
+  let project_flag name command_name doc =
+    doc_of doc (flag name (fun () -> set_project_command command_name))
+  in
   [
     { name = "--"; doc = ""; internal = true; handler = fun rest -> raw.program_argv := rest; [] };
+    project_flag "init" Project_init
+      "  pp init [DIR]             Create a project manifest and starter files\n";
+    project_flag "add" Project_add
+      "  pp add NAME URI           Add and pin a project dependency\n";
+    project_flag "update" Project_update
+      "  pp update [NAME]          Re-pin one dependency or all dependencies\n";
+    project_flag "remove" Project_remove
+      "  pp remove NAME            Remove a project dependency\n";
+    project_flag "build" Project_build
+      "  pp build                  Build the selected project entry\n";
+    project_flag "test" Project_test
+      "  pp test [PATH...]         Run project tests\n";
+    doc_of "  pp --project <project.pp>  Select a project for project commands or execution\n"
+      (opt1 "--project" (fun p -> raw.project_file := Some p));
+    doc_of "  pp test --verbose         Replay passing test output too\n"
+      (flag "--verbose" (fun () -> raw.project_verbose := true));
     doc_of "  pp --update <file.pp>     Re-resolve islands and rewrite inline pins (implies --fetch-islands)\n"
       (flag "--update" (fun () -> raw.update_islands := true; raw.fetch_islands := true));
     doc_of "  pp --fetch-islands        Allow git fetch for uncached island pins (default: off)\n"
@@ -240,11 +285,8 @@ let flags raw =
       (opt1 "--pin-file" (fun p -> raw.pin_file := Some p));
     doc_of "  pp --dump-pins <path> <file.pp>  After running, write every run_pins/probe_values entry as (pin ...)/(pin-probe ...) lines to <path>\n"
       (opt1 "--dump-pins" (fun p -> raw.dump_pins_file := Some p));
-    doc_of "  pp --emit-braces <file.ppl>  Print a sexpr (.ppl) file as brace-surface text (.pp/.ppb are brace surface, .ppl is the sexpr/AST surface)\n"
-      (opt1 "--emit-braces" (fun f -> raw.emit_braces_file := Some f));
-    doc_of "  pp --roundtrip-braces <file.ppl>  Assert sexpr->braces->re-read AST + hash equality (the fuzz gate)\n"
-      (opt1 "--roundtrip-braces" (fun f -> raw.roundtrip_braces_file := Some f));
-    doc_of "  pp fmt --to-braces <file> [-i]  Transpile sexpr source to brace source, carrying comments (-i/--in-place rewrites the file, same path)\n  pp fmt --to-sexpr <file> [-i]   Transpile brace source to sexpr source, carrying comments\n"
+    { (opt1 "--check-roundtrip" (fun f -> raw.check_roundtrip_file := Some f)) with internal = true };
+    doc_of "  pp fmt <file>           Rewrite a source file in its canonical surface, preserving comments\n  pp fmt --to-braces <file.ppl>  Convert sexpr source to brace source on stdout\n  pp fmt --to-sexpr <file.pp>   Convert brace source to sexpr source on stdout\n"
       ({ name = "fmt"; doc = ""; internal = false; handler = parse_fmt raw });
     { (opt2 "--compare-hash" (fun a b -> raw.compare_hash := Some (a, b))) with internal = true };
     { (opt2 "--list-comments" (fun surface file ->
@@ -268,7 +310,7 @@ let flags raw =
     { name = "--check-kernel-props"; doc = ""; internal = true; handler = parse_kernel_props raw };
     doc_of "  pp --help                Print this help\n"
       (flag "--help" (fun () -> raw.help := true));
-    { (flag "-h" (fun () -> ())) with internal = true };
+    { (flag "-h" (fun () -> raw.help := true)) with internal = true };
     doc_of "  pp --once <file.pp>        Run once and exit (explicit; default behavior)\n"
       (flag "--once" (fun () -> ()));
     doc_of "  pp --watch <file.pp>       Run, then watch cell changes and re-evaluate\n  pp --watch --stabilize <file>  Watch with push stabilize (dirty-propagation)\n"
@@ -295,7 +337,10 @@ let validated raw =
       ~option_name:"--gc-grace-seconds" !(raw.gc_grace_seconds) in
   { command_argv = raw.command_argv; program_argv = !(raw.program_argv);
     files = List.rev !(raw.files); grants = List.rev !(raw.grants);
-    eval_string = !(raw.eval_string); reconcile_root = !(raw.reconcile_root);
+    eval_string = !(raw.eval_string);
+    project_command = !(raw.project_command); project_file = !(raw.project_file);
+    project_verbose = !(raw.project_verbose);
+    reconcile_root = !(raw.reconcile_root);
     supervise = !(raw.supervise); member_name = !(raw.member_name);
     desired_object = !(raw.desired_object); publish_object_root = !(raw.publish_object_root);
     watch = !(raw.watch); watch_interval = interval; stabilize = !(raw.stabilize);
@@ -304,8 +349,8 @@ let validated raw =
     gc_grace_seconds = grace; gc = !(raw.gc);
     update_islands = !(raw.update_islands); fetch_islands = !(raw.fetch_islands);
     pin_file = !(raw.pin_file);
-    dump_pins_file = !(raw.dump_pins_file); emit_braces_file = !(raw.emit_braces_file);
-    roundtrip_braces_file = !(raw.roundtrip_braces_file); fmt = !(raw.fmt);
+    dump_pins_file = !(raw.dump_pins_file);
+    check_roundtrip_file = !(raw.check_roundtrip_file); fmt = !(raw.fmt);
     compare_hash = !(raw.compare_hash); list_comments = !(raw.list_comments);
     why = !(raw.why); no_cache = !(raw.no_cache); check = !(raw.check);
     graph = !(raw.graph); lint_file = !(raw.lint_file);
@@ -333,6 +378,9 @@ let print_help (t : t) =
      the same immutable table without exposing parser state. *)
   let raw = new_raw t.command_argv in
   List.iter (fun f -> if not f.internal then print_string f.doc) (flags raw)
+let project_command (t : t) = t.project_command
+let project_file (t : t) = t.project_file
+let project_verbose (t : t) = t.project_verbose
 
 let command_argv (t : t) = t.command_argv
 let program_argv (t : t) = t.program_argv
@@ -357,8 +405,7 @@ let update_islands (t : t) = t.update_islands
 let fetch_islands (t : t) = t.fetch_islands
 let pin_file (t : t) = t.pin_file
 let dump_pins_file (t : t) = t.dump_pins_file
-let emit_braces_file (t : t) = t.emit_braces_file
-let roundtrip_braces_file (t : t) = t.roundtrip_braces_file
+let check_roundtrip_file (t : t) = t.check_roundtrip_file
 let fmt (t : t) = t.fmt
 let compare_hash (t : t) = t.compare_hash
 let list_comments (t : t) = t.list_comments

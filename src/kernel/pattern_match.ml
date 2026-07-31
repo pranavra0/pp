@@ -58,7 +58,7 @@ let rec match_pattern (v : value) (p : pattern) : (string * value) list option =
                   | Exact when remaining <> [] -> None
                   | Exact -> Some bindings
                   | Ignore -> Some bindings
-                  | Bind name -> Some (bindings @ [name, VMap remaining]))
+                  | Bind name -> Some (bindings @ [name, Value.map remaining]))
              | (key, pattern) :: rest ->
                  (match find_key key [] remaining with
                   | None -> None

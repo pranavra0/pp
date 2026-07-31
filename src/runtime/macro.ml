@@ -345,12 +345,12 @@ and expand_static_island ?source:_ services session expansion_count uri pin =
   let tree = Island.resolve ~uri ~pin in
   expand_static_file services session expansion_count (Island.entry_file tree)
 
-let expand_module_file services ~path source =
+let expand_module_file ?(install_exports = false) services ~path source =
   let session = Effect.perform Dynamic_scope.Get_session in
   let expansion_count = ref 0 in
   let forms = Reader_braces.read_dispatch ~source:path ~path source in
   let expanded, exported =
-    expand_module ~install_exports:false services session expansion_count None forms
+    expand_module ~install_exports services session expansion_count None forms
   in
   (expanded, List.map fst exported)
 

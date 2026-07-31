@@ -16,6 +16,7 @@ val expand_toplevel_list : services -> Core_model.expr list -> Core_model.expr l
     recursively expanded. *)
 
 val expand_module_file :
+  ?install_exports:bool ->
   services -> path:string -> string -> Core_model.expr list * string list
 (** Expand a module file in an isolated user-macro scope.  The returned names
     are macro exports; none of them are installed in the caller's scope. *)

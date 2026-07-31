@@ -216,10 +216,13 @@ let fetch_git (u : uri) : string =
 (* Fetch/derive a fresh pin for a URI — the impure step behind `pp --update`
    (and first-fetch). file: re-hashes the local source dir; git:/github:
    clone the ref. *)
-let repin (u : uri) : string =
+let repin_uri (u : uri) : string =
   match u.scheme with
   | SFile -> materialize ~uri:u.raw ~src_dir:u.locator
   | SGit | SGitHub -> fetch_git u
+
+let repin (raw_uri : string) : string =
+  repin_uri (parse_uri raw_uri)
 
 (* ---- Resolution: pin -> immutable cached tree (never the network) ---- *)
 
@@ -370,9 +373,8 @@ let update_file (path : string) : int * int =
   in
   List.iter (fun (uri, old_pin) ->
     let u = parse_uri uri in
-    let fresh = repin u in
+    let fresh = repin_uri u in
     match old_pin with
-    | Some p when p = fresh -> ()  (* already current *)
     | Some p when is_pin p ->
         (match find_delimited !text p with
          | [] ->

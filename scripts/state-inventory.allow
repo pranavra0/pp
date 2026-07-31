@@ -7,6 +7,7 @@ mutable-field|src/runtime/cache_policy.ml|volatile_count|test-diagnostic
 mutable-field|src/runtime/cache_policy.ml|why_enabled|command
 top-ref|src/runtime/store_layout.ml|write_count|durable-store
 mutable-field|src/frontend/printer_braces.ml|anch|pass
+mutable-field|src/frontend/printer_braces.ml|allow_export|pass
 mutable-field|src/frontend/printer_braces.ml|col|pass
 mutable-field|src/frontend/printer_braces.ml|indent|pass
 mutable-field|src/frontend/printer_braces.ml|line|pass

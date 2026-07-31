@@ -143,7 +143,7 @@ the transform would change semantics or scoping.
 
 ### The reader round-trip gate
 
-Every generated program also passes through `pp --roundtrip-braces`,
+Every generated program also passes through `pp --check-roundtrip`,
 which prints the sexpr AST as brace text, re-reads it with the brace
 reader, and asserts structural AST equality and hash equality (SPEC law
 20). Any failure gates the run like a twin mismatch.

@@ -8,7 +8,7 @@
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 # A match file covering every pattern kind AND a guard.
-cat > "$TMP/m.ppb" <<'EOF'
+cat > "$TMP/m.pp" <<'EOF'
 def describe(r) {
   match r {
     [:ok, v] if v > 10 => "big ok"
@@ -34,7 +34,7 @@ EOF
 expected=$'"big ok"\n"small ok"\n"boom"\n"long list"\n"singleton"\n"empty"\n"the answer"\n"other"'
 
 # (a) the brace file itself runs correctly (baseline).
-got=$("$PP" "$TMP/m.ppb" 2>&1)
+got=$("$PP" "$TMP/m.pp" 2>&1)
 if [ "$got" = "$expected" ]; then
   ok "brace-baseline"
 else
@@ -43,7 +43,7 @@ fi
 
 # (b) transpile to sexpr, and the SEXPR file runs identically
 #     (the sexpr reader now understands match — the C4 change).
-"$PP" fmt --to-sexpr "$TMP/m.ppb" > "$TMP/m.ppl" 2>"$TMP/e1"
+"$PP" fmt --to-sexpr "$TMP/m.pp" > "$TMP/m.ppl" 2>"$TMP/e1"
 if [ ! -s "$TMP/m.ppl" ]; then
   bad "to-sexpr" "$(cat "$TMP/e1")"
 else
@@ -58,12 +58,12 @@ fi
 
 # (c) full round-trip braces → sexpr → braces preserves the LAW-20 hash (this
 #     is the property that lets match files rejoin the tests/055 sweep).
-"$PP" fmt --to-braces "$TMP/m.ppl" > "$TMP/m2.ppb" 2>"$TMP/e2"
-if "$PP" --compare-hash "$TMP/m.ppb" "$TMP/m2.ppb" >/dev/null 2>&1; then
+"$PP" fmt --to-braces "$TMP/m.ppl" > "$TMP/m2.pp" 2>"$TMP/e2"
+if "$PP" --compare-hash "$TMP/m.pp" "$TMP/m2.pp" >/dev/null 2>&1; then
   ok "roundtrip-hash-preserved"
 else
   bad "roundtrip-hash-preserved" "$(cat "$TMP/e2")" \
-      "$(diff "$TMP/m.ppb" "$TMP/m2.ppb" | head -20)"
+      "$(diff "$TMP/m.pp" "$TMP/m2.pp" | head -20)"
 fi
 
 # (d) a hand-written sexpr `(match …)` (not printer-generated) parses and runs,

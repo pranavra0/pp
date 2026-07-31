@@ -2,19 +2,19 @@
 # tests/054 — the brace reader (SPEC Appendix B): a location-preserving
 # sexpr<->brace printer, tested across both readers.
 #
-#   (a) a nontrivial .ppb program (infix precedence, pipeline, cell literals,
+#   (a) a nontrivial .pp program (infix precedence, pipeline, cell literals,
 #       and/or, map/vector literals, do/let/let*/if-else, node + needs,
 #       with-handler/with-config/config, defmacro, quote{}/quasiquote{}/
 #       unquote/splice, `;` separators, `#` comments) runs correctly;
-#   (b) cross-surface loading: a .pp loads a .ppb and vice versa; a pinned
-#       island whose tree ships entry.ppb imports from a .pp program, and a
-#       .ppb program imports an island via the string-URI spelling;
+#   (b) a .ppl loads a .pp and vice versa; a pinned
+#       island whose tree ships entry.pp imports from a .ppl program, and a
+#       .pp program imports an island via the string-URI spelling;
 #   (c) assert parity (SPEC law 29): the SAME assert at the same line
 #       produces the same desugared message in both surfaces (condition
 #       rendered in s-expression notation), modulo only the file name;
-#   (d) `pp --emit-braces` on a real sexpr test file produces a .ppb whose
+#   (d) `pp fmt --to-braces` on a real sexpr test file produces a .pp whose
 #       output matches the .pp original's;
-#   (e) `pp --roundtrip-braces` (AST + hash equality through the printer and
+#   (e) `pp --check-roundtrip` (AST + hash equality through the printer and
 #       the second reader, SPEC law 20) holds for every .pp in the tree;
 #   (f) the metamorphic fuzzer's round-trip gate passes on a few hundred
 #       full-grammar programs (2 readers).
@@ -28,7 +28,7 @@ case "$FUZZ" in /*) : ;; *) FUZZ="$PWD/$FUZZ" ;; esac
 ROOT="$PWD"
 STDLIB="$ROOT/stdlib/list.pp"
 
-# ---- (a) the nontrivial .ppb program ----
+# ---- (a) the nontrivial .pp program ----
 # covers: comments, ';' separators, infix precedence, pipeline, infix
 # and/or (right-assoc desugar), operator-as-value, n-ary call form,
 # vector/map literals, quote{}/quasiquote{}/unquote/splice, type annotations
@@ -36,7 +36,7 @@ STDLIB="$ROOT/stdlib/list.pp"
 # continuation, with-handler/with-config/config, defmacro, kebab identifiers
 # vs the whitespace rule, if/else-if/else, module/import.
 mkdir -p "$TMP/a"
-cat > "$TMP/a/main.ppb" <<EOF
+cat > "$TMP/a/main.pp" <<EOF
 load("$STDLIB")
 let x = 2 + 3 * 4; print(x)
 x |> print
@@ -95,36 +95,36 @@ string-index
 "lt"
 50'
 # fresh HOME so node-cache hit/miss cannot skew stdout
-got=$(HOME="$TMP/h" "$PP" "$TMP/a/main.ppb" 2>"$TMP/a/err")
-if [ "$got" = "$expected" ]; then ok "ppb-program"
-else bad "ppb-program" "expected: $(printf '%q' "$expected")" "got:      $(printf '%q' "$got")" "stderr: $(cat "$TMP/a/err")"; fi
+got=$(HOME="$TMP/h" "$PP" "$TMP/a/main.pp" 2>"$TMP/a/err")
+if [ "$got" = "$expected" ]; then ok "pp-program"
+else bad "pp-program" "expected: $(printf '%q' "$expected")" "got:      $(printf '%q' "$got")" "stderr: $(cat "$TMP/a/err")"; fi
 
 # ---- (b) cross-surface loading + islands ----
 mkdir -p "$TMP/b"
-cat > "$TMP/b/lib.ppb" <<'EOF'
+cat > "$TMP/b/lib.pp" <<'EOF'
 def lib-fn(n) { n * 10 }
 EOF
 cat > "$TMP/b/use.ppl" <<'EOF'
-(load "lib.ppb")
+(load "lib.pp")
 (print (lib-fn 4))
 EOF
 cat > "$TMP/b/lib2.ppl" <<'EOF'
 (def (lib2-fn n) (* n 100))
 EOF
-cat > "$TMP/b/use2.ppb" <<'EOF'
+cat > "$TMP/b/use2.pp" <<'EOF'
 load("lib2.ppl")
 print(lib2-fn(4))
 EOF
 
 ( cd "$TMP/b" &&
   [ "$("$PP" use.ppl 2>&1)" = "40" ] ) \
-  && ok "ppl-loads-ppb" || bad "ppl-loads-ppb" "$(cd "$TMP/b" && "$PP" use.ppl 2>&1)"
+  && ok "ppl-loads-pp" || bad "ppl-loads-pp" "$(cd "$TMP/b" && "$PP" use.ppl 2>&1)"
 ( cd "$TMP/b" &&
-  [ "$("$PP" use2.ppb 2>&1)" = "400" ] ) \
-  && ok "ppb-loads-ppl" || bad "ppb-loads-ppl" "$(cd "$TMP/b" && "$PP" use2.ppb 2>&1)"
+  [ "$("$PP" use2.pp 2>&1)" = "400" ] ) \
+  && ok "pp-loads-ppl" || bad "pp-loads-ppl" "$(cd "$TMP/b" && "$PP" use2.pp 2>&1)"
 
 mkdir -p "$TMP/b/isl"
-cat > "$TMP/b/isl/entry.ppb" <<'EOF'
+cat > "$TMP/b/isl/entry.pp" <<'EOF'
 let isl-x = 41
 def isl-add(n) { n + isl-x }
 EOF
@@ -134,25 +134,24 @@ cat > "$TMP/b/useisl.ppl" <<EOF
 EOF
 if "$PP" --update "$TMP/b/useisl.ppl" >/dev/null 2>&1 \
    && [ "$("$PP" "$TMP/b/useisl.ppl" 2>&1)" = "42" ]; then
-  ok "ppb-island-from-ppl"
+  ok "pp-island-from-ppl"
 else
-  bad "ppb-island-from-ppl" "$("$PP" "$TMP/b/useisl.ppl" 2>&1)"
+  bad "pp-island-from-ppl" "$("$PP" "$TMP/b/useisl.ppl" 2>&1)"
 fi
 PIN=$(sed -n 's/.*"\([0-9a-f]\{64\}\)".*/\1/p' "$TMP/b/useisl.ppl" | head -1)
-cat > "$TMP/b/useisl2.ppb" <<EOF
+cat > "$TMP/b/useisl2.pp" <<EOF
 import(island("file:$TMP/b/isl", "$PIN"))
 print(isl-add(9))
 EOF
-if [ -n "$PIN" ] && [ "$("$PP" "$TMP/b/useisl2.ppb" 2>&1)" = "50" ]; then
-  ok "island-string-uri-from-ppb"
+if [ -n "$PIN" ] && [ "$("$PP" "$TMP/b/useisl2.pp" 2>&1)" = "50" ]; then
+  ok "island-string-uri-from-pp"
 else
-  bad "island-string-uri-from-ppb" "pin=$PIN" "$("$PP" "$TMP/b/useisl2.ppb" 2>&1)"
+  bad "island-string-uri-from-pp" "pin=$PIN" "$("$PP" "$TMP/b/useisl2.pp" 2>&1)"
 fi
 
 # ---- (b, continued) both cross-surface island directions with the
-# LITERAL .pp/.ppl extensions (not just their .ppb alias above): a .ppl
-# island loads from a .pp program AND a .pp island loads from a .ppl
-# program ----
+# LITERAL .pp/.ppl extensions: a .ppl island loads from a .pp program
+# and a .pp island loads from a .ppl program.
 mkdir -p "$TMP/b/isl2"
 cat > "$TMP/b/isl2/entry.ppl" <<'EOF'
 (def isl2-x 41)
@@ -189,42 +188,42 @@ fi
 #      data, `at file:line` suffix), modulo only the file name ----
 mkdir -p "$TMP/c"
 printf '(print "start")\n(assert (< 2 1))\n' > "$TMP/c/t.ppl"
-printf 'print("start")\nassert(2 < 1)\n' > "$TMP/c/t.ppb"
+printf 'print("start")\nassert(2 < 1)\n' > "$TMP/c/t.pp"
 err_pp=$("$PP" "$TMP/c/t.ppl" 2>&1 >/dev/null | sed 's/t\.ppl/t.pp/')
-err_ppb=$("$PP" "$TMP/c/t.ppb" 2>&1 >/dev/null | sed 's/t\.ppb/t.pp/')
-if [ "$err_pp" = "$err_ppb" ] && printf '%s' "$err_pp" | grep -q 'assertion failed: (< 2 1) at .*t\.pp:2'; then
+err_roundtrip=$("$PP" "$TMP/c/t.pp" 2>&1 >/dev/null | sed 's/t\.pp/t.pp/')
+if [ "$err_pp" = "$err_roundtrip" ] && printf '%s' "$err_pp" | grep -q 'assertion failed: (< 2 1) at .*t\.pp:2'; then
   ok "assert-desugar-parity"
 else
-  bad "assert-desugar-parity" "pp:  $err_pp" "ppb: $err_ppb"
+  bad "assert-desugar-parity" "ppl: $err_pp" "pp: $err_roundtrip"
 fi
 # custom-message form
 printf '(assert (< 2 1) "boom")\n' > "$TMP/c/m.ppl"
-printf 'assert(2 < 1, "boom")\n' > "$TMP/c/m.ppb"
+printf 'assert(2 < 1, "boom")\n' > "$TMP/c/m.pp"
 err_pp=$("$PP" "$TMP/c/m.ppl" 2>&1 | sed 's/m\.ppl/m.pp/')
-err_ppb=$("$PP" "$TMP/c/m.ppb" 2>&1 | sed 's/m\.ppb/m.pp/')
-if [ "$err_pp" = "$err_ppb" ] && printf '%s' "$err_pp" | grep -q 'boom at .*m\.pp:1'; then
+err_roundtrip=$("$PP" "$TMP/c/m.pp" 2>&1 | sed 's/m\.pp/m.pp/')
+if [ "$err_pp" = "$err_roundtrip" ] && printf '%s' "$err_pp" | grep -q 'boom at .*m\.pp:1'; then
   ok "assert-message-parity"
 else
-  bad "assert-message-parity" "pp:  $err_pp" "ppb: $err_ppb"
+  bad "assert-message-parity" "ppl: $err_pp" "pp: $err_roundtrip"
 fi
 
-# ---- (d) emit-braces on a real file: same output ----
+# ---- (d) to-braces on a real file: same output ----
 # The tree is brace-surface; derive the sexpr (.ppl) form first, then emit
 # braces from IT — the emitted program must still behave correctly.
 "$PP" fmt --to-sexpr "$ROOT/tests/007-phase0-laws.pp" > "$TMP/007.ppl" 2>"$TMP/emit.err" \
   || bad "fmt-to-sexpr-007" "$(cat "$TMP/emit.err")"
-"$PP" --emit-braces "$TMP/007.ppl" > "$TMP/007.ppb" 2>"$TMP/emit.err"
-if [ $? -ne 0 ]; then bad "emit-braces-007" "$(cat "$TMP/emit.err")"; fi
+"$PP" fmt --to-braces "$TMP/007.ppl" > "$TMP/007.pp" 2>"$TMP/emit.err"
+if [ $? -ne 0 ]; then bad "to-braces-007" "$(cat "$TMP/emit.err")"; fi
 o_pp=$(HOME="$TMP/h-007-pp" "$PP" "$ROOT/tests/007-phase0-laws.pp" 2>&1)
-o_ppb=$(HOME="$TMP/h-007-ppb" "$PP" "$TMP/007.ppb" 2>&1)
-if [ "$o_pp" = "$o_ppb" ] && printf '%s' "$o_ppb" | grep -q 'ALL TESTS PASSED'; then
-  ok "emit-007-diff"
+o_roundtrip=$(HOME="$TMP/h-007-roundtrip" "$PP" "$TMP/007.pp" 2>&1)
+if [ "$o_pp" = "$o_roundtrip" ] && printf '%s' "$o_roundtrip" | grep -q 'ALL TESTS PASSED'; then
+  ok "to-braces-007-diff"
 else
-  bad "emit-007-diff" "outputs differ:" "$(diff <(printf '%s' "$o_pp") <(printf '%s' "$o_ppb") | head -6)"
+  bad "to-braces-007-diff" "outputs differ:" "$(diff <(printf '%s' "$o_pp") <(printf '%s' "$o_roundtrip") | head -6)"
 fi
 
 # ---- (e) round-trip (AST + hash equality, SPEC law 20) over the whole tree ----
-# The tree is brace-surface; --roundtrip-braces takes sexpr input (it
+# The tree is brace-surface; --check-roundtrip takes sexpr input (it
 # round-trips sexpr -> braces -> re-read), so derive each file's .ppl form
 # first — the property gated is unchanged: every tree file's AST survives
 # the printer/second-reader round trip with hash equality.
@@ -238,7 +237,7 @@ for f in "$ROOT"/tests/[0-9]*.pp \
     bad "roundtrip-tree-to-sexpr ($f)" "$(tail -1 "$TMP/rt.err")"
     rt_fail=1; continue
   fi
-  if ! "$PP" --roundtrip-braces "$TMP/rt/tree.ppl" >/dev/null 2>"$TMP/rt.err"; then
+  if ! "$PP" --check-roundtrip "$TMP/rt/tree.ppl" >/dev/null 2>"$TMP/rt.err"; then
     bad "roundtrip-tree ($f)" "$(tail -1 "$TMP/rt.err")"
     rt_fail=1
   fi

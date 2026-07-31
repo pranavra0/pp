@@ -31,6 +31,13 @@ let production_host () =
 
 let source_roots cli =
   let raw = Sys.getcwd () :: List.map Filename.dirname (Cli.files cli) in
+  let raw = match Cli.project_file cli with
+    | Some path ->
+        let path = if Sys.file_exists path && Sys.is_directory path
+          then path else Filename.dirname path in
+        path :: raw
+    | None -> raw
+  in
   let raw = match World_path.stdlib_root () with Some root -> root :: raw | None -> raw in
   List.map World_path.canonical raw
 

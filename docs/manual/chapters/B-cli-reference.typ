@@ -30,6 +30,24 @@ and `--watch` all layer onto whichever run mode you pick. Anything after a bare
   [`pp --help`, `pp -h`], [Print the usage summary and exit.],
 )
 
+== Formatting
+
+`pp fmt` preserves comments and rewrites a source file atomically in its
+existing canonical surface. Explicit surface conversion writes to stdout and
+never mutates the input:
+
+#table(
+  columns: (auto, 1fr),
+  inset: (x: 6pt, y: 4pt),
+  align: (left, left),
+  stroke: (x: none, y: 0.5pt + luma(220)),
+  table.header([*Invocation*], [*Meaning*]),
+  [`pp fmt <file.pp>` or `pp fmt <file.ppl>`], [Canonicalize the file in place while preserving comments.],
+  [`pp fmt --to-braces <file.ppl>`], [Print brace-surface output to stdout; reject brace input.],
+  [`pp fmt --to-sexpr <file.pp>`], [Print s-expression output to stdout; reject s-expression input.],
+)
+
+
 == Execution modes
 
 pp has a single tree-walking interpreter over the content-addressed store.

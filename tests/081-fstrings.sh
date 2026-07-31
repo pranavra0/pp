@@ -103,13 +103,13 @@ fi
 
 # (l) f-strings round-trip through `pp fmt` hash-preserved (one-way desugar to
 #     string-append/->string — the intermediate is a valid brace program).
-cat > "$TMP/rt.ppb" <<'EOF'
+cat > "$TMP/rt.pp" <<'EOF'
 def msg(n, who) { f"built {n} for {who}!" }
 print(msg(3, "you"))
 EOF
-"$PP" fmt --to-sexpr "$TMP/rt.ppb" > "$TMP/rt.ppl" 2>"$TMP/rt.err"
-"$PP" fmt --to-braces "$TMP/rt.ppl" > "$TMP/rt2.ppb" 2>>"$TMP/rt.err"
-if "$PP" --compare-hash "$TMP/rt.ppb" "$TMP/rt2.ppb" >/dev/null 2>&1; then
+"$PP" fmt --to-sexpr "$TMP/rt.pp" > "$TMP/rt.ppl" 2>"$TMP/rt.err"
+"$PP" fmt --to-braces "$TMP/rt.ppl" > "$TMP/rt2.pp" 2>>"$TMP/rt.err"
+if "$PP" --compare-hash "$TMP/rt.pp" "$TMP/rt2.pp" >/dev/null 2>&1; then
   ok "fstring-fmt-hash-preserved"
 else
   bad "fstring-fmt-hash-preserved" "$(cat "$TMP/rt.err")"

@@ -4,7 +4,13 @@ open Source_error
 type t = { root : string }
 type area = Objects | Traces | Blobs | Fenced_specs | Procs | Locks
 
-let default = { root = Filename.concat (Sys.getenv "HOME") ".pp/store" }
+let default =
+  let root =
+    match Sys.getenv_opt "PP_STORE_ROOT" with
+    | Some path when path <> "" -> path
+    | _ -> Filename.concat (Sys.getenv "HOME") ".pp/store"
+  in
+  { root }
 let root t = t.root
 let area_name = function
   | Objects -> "objects" | Traces -> "traces" | Blobs -> "blobs"

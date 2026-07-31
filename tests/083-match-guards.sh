@@ -99,7 +99,7 @@ run_ok "guard-in-quasiquote" "$TMP/qq.pp" $'"pos"\n"nonpos"'
 
 # (f) guardless matches are UNCHANGED — fmt round-trip stays hash-preserved for
 #     a mixed guarded/guardless match (guardless arm keeps its old encoding).
-cat > "$TMP/rt.ppb" <<'EOF'
+cat > "$TMP/rt.pp" <<'EOF'
 def describe(r) {
   match r {
     [:ok, v] if v > 10 => "big"
@@ -109,9 +109,9 @@ def describe(r) {
 }
 print(describe([:ok, 50]))
 EOF
-"$PP" fmt --to-sexpr "$TMP/rt.ppb" > "$TMP/rt.ppl" 2>"$TMP/rt.err"
-"$PP" fmt --to-braces "$TMP/rt.ppl" > "$TMP/rt2.ppb" 2>>"$TMP/rt.err"
-if "$PP" --compare-hash "$TMP/rt.ppb" "$TMP/rt2.ppb" >/dev/null 2>&1; then
+"$PP" fmt --to-sexpr "$TMP/rt.pp" > "$TMP/rt.ppl" 2>"$TMP/rt.err"
+"$PP" fmt --to-braces "$TMP/rt.ppl" > "$TMP/rt2.pp" 2>>"$TMP/rt.err"
+if "$PP" --compare-hash "$TMP/rt.pp" "$TMP/rt2.pp" >/dev/null 2>&1; then
   ok "guarded-match-fmt-hash-preserved"
 else
   bad "guarded-match-fmt-hash-preserved" "$(cat "$TMP/rt.err")"

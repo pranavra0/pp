@@ -135,12 +135,6 @@ Run from the repository root with the normal opam environment; no special enviro
 
 The map-pattern slice is complete and committed alongside this plan. The following approved work remains, in the order tracked by the completion checklist:
 
-### Modules
-- Remove parser extension fallthrough and ppb.
-
-### Patterns and formatting
-- Implement canonical comment-preserving formatter commands.
-
 ### Projects
 - Define the canonical project module model.
 - Decode and validate typed project manifests.
@@ -172,4 +166,4 @@ The map-pattern slice is complete and committed alongside this plan. The followi
 
 ### Current verification note
 - Map-pattern implementation is covered by tests/108-map-patterns.sh and the adjacent match tests.
-- The pre-existing tests/084-match-sexpr-surface.sh still assumes the removed .ppb extension; updating that stale fixture belongs to the parser-extension cleanup item above.
+- The parser-extension cleanup migrated tests/084-match-sexpr-surface.sh and all brace fixtures to the canonical `.pp` extension.

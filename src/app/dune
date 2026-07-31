@@ -2,7 +2,7 @@
  (name pp_app)
  (public_name pp.app)
  (wrapped true)
- (modules cli_validation cli app_context command_run command_reconcile command_watch command_frontend command_developer command_cluster command_gc command_island command_eval command_dispatch kernel_props)
+ (modules cli_validation cli project_manifest app_context command_run command_reconcile command_watch command_frontend command_developer command_cluster command_gc command_island command_eval command_project command_dispatch kernel_props)
  (libraries pp.kernel pp.frontend pp.runtime cryptokit unix)
  (flags -no-strict-sequence))
 

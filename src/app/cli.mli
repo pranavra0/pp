@@ -1,6 +1,9 @@
 open Pp_runtime
 open Pp_kernel
 type fmt_target = To_braces | To_sexpr
+type project_command = Project_init | Project_add | Project_update
+  | Project_remove | Project_build | Project_test
+
 
 type t
 
@@ -12,6 +15,9 @@ val program_argv : t -> string list
 val files : t -> string list
 val grants : t -> string list
 val eval_string : t -> string option
+val project_command : t -> project_command option
+val project_file : t -> string option
+val project_verbose : t -> bool
 val reconcile_root : t -> string option
 val supervise : t -> bool
 val member_name : t -> string option
@@ -30,9 +36,8 @@ val update_islands : t -> bool
 val fetch_islands : t -> bool
 val pin_file : t -> string option
 val dump_pins_file : t -> string option
-val emit_braces_file : t -> string option
-val roundtrip_braces_file : t -> string option
-val fmt : t -> (fmt_target * string * bool) option
+val check_roundtrip_file : t -> string option
+val fmt : t -> (fmt_target option * string) option
 val compare_hash : t -> (string * string) option
 val list_comments : t -> ([ `Sexpr | `Brace ] * string) option
 val why : t -> bool
