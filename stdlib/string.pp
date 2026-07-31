@@ -21,6 +21,27 @@ def ends-with?(s, suffix) {
   }
 }
 
+def contains?(s, sub) { not(nil?(string-index(s, sub))) }
+def string-repeat(s, n) {
+  if n < 0 { error("string-repeat: count must not be negative") }
+  else if n = 0 { "" } else { string-append(s, string-repeat(s, n - 1)) }
+}
+def string-replace(s, old, new) {
+  if old = "" { error("string-replace: search string must not be empty") }
+  else if nil?(string-index(s, old)) { s }
+  else {
+    let (i = string-index(s, old)) {
+      string-append(string-sub(s, 0, i), new,
+        string-replace(string-sub(s, i + string-length(old),
+          string-length(s) - i - string-length(old)), old, new))
+    }
+  }
+}
 
-# lines(s) — split into lines, dropping empty fields (trailing \n vanishes)
-def lines(s) { string-split(s, "\n") }
+# lines removes only the terminal field introduced by a final newline.
+def lines(s) {
+  let (result = string-split(s, "\n")) {
+    if ends-with?(s, "\n") { if nil?(result) { nil } else { take(length(result) - 1, result) } }
+    else { result }
+  }
+}

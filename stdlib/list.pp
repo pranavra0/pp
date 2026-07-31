@@ -39,10 +39,20 @@ def range(start, end) {
   if start >= end { nil } else { cons(start, range(start + 1, end)) }
 }
 
+def range-by(start, end, step) {
+  if step = 0 { error("range-by: step must not be zero") }
+  else if step > 0 {
+    if start >= end { nil } else { cons(start, range-by(start + step, end, step)) }
+  } else {
+    if start <= end { nil } else { cons(start, range-by(start + step, end, step)) }
+  }
+}
+
 
 # take(n, lst) — take first n elements of lst
 def take(n, lst) {
-  if if nil?(lst) { true } else { n = 0 } { nil } else {
+  if n < 0 { error("take: count must not be negative") }
+  else if if nil?(lst) { true } else { n = 0 } { nil } else {
     cons(car(lst), take(n - 1, cdr(lst)))
   }
 }
@@ -58,6 +68,8 @@ def each(f, lst) {
     f(car(lst))
     each(f, cdr(lst))
   } }
+
+def each!(f, lst) { each(f, lst) }
 # append(a, b) — concatenate two lists (lazy in b)
 def append(a, b) { if nil?(a) { b } else { cons(car(a), append(cdr(a), b)) } }
 
@@ -70,13 +82,15 @@ fn(acc, x) { cons(x, acc) }, nil, lst)
 }
 # nth(n, lst) — zero-based element access; nil past the end
 def nth(n, lst) {
-  if nil?(lst) { nil } else if n = 0 { car(lst) } else { nth(n - 1, cdr(lst)) }
+  if n < 0 { error("nth: index must not be negative") }
+  else if nil?(lst) { nil } else if n = 0 { car(lst) } else { nth(n - 1, cdr(lst)) }
 }
 
 
 # drop(n, lst) — lst without its first n elements
 def drop(n, lst) {
-  if if nil?(lst) { true } else { n = 0 } { lst } else { drop(n - 1, cdr(lst)) }
+  if n < 0 { error("drop: count must not be negative") }
+  else if if nil?(lst) { true } else { n = 0 } { lst } else { drop(n - 1, cdr(lst)) }
 }
 
 
@@ -84,5 +98,29 @@ def drop(n, lst) {
 def member?(x, lst) {
   if nil?(lst) { false } else if x = car(lst) { true } else {
     member?(x, cdr(lst))
+  }
+}
+
+def reject(pred, lst) { filter(fn(x) { not(pred(x)) }, lst) }
+def all?(pred, lst) { if nil?(lst) { true } else if pred(car(lst)) { all?(pred, cdr(lst)) } else { false } }
+def any?(pred, lst) { if nil?(lst) { false } else if pred(car(lst)) { true } else { any?(pred, cdr(lst)) } }
+def find(pred, lst) { if nil?(lst) { nil } else if pred(car(lst)) { car(lst) } else { find(pred, cdr(lst)) } }
+def flat-map(f, lst) { flatten(map(f, lst)) }
+def flatten(lst) { if nil?(lst) { nil } else { append(car(lst), flatten(cdr(lst))) } }
+def zip(a, b) {
+  if nil?(a) { if nil?(b) { nil } else { error("zip: lists must have equal length") } }
+  else if nil?(b) { error("zip: lists must have equal length") }
+  else { cons(list(car(a), car(b)), zip(cdr(a), cdr(b))) }
+}
+def enumerate(lst) { enumerate-from(0, lst) }
+def enumerate-from(i, lst) {
+  if nil?(lst) { nil } else { cons(list(i, car(lst)), enumerate-from(i + 1, cdr(lst))) }
+}
+def partition(pred, lst) {
+  let (parts = foldl(fn(acc, x) {
+    if pred(x) { {:matched -> cons(x, acc[:matched]), :rest -> acc[:rest]} }
+    else { {:matched -> acc[:matched], :rest -> cons(x, acc[:rest])} }
+  }, {:matched -> nil, :rest -> nil}, lst)) {
+    {:matched -> reverse(parts[:matched]), :rest -> reverse(parts[:rest])}
   }
 }

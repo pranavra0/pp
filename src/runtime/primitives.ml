@@ -350,6 +350,11 @@ let register_collections () =
         else failwith "vector index out of bounds"
     | _ -> failwith "vector-get expects a vector and an integer");
 
+  register "vector-length" (fun args _env ->
+    match force_args args with
+    | [VVector vs] -> VInt (Array.length vs)
+    | _ -> failwith "vector-length expects a vector");
+
   (* Map operations *)
   register "hash-map" (fun args _env ->
     let rec make_pairs = function
@@ -371,6 +376,12 @@ let register_collections () =
   (* Set operations *)
   register "hash-set" (fun args _env ->
     VSet args);  (* lazy *)
+
+  register "set->list" (fun args _env ->
+    match force_args args with
+    | [VSet values] ->
+        List.fold_right (fun value acc -> VPair (value, acc)) values VNil
+    | _ -> failwith "set->list expects a set");
 
   (* Type predicates — force to check *)
   predicate ~declare "int?"     (function VInt _ -> true | _ -> false);
@@ -746,17 +757,28 @@ let register_stdlib () =
     | [VInt n] -> raise (Source_error.Pp_exit n)
     | _ -> failwith "exit expects an optional integer status");
 
-  (* (string-split S SEP) — split on the single-char separator, dropping
-     empty fields (manifest-file friendly: trailing newlines vanish). *)
+  (* (string-split S SEP) — split on any non-empty separator and preserve
+     empty fields. *)
   register "string-split" (fun args _env ->
     let args = force_args args in
     match args with
-    | [VString s; VString sep] when String.length sep = 1 ->
-        let parts = String.split_on_char sep.[0] s in
-        List.fold_right (fun p acc ->
-          if p = "" then acc else VPair (VString p, acc))
-          parts VNil
-    | _ -> failwith "string-split expects a string and a single-char separator");
+    | [VString s; VString sep] when String.length sep > 0 ->
+        let n = String.length s and m = String.length sep in
+        let rec collect start acc =
+          if start > n then List.rev acc
+          else
+            let rec find i =
+              if i + m > n then None
+              else if String.sub s i m = sep then Some i
+              else find (i + 1)
+            in
+            match find start with
+            | None -> List.rev (String.sub s start (n - start) :: acc)
+            | Some i -> collect (i + m) (String.sub s start (i - start) :: acc)
+        in
+        List.fold_right (fun p acc -> VPair (VString p, acc))
+          (collect 0 []) VNil
+    | _ -> failwith "string-split expects a string and a non-empty separator");
 
   (* (map-insert M K V) — a new map with K bound to V (K forced; an existing
      binding for K is replaced). The dynamic counterpart of the {..} literal,
