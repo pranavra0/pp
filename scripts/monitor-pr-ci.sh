@@ -73,9 +73,12 @@ while :; do
   gh_status=$?
   set -e
 
-  if ! jq -e . >/dev/null 2>&1 <<<"$checks"; then
+  error=$(<"$error_file")
+  if [ -z "${checks//[[:space:]]/}" ] && [[ "$error" == *"no checks reported"* ]]; then
+    checks='[]'
+  elif ! jq -e . >/dev/null 2>&1 <<<"$checks"; then
     printf 'monitor-pr-ci: unable to read checks for %s#%s\n' "$repo" "$pr" >&2
-    cat "$error_file" >&2
+    printf '%s\n' "$error" >&2
     exit "$gh_status"
   fi
   rm -f "$error_file"
