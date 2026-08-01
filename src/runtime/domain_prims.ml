@@ -24,8 +24,8 @@ let force value =
   Session.force (Effect.perform Dynamic_scope.Get_session) value
 
 let require_no_node_body (who : string) : unit =
-  if Effect.perform Dynamic_scope.In_node then
-    failwith (who ^ ": may not be called inside a node body (writes are domain-apply-only)")
+  Dynamic_scope.require_script_tier
+    (who ^ ": may not be called inside a node body (writes are domain-apply-only)")
 
 let has_fs_read path =
   List.exists (fun cap -> Capability.check_fs_read cap (World_path.canonical path))

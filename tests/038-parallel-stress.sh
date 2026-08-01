@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Fork-at-dispatch store stress and dynamic-scope inheritance.
+# pins: LAW-35
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 

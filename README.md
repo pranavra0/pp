@@ -11,10 +11,13 @@ root, that a computation must hold before it can touch the world.
 ## Getting started
 
 ```sh
-opam install dune cryptokit
+opam install .
 dune build
 pp file.pp
 ```
+
+The package is authored by Pranav Rao and distributed under the MIT License;
+see [LICENSE](LICENSE).
 
 Run `pp --help` to see all flags.
 

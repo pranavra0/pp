@@ -16,22 +16,18 @@
 #   * the PENDING list is self-cleaning: an entry that is actually pinned (so it
 #     should be promoted) or that no longer names a "holds" law is a red build.
 #
-# The laws already backed by a pinned test cover value/hash identity, the
-# capability bans on smuggling caps or sealed values across a node boundary,
-# trace and authority checks, handler restore, and failure caching. The
-# remaining "holds" laws are on PENDING and get pinned test coverage over
-# time; the ratchet keeps the pinned set from regressing meanwhile.
+# Every law currently marked "holds" must have a real pinned test. This gate
+# is a project invariant: a new law must arrive with behavioral evidence, not
+# a deferred promise.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SPEC="$ROOT/docs/SPEC.md"
 TESTS="$ROOT/tests"
 
-# "holds" laws deliberately deferred to a later backfill tranche — the visible
-# tail. Each must be a real "holds" law and must NOT be pinned (or it should be
-# promoted off this list); the checks below enforce both, so the list cannot go
-# stale silently.
-PENDING="1 5 9 10 12 13 14 15 29 31 32 35 37 38"
+# All current "holds" laws are pinned. Keep this empty rather than weakening
+# the gate with an unreviewed backlog.
+PENDING=""
 
 # ---- 1. Parse SPEC: emit "<law-id> <status-word>" for every law. -----------
 # BSD/awk-portable: no gawk match() arrays. Take the first **Status:** line

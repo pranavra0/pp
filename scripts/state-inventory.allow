@@ -54,3 +54,8 @@ mutable-field|src/runtime/session.ml|force_path|evaluation-session
 mutable-field|src/runtime/session.ml|fenced_epoch|pass
 mutable-field|src/runtime/session.ml|fenced_epoch_nonce|evaluation-session
 mutable-field|src/runtime/session.ml|fenced_epoch_recovered|pass
+
+top-ref|src/runtime/dynamic_scope.ml|tail_capabilities|evaluation-session
+top-ref|src/runtime/dynamic_scope.ml|tail_configs|evaluation-session
+top-ref|src/runtime/dynamic_scope.ml|tail_handlers|evaluation-session
+top-ref|src/runtime/dynamic_scope.ml|tail_capability_depth_ref|evaluation-session

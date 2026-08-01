@@ -93,8 +93,8 @@ let run_command (spec : value) : value =
 let result_hash (v : value) : string = Identity.hash_value v
 
 let register (kind : string) (spec : value) : unit =
-  if Effect.perform Dynamic_scope.In_node then
-    failwith "fenced: fenced effects may not appear inside node bodies (LAW 31)";
+  Dynamic_scope.require_script_tier
+    "fenced: fenced effects may not appear inside node bodies (LAW 31)";
   let forced = Force_deep.force_deep_plain ~force spec in
   (match Codec.encode_value forced with
    | Some _ -> ()

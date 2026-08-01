@@ -15,6 +15,7 @@
 #   Stratification (SPEC law 30): a program whose evaluation READ its own domain
 #   (any file:/tree: observation under ROOT) is an error — otherwise
 #   reconcile loops forever.
+# pins: LAW-15
 #
 # Runs under an isolated HOME; single engine.
 set -uo pipefail

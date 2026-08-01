@@ -1,5 +1,6 @@
 # Smoke tests for core semantic laws.
 # Each section runs a small program that demonstrates one law and checks it holds.
+# pins: LAW-1 LAW-5 LAW-9 LAW-10 LAW-12 LAW-13 LAW-14
 
 print("=== LAW 1: mutual let sees siblings ===")
 let (y = x + 1, x = 1) { print("mutual let y =>", y) }

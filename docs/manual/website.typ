@@ -1,6 +1,6 @@
 #import "/lib.typ": example
 
-#set document(title: "pp", author: "the pp project")
+#set document(title: "pp", author: "Pranav Rao")
 #set par(justify: true)
 #set raw(theme: "/pp.tmTheme")
 
@@ -22,8 +22,7 @@
 pp is a content-addressed, capability-scoped language for computations that
 should be reusable, inspectable, and safe to move.
 
-The #link("manual.html")[reference manual] is the source of truth. It
-contains the language, runtime, domains, distribution, CLI, standard library,
+The #link("manual.html")[reference manual] contains the language, runtime, domains, distribution, CLI, standard library,
 and tested examples. The #link("pp-manual.pdf")[PDF] is the same manual in a
 printable format.
 
@@ -38,7 +37,7 @@ Capabilities make authority explicit. Domains apply desired state and repair
 drift. Scheduling chooses where a force runs without changing the program's
 identity.
 
-== One graph, several jobs
+== Programming language as a graph
 
 This is the scale to keep in mind: source files become cached artifacts, the
 artifacts become desired state, the filesystem domain deploys them, and the

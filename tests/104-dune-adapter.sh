@@ -98,10 +98,15 @@ if grep -q -- '"--root" "/in"' "$TMP/closed.out" \
   ok "dune-closed-immutable-request"
 else bad "dune-closed-immutable-request" "$(cat "$TMP/closed.out")"; fi
 
-if ! rg -n -i 'dune' src/runtime --glob '*.ml' --glob '*.mli' \
-    >"$TMP/core-dune"; then
-  ok "dune-policy-outside-core"
-else bad "dune-policy-outside-core" "$(cat "$TMP/core-dune")"; fi
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+grep -Rni --include='*.ml' --include='*.mli' 'dune' "$ROOT/src/runtime" \
+  >"$TMP/core-dune"
+grep_status=$?
+case "$grep_status" in
+  0) bad "dune-policy-outside-core" "$(cat "$TMP/core-dune")" ;;
+  1) ok "dune-policy-outside-core" ;;
+  *) bad "dune-policy-check-failed" "grep exit status $grep_status" ;;
+esac
 
 if [ "$fail" -eq 0 ]; then echo "=== DUNE ADAPTER TEST PASSED ==="; fi
 exit "$fail"

@@ -75,5 +75,9 @@ let render catalog =
       descriptor.name (shape_string descriptor.shape)
       (category_string descriptor.category)
   in
+  let public_entries =
+    List.filter (fun descriptor -> not (String.contains descriptor.name '\000'))
+      catalog.entries
+  in
   String.concat "\n" ("| builtin | arity | category |" ::
-    "|---|---|---|" :: List.map row catalog.entries) ^ "\n"
+    "|---|---|---|" :: List.map row public_entries) ^ "\n"

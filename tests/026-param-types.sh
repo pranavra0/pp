@@ -9,6 +9,7 @@
 #   (c) unknown type names are a hard error;
 #   (d) vector param lists ([x : int]) and multi-param lists check too;
 #   (e) return-type + param-type combine.
+# pins: LAW-32
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 assert_out() {
