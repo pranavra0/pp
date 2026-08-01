@@ -213,15 +213,11 @@ let flags raw =
       (opt2 "--mint-token" (fun out ttl ->
         raw.mint_token := Some (out, match int_of_string_opt ttl with
           | Some n -> n | None -> command ("invalid --mint-token ttl-seconds: " ^ ttl))));
-    doc_of "  pp --transport-push/--transport-pull object|blob|trace <id> <root>  Local-dir sync (internal)\n"
-      (opt3 "--transport-push" (fun k id root -> raw.transport_push := Some (k, id, root)));
+    { (opt3 "--transport-push" (fun k id root -> raw.transport_push := Some (k, id, root))) with internal = true };
     { (opt3 "--transport-pull" (fun k id root -> raw.transport_pull := Some (k, id, root))) with internal = true };
-    doc_of "  pp --serve-hit <key> <token-file> <shared-root> <reply-file>  Capability-gated hit (internal)\n"
-      (opt4 "--serve-hit" (fun k token root reply -> raw.serve_hit := Some (k, token, root, reply)));
-    doc_of "  pp --recv-hit <reply-file> <shared-root>  Ingest a serve-hit reply (internal)\n"
-      (opt2 "--recv-hit" (fun reply root -> raw.recv_hit := Some (reply, root)));
-    doc_of "  pp --remote-node <token> <pins> <root> <keys> <reply>  Cluster-member side of remote placement (internal)\n"
-      (opt5 "--remote-node" (fun token pins root keys reply -> raw.remote_node := Some (token, pins, root, keys, reply)));
+    { (opt4 "--serve-hit" (fun k token root reply -> raw.serve_hit := Some (k, token, root, reply))) with internal = true };
+    { (opt2 "--recv-hit" (fun reply root -> raw.recv_hit := Some (reply, root))) with internal = true };
+    { (opt5 "--remote-node" (fun token pins root keys reply -> raw.remote_node := Some (token, pins, root, keys, reply))) with internal = true };
     doc_of "  pp --reconcile <root>    Materialize the program's map value under <root>\n"
       (opt1 "--reconcile" (fun root -> raw.reconcile_root := Some root));
     doc_of "  pp --supervise <file.pp>  Reconcile program's process-map value (use with --watch)\n"

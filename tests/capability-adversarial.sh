@@ -159,14 +159,14 @@ force(node { clos() })
 EOF
 run_case node-cap-capture-via-closure "may not be or contain a capability" "$TMP/node-cap-closure.pp"
 
-# --- node-cap-result-rejected (layer 2: result ban, export side): a node
-#     whose BODY produces a capability (not merely references one as a free
-#     var — `current-capabilities` resolves as a builtin, so this does NOT
-#     trip the free-var ban; only the result ban catches it) must not store
-#     or return it. ---
-run_case node-cap-result-rejected "a node may not return a capability" \
+# --- node-cap-observation-rejected: public authority inspection is scripting
+#     tier only. The `needs` reader sugar uses a private projection so explicit
+#     node authority still works without leaving an ambient observation hole. ---
+run_case node-cap-observation-rejected \
+  "current-capabilities: may not be called inside a node body" \
   -e 'force(node { current-capabilities() })'
-run_case node-cap-result-embedded "a node may not return a capability" \
+run_case node-cap-observation-embedded \
+  "current-capabilities: may not be called inside a node body" \
   -e 'force(node { list(1, current-capabilities()) })'
 
 # --- effect-removed: the `effect` special form no longer exists; `effect()`

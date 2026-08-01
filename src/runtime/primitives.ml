@@ -434,6 +434,9 @@ let register_scalars () =
 
 let register_caps () =
   let register = register ~category:Capabilities in
+  let current_capabilities () =
+    VCapability (Capability.compose (Effect.perform Dynamic_scope.Get_capabilities))
+  in
   register "cap-compose" (fun args _env ->
     let caps = List.map (fun v -> match force_val v with VCapability c -> c | _ -> failwith "cap-compose expects capabilities") args in
     VCapability (Capability.compose caps));
@@ -443,9 +446,18 @@ let register_caps () =
      exercises on every perform. Callable anywhere, ambient-
      gated like every other perform path — no explicit-cap argument. *)
   register "current-capabilities" (fun args _env ->
+    Dynamic_scope.require_script_tier
+      "current-capabilities: may not be called inside a node body (scripting-tier only)";
     match args with
-    | [] -> VCapability (Capability.compose (Effect.perform Dynamic_scope.Get_capabilities))
+    | [] -> current_capabilities ()
     | _ -> failwith "current-capabilities takes no arguments");
+
+  register "\000needs-current-capabilities" (fun args _env ->
+    match args with
+    | [] ->
+        VCapability
+          (Capability.compose (Effect.perform Dynamic_scope.Get_capabilities))
+    | _ -> failwith "needs capability projection takes no arguments");
 
   register "cap-restrict" (fun args _env ->
     let args = force_args args in
@@ -863,6 +875,8 @@ let register_domains () =
     | _ -> failwith "configure-runtime expects one map argument");
 
   register "runtime-config" (fun args _env ->
+    Dynamic_scope.require_script_tier
+      "runtime-config: may not be called inside a node body (scripting-tier only)";
     match args with
     | [] -> Option.value ~default:(VMap []) (Session.runtime_manifest (session ()))
     | _ -> failwith "runtime-config expects no arguments");
@@ -1062,6 +1076,8 @@ let register_macros () =
      are deliberately unhygienic: full hygiene is not
      required for a Lisp-1 with explicit quasiquote. *)
   register "gensym" (fun args _env ->
+    Dynamic_scope.require_script_tier
+      "gensym: may not be called inside a node body (scripting-tier only)";
     let prefix = match force_args args with
       | [] -> "g"
       | [VString p] -> p

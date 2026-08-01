@@ -72,8 +72,8 @@ let exec (argv : string list) : int * string * string =
                 (code, read_all out_f, read_all err_f)))))
 
 let run_effect (args : value list) : value =
-  if Effect.perform Dynamic_scope.In_node then
-    failwith "run: may not be called inside a node body (scripting-tier only)";
+  Dynamic_scope.require_script_tier
+    "run: may not be called inside a node body (scripting-tier only)";
   if not (has_process_cap ()) then
     capability "capability error: no process authority for run";
   let argv = List.map (function
@@ -245,10 +245,9 @@ let curl_bin () : string =
    couldn't connect, timeout) is a pp-level error; an HTTP-level error
    status (404, 500, …) is not — it comes back as an ordinary result, same *)
 let http_request ~(method_ : string) ~(url : string) ~(body : string option) : value =
-  if Effect.perform Dynamic_scope.In_node then
-    failwith (Printf.sprintf
-      "perform http-%s: network effects may not appear inside node bodies (LAW 37/38)"
-      (String.lowercase_ascii method_));
+  Dynamic_scope.require_script_tier (Printf.sprintf
+    "perform http-%s: network effects may not appear inside node bodies (LAW 37/38)"
+    (String.lowercase_ascii method_));
   let (_scheme, host, port) = parse_http_url url in
   if not (has_network_cap ~host ~port:(Some port)) then
     capability

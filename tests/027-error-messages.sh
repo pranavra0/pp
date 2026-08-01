@@ -8,6 +8,7 @@
 #   (d) unbound-symbol errors carry the location and identical text;
 #   (e) an error that already carries a location is not double-located;
 #   (f) uncaught errors print as one clean "pp: error: …" line, exit 1.
+# pins: LAW-29
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 # assert_err NAME FILE PATTERN — tree-walker fails, stderr matches PATTERN.

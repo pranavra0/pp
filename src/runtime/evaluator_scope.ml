@@ -17,8 +17,10 @@ let with_caps operations cap_expr body env k =
   in
   if not (Capability.subseteq requested (Dynamic_scope.capabilities ())) then
     capability Capability.err_with_caps_widen;
-  Dynamic_scope.with_capabilities [requested]
-    (fun () -> operations.eval_tail body env k)
+  Dynamic_scope.with_tail_capabilities [requested]
+    (fun leave -> operations.eval_tail body env (fun value ->
+       leave ();
+       k value))
 
 let with_handlers operations handlers body env k =
   let handlers = List.map (fun (name, handler_expr) ->
@@ -27,15 +29,19 @@ let with_handlers operations handlers body env k =
      (fun args -> operations.apply handler args env),
      Identity.hash_value handler)
   ) handlers in
-  Dynamic_scope.with_handlers handlers
-    (fun () -> operations.eval_tail body env k)
+  Dynamic_scope.with_tail_handlers handlers
+    (fun leave -> operations.eval_tail body env (fun value ->
+       leave ();
+       k value))
 
 let with_config operations map_expr body env k =
   let config = operations.force (operations.eval map_expr env) in
   match config with
   | VMap _ ->
-      Dynamic_scope.with_config config
-        (fun () -> operations.eval_tail body env k)
+      Dynamic_scope.with_tail_config config
+        (fun leave -> operations.eval_tail body env (fun value ->
+           leave ();
+           k value))
   | _ -> failwith "with-config expects a map"
 
 let read_config operations key_name default env k =

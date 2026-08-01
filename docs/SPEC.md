@@ -100,13 +100,18 @@ cacheable node — nothing bans it from the scripting tier. The restrictions in
 this spec are the terms of a bargain the programmer opts into, not a
 language-wide prohibition.
 
-Status of the tier split itself: partial. The `node`/`defnode` reader forms
-exist, and both inline and applied nodes are real persistence boundaries: the
-tree-walker routes them through `~/.pp/store` with verifying traces, so a node
-caches across runs while a scripting-tier expression does not. They share the
-same store. The remaining gap is the broader tier specification, not applied
-node identity. The node tier's write discipline now exists: node writes are
-sandbox-scratch only (LAW 18, `tests/017`).
+Status of the tier split itself: holds for the core boundary. The
+`node`/`defnode` reader forms are real persistence boundaries: the tree-walker
+routes them through `~/.pp/store` with verifying traces, so a node caches
+across runs while a scripting-tier expression does not. They share the same
+store. Node-visible runtime inputs are closed: a dependency is a keyed value,
+a recorded cell, an explicit probe, or a scripting-only operation rejected at
+the node boundary. In particular, capability inspection, runtime manifests,
+and fresh-name allocation cannot silently vary a cached node
+(`tests/109-node-ambient.sh`). The node tier's write discipline is
+sandbox-scratch only (LAW 18, `tests/017`); provider-specific foreign
+execution remains governed by its executor cacheability classification (LAW
+16).
 
 ---
 
@@ -378,10 +383,10 @@ Grounding: a language proposing to be the operating system cannot have "your
 service loop overflowed" as part of its semantics. Loops are recursion, and
 recursion must be safe.
 
-**Status: holds** — CPS `eval_tail`/`apply_tail` in the tree-walker,
-CPS continuations in the tree-walker. Caveat: a tail call inside
-`effect`/`with-handler`/`with-config` currently skips the matching scope-exit
-guarantee.
+**Status: holds** — CPS `eval_tail`/`apply_tail` in the tree-walker and
+CPS-aware dynamic-scope frames keep recursive calls through `with-caps`,
+`with-handler`, and `with-config` bounded in native stack and linear in depth
+(`tests/007-phase0-laws.pp`, `tests/110-tail-scopes.sh`).
 
 Test: a tail-recursive countdown from a million evaluates to `0` with no
 overflow.
@@ -1488,13 +1493,10 @@ Test: `tests/044-sealed.sh`.
 
 ---
 
-## Appendix A — Current gaps
+## Appendix A — Current status
 
-Every law not marked holds, with the discrepancy or fuzzer evidence it maps
-to. This table is the honest inverse of the spec: what pp says it is, versus
-what `src/` does today. Current-state claims cite the change ledger and
-fuzzer signatures, not line numbers, since the source is under active
-migration.
+Every law is currently marked `holds`; this table is the checked contract
+between the language's stated semantics and the implementation.
 
 | Law | Area | Status | Evidence |
 |---|---|---|---|
@@ -1535,15 +1537,10 @@ migration.
 | LAW 38 | volatile-node containment | holds | `--check` double-run detection unchanged (`tests/019`); containment is the same probe mechanism as LAW 37 — a volatile read wrapped as a probe is observed and pinned once per pass as its own cell, in-memory only, never written to `~/.pp/store` (`tests/043-probes.sh`) |
 | LAW 39 | sealed cells | holds | `CapSecret`/`VSealed`: confidential reads redact on print, exclude from the content-addressed store, ban at the node boundary both directions, gate hits on a covering grant; `unseal(v)` is the explicit boundary (`tests/044-sealed.sh`) |
 
-Laws that hold today, for the record: LAW 1 (mutual `let`), LAW 5 (`let*` as
-sequential sugar), LAW 9 (branch pruning), LAW 10 (tail-call optimisation),
-LAW 12 (total quotation/quasiquote), LAW 13 (effect order in `do`),
-LAW 14 (undemanded values fire no effects), LAW 22 (unforgeable
-capabilities), LAW 25 (no unenforced authority), LAW 27 (exception/tail-safe
-dynamic extent), LAW 32 (gradual types), LAW 33 (config), and LAW 35
-(run-on-N-take-first as a handler, local process pool). Each is exercised by
-`tests/*.pp` under the fuzzer, and each must stay green
-through the build-engine milestone's remaining work.
+All 40 laws in the table are marked `holds` and have a pinned behavioral
+test. The law-linkage gate (`tests/072-law-pins.sh`) keeps the table and
+the test suite synchronized; the full grammar fuzzer and `dune runtest`
+must remain green.
 
 ---
 
@@ -1796,7 +1793,10 @@ duplicate-definition check (LAW 4).
 `needs` items (L35) lower via the grant-descriptor sugar of B.8
 (`fs.read`/`fs.write`/`fs.rw`, each a mode-scoped `cap-restrict` over
 `(current-capabilities)` — that table is the one authoritative listing, not
-this paragraph). `needs` is value-open: the descriptors are only sugar. Any
+this paragraph). The reader's explicit `needs current-capabilities()` spelling
+uses a private projection so it can apply the node's captured authority
+without exposing an ambient capability observation in ordinary node code.
+`needs` is value-open: the descriptors are only sugar. Any
 other item is an ordinary expression passed through unchanged — it must
 evaluate to a capability, and LAW 22b's subset gate does the enforcing, so
 the reader adds nothing — so a named or composed grant is a legal item, for

@@ -2,6 +2,7 @@
 # A probe is a named, deliberately nondeterministic input: nondeterminism
 # must be declared (SPEC law 37), and a probe's volatility stays contained
 # and in-memory only (SPEC law 38).
+# pins: LAW-37 LAW-38
 #
 # A probe is registered once (`register-probe name observe-fn read-cap`,
 # script-tier) and read inside a node via `(probe name)`. The observe-fn runs

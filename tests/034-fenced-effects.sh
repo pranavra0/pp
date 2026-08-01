@@ -9,6 +9,7 @@
 #   by silent retry.
 #
 # Runs under an isolated HOME; single engine.
+# pins: LAW-31
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 OUT="$TMP/out"

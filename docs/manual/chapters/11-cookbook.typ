@@ -1,6 +1,6 @@
 #import "/lib.typ": example
 
-#set document(title: "pp cookbook", author: "the pp project")
+#set document(title: "pp cookbook", author: "Pranav Rao")
 #set par(justify: true)
 #set raw(theme: "/pp.tmTheme")
 #context {

@@ -121,6 +121,7 @@ let persist ~(key : Key.t) ~(reads : (string * string) list)
 let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
   t.thunk_status <- Evaluating;
   let captured_caps = Evaluator_thunks.captured_capabilities t in
+  let tail_depth = Dynamic_scope.tail_capability_depth () in
   let frame : (string * string) list ref = ref [] in
   let sandbox_slot = ref None in
   Fun.protect
@@ -130,7 +131,12 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
         try run ()
         with
         | effect Dynamic_scope.Get_capabilities, k ->
-            Effect.Deep.continue k captured_caps
+            let capabilities =
+              match Dynamic_scope.tail_capabilities_at tail_depth with
+              | Some capabilities -> capabilities
+              | None -> captured_caps
+            in
+            Effect.Deep.continue k capabilities
         | effect (Dynamic_scope.Record_read (c, h)), k ->
             if not (List.mem (c, h) !frame) then frame := (c, h) :: !frame;
             Effect.Deep.continue k (Effect.perform (Dynamic_scope.Record_read (c, h)))
@@ -172,7 +178,12 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
               Effect.Deep.continue k (Effect.perform (Dynamic_scope.Record_read (c, h)))
           | effect Dynamic_scope.In_node, k -> Effect.Deep.continue k true
           | effect Dynamic_scope.Get_capabilities, k ->
-              Effect.Deep.continue k captured_caps
+              let capabilities =
+                match Dynamic_scope.tail_capabilities_at tail_depth with
+                | Some capabilities -> capabilities
+                | None -> captured_caps
+              in
+              Effect.Deep.continue k capabilities
           | effect Dynamic_scope.Current_sandbox, k -> Effect.Deep.continue k (Some sandbox_slot)
           | e -> raise e
         in

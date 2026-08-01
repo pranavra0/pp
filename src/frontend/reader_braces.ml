@@ -1572,6 +1572,8 @@ and parse_head ps c (n : string) : expr =
                     value-open — any other expression passes through to
                     cap-compose unchanged. *)
                  let lower_item = function
+                   | EApply (ESymbol "current-capabilities", []) ->
+                       EApply (ESymbol "\000needs-current-capabilities", [])
                    | EApply (ESymbol d, [e]) as orig ->
                        (match Surface_tables.find_grant_sugar d with
                         | Some g -> needs_restrict e g.Surface_tables.restrict_mode
@@ -1751,7 +1753,7 @@ and parse_head ps c (n : string) : expr =
 
 and needs_restrict (e : expr) (mode : string) : expr =
   EApply (ESymbol "cap-restrict",
-          [EApply (ESymbol "current-capabilities", []); e;
+          [EApply (ESymbol "\000needs-current-capabilities", []); e;
            ELiteral (VKeyword mode)])
 
 

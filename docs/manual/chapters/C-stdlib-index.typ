@@ -210,8 +210,6 @@ and policy helpers. `configure-runtime` installs a manifest at script scope.
 The reader forms `quasiquote`, `unquote`, and `unquote-splicing` are also
 registered as builtins, and you normally reach them through the reader's
 quasiquote syntax; outside a quasiquote the latter two are an error. The
-`ppc-run` / `ppc-finish` family are self-hosting compiler scaffolding and are
-mostly unimplemented today.
 
 == Lists
 

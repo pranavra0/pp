@@ -23,7 +23,17 @@ val with_handlers :
   (string * (Core_model.value list -> Core_model.value) * string) list ->
   (unit -> 'a) -> 'a
 val with_domain : string -> (unit -> 'a) -> 'a
+val with_tail_capabilities :
+  Capability.t list -> ((unit -> unit) -> 'a) -> 'a
+val with_tail_config :
+  Core_model.value -> ((unit -> unit) -> 'a) -> 'a
+val with_tail_handlers :
+  (string * (Core_model.value list -> Core_model.value) * string) list ->
+  ((unit -> unit) -> 'a) -> 'a
+val tail_capabilities_at : int -> Capability.t list option
+val tail_capability_depth : unit -> int
 val without_observation_collection : (unit -> 'a) -> 'a
+val require_script_tier : string -> unit
 val record_event : Core_model.value -> unit
 val record_read : string -> string -> unit
 val config_lookup : string -> Core_model.value option

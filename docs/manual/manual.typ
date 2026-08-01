@@ -4,7 +4,7 @@
 
 #import "lib.typ": example
 
-#set document(title: "pp reference manual", author: "the pp project")
+#set document(title: "pp reference manual", author: "Pranav Rao")
 #set heading(numbering: "1.1")
 #set par(justify: true)
 #set raw(theme: "/pp.tmTheme")  // muted, Zig-like syntax colours
