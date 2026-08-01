@@ -69,17 +69,41 @@ while :; do
   error_file=$(mktemp)
   trap 'rm -f "$error_file"' EXIT
   set +e
-  checks=$(gh pr checks "$pr" --repo "$repo" --json name,state,bucket,link,workflow 2>"$error_file")
+  head_sha=$(gh pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid 2>"$error_file")
   gh_status=$?
+  raw_checks=
+  if [ "$gh_status" -eq 0 ]; then
+    raw_checks=$(gh api \
+      -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2022-11-28' \
+      "repos/$repo/commits/$head_sha/check-runs?per_page=100" 2>>"$error_file")
+    gh_status=$?
+  fi
   set -e
 
   error=$(<"$error_file")
-  if [ -z "${checks//[[:space:]]/}" ] && [[ "$error" == *"no checks reported"* ]]; then
-    checks='[]'
-  elif ! jq -e . >/dev/null 2>&1 <<<"$checks"; then
+  if [ "$gh_status" -ne 0 ]; then
     printf 'monitor-pr-ci: unable to read checks for %s#%s\n' "$repo" "$pr" >&2
     printf '%s\n' "$error" >&2
     exit "$gh_status"
+  elif ! checks=$(jq '[
+      .check_runs[] |
+      {
+        name,
+        link: (.details_url // .html_url),
+        state: .status,
+        bucket: (
+          if .status != "completed" then "pending"
+          elif .conclusion == "cancelled" then "cancel"
+          elif .conclusion == "success" or .conclusion == "neutral" or .conclusion == "skipped" then "pass"
+          else "fail"
+          end
+        ),
+        workflow: (.app.name // "")
+      }
+    ]' <<<"$raw_checks"); then
+    printf 'monitor-pr-ci: unable to parse checks for %s#%s\n' "$repo" "$pr" >&2
+    exit 1
   fi
   rm -f "$error_file"
   trap - EXIT
