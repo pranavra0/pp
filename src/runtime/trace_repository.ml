@@ -9,6 +9,11 @@ type trace = {
 type t = { layout : Store_layout.t }
 let create layout = { layout }
 let default = create Store_layout.default
+let memory_mode = ref false
+let memory : (string, trace list) Hashtbl.t = Hashtbl.create 32
+let set_memory_mode enabled =
+  memory_mode := enabled;
+  if enabled then Hashtbl.clear memory
 
 let to_line (tr : trace) : string =
   let outcome_s = match tr.outcome with Ok -> "ok" | Failed -> "failed" in
@@ -71,23 +76,25 @@ let of_line (line : string) : trace option =
   else None
 
 let load t ~(key : Identity_types.Cache_key.t) : trace list =
-  let path = Store_layout.path t.layout Store_layout.Traces
-    (Identity_types.Cache_key.to_string key) in
-  if Sys.file_exists path then (
-    try
-      let ic = open_in path in
-      Fun.protect
-        ~finally:(fun () -> close_in_noerr ic)
-        (fun () ->
-          let lines = ref [] in
-          (try
-             while true do lines := input_line ic :: !lines done
-           with End_of_file -> ());
-          List.filter_map of_line (List.rev !lines))
-    with
-    | Sys_error _ | Unix.Unix_error _ -> []
-  ) else
-    []
+  let key = Identity_types.Cache_key.to_string key in
+  if !memory_mode then Option.value ~default:[] (Hashtbl.find_opt memory key)
+  else
+    let path = Store_layout.path t.layout Store_layout.Traces key in
+    if Sys.file_exists path then (
+      try
+        let ic = open_in path in
+        Fun.protect
+          ~finally:(fun () -> close_in_noerr ic)
+          (fun () ->
+            let lines = ref [] in
+            (try
+               while true do lines := input_line ic :: !lines done
+             with End_of_file -> ());
+            List.filter_map of_line (List.rev !lines))
+      with
+      | Sys_error _ | Unix.Unix_error _ -> []
+    ) else
+      []
 
 (* ---- Concurrent-writer safety: per-key lock around the traces/<key> RMW ----
 
@@ -107,17 +114,15 @@ let load t ~(key : Identity_types.Cache_key.t) : trace list =
 let trace_lock_enabled =
   lazy (match Sys.getenv_opt "PP_TRACE_LOCK" with Some "0" -> false | _ -> true)
 
-
-
 let with_trace_lock t (key : Identity_types.Cache_key.t) (f : unit -> unit) : unit =
-  if not (Lazy.force trace_lock_enabled) then f ()
+  if !memory_mode || not (Lazy.force trace_lock_enabled) then f ()
   else begin
     Store_layout.ensure_area t.layout Store_layout.Locks;
     let lock_path = Store_layout.path t.layout Store_layout.Locks
       (Identity_types.Cache_key.to_string key) in
     match (try Some (Unix.openfile lock_path [Unix.O_CREAT; Unix.O_WRONLY] 0o644)
            with Unix.Unix_error _ -> None) with
-    | None -> f ()  (* lock acquisition is best-effort; correctness is atomic replace *)
+    | None -> f ()
     | Some fd ->
         Fun.protect
           ~finally:(fun () ->
@@ -131,17 +136,27 @@ let with_trace_lock t (key : Identity_types.Cache_key.t) (f : unit -> unit) : un
   end
 
 let put t ~key ~outcome ~result_hash ~reads =
-  Store_layout.ensure_area t.layout Store_layout.Traces;
-  with_trace_lock t key (fun () ->
-    let tr = { outcome = outcome; result_hash = result_hash;
-               reads = reads } in
+  let key_text = Identity_types.Cache_key.to_string key in
+  let tr = { outcome = outcome; result_hash = result_hash; reads = reads } in
+  if !memory_mode then begin
     let existing = load t ~key in
-    if not (List.mem tr existing) then (
-      let set = existing @ [tr] in
-      let content = String.concat "" (List.map (fun t -> to_line t ^ "\n") set) in
-      Store_layout.atomic_replace
-        (Store_layout.path t.layout Store_layout.Traces
-           (Identity_types.Cache_key.to_string key)) content
-    ))
-let keys t = Store_layout.list t.layout Store_layout.Traces
-  |> List.map Identity_types.Cache_key.of_string
+    if not (List.mem tr existing) then
+      Hashtbl.replace memory key_text (existing @ [tr])
+  end else begin
+    Store_layout.ensure_area t.layout Store_layout.Traces;
+    with_trace_lock t key (fun () ->
+      let existing = load t ~key in
+      if not (List.mem tr existing) then (
+        let set = existing @ [tr] in
+        let content = String.concat "" (List.map (fun t -> to_line t ^ "\n") set) in
+        Store_layout.atomic_replace
+          (Store_layout.path t.layout Store_layout.Traces key_text) content
+      ))
+  end
+let keys t =
+  if !memory_mode then
+    Hashtbl.fold (fun key _ acc -> Identity_types.Cache_key.of_string key :: acc)
+      memory []
+  else
+    Store_layout.list t.layout Store_layout.Traces
+    |> List.map Identity_types.Cache_key.of_string

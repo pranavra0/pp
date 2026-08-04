@@ -38,7 +38,9 @@
   tests/unit/repository_unit.exe
   tests/unit/observation_unit.exe
   tests/unit/lifecycle_unit.exe
-  tests/unit/parser_unit.exe)
+  tests/unit/parser_unit.exe
+  src/browser/browser_cli.exe
+  src/browser/browser_main.js)
  (action
  (progn
   (run bash scripts/check-architecture.sh)
@@ -54,7 +56,8 @@
 ; Keep both executables in the default build.
 (rule
  (alias default)
- (deps (source_tree stdlib) src/app/main.exe tools/fuzz.exe tools/check-dependencies.sh)
+ (deps (source_tree stdlib) src/app/main.exe tools/fuzz.exe
+   src/browser/browser_main.js tools/check-dependencies.sh)
  (action (progn)))
 
 (rule
@@ -64,7 +67,7 @@
    tools/api-surface.allow tools/check-vertical-slices.sh
    scripts/check-state-inventory.sh
    scripts/state-inventory.allow dune src/kernel/dune src/frontend/dune
-   src/runtime/dune src/app/dune)
+   src/runtime/dune src/app/dune src/browser/dune)
  (action (run bash scripts/check-architecture.sh)))
 
 (rule

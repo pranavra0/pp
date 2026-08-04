@@ -8,6 +8,7 @@ type trace = {
 type t
 val create : Store_layout.t -> t
 val default : t
+val set_memory_mode : bool -> unit
 val to_line : trace -> string
 val of_line : string -> trace option
 val load : t -> key:Identity_types.Cache_key.t -> trace list

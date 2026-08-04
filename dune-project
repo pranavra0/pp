@@ -18,4 +18,5 @@
  (depends
   (ocaml (>= 5.1))
   dune-build-info
-  cryptokit))
+  cryptokit
+  js_of_ocaml))

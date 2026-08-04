@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'">
+  <title>pp Playground</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="../README.md">pp</a>
+    <span class="brand-subtitle">content-addressed computation playground</span>
+    <span id="runtime-badge" class="badge">checking browser runtime…</span>
+  </header>
+
+  <main class="shell">
+    <section class="intro">
+      <p class="eyebrow">Playground</p>
+      <h1>Change the program. See the computation.</h1>
+      <p>Run a real pp example in the browser, inspect its result, and follow the values that make work reusable.</p>
+    </section>
+
+    <section class="controls" aria-label="Playground controls">
+      <label>
+        Example
+        <select id="preset"></select>
+      </label>
+      <label>
+        Scenario
+        <select id="scenario">
+          <option value="run">Run source</option>
+          <option value="replay">Replay a recording</option>
+        </select>
+      </label>
+      <button id="run" class="primary">Run</button>
+      <button id="reset">Reset</button>
+      <button id="share">Copy share link</button>
+    </section>
+
+    <section class="tabs" role="tablist" aria-label="Playground views">
+      <button class="tab active" role="tab" aria-selected="true" data-panel="program">Program</button>
+      <button class="tab" role="tab" aria-selected="false" data-panel="scenario-panel">Scenario</button>
+      <button class="tab" role="tab" aria-selected="false" data-panel="why">Why?</button>
+    </section>
+
+    <section id="program" class="panel-grid tab-panel" role="tabpanel">
+      <article class="card editor-card">
+        <div class="card-heading">
+          <div>
+            <h2>Program</h2>
+            <p id="example-description"></p>
+          </div>
+          <span class="file-label">browser.pp</span>
+        </div>
+        <textarea id="source" spellcheck="false" aria-label="pp source"></textarea>
+      </article>
+
+      <article class="card result-card">
+        <div class="card-heading">
+          <div>
+            <h2>Result</h2>
+            <p id="run-status">No run yet.</p>
+          </div>
+          <span id="run-kind" class="badge">ready</span>
+        </div>
+        <div class="result-block">
+          <h3>Output</h3>
+          <pre id="output" tabindex="0">Run an example to see its output.</pre>
+        </div>
+        <div class="result-block">
+          <h3>Final value</h3>
+          <code id="value">—</code>
+        </div>
+        <div class="result-block">
+          <h3>Diagnostics</h3>
+          <ul id="diagnostics" class="diagnostics"><li>None</li></ul>
+        </div>
+      </article>
+    </section>
+
+    <section id="scenario-panel" class="card tab-panel hidden" role="tabpanel">
+      <div class="card-heading">
+        <div>
+          <h2>Scenario</h2>
+          <p>Browser runs are deterministic and authority-free.</p>
+        </div>
+        <span class="badge">virtual host</span>
+      </div>
+      <dl class="scenario-list">
+        <div><dt>Filesystem</dt><dd>unavailable unless virtualized</dd></div>
+        <div><dt>Process execution</dt><dd>unavailable</dd></div>
+        <div><dt>Network</dt><dd>unavailable unless declared virtual transport</dd></div>
+        <div><dt>Capabilities</dt><dd>none granted by share links</dd></div>
+      </dl>
+      <p id="scenario-note" class="notice"></p>
+    </section>
+
+    <section id="why" class="card tab-panel hidden" role="tabpanel">
+      <div class="card-heading">
+        <div>
+          <h2>Why?</h2>
+          <p>Start with the semantic explanation; inspect raw events when available.</p>
+        </div>
+      </div>
+      <div id="why-content" class="why-content"></div>
+      <h3>Semantic events</h3>
+      <ol id="events" class="events"><li>No events recorded yet.</li></ol>
+    </section>
+  </main>
+
+  <footer>
+    <a href="https://github.com/pranavra0/pp">pp source</a>
+    <span>Browser effects are virtual. This playground never receives native capabilities.</span>
+  </footer>
+
+  <script src="examples.js"></script>
+  <script src="pp-browser.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -16,6 +16,12 @@ let () =
          Identity_types.Node_key.to_string
            (Identity_types.Node_key.of_string (Identity_types.Node_key.to_string key)))
     "node key text did not round-trip";
+  check (Hasher.hash_string "" =
+         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+    "empty SHA-256 vector drifted";
+  check (Hasher.hash_string "abc" =
+         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    "abc SHA-256 vector drifted";
   check (Hasher.hash_concat ["a:b"; "c"] <> Hasher.hash_concat ["a"; "b:c"])
     "hash framing is ambiguous";
   print_endline "kernel: ok"

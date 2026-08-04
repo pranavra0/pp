@@ -59,3 +59,8 @@ top-ref|src/runtime/dynamic_scope.ml|tail_capabilities|evaluation-session
 top-ref|src/runtime/dynamic_scope.ml|tail_configs|evaluation-session
 top-ref|src/runtime/dynamic_scope.ml|tail_handlers|evaluation-session
 top-ref|src/runtime/dynamic_scope.ml|tail_capability_depth_ref|evaluation-session
+top-ref|src/runtime/trace_repository.ml|memory_mode|browser-runtime
+top-table|src/runtime/trace_repository.ml|memory|browser-runtime
+top-ref|src/runtime/object_repository.ml|memory_mode|browser-runtime
+top-table|src/runtime/object_repository.ml|memory|browser-runtime
+top-table|src/runtime/object_repository.ml|fenced_memory|browser-runtime

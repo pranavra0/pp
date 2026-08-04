@@ -1,0 +1,23 @@
+(library
+ (name pp_browser_runtime)
+ (public_name pp.browser_runtime)
+ (wrapped true)
+ (modules browser_runtime)
+ (libraries pp.runtime))
+
+(executable
+ (name browser_main)
+ (modules browser_main)
+ (modes byte)
+ (libraries pp.browser_runtime js_of_ocaml))
+
+(executable
+ (name browser_cli)
+ (modules browser_cli)
+ (libraries pp.browser_runtime))
+
+(rule
+ (targets browser_main.js)
+ (deps browser_main.bc)
+ (action
+  (run js_of_ocaml --effects=cps %{deps} -o %{targets})))
