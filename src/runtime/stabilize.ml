@@ -6,10 +6,9 @@ open Pp_kernel
 open Core_model
 
 (* Side-table: node_key → in-memory thunk. Populated by the force path
-   (evaluator.ml force) on every node-key
-   computation. Used by reset_dirty to mark only the dirty subset
-   Unevaluated, leaving clean thunks Evaluated so they skip Cache_policy.lookup Cache_policy.default
-   entirely — the push-scheduler optimization. *)
+   (evaluator.ml force) on every node-key computation. Used by reset_dirty to
+   mark only the dirty subset Unevaluated, leaving clean thunks Evaluated so
+   they skip cache lookup entirely — the push-scheduler optimization. *)
 let register_node_key ~(key : Identity_types.Node_key.t) ~thunk =
   Session.set_node_thunk (Effect.perform Dynamic_scope.Get_session) key thunk
 
@@ -50,7 +49,7 @@ let evaluated_dependencies_changed
     | _ -> true
   in
   let matching_traces =
-    Trace_repository.load Trace_repository.default ~key:cache_key
+    Trace_repository.load (Runtime_context.traces ()) ~key:cache_key
     |> List.filter (fun trace ->
          trace.Trace_repository.outcome = Trace_repository.Ok
          && trace.Trace_repository.result_hash = result_hash)

@@ -109,13 +109,12 @@ let persist ~(key : Key.t) ~(reads : (string * string) list)
     ~(outcome : Trace_repository.outcome) (result : value) : Object_hash.t =
   let cache_key = Identity_types.Cache_key.of_node_key key in
   let result_hash = Object_hash.of_digest (Identity.hash_value result) in
-  (try Object_repository.put Object_repository.default
-         ~key:(Object_hash.to_string result_hash) ~value:result with _ -> ());
-  (try Trace_repository.put Trace_repository.default ~key:cache_key
-         ~outcome ~result_hash
-         ~reads:(List.map (fun (cell, hash) ->
-           (Identity_types.Cell_id.of_string cell,
-            Identity_types.Observed_hash.of_digest hash)) reads) with _ -> ());
+  Object_repository.put (Runtime_context.objects ())
+    ~key:(Object_hash.to_string result_hash) ~value:result;
+  Trace_repository.put (Runtime_context.traces ()) ~key:cache_key ~outcome ~result_hash
+    ~reads:(List.map (fun (cell, hash) ->
+      (Identity_types.Cell_id.of_string cell,
+       Identity_types.Observed_hash.of_digest hash)) reads);
   result_hash
 
 let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
@@ -124,6 +123,13 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
   let tail_depth = Dynamic_scope.tail_capability_depth () in
   let frame : (string * string) list ref = ref [] in
   let sandbox_slot = ref None in
+  let persist_failure value =
+    try ignore (persist ~key ~reads:(List.rev !frame)
+      ~outcome:Trace_repository.Failed value)
+    with e ->
+      t.thunk_status <- Unevaluated;
+      raise e
+  in
   Fun.protect
     ~finally:(fun () -> match !sandbox_slot with Some d -> Sandbox.remove_tree d | None -> ())
     (fun () ->
@@ -142,33 +148,31 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
             Effect.Deep.continue k (Effect.perform (Dynamic_scope.Record_read (c, h)))
         | effect Dynamic_scope.In_node, k -> Effect.Deep.continue k true
         | effect Dynamic_scope.Current_sandbox, k -> Effect.Deep.continue k (Some sandbox_slot)
-        (* Evaluative failures are durable results; authority failures are
-           dependent on the caller and must leave no cached failure behind. *)
         | Error error as e ->
             (match cache_decision error with
              | Cacheable ->
-                 ignore (persist ~key ~reads:(List.rev !frame)
-                   ~outcome:Trace_repository.Failed
-                   (VString (string_of_t error)));
-                 t.thunk_status <- Unevaluated;
+                 persist_failure (VString (string_of_t error));
                  raise e
              | Do_not_cache ->
                  t.thunk_status <- Unevaluated;
                  raise e)
         | Failure msg ->
-            ignore (persist ~key ~reads:(List.rev !frame)
-              ~outcome:Trace_repository.Failed (VString msg));
-            t.thunk_status <- Unevaluated;
+            persist_failure (VString msg);
             raise (Error (Evaluator (diagnostic msg)))
         | e ->
             t.thunk_status <- Unevaluated;
             raise e
       in
       validate_result t result;
+      let result_hash =
+        try persist ~key ~reads:(List.rev !frame)
+          ~outcome:Trace_repository.Ok result
+        with e ->
+          t.thunk_status <- Unevaluated;
+          raise e
+      in
       t.thunk_status <- Evaluated result;
-      let result_hash = persist ~key ~reads:(List.rev !frame)
-        ~outcome:Trace_repository.Ok result in
-      if Cache_policy.check_enabled Cache_policy.default then begin
+      if Cache_policy.check_enabled (Runtime_context.cache ()) then begin
         let frame2 = ref [] in
         let r2 =
           try run ()
@@ -188,7 +192,7 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
           | e -> raise e
         in
         if Object_hash.of_digest (Identity.hash_value r2) <> result_hash then begin
-          Cache_policy.note_volatile Cache_policy.default;
+          Cache_policy.note_volatile (Runtime_context.cache ());
           Printf.eprintf
             "[check] volatile node %s: an identical run produced a different result hash\n%!"
             (Cache_policy.short_key (Key.to_string key))
@@ -199,8 +203,11 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
 let lookup_hit ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
     (t : thunk) : value option =
   let cache_key = Identity_types.Cache_key.of_node_key key in
-  serve_hit ~t (Cache_policy.lookup Cache_policy.default ~key:cache_key ~authorized)
-
+  serve_hit ~t (Cache_policy.lookup ((Runtime_context.cache ()))
+    ~traces:(Runtime_context.traces ()) ~objects:(Runtime_context.objects ())
+    ~blobs:(Runtime_context.blobs ()) ~observe_id:Observation.observe_id
+    ~replay:Observation.replay
+    ~key:cache_key ~authorized)
 let force ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
     ~(run : unit -> value) (t : thunk) : value =
   Stabilize.register_node_key ~key ~thunk:t;

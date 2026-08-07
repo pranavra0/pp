@@ -59,9 +59,12 @@ expected="$tmp/expected"
 actual="$tmp/actual"
 awk -F'|' '/^[[:space:]]*#/ || NF == 0 { next } NF != 3 { print "invalid API manifest row: " $0 > "/dev/stderr"; bad=1; next } { print $1 "|" $2 } END { if (bad) exit 1 }' "$manifest" | sort -u > "$expected"
 
-for dir in src/kernel src/frontend; do
+for dir in src/kernel src/frontend src/runtime src/app; do
   for file in "$root/$dir"/*.mli; do
     [ -f "$file" ] || continue
+    # Dune synthesizes the executable's inferred interface in the build tree;
+    # only library interfaces are part of the reviewed API manifest.
+    [ "$file" = "$root/src/app/main.mli" ] && continue
     rel=${file#"$root"/}
     surface=$(declarations "$file" | sort)
     hash=$(printf '%s\n' "$surface" | digest)
@@ -74,4 +77,4 @@ if ! diff -u "$expected" "$actual"; then
   echo "API surface drift: update the manifest only after reviewing the foundational interface change" >&2
   exit 1
 fi
-echo "API surface: foundational interfaces match the reviewed baseline"
+echo "API surface: reviewed library interfaces match the baseline"

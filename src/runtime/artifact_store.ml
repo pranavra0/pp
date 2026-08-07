@@ -1,7 +1,7 @@
 open Pp_kernel
 
 let read_blob hash =
-  match Blob_repository.get Blob_repository.default hash with
+  match Blob_repository.get (Runtime_context.blobs ()) hash with
   | Some content when Hasher.hash_string content = hash -> content
   | Some _ -> failwith ("tree blob hash mismatch: " ^ hash)
   | None -> failwith ("tree blob is missing: " ^ hash)
@@ -77,7 +77,7 @@ let snapshot ~root ~paths =
     match stat.Unix.st_kind with
     | Unix.S_REG ->
         let content = Cell_repository.read_raw source in
-        let blob = Blob_repository.put Blob_repository.default content in
+        let blob = Blob_repository.put (Runtime_context.blobs ()) content in
         add (Artifact_tree.File { path; mode = stat.Unix.st_perm land 0o777; blob })
     | Unix.S_DIR ->
         add (Artifact_tree.Directory { path; mode = stat.Unix.st_perm land 0o777 });

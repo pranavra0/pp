@@ -20,7 +20,7 @@ let run_reporters ctx =
 
 let schedule_audit ctx cli files last =
   let scheduler = App_context.scheduler ctx in
-  if Cache_policy.check_enabled Cache_policy.default &&
+  if Cache_policy.check_enabled (Runtime_context.cache ()) &&
      Scheduler.schedules_batches scheduler then
     match last with
     | None -> ()
@@ -35,7 +35,7 @@ let schedule_audit ctx cli files last =
             Command_run.run_files ctx cli files) in
         (match serial with
          | Some value when Identity.hash_value value <> scheduled_hash ->
-             Cache_policy.note_volatile Cache_policy.default;
+             Cache_policy.note_volatile (Runtime_context.cache ());
              Printf.eprintf
                "[check] schedule non-transparent: %s and serial re-runs produced different desired-state hashes\n%!"
                (Scheduler.handler_name saved)

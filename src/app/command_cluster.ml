@@ -68,7 +68,7 @@ let prepare ctx cli =
   (match Cli.desired_object cli with
    | Some (hash, root) ->
        Transport.LocalDir.pull_object root ~hash;
-       (match Object_repository.get Object_repository.default ~key:hash with
+       (match Object_repository.get (Runtime_context.objects ()) ~key:hash with
         | Some value -> List.iter (fun blob ->
             try Transport.LocalDir.pull_blob root ~hash:blob with _ -> ())
             (Artifact_tree.reachable_blobs value)
@@ -103,7 +103,7 @@ let publish ctx cli =
               let hash = Identity.hash_value forced in
               (match Codec.encode_value forced with
                | None -> command "pp: --publish-object: the program's value contains code (a closure/thunk/handle) and cannot be published as data"
-               | Some _ -> Object_repository.put Object_repository.default ~key:hash ~value:forced);
+               | Some _ -> Object_repository.put (Runtime_context.objects ()) ~key:hash ~value:forced);
               List.iter (fun blob ->
                 try Transport.LocalDir.push_blob shared_root ~hash:blob with _ -> ())
                 (Artifact_tree.reachable_blobs forced);

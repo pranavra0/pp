@@ -251,12 +251,12 @@ let resolve ~(uri : string) ~(pin : string option) : string =
                u.raw (short p) (short h)));
         (* Drift visibility (`pp why`): the pin still governs, but tell the
            user when the local source has moved past it. *)
-        (if Cache_policy.why_enabled Cache_policy.default && u.scheme = SFile
+        (if Cache_policy.why_enabled (Runtime_context.cache ()) && u.scheme = SFile
             && Sys.file_exists u.locator && Sys.is_directory u.locator then
            match verify_pin ~dir:u.locator ~pin:p with
            | Ok () -> ()
            | Error h ->
-               Cache_policy.diagnose Cache_policy.default "island %s: source dir now hashes %s but the pin is %s — run pp --update"
+               Cache_policy.diagnose (Runtime_context.cache ()) "island %s: source dir now hashes %s but the pin is %s — run pp --update"
                  u.raw (short h) (short p));
         dir
       end

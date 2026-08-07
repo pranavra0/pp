@@ -13,109 +13,6 @@ let core_operations () = Session.core_operations (session ())
 let force_val (v : value) : value = (core_operations ()).force v
 let force_args (args : value list) : value list = List.map force_val args
 
-let map_fields value =
-  match force_val value with
-  | VMap fields -> fields
-  | other -> failwith ("runtime manifest expects a map, got " ^
-      Presentation.string_of_value other)
-
-let field fields name =
-  match Force_deep.find_kv ~force:force_val fields name with
-  | Some value -> Some (force_val value)
-  | None -> None
-
-let string_field fields name =
-  match field fields name with
-  | Some (VString value) | Some (VKeyword value) -> value
-  | Some value -> failwith (Printf.sprintf "runtime manifest :%s expects a string or keyword, got %s"
-      name (Presentation.string_of_value value))
-  | None -> failwith ("runtime manifest: missing :" ^ name)
-
-let int_field fields name =
-  match field fields name with
-  | Some (VInt value) when value > 0 -> value
-  | Some value -> failwith (Printf.sprintf "runtime manifest :%s expects a positive integer, got %s"
-      name (Presentation.string_of_value value))
-  | None -> failwith ("runtime manifest: missing :" ^ name)
-
-let runtime_schedule spec =
-  let fields = map_fields spec in
-  match string_field fields "kind" with
-  | "serial" -> Scheduler.Serial
-  | "parallel" -> Scheduler.Parallel (int_field fields "width")
-  | "race" -> Scheduler.Race (int_field fields "width")
-  | kind -> failwith ("runtime manifest: unknown schedule kind " ^ kind)
-
-let custom_plan_value jobs policy =
-  let descriptors = VVector (Array.of_list (List.mapi (fun index job ->
-    VMap [
-      VKeyword "index", VInt index;
-      VKeyword "key", VString (Identity_types.Node_key.to_string job.Scheduler.j_key);
-      VKeyword "width", VInt job.Scheduler.j_width
-    ]) jobs)) in
-  let result = Dynamic_scope.with_capabilities [] (fun () ->
-    Session.call (session ()) ~env:Environment.empty policy [descriptors]) in
-  let fields = map_fields result in
-  let mode = string_field fields "mode" in
-  let mode = match mode with
-    | "serial" -> Scheduler.Serial_batch
-    | "parallel" -> Scheduler.Parallel_batch (int_field fields "width")
-    | "race" -> Scheduler.Race_batch (int_field fields "width")
-    | "remote" -> Scheduler.Remote_batch (string_field fields "member")
-    | other -> failwith ("scheduler policy returned unknown mode " ^ other)
-  in
-  let batches = match field fields "batches" with
-    | Some (VVector batches) -> Array.to_list (Array.map (fun batch ->
-        match force_val batch with
-        | VVector indexes -> Array.to_list (Array.map (fun index ->
-            match force_val index with
-            | VInt index -> index
-            | other -> failwith ("scheduler policy batch index must be an integer, got " ^
-                Presentation.string_of_value other)) indexes)
-        | other -> failwith ("scheduler policy batch must be a vector, got " ^
-            Presentation.string_of_value other)) batches)
-    | Some other -> failwith ("scheduler policy :batches must be a vector, got " ^
-        Presentation.string_of_value other)
-    | None -> failwith "scheduler policy: missing :batches"
-  in
-  { Scheduler.mode; batches }
-
-let custom_scheduler spec =
-  let fields = map_fields spec in
-  let policy = match field fields "policy" with
-    | Some (VClosure _ | VBuiltin _) as value -> Option.get value
-    | Some value -> failwith ("custom schedule :policy expects a function, got " ^
-        Presentation.string_of_value value)
-    | None -> failwith "custom schedule: missing :policy"
-  in
-  let redundancy = match field fields "redundancy" with
-    | None -> 1
-    | Some (VInt value) when value > 0 -> value
-    | Some value -> failwith ("custom schedule :redundancy expects a positive integer, got " ^
-        Presentation.string_of_value value)
-  in
-  Scheduler.custom ~name:"custom" ~redundancy
-    ~remote_dispatch:(match Session.remote_dispatch (session ()) with
-      | Some dispatch -> dispatch
-      | None -> (fun ~member:_ _ ->
-          failwith "custom schedule: remote execution requires host configuration"))
-    ~plan:(fun jobs -> custom_plan_value jobs policy)
-
-let validate_manifest fields =
-  List.iter (fun (key, value) ->
-    let name = match key with
-      | VKeyword name | VString name -> name
-      | other -> failwith ("runtime manifest keys must be keywords or strings, got " ^
-          Presentation.string_of_value other)
-    in
-    if not (List.mem name ["schedule"; "reporter"; "build-policy";
-                           "execution-policy"]) then
-      failwith ("runtime manifest has unknown field :" ^ name);
-    if name = "build-policy" || name = "execution-policy" then
-      if Codec.encode_value (Force_deep.force_deep value) = None then
-        failwith ("runtime manifest :" ^ name ^ " must be canonical data");
-    if name = "schedule" then ignore (map_fields value)) fields;
-  fields
 
 (* ---- gensym (defmacro hygiene) ----
 
@@ -604,14 +501,14 @@ let register_io () =
   register "blob" (fun args _env ->
     let args = force_args args in
     match args with
-    | [VString s] -> VString (Blob_repository.put Blob_repository.default s)
+    | [VString s] -> VString (Blob_repository.put (Runtime_context.blobs ()) s)
     | _ -> failwith "blob expects a string");
 
   register "blob-get" (fun args _env ->
     let args = force_args args in
     match args with
     | [VString hash] ->
-        (match Blob_repository.get Blob_repository.default hash with
+        (match Blob_repository.get (Runtime_context.blobs ()) hash with
          | Some bytes when Hasher.hash_string bytes = hash -> VString bytes
          | Some _ -> failwith ("blob-get: blob hash mismatch: " ^ hash)
          | None -> failwith ("blob-get: blob missing from store: " ^ hash))
@@ -840,17 +737,17 @@ let register_domains () =
       failwith "configure-runtime: may not be called inside a node body";
     match args with
     | [spec] ->
-        let fields = map_fields spec in
-        let fields = validate_manifest fields in
+        let fields = Runtime_manifest.map_fields ~force:force_val spec in
+        let fields = Runtime_manifest.validate_manifest ~force:force_val fields in
         Session.set_runtime_manifest (session ()) spec;
-        (match field fields "schedule" with
+        (match Runtime_manifest.field ~force:force_val fields "schedule" with
          | None -> ()
          | Some schedule when not (Session.schedule_locked (session ())) ->
              let scheduler = Session.scheduler (session ()) in
-             let fields = map_fields schedule in
-             let kind = string_field fields "kind" in
-             let handler = if kind = "custom" then custom_scheduler schedule else
-               let policy = runtime_schedule schedule in
+             let fields = Runtime_manifest.map_fields ~force:force_val schedule in
+             let kind = Runtime_manifest.string_field ~force:force_val fields "kind" in
+             let handler = if kind = "custom" then Runtime_manifest.custom_scheduler ~force:force_val ~session:(session ()) schedule else
+               let policy = Runtime_manifest.runtime_schedule ~force:force_val schedule in
                Scheduler.builtin
                  ~remote_dispatch:(match Session.remote_dispatch (session ()) with
                    | Some dispatch -> dispatch
@@ -863,7 +760,7 @@ let register_domains () =
                VKeyword "handler", VString (Scheduler.handler_name handler)
              ])
          | Some _ -> ());
-        (match field fields "reporter" with
+        (match Runtime_manifest.field ~force:force_val fields "reporter" with
          | Some reporter ->
              (match reporter with
               | VClosure _ | VBuiltin _ ->

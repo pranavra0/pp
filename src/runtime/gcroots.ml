@@ -7,7 +7,7 @@ type root = {
 }
 
 let roots_path () =
-  Filename.concat (Store_layout.root Store_layout.default) "gc-roots"
+  Filename.concat (Store_layout.root (Runtime_context.layout ())) "gc-roots"
 
 let root_to_value root =
   VMap [
@@ -44,7 +44,7 @@ let read_all () =
          else Option.bind (Codec.decode_value line) value_to_root)
 
 let record ~keep root =
-  Store_layout.ensure_dir (Store_layout.root Store_layout.default);
+  Store_layout.ensure_dir (Store_layout.root (Runtime_context.layout ()));
   let existing = read_all () in
   let updated = existing @ [root] in
   let count = List.length updated in

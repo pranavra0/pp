@@ -109,7 +109,7 @@ let of_line (line : string) : entry option =
 
 (* ---- The log file ---- *)
 
-let journal_dir = Filename.concat (Store_layout.root Store_layout.default) "journal"
+let journal_dir = Filename.concat (Store_layout.root (Runtime_context.layout ())) "journal"
 let log_path () = Filename.concat journal_dir "log"
 
 (* Concurrent-writer safety: one line is one Unix.write_substring on an O_APPEND fd.

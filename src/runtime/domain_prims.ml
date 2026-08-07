@@ -146,7 +146,7 @@ let require_domain_context (who : string) : Session.domain_entry * string =
                     (who ^ ": capability error: no authority for domain " ^ name))
 
 let domain_state_root (domain_name : string) : string =
-  Filename.concat (Store_layout.root Store_layout.default) (Filename.concat "domain-state" domain_name)
+  Filename.concat (Store_layout.root (Runtime_context.layout ())) (Filename.concat "domain-state" domain_name)
 
 let state_key_file (domain_name : string) (key : string) : string =
   Filename.concat (domain_state_root domain_name) (Hasher.hash_string key)
@@ -236,7 +236,7 @@ let env_array spec_env =
 
 let domain_io_dir () : string =
   let name = match Effect.perform Dynamic_scope.Get_domain with Some n -> n | None -> "unknown" in
-  Filename.concat (Store_layout.root Store_layout.default) (Filename.concat "domain-state" (name ^ "-io"))
+  Filename.concat (Store_layout.root (Runtime_context.layout ())) (Filename.concat "domain-state" (name ^ "-io"))
 
 let out_file name = Filename.concat (domain_io_dir ()) ("svc-" ^ Hasher.hash_string name ^ ".out")
 let err_file name = Filename.concat (domain_io_dir ()) ("svc-" ^ Hasher.hash_string name ^ ".err")

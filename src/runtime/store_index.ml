@@ -3,7 +3,7 @@ let reverse () =
   let result = Hashtbl.create 64 in
   List.iter (fun key ->
     let key_s = Identity_types.Cache_key.to_string key in
-    let cells = Trace_repository.load Trace_repository.default ~key
+    let cells = Trace_repository.load ((Runtime_context.traces ())) ~key
       |> List.concat_map (fun trace ->
            List.map (fun (cell, _) -> Identity_types.Cell_id.to_string cell)
              trace.Trace_repository.reads)
@@ -13,7 +13,7 @@ let reverse () =
       Hashtbl.replace result cell
         (key_s :: Option.value ~default:[] (Hashtbl.find_opt result cell)))
       cells)
-    (List.sort compare (Trace_repository.keys Trace_repository.default));
+    (List.sort compare (Trace_repository.keys ((Runtime_context.traces ()))));
   result
 
 let dirty_keys ~dependency_cells changed reverse =

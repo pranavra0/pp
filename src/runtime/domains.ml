@@ -87,23 +87,27 @@ let compute_plan ~(domain_name : string) ~(diff_closure : value)
   let session = Effect.perform Dynamic_scope.Get_session in
   let key = Identity_types.Cache_key.of_digest
     (plan_cache_key ~diff_closure ~observed ~desired) in
-  match Cache_policy.lookup Cache_policy.default ~key ~authorized:(fun _ -> true) with
+  match Cache_policy.lookup (Runtime_context.cache ())
+      ~traces:(Runtime_context.traces ()) ~objects:(Runtime_context.objects ())
+      ~blobs:(Runtime_context.blobs ()) ~observe_id:Observation.observe_id
+      ~replay:Observation.replay
+      ~key ~authorized:(fun _ -> true) with
   | Cache_policy.HitOk v ->
-      Cache_policy.diagnose Cache_policy.default "domain %s: plan %s: hit (cached, unchanged observed/desired)"
+      Cache_policy.diagnose (Runtime_context.cache ()) "domain %s: plan %s: hit (cached, unchanged observed/desired)"
         domain_name (Cache_policy.short_key (Identity_types.Cache_key.to_string key));
       v
   | Cache_policy.HitFailed _ | Cache_policy.Miss ->
-      Cache_policy.diagnose Cache_policy.default "domain %s: plan %s: miss — running diff"
+      Cache_policy.diagnose (Runtime_context.cache ()) "domain %s: plan %s: miss — running diff"
         domain_name (Cache_policy.short_key (Identity_types.Cache_key.to_string key));
       let plan =
         try Session.call session ~env:Environment.empty diff_closure [observed; desired]
         with effect Dynamic_scope.Get_capabilities, k -> Effect.Deep.continue k []
       in
       let result_hash = Identity_types.Object_hash.of_digest (Identity.hash_value plan) in
-      (try Object_repository.put Object_repository.default
+      (try Object_repository.put (Runtime_context.objects ())
              ~key:(Identity_types.Object_hash.to_string result_hash) ~value:plan
        with Sys_error _ | Unix.Unix_error _ -> ());
-      (try Trace_repository.put Trace_repository.default ~key
+      (try Trace_repository.put (Runtime_context.traces ()) ~key
              ~outcome:Trace_repository.Ok ~result_hash ~reads:[]
        with Sys_error _ | Unix.Unix_error _ -> ());
       plan
@@ -267,7 +271,7 @@ let prepare_pass invocation (all_desired : value) : pass =
 let record_epoch invocation (forced : value) : unit =
   try
     let hash = Identity.hash_value forced in
-    (try Object_repository.put Object_repository.default ~key:hash ~value:forced
+    (try Object_repository.put (Runtime_context.objects ()) ~key:hash ~value:forced
      with Sys_error _ | Unix.Unix_error _ -> ());
     Journal.append (Journal.Epoch { hash });
     Gcroots.record ~keep:(Invocation.gc_keep_epochs invocation)

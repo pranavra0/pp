@@ -4,7 +4,7 @@ let default_grace_seconds = 2.0
 
 let mark_object live hash =
   Hashtbl.replace live ("object:" ^ hash) ();
-  match Object_repository.get Object_repository.default ~key:hash with
+  match Object_repository.get (Runtime_context.objects ()) ~key:hash with
   | None -> ()
   | Some value ->
       List.iter
@@ -19,8 +19,7 @@ let mark_graph roots =
     if not (Hashtbl.mem visited key_text) then begin
       Hashtbl.replace visited key_text ();
       Hashtbl.replace live ("trace:" ^ key_text) ();
-      Trace_repository.load Trace_repository.default
-        ~key:(Identity_types.Cache_key.of_node_key key)
+      Trace_repository.load (Runtime_context.traces ()) ~key:(Identity_types.Cache_key.of_node_key key)
       |> List.iter (fun trace ->
            mark_object live
              (Identity_types.Object_hash.to_string trace.Trace_repository.result_hash);
@@ -75,7 +74,7 @@ let run ~grace_seconds =
       "pp gc: no wanted roots; nothing to do\n"
   else
     let live = mark_graph roots in
-    Store_layout.with_lifecycle_write (fun () ->
+    Store_layout.with_lifecycle_write ~layout:(Runtime_context.layout ()) (fun () ->
       let snapshot = manifest_snapshot () in
       let aborted = ref false in
       let ko, do_ =
