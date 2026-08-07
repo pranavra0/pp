@@ -2,6 +2,6 @@
  (name pp_runtime)
  (public_name pp.runtime)
  (wrapped true)
- (modules fswalk executor session dynamic_scope world_path observation store_layout object_repository blob_repository artifact_store trace_repository repository_inventory cache_policy cell_repository store_index sandbox loader error_context journal gcroots node force_deep process closed_action scheduler domain_config domain_prims fenced island primitive_catalog primitives domains reconciliation evaluator evaluator_thunks evaluator_application evaluator_node evaluator_effects evaluator_scope evaluator_forms evaluator_match macro stabilize repl remote_protocol transport remote store_gc)
+ (modules fswalk executor session dynamic_scope runtime_context runtime_manifest world_path observation store_layout object_repository blob_repository artifact_store trace_repository repository_inventory cache_policy cell_repository store_index sandbox loader error_context journal gcroots node force_deep process closed_action scheduler domain_config domain_prims fenced island primitive_catalog primitives domains reconciliation evaluator evaluator_thunks evaluator_application evaluator_node evaluator_effects evaluator_scope evaluator_forms evaluator_match macro stabilize repl remote_protocol transport remote store_gc)
  (libraries pp.kernel pp.frontend unix)
  (flags -no-strict-sequence))

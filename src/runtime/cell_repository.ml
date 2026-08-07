@@ -13,15 +13,15 @@ let read_file path =
   let session = Effect.perform Dynamic_scope.Get_session in
   match Session.find_run_pin session cell with
   | Some hash ->
-      (match Blob_repository.get Blob_repository.default hash with
+      (match Blob_repository.get (Runtime_context.blobs ()) hash with
        | Some content -> serve content hash
        | None ->
            let content = read_raw path in
-           let hash = Blob_repository.put Blob_repository.default content in
+           let hash = Blob_repository.put (Runtime_context.blobs ()) content in
            Session.set_run_pin session cell hash; serve content hash)
   | None ->
       let content = read_raw path in
-      let hash = Blob_repository.put Blob_repository.default content in
+      let hash = Blob_repository.put (Runtime_context.blobs ()) content in
       Session.set_run_pin session cell hash; serve content hash
 let read_sealed path =
   let cell = Cell.serialize (Observation.sealed path) in

@@ -290,8 +290,11 @@ cache lookup and local node rebuild path when no worker produced a result.
 `main.ml` starts the process, parses the CLI, builds production services, and
 converts uncaught errors to exit status. `cli.ml` owns option parsing and help
 rows; `cli_validation.ml` converts raw strings into scheduler, recovery, and
-numeric runtime policy. `app_context.ml` constructs host services, stores, schedulers,
-sessions, evaluators, and reconciliation services.
+numeric runtime policy. `app_context.ml` constructs one explicit runtime
+context containing host services, stores, cache policy, scheduler, session,
+evaluator, and reconciliation services. Runtime code resolves repository and
+policy access from that active context, so command-local state is not assembled
+from independent process-global repository singletons.
 
 Command ownership is split as follows:
 

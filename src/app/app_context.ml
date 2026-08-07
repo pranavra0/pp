@@ -7,6 +7,7 @@ type t = {
   scheduler : Scheduler.t;
   session : Session.t;
   reconciliation : Reconciliation.t;
+  runtime_context : Runtime_context.t;
 }
 
 let read_secret path =
@@ -65,8 +66,12 @@ let create host cli =
   in
   let handler = Scheduler.builtin ~remote_dispatch:(Remote.dispatcher host invocation)
       (Cli.schedule_policy cli) in
-  let scheduler = Scheduler.create ~handler
-  in
+  let scheduler = Scheduler.create ~handler in
+  let cache = Cache_policy.create () in
+  Cache_policy.configure cache
+    ~no_cache:(Cli.no_cache cli) ~why:(Cli.why cli) ~check:(Cli.check cli);
+  Cache_policy.reset_volatile cache;
+  let runtime_context = Runtime_context.create ~cache () in
   let session =
     Session.create ~executor:(Closed_action.linux_executor ())
       ~remote_dispatch:(Remote.dispatcher host invocation)
@@ -74,16 +79,14 @@ let create host cli =
       Evaluator.operations
   in
   let reconciliation = Reconciliation.create ~session ~invocation in
-  Store_layout.init Store_layout.default;
-  Cache_policy.configure Cache_policy.default
-    ~no_cache:(Cli.no_cache cli) ~why:(Cli.why cli) ~check:(Cli.check cli);
-  Cache_policy.reset_volatile Cache_policy.default;
+  Store_layout.init (Runtime_context.layout_of runtime_context);
   Island.fetch_enabled := Cli.fetch_islands cli;
   Island.update_mode := Cli.update_islands cli;
-  { host; invocation; scheduler; session; reconciliation }
+  { host; invocation; scheduler; session; reconciliation; runtime_context }
 
 let host t = t.host
 let invocation t = t.invocation
 let scheduler t = t.scheduler
 let session t = t.session
 let reconciliation t = t.reconciliation
+let runtime_context t = t.runtime_context

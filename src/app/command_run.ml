@@ -69,10 +69,10 @@ let build_all_desired cli value =
   in
   if entries = [] then value else Core_model.VMap entries
 
-let compute_desired _ctx cli last =
+let compute_desired ctx cli last =
   match Cli.desired_object cli with
   | Some (hash, _) ->
-      (match Object_repository.get Object_repository.default ~key:hash with
+      (match Object_repository.get ((Runtime_context.objects ())) ~key:hash with
        | Some value -> value
        | None -> command (Printf.sprintf
          "pp: --desired-object %s: not found in the local store even after pulling — check the shared root and that it was published there via --publish-object" hash))

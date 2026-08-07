@@ -14,16 +14,20 @@ let run host cli =
      | None -> ());
     Command_eval.run ctx cli;
     Command_cluster.serve_remote ctx cli;
-    if Cache_policy.check_enabled Cache_policy.default &&
-       Cache_policy.volatile_count Cache_policy.default > 0 then begin
+    if Cache_policy.check_enabled ((Runtime_context.cache ())) &&
+       Cache_policy.volatile_count ((Runtime_context.cache ())) > 0 then begin
       Printf.eprintf "[check] FAIL: %d volatile node(s) flagged\n%!"
-        (Cache_policy.volatile_count Cache_policy.default);
+        (Cache_policy.volatile_count ((Runtime_context.cache ())));
       exit 1
     end
   in
   let dispatch () =
     if Cli.reconcile_root cli <> None || Cli.supervise cli then
-      Store_layout.with_lifecycle_read dispatch
+      Store_layout.with_lifecycle_read ~layout:((Runtime_context.layout ())) dispatch
     else dispatch ()
   in
-  Scheduler.with_signal_handler (App_context.scheduler ctx) ~f:(fun () -> dispatch ()) ()
+  Runtime_context.with_current (App_context.runtime_context ctx)
+    (fun () ->
+      Scheduler.with_signal_handler (App_context.scheduler ctx)
+        ~f:(fun () -> dispatch ()) ())
+    ()

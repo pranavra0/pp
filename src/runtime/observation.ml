@@ -115,7 +115,7 @@ let rec current_node_trace seen key =
            | None -> false)
            trace.Trace_repository.reads
     in
-    List.find_opt valid (Trace_repository.load Trace_repository.default ~key:cache_key)
+    List.find_opt valid (Trace_repository.load (Runtime_context.traces ()) ~key:cache_key)
 
 and current_node_hash seen key =
   let session = Effect.perform Dynamic_scope.Get_session in
@@ -191,8 +191,7 @@ let rec authorized_seen seen caps cell =
           (Option.map Identity_types.Node_key.to_string
              (Session.node_key_by_id session key))
         in
-        let traces = Trace_repository.load Trace_repository.default
-          ~key:(Identity_types.Cache_key.of_string current_key)
+        let traces = Trace_repository.load (Runtime_context.traces ()) ~key:(Identity_types.Cache_key.of_string current_key)
         in
         let seen = KeySet.add current_key (KeySet.add key seen) in
         traces <> []

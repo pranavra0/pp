@@ -119,7 +119,7 @@ let execute_current ~(kind : string) ~(spec : value) : unit =
   let key = action_key ~epoch ~kind ~spec_hash in
   if Journal.has_fenced_done key then ()
   else begin
-    Object_repository.put_fenced Object_repository.default ~hash:spec_hash spec;
+    Object_repository.put_fenced (Runtime_context.objects ()) ~hash:spec_hash spec;
     Journal.append (Journal.FencedIntent {
       key; epoch; kind; spec_hash });
     let result = run_command spec in
@@ -132,7 +132,7 @@ let execute_current ~(kind : string) ~(spec : value) : unit =
 let execute_recovery
     ~(decide : Journal.fenced_entry -> recovery_decision)
     ~(entry : Journal.fenced_entry) : unit =
-  let result = match Object_repository.get_fenced Object_repository.default
+  let result = match Object_repository.get_fenced (Runtime_context.objects ())
       ~hash:entry.Journal.fe_spec_hash with
     | None ->
         (* A missing spec cannot be retried safely. *)

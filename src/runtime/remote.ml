@@ -112,7 +112,7 @@ let preseed_pins_from_file session ~(pins_file : string) : unit =
            | Ok (Remote_protocol.Probe_pin { name; value }) ->
                Session.preseed_probe session name value
            | Ok (Remote_protocol.File_pin { cell; hash }) ->
-                 (match Blob_repository.get Blob_repository.default hash with
+                 (match Blob_repository.get (Runtime_context.blobs ()) hash with
                   | None ->
                       failwith (Printf.sprintf
                         "pp: --pin-file: pinned blob %s not found in this \
@@ -146,7 +146,7 @@ let serve_assigned_keys host ~(token_text : string) ~(keys_file : string)
   List.iter (fun reply ->
     match Transport.parse_reply_text reply with
     | Some (Transport.RHit { result_hash; _ }) ->
-        (match Object_repository.get Object_repository.default ~key:result_hash with
+        (match Object_repository.get (Runtime_context.objects ()) ~key:result_hash with
          | None -> ()
          | Some v ->
              List.iter (fun h -> try Transport.LocalDir.push_blob shared_root ~hash:h with _ -> ())
@@ -249,7 +249,7 @@ let ship_and_pull host invocation ~(member_home : string) (closed : Scheduler.jo
     let member_store_root = Filename.concat member_home store_suffix in
     let pins = pre_observe_granted_scope invocation in
     List.iter (fun (_, hash, content) ->
-      ignore (Blob_repository.put Blob_repository.default content);
+      ignore (Blob_repository.put (Runtime_context.blobs ()) content);
       Transport.LocalDir.push_blob member_store_root ~hash)
       pins;
     let pins_file = Filename.concat scratch "pins" in
@@ -286,14 +286,13 @@ let ship_and_pull host invocation ~(member_home : string) (closed : Scheduler.jo
     in
     let log_file = Filename.concat scratch "log" in
     let code = spawn_member ~exe ~argv ~env:(member_env member_home) ~log_file in
-    (* Test-only, paired with PP_REMOTE_TEST_HOOK above: runs once the
-       member has exited, before the dispatcher pulls back and re-checks
-       its OWN Cache_policy.lookup Cache_policy.default against the CURRENT world. *)
+    (* Test-only hook runs before the dispatcher re-checks the current
+       runtime context after the member exits. *)
     (match Sys.getenv_opt "PP_REMOTE_TEST_HOOK_AFTER" with
      | Some cmd when cmd <> "" -> ignore (Sys.command cmd)
      | _ -> ());
     if code <> 0 then
-      Cache_policy.diagnose Cache_policy.default "remote: member subprocess for %s exited %d (see %s) — \
+      Cache_policy.diagnose (Runtime_context.cache ()) "remote: member subprocess for %s exited %d (see %s) — \
                  degrading this batch to local compute"
         member_home code log_file
     else if Sys.file_exists reply_file then
@@ -304,7 +303,7 @@ let ship_and_pull host invocation ~(member_home : string) (closed : Scheduler.jo
              try
                match Transport.recv_hit ~reply_text:line ~shared_root with
                | Transport.RHit { result_hash; _ } ->
-                   (match Object_repository.get Object_repository.default ~key:result_hash with
+                   (match Object_repository.get (Runtime_context.objects ()) ~key:result_hash with
                     | None -> ()
                     | Some v ->
                         List.iter (fun h ->
@@ -313,7 +312,7 @@ let ship_and_pull host invocation ~(member_home : string) (closed : Scheduler.jo
                           (Artifact_tree.reachable_blobs v))
                | Transport.RMiss _ | Transport.RDeny _ -> ()
              with e ->
-               Cache_policy.diagnose Cache_policy.default "remote: recv-hit failed (%s) — that key stays a \
+               Cache_policy.diagnose (Runtime_context.cache ()) "remote: recv-hit failed (%s) — that key stays a \
                           local miss and recomputes in-process"
                  (Printexc.to_string e)))
 
@@ -330,16 +329,16 @@ let dispatch_remote host invocation ~(member : string) (jobs : Scheduler.job lis
   try
     match find_member_root member with
     | None ->
-        Cache_policy.diagnose Cache_policy.default "remote: unknown cluster member %s (see %s) — batch stays local"
+        Cache_policy.diagnose (Runtime_context.cache ()) "remote: unknown cluster member %s (see %s) — batch stays local"
           member (members_path ())
     | Some root ->
         (match member_home_of_root root with
-         | Error msg -> Cache_policy.diagnose Cache_policy.default "remote: %s — batch stays local" msg
+         | Error msg -> Cache_policy.diagnose (Runtime_context.cache ()) "remote: %s — batch stays local" msg
          | Ok member_home ->
              let closed = List.filter (fun j -> Evaluator.is_data_closed j.Scheduler.j_thunk) jobs in
              if closed <> [] then ship_and_pull host invocation ~member_home closed)
   with e ->
-    Cache_policy.diagnose Cache_policy.default "remote: dispatch to %s failed (%s) — batch stays local"
+    Cache_policy.diagnose (Runtime_context.cache ()) "remote: dispatch to %s failed (%s) — batch stays local"
       member (Printexc.to_string e)
 
 let dispatcher host invocation : member:string -> Scheduler.job list -> unit =

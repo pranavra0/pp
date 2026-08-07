@@ -11,8 +11,8 @@ open Pp_kernel
    code path. The child exits 0 on success / 1 on error; the failing trace
    was already persisted by [Node.rebuild] itself. The parent never
    reads a value from a child — it reaps and falls through to the ordinary
-   [Cache_policy.lookup Cache_policy.default]: the child's trace+object make it a hit, a dead child makes
-   it a miss and the parent recomputes in-process. Worker death therefore
+   cache lookup in the active runtime context: the child's trace+object make
+   it a hit, a dead child makes it a miss and the parent recomputes in-process.
    degrades to "computed serially," never a wrong answer, never a hang.
 
    No value, closure, capability, or handler ever crosses a process

@@ -56,7 +56,7 @@ let ingest_object ~(claimed_hash : string) (text : string) : unit =
              "object %s: content hashes to %s, not its claimed name — \
               refusing to accept (corrupt or tampered in transit)"
              claimed_hash actual)
-      else Object_repository.put Object_repository.default ~key:claimed_hash ~value:v
+      else Object_repository.put (Runtime_context.objects ()) ~key:claimed_hash ~value:v
 
 let ingest_blob ~(claimed_hash : string) (content : string) : unit =
   let actual = Hasher.hash_string content in
@@ -65,7 +65,7 @@ let ingest_blob ~(claimed_hash : string) (content : string) : unit =
       (Printf.sprintf
          "blob %s: content hashes to %s, not its claimed name — refusing \
           to accept (corrupt or tampered in transit)" claimed_hash actual)
-  else ignore (Blob_repository.put Blob_repository.default content)
+  else ignore (Blob_repository.put (Runtime_context.blobs ()) content)
 
 (* Traces have no self-describing content hash: their filename is a NODE
    KEY (H(code, free-var value hashes) — see Trace_repository/identity.ml), not
@@ -92,10 +92,9 @@ let ingest_trace_lines ~(key : string) (raw : string) : unit =
              "trace %s: unparseable line — refusing to accept (corrupt or \
               tampered in transit): %s" key line)
     | Some tr ->
-        Trace_repository.put Trace_repository.default
-          ~key:(Identity_types.Cache_key.of_string key)
-          ~outcome:tr.Trace_repository.outcome
-          ~result_hash:tr.Trace_repository.result_hash ~reads:tr.Trace_repository.reads)
+        Trace_repository.put (Runtime_context.traces ()) ~key:(Identity_types.Cache_key.of_string key)
+        ~outcome:tr.Trace_repository.outcome
+        ~result_hash:tr.Trace_repository.result_hash ~reads:tr.Trace_repository.reads)
     lines
 
 (* ---- LocalDir: a second store-shaped root on one machine ----
@@ -129,7 +128,7 @@ module LocalDir = struct
      an adversary controls in the MITM threat model. *)
 
   let push_object (root : t) ~(hash : string) : unit =
-    match Object_repository.get Object_repository.default ~key:hash with
+    match Object_repository.get (Runtime_context.objects ()) ~key:hash with
     | None ->
         raise_unavailable root (Printf.sprintf
           "transport: push-object %s: no such object in the local store" hash)
@@ -137,11 +136,10 @@ module LocalDir = struct
         (match Codec.encode_value v with
          | None ->
              (* T5 non-regression, made explicit rather than assumed:
-                Object_repository.get Object_repository.default only ever decodes via Codec.decode_value,
-                whose grammar contains no code/capability/sealed
-                constructor at all — this branch should be unreachable —
-                but push refuses to ship on any doubt, never "ship and
-                hope". *)
+                the active object repository decodes only through
+                Codec.decode_value, whose grammar contains no
+                code/capability/sealed constructor — this branch should be
+                unreachable — but push refuses to ship on any doubt. *)
              raise_unavailable root (Printf.sprintf
                "transport: push-object %s: refusing to ship a value that \
                 does not re-encode as data (sealed/non-data invariant \
@@ -158,7 +156,7 @@ module LocalDir = struct
              end)
 
   let push_blob (root : t) ~(hash : string) : unit =
-    match Blob_repository.get Blob_repository.default hash with
+    match Blob_repository.get (Runtime_context.blobs ()) hash with
     | None ->
         raise_unavailable root (Printf.sprintf
           "transport: push-blob %s: no such blob in the local store" hash)
@@ -182,8 +180,7 @@ module LocalDir = struct
   (* Push exactly [traces] (a caller-chosen subset — see [serve_hit]'s
      authorization filtering below) into the remote root's trace SET for
      [key], merged with whatever is already there (R9's key -> SET is the
-     merge mechanism, same de-dup rule Trace_repository.put Trace_repository.default already uses
-     locally). *)
+     merge mechanism and uses the same local de-duplication rule. *)
   let push_trace_filtered (root : t) ~(key : string) ~(traces : Trace_repository.trace list) : unit =
     if traces <> [] then begin
       Store_layout.ensure_dir (traces_dir root);
@@ -198,8 +195,7 @@ module LocalDir = struct
     end
 
   let push_trace (root : t) ~(key : string) : unit =
-    let mine = Trace_repository.load Trace_repository.default
-      ~key:(Identity_types.Cache_key.of_string key) in
+    let mine = Trace_repository.load (Runtime_context.traces ()) ~key:(Identity_types.Cache_key.of_string key) in
     if mine = [] then
       raise_unavailable root (Printf.sprintf
         "transport: push-trace %s: no local traces for this node key" key)
@@ -251,14 +247,18 @@ let decide host ~(key : string) ~(token_text : string) : decision =
   | Error reason -> DDeny reason
   | Ok caps ->
       let authorized = Observation.authorized_id caps in
-      (match Cache_policy.lookup Cache_policy.default
+      (match Cache_policy.lookup (Runtime_context.cache ())
+               ~traces:(Runtime_context.traces ())
+               ~objects:(Runtime_context.objects ())
+               ~blobs:(Runtime_context.blobs ())
+               ~observe_id:Observation.observe_id ~replay:Observation.replay
                ~key:(Identity_types.Cache_key.of_string key) ~authorized with
        | Cache_policy.Miss -> DMiss
        | Cache_policy.HitOk v | Cache_policy.HitFailed v ->
            (match Codec.encode_value v with
             | None ->
-                (* T5 guard: Cache_policy.lookup Cache_policy.default can only ever have produced [v] by
-                   decoding an on-disk object, whose grammar contains no
+                (* T5 guard: the active cache context can only have produced
+                   [v] by decoding an on-disk object, whose grammar contains no
                    code/capability/sealed constructor — unreachable in
                    practice, but serve-hit refuses to ship on any doubt. *)
                 failwith (Printf.sprintf
@@ -267,8 +267,7 @@ let decide host ~(key : string) ~(token_text : string) : decision =
                    violation — should be unreachable)" key)
             | Some _ ->
                 let result_hash = Identity.hash_value v in
-                let traces = Trace_repository.load Trace_repository.default
-                  ~key:(Identity_types.Cache_key.of_string key) in
+                let traces = Trace_repository.load (Runtime_context.traces ()) ~key:(Identity_types.Cache_key.of_string key) in
                 (* Only the trace(s) whose ENTIRE closure this token's caps
                    cover — never leak a cell name/path the token doesn't
                    authorize, even when a DIFFERENT trace for the same key

@@ -103,9 +103,9 @@ let init t =
       end;
       atomic_replace version_path version
 
-let with_lifecycle command f =
-  ensure_area default Locks;
-  let path = path default Locks "lifecycle" in
+let with_lifecycle ?(layout = default) command f =
+  ensure_area layout Locks;
+  let path = path layout Locks "lifecycle" in
   let fd = Unix.openfile path [Unix.O_CREAT; Unix.O_RDWR] 0o600 in
   Fun.protect
     ~finally:(fun () ->
@@ -115,5 +115,7 @@ let with_lifecycle command f =
       Unix.lockf fd command 0;
       f ())
 
-let with_lifecycle_read f = with_lifecycle Unix.F_RLOCK f
-let with_lifecycle_write f = with_lifecycle Unix.F_LOCK f
+let with_lifecycle_read ?layout f =
+  with_lifecycle ?layout Unix.F_RLOCK f
+let with_lifecycle_write ?layout f =
+  with_lifecycle ?layout Unix.F_LOCK f

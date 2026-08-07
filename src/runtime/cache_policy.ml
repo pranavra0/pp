@@ -33,7 +33,12 @@ let event kind key reason =
 let diagnose t fmt =
   if t.why_enabled then Printf.eprintf ("[why] " ^^ fmt ^^ "\n%!")
   else Printf.ifprintf stderr fmt
-let lookup t ~(key : Identity_types.Cache_key.t)
+let lookup t ~(traces : Trace_repository.t) ~(objects : Object_repository.t)
+    ~(blobs : Blob_repository.t)
+    ~(observe_id : Identity_types.Cell_id.t ->
+      Identity_types.Observed_hash.t option)
+    ~(replay : (Identity_types.Cell_id.t * Identity_types.Observed_hash.t) list -> unit)
+    ~(key : Identity_types.Cache_key.t)
     ~(authorized : Identity_types.Cell_id.t -> bool) : result =
   if t.no_cache then begin
     event "node-cache" (Identity_types.Cache_key.to_string key) "disabled";
@@ -41,7 +46,7 @@ let lookup t ~(key : Identity_types.Cache_key.t)
       (short_key (Identity_types.Cache_key.to_string key));
     Miss
   end else begin
-    let traces = Trace_repository.load Trace_repository.default ~key in
+    let traces = Trace_repository.load traces ~key in
     let describe c =
       if authorized c then Identity_types.Cell_id.to_string c
       else "<redacted unauthorized cell>"
@@ -56,7 +61,7 @@ let lookup t ~(key : Identity_types.Cache_key.t)
       | None ->
           (match
              List.find_opt (fun (c, h) ->
-               match Observation.observe_id c with
+               match observe_id c with
                | Some cur -> cur <> h
                | None -> true)
                t.Trace_repository.reads
@@ -98,7 +103,7 @@ let lookup t ~(key : Identity_types.Cache_key.t)
              (short_key (Identity_types.Cache_key.to_string key)));
         Miss
     | Some tr ->
-        (match Object_repository.get Object_repository.default
+        (match Object_repository.get objects
                  ~key:(Identity_types.Object_hash.to_string
                          tr.Trace_repository.result_hash) with
          | None ->
@@ -109,7 +114,7 @@ let lookup t ~(key : Identity_types.Cache_key.t)
              let tree_blobs = Artifact_tree.reachable_blobs v in
              let missing_blob =
                List.find_opt (fun hash ->
-                 match Blob_repository.get Blob_repository.default hash with
+                 match Blob_repository.get blobs hash with
                  | Some bytes -> Hasher.hash_string bytes <> hash
                  | None -> true)
                  tree_blobs
@@ -126,6 +131,6 @@ let lookup t ~(key : Identity_types.Cache_key.t)
                (short_key (Identity_types.Cache_key.to_string key))
                (match tr.Trace_repository.outcome with Trace_repository.Ok -> "ok" | Trace_repository.Failed -> "failing")
                (List.length tr.Trace_repository.reads);
-             Observation.replay tr.Trace_repository.reads;
+             replay tr.Trace_repository.reads;
              (match tr.Trace_repository.outcome with Trace_repository.Ok -> HitOk v | Trace_repository.Failed -> HitFailed v))
   end
