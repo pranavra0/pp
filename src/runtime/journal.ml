@@ -83,7 +83,9 @@ let is_pid (s : string) : bool =
   String.length s > 0
   && (String.length s = 1 || s.[0] <> '0')
   && String.for_all (fun c -> c >= '0' && c <= '9') s
-  && Option.exists (fun n -> n >= 0 && string_of_int n = s) (int_of_string_opt s)
+  && (match int_of_string_opt s with
+      | Some n -> n >= 0 && string_of_int n = s
+      | None -> false)
 
 let of_line (line : string) : entry option =
   if line = "" || String.exists (fun c -> c = '\r' || c = '\n') line then None
