@@ -150,17 +150,20 @@ let (n = slurp("$TRIGGER"), v = force(node {
   }}
 }
 EOF
-timeout_bin() { command -v timeout >/dev/null 2>&1 && echo timeout || echo ""; }
+timeout_bin() {
+  if command -v timeout >/dev/null 2>&1; then
+    command -v timeout
+  else
+    TIMEOUT_DIR=$(mktemp -d)
+    printf '#!/bin/sh\nexec perl -e '\''alarm shift; exec @ARGV'\'' "$@"\n' > "$TIMEOUT_DIR/timeout"
+    chmod +x "$TIMEOUT_DIR/timeout"
+    echo "$TIMEOUT_DIR/timeout"
+  fi
+}
 TB=$(timeout_bin)
 run_watch() {
-  if [ -n "$TB" ]; then
-    "$TB" 6 "$PP" --watch --watch-interval 0.2 --grant "fs:${TMP}:ro" \
-      --grant "fs:${OUT}:wo" --reconcile "$OUT" "$TMP/watch.pp" > "$TMP/watch.out" 2>&1
-  else
-    "$PP" --watch --watch-interval 0.2 --grant "fs:${TMP}:ro" \
-      --grant "fs:${OUT}:wo" --reconcile "$OUT" "$TMP/watch.pp" > "$TMP/watch.out" 2>&1 &
-    echo $! > "$TMP/watch.pid"
-  fi
+  "$TB" 6 "$PP" --watch --watch-interval 0.2 --grant "fs:${TMP}:ro" \
+    --grant "fs:${OUT}:wo" --reconcile "$OUT" "$TMP/watch.pp" > "$TMP/watch.out" 2>&1
 }
 run_watch &
 WATCH_SHELL=$!
@@ -170,12 +173,7 @@ for i in $(seq 1 6); do
   "$PP" --gc-keep-epochs 2 --gc-grace-seconds 0 gc > "$TMP/watch-gc-$i.out" 2>&1 || true
 done
 sleep 0.5
-if [ -n "$TB" ]; then
-  wait "$WATCH_SHELL" 2>/dev/null || true
-else
-  kill "$(cat "$TMP/watch.pid" 2>/dev/null)" 2>/dev/null || true
-  wait "$WATCH_SHELL" 2>/dev/null || true
-fi
+wait "$WATCH_SHELL" 2>/dev/null || true
 watch_bound=$(count_store)
 ok "watch-loop-gc-race-no-crash (watch.pp's own process survived $((6)) ticks racing pp gc)"
 if [ "$watch_bound" -lt "$unbounded" ]; then
