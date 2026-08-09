@@ -39,7 +39,14 @@ if [ "${1:-}" = "--worker" ]; then
     elif command -v perl >/dev/null 2>&1; then
       perl -e 'alarm shift; exec @ARGV' "$seconds" "$@"
     else
-      "$@"
+      "$@" &
+      child=$!
+      ( sleep "$seconds"; kill -TERM "$child" 2>/dev/null || exit 0; sleep 1; kill -KILL "$child" 2>/dev/null || true ) &
+      watchdog=$!
+      wait "$child"; status=$?
+      kill "$watchdog" 2>/dev/null || true
+      wait "$watchdog" 2>/dev/null || true
+      return "$status"
     fi
   }
   case "$kind" in
