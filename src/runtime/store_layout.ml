@@ -21,8 +21,9 @@ let rec canonical_root path =
     let parent = Filename.dirname path in
     if parent = path then path
     else Filename.concat (canonical_root parent) (Filename.basename path)
+let canonical_path path = canonical_root (absolute path)
 
-let of_root root = { root = canonical_root (absolute root) }
+let of_root root = { root = canonical_path root }
 let root t = t.root
 let area_name = function
   | Objects -> "objects" | Traces -> "traces" | Blobs -> "blobs"
@@ -66,14 +67,15 @@ let maybe_crash boundary = match Lazy.force crash_spec with
   | _ -> ()
 let atomic_replace path content =
   incr write_count; maybe_crash "before";
-  try atomic_replace_c (absolute path) content; maybe_crash "post-rename" with
+  let path = canonical_path path in
+  try atomic_replace_c path content; maybe_crash "post-rename" with
   | Sys_error message -> raise (Error (Store (Write_failed {path;message})))
   | Unix.Unix_error (error,_,_) ->
       raise (Error (Store (Write_failed {path;message=Unix.error_message error})))
-let open_append path = open_append_c (absolute path)
-let open_rw path = open_rw_c (absolute path)
-let open_trunc path = open_trunc_c (absolute path)
-let open_read path = open_read_c (absolute path)
+let open_append path = open_append_c (canonical_path path)
+let open_rw path = open_rw_c (canonical_path path)
+let open_trunc path = open_trunc_c (canonical_path path)
+let open_read path = open_read_c (canonical_path path)
 let read_store path =
   try
     let fd = open_read path in
@@ -82,8 +84,8 @@ let read_store path =
       (fun () -> Some (really_input_string ic (in_channel_length ic)))
   with Sys_error _ | Unix.Unix_error _ | End_of_file -> None
 let remove path =
-  try unlink_c (absolute path) with Unix.Unix_error (Unix.ENOENT,_,_) -> ()
-let clear_dir path = clear_dir_c (absolute path)
+  try unlink_c (canonical_path path) with Unix.Unix_error (Unix.ENOENT,_,_) -> ()
+let clear_dir path = clear_dir_c (canonical_path path)
 let version = "pp-store 2\n"
 let versioned = [Objects; Traces; Fenced_specs; Procs]
 let nonempty t kind = list t kind <> []
