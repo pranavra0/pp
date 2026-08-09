@@ -15,20 +15,17 @@ if [ -e "$EXPORT/.git" ]; then
   exit 1
 fi
 
-if DUNE=$(command -v dune 2>/dev/null); then
-  :
-elif command -v opam >/dev/null 2>&1; then
-  DUNE=$(opam exec -- which dune) || {
-    printf '::error title=clean-export::could not locate dune through opam (root=%s export=%s)\n' "$ROOT" "$EXPORT"
-    exit 1
-  }
+if command -v opam >/dev/null 2>&1; then
+  DUNE=(opam exec -- dune)
+elif DUNE=$(command -v dune 2>/dev/null); then
+  DUNE=("$DUNE")
 else
   printf '::error title=clean-export::could not locate dune (root=%s export=%s)\n' "$ROOT" "$EXPORT"
   exit 1
 fi
 cd "$EXPORT"
-"$DUNE" build
-"$DUNE" runtest --force
+"${DUNE[@]}" build
+"${DUNE[@]}" runtest --force
 ./_build/default/src/app/main.exe --version > version.out
 expected=$(sed -nE 's/^[[:space:]]*\(version[[:space:]]+([^ )]+)\).*/\1/p' dune-project)
 actual=$(sed -n 's/^pp v//p' version.out)
