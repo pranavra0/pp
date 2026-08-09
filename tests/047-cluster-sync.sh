@@ -137,8 +137,15 @@ if [ -f "$DESIRED_OUT/a.txt" ] && [ "$(cat "$DESIRED_OUT/a.txt")" = "DESIRED-A" 
 else
   echo "FAIL desired-object-materializes-tree: expected files/content"; fail=1
 fi
-if [ "$(stat -c '%a' "$DESIRED_OUT/a.txt" 2>/dev/null)" = "644" ] \
-  && [ "$(stat -c '%a' "$DESIRED_OUT/sub" 2>/dev/null)" = "755" ]; then
+mode_of() {
+  if stat -c '%a' "$1" >/dev/null 2>&1; then
+    stat -c '%a' "$1"
+  else
+    stat -f '%Lp' "$1"
+  fi
+}
+if [ "$(mode_of "$DESIRED_OUT/a.txt")" = "644" ] \
+  && [ "$(mode_of "$DESIRED_OUT/sub")" = "755" ]; then
   echo "ok   desired-object-materializes-modes"
 else
   echo "FAIL desired-object-materializes-modes: expected 644/755"; fail=1
