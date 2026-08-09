@@ -30,7 +30,7 @@ let production_host () =
     ~canonical_realpath:World_path.canonical_impl ~unix_time:Unix.time
     ~home_dir:(fun () ->
       match Sys.getenv_opt "HOME" with
-      | Some home when home <> "" -> home
+      | Some home when home <> "" -> World_path.canonical_impl home
       | _ -> failwith "HOME is not set")
     ~read_secret ~write_secret
 
