@@ -9,8 +9,15 @@ open Codec
    anchor. Operators copy it to other members outside pp. *)
 
 (* Host effects arrive through an immutable service value. *)
+let rec canonical_path path =
+  if Sys.file_exists path then Unix.realpath path
+  else
+    let parent = Filename.dirname path in
+    if parent = path then path
+    else Filename.concat (canonical_path parent) (Filename.basename path)
 let cluster_dir host : string =
-  Filename.concat (host.Host_services.home_dir ()) ".pp/cluster"
+  let raw = Filename.concat (host.Host_services.home_dir ()) ".pp/cluster" in
+  canonical_path raw
 
 let secret_path host : string = Filename.concat (cluster_dir host) "secret"
 let id_path host : string = Filename.concat (cluster_dir host) "id"

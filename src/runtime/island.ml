@@ -89,7 +89,8 @@ let short (p : string) : string =
 
 let islands_root () =
   let home = match Sys.getenv_opt "HOME" with Some h -> h | None -> "/tmp" in
-  Filename.concat (Filename.concat home ".pp") "islands"
+  Store_layout.root
+    (Store_layout.of_root (Filename.concat (Filename.concat home ".pp") "islands"))
 
 let cache_src_root () = Filename.concat (islands_root ()) "src"
 let cached_tree (pin : string) = Filename.concat (cache_src_root ()) pin

@@ -117,9 +117,10 @@ let ingest_trace_lines ~(key : string) (raw : string) : unit =
 module LocalDir = struct
   type t = string
 
-  let objects_dir (root : t) = Filename.concat root "objects"
-  let blobs_dir (root : t) = Filename.concat root "blobs"
-  let traces_dir (root : t) = Filename.concat root "traces"
+  let canonical_root (path : t) = Store_layout.root (Store_layout.of_root path)
+  let objects_dir (path : t) = Filename.concat (canonical_root path) "objects"
+  let blobs_dir (path : t) = Filename.concat (canonical_root path) "blobs"
+  let traces_dir (path : t) = Filename.concat (canonical_root path) "traces"
 
   (* ---- push: the local repositories -> an arbitrary root ----
      Push re-checks its OWN local content against the hash it is about to
