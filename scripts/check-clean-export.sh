@@ -16,7 +16,8 @@ if [ -e "$EXPORT/.git" ]; then
 fi
 
 if command -v opam >/dev/null 2>&1; then
-  DUNE=(opam exec -- dune)
+  OPAM_SWITCH=$(opam switch show)
+  DUNE=(opam exec --switch="$OPAM_SWITCH" -- dune)
 elif DUNE=$(command -v dune 2>/dev/null); then
   DUNE=("$DUNE")
 else
