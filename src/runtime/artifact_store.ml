@@ -2,9 +2,8 @@ open Pp_kernel
 
 let read_blob hash =
   match Blob_repository.get (Runtime_context.blobs ()) hash with
-  | Some content when Hasher.hash_string content = hash -> content
-  | Some _ -> failwith ("tree blob hash mismatch: " ^ hash)
-  | None -> failwith ("tree blob is missing: " ^ hash)
+  | Some content -> content
+  | None -> failwith ("tree blob is missing or corrupt: " ^ hash)
 
 let rec ensure_dir path =
   if not (Sys.file_exists path) then begin

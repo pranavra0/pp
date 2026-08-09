@@ -1,7 +1,6 @@
 open Pp_kernel
 
 val pin_line : string -> string -> string
-val pin_probe_line : string -> Core_model.value -> string
 val preseed_pins_from_file : Session.t -> pins_file:string -> unit
 val serve_assigned_keys :
   Host_services.t ->

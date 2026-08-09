@@ -3,7 +3,7 @@
 # all probes stay in a temporary copy and are removed on exit.
 set -euo pipefail
 
-ROOT=$(cd "$(dirname "$0")/.." && pwd)
+ROOT="${DUNE_SOURCEROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 

@@ -102,6 +102,7 @@ type raw = {
   recv_hit : (string * string) option ref;
   remote_node : (string * string * string * string * string) option ref;
   check_kernel_props : (int * int) option ref;
+  once : bool ref;
   version : bool ref;
   help : bool ref;
   dump_surface_tables : bool ref;
@@ -127,7 +128,7 @@ let new_raw command_argv = {
   transport_push = ref None; transport_pull = ref None; serve_hit = ref None;
   recv_hit = ref None; remote_node = ref None;
   check_kernel_props = ref None; version = ref false;
-  help = ref false;
+  help = ref false; once = ref false;
   dump_surface_tables = ref false; dump_builtins = ref false;
 }
 
@@ -264,9 +265,9 @@ let flags raw =
     { name = "--check-kernel-props"; doc = ""; internal = true; handler = parse_kernel_props raw };
     doc_of "  pp --help                Print this help\n"
       (flag "--help" (fun () -> raw.help := true));
-    { (flag "-h" (fun () -> ())) with internal = true };
+    { (flag "-h" (fun () -> raw.help := true)) with internal = true };
     doc_of "  pp --once <file.pp>        Run once and exit (explicit; default behavior)\n"
-      (flag "--once" (fun () -> ()));
+      (flag "--once" (fun () -> raw.once := true));
     doc_of "  pp --watch <file.pp>       Run, then watch cell changes and re-evaluate\n  pp --watch --stabilize <file>  Watch with push stabilize (dirty-propagation)\n"
       (flag "--watch" (fun () -> raw.watch := true));
     doc_of "  pp --watch-interval <s>   Poll interval for --watch (default 1.0)\n"
@@ -279,6 +280,62 @@ let flags raw =
     doc_of "  pp run <file>            Run a pp source file\n"
       (opt1 "run" (fun f -> raw.files := f :: !(raw.files)));
   ]
+
+let validate_modes raw =
+  let option_set option = !option <> None in
+  let modes = List.filter_map (fun (active, name) ->
+    if active then Some name else None) [
+      (!(raw.help), "--help");
+      (!(raw.version), "--version");
+      (!(raw.dump_surface_tables), "--dump-surface-tables");
+      (!(raw.dump_builtins), "--dump-builtins");
+      (option_set raw.check_kernel_props, "--check-kernel-props");
+      (option_set raw.lint_file, "lint");
+      (!(raw.graph), "graph");
+      (option_set raw.island_pins, "island-pins");
+      (!(raw.cluster_init), "cluster-init");
+      (option_set raw.mint_token, "--mint-token");
+      (option_set raw.transport_push, "--transport-push");
+      (option_set raw.transport_pull, "--transport-pull");
+      (option_set raw.serve_hit, "--serve-hit");
+      (option_set raw.recv_hit, "--recv-hit");
+      (!(raw.gc), "gc");
+      (option_set raw.emit_braces_file, "--emit-braces");
+      (option_set raw.roundtrip_braces_file, "--roundtrip-braces");
+      (option_set raw.fmt, "fmt");
+      (option_set raw.compare_hash, "--compare-hash");
+      (option_set raw.list_comments, "--list-comments");
+      ((!(raw.files) <> [] || option_set raw.eval_string
+        || option_set raw.reconcile_root || !(raw.supervise)
+        || option_set raw.desired_object || option_set raw.publish_object_root
+        || option_set raw.remote_node || !(raw.watch)) && not !(raw.graph), "evaluation");
+    ]
+  in
+  (match modes with
+   | [] | [_] -> ()
+   | _ -> command ("conflicting command modes: " ^ String.concat ", " modes));
+  if option_set raw.eval_string && !(raw.files) <> [] then
+    command "-e cannot be combined with source files";
+  if option_set raw.desired_object
+     && (option_set raw.eval_string || !(raw.files) <> []) then
+    command "--desired-object cannot be combined with a program";
+  if option_set raw.desired_object
+     && not (option_set raw.reconcile_root || !(raw.supervise)) then
+    command "--desired-object requires --reconcile or --supervise";
+  if !(raw.once) && !(raw.watch) then
+    command "--once cannot be combined with --watch";
+  if !(raw.once) && !(raw.files) = [] then
+    command "--once requires a source file";
+  if !(raw.stabilize) && not !(raw.watch) then
+    command "--stabilize requires --watch";
+  if !(raw.watch) && !(raw.files) = [] then
+    command "--watch requires a source file";
+  if !(raw.supervise) && !(raw.files) = [] && not (option_set raw.desired_object) then
+    command "--supervise requires a source file";
+  if option_set raw.publish_object_root && !(raw.files) = [] then
+    command "--publish-object requires a source file";
+  if option_set raw.remote_node && !(raw.files) = [] then
+    command "--remote-node requires a source file"
 
 let validated raw =
   let policy = Cli_validation.schedule !(raw.schedule) in
@@ -313,15 +370,21 @@ let validated raw =
     help = !(raw.help);
     dump_surface_tables = !(raw.dump_surface_tables); dump_builtins = !(raw.dump_builtins) }
 
-let parse args = validated (let raw = new_raw args in
+let parse args =
+  let raw = new_raw args in
   let fs = flags raw in
   let rec loop = function
     | [] -> ()
     | token :: rest ->
         (match List.find_opt (fun f -> f.name = token) fs with
          | Some f -> loop (f.handler rest)
+         | None when String.length token > 0 && token.[0] = '-' ->
+             command ("unrecognized option: " ^ token)
          | None -> raw.files := token :: !(raw.files); loop rest)
-  in loop args; raw)
+  in
+  loop args;
+  validate_modes raw;
+  validated raw
 
 let print_help (t : t) =
   Printf.printf "pp — lazy, pure-by-default, content-addressed Lisp\nUsage:\n  pp                       Start REPL\n  pp <file.pp>             Run a pp source file\n";

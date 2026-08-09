@@ -17,4 +17,26 @@ let () =
     "unknown observation was authorized";
   check (Observation.env_hash None <> Observation.env_hash (Some ""))
     "environment absence was not distinguished from empty value";
+  let make_root prefix =
+    let path = Filename.temp_file prefix "" in
+    Sys.remove path;
+    Unix.mkdir path 0o700;
+    path
+  in
+  let symlink_tree = make_root "pp-observe-link-" in
+  let file_tree = make_root "pp-observe-file-" in
+  Fun.protect
+    ~finally:(fun () ->
+      Fswalk.remove_tree symlink_tree;
+      Fswalk.remove_tree file_tree)
+    (fun () ->
+      let content = "c" in
+      Unix.symlink content
+        (Filename.concat symlink_tree "a");
+      let oc = open_out_bin (Filename.concat file_tree "a") in
+      Fun.protect
+        ~finally:(fun () -> close_out_noerr oc)
+        (fun () -> output_string oc content);
+      check (Observation.tree_hash symlink_tree <> Observation.tree_hash file_tree)
+        "tree hash framing collided for symlink and file entries");
   print_endline "observation: ok"

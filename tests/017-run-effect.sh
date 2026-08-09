@@ -48,8 +48,8 @@ EOF
 run --grant process --grant "fs:$SRC:ro" "$TMP/c.pp"
 assert "node-run-denied" "scripting-tier only" present
 
-# --- (d) absolute write-file inside a node errors (even with rw grant, per
-#         SPEC law 18); scripting-tier write-file is unchanged ---
+# --- (d) absolute write-file inside a node errors even with an rw grant
+#         (SPEC law 18); scripting-tier write-file requires explicit authority ---
 cat > "$TMP/e1.pp" <<EOF
 force(node { perform write-file("$TMP/evil.txt", "X") })
 EOF
@@ -63,6 +63,61 @@ else echo "ok   node-write-no-leak"; fi
 run --grant "fs:$TMP:rw" "$TMP/e2.pp"
 if [ -f "$TMP/ok.txt" ]; then echo "ok   scripting-write-works"
 else echo "FAIL scripting-write-works: ok.txt missing"; cat "$TMP/out"; fail=1; fi
-rm -rf "$TMP"
+# --- (e) scripting write-file requires a write grant; read-only is denied ---
+cat > "$TMP/e3.pp" <<EOF
+perform write-file("$TMP/no-grant.txt", "X")
+EOF
+run "$TMP/e3.pp"
+assert "scripting-write-no-grant-denied" "capability error" present
+if [ -f "$TMP/no-grant.txt" ]; then echo "FAIL scripting-write-no-grant-leak"; fail=1
+else echo "ok   scripting-write-no-grant-no-leak"; fi
+cat > "$TMP/e4.pp" <<EOF
+perform write-file("$TMP/read-only.txt", "X")
+EOF
+run --grant "fs:$TMP:ro" "$TMP/e4.pp"
+assert "scripting-write-read-only-denied" "capability error" present
+if [ -f "$TMP/read-only.txt" ]; then echo "FAIL scripting-write-read-only-leak"; fail=1
+else echo "ok   scripting-write-read-only-no-leak"; fi
+# --- (f) process observation/mutation requires process authority too ---
+cat > "$TMP/reap.pp" <<'EOF'
+perform proc-reap()
+EOF
+run "$TMP/reap.pp"
+assert "proc-reap-no-grant-denied" "capability error" present
+run --grant process "$TMP/reap.pp"
+assert "proc-reap-granted" "capability error" absent
+
+# --- (g) a dangling symlink cannot redirect an allowed write outside its grant ---
+mkdir -p "$TMP/allowed"
+ln -s "$TMP/escape.txt" "$TMP/allowed/link"
+cat > "$TMP/e5.pp" <<EOF
+perform write-file("$TMP/allowed/link", "X")
+EOF
+run --grant "fs:$TMP/allowed:rw" "$TMP/e5.pp"
+assert "scripting-write-symlink-denied" "refusing symlink" present
+if [ -f "$TMP/escape.txt" ]; then echo "FAIL scripting-write-symlink-leak"; fail=1
+else echo "ok   scripting-write-symlink-no-leak"; fi
+ 
+ # --- (h) CR/LF-containing argv is rejected before child execution ---
+ rm -f "$TMP/crlf-sentinel"
+ printf 'perform run("sh", "-c", "touch %s\\r\\n")\n' "$TMP/crlf-sentinel" > "$TMP/crlf.pp"
+ run --grant process "$TMP/crlf.pp"
+ assert "run-crlf-invalid" "invalid|journal" present
+ if [ -e "$TMP/crlf-sentinel" ]; then echo "FAIL run-crlf-child-executed"; fail=1
+ else echo "ok   run-crlf-child-blocked"; fi
+ 
+ # --- (i) a journal log leaf that is not a regular file blocks execution ---
+ rm -f "$TMP/journal-sentinel"
+ rm -rf "$TMP/.pp"
+ mkdir -p "$TMP/.pp/store/journal"
+ mkdir "$TMP/.pp/store/journal/log"
+ cat > "$TMP/journal-leaf.pp" <<EOF
+perform run("sh", "-c", "touch $TMP/journal-sentinel")
+EOF
+ run --grant process "$TMP/journal-leaf.pp"
+ assert "journal-invalid-leaf" "invalid|journal" present
+ if [ -e "$TMP/journal-sentinel" ]; then echo "FAIL journal-leaf-child-executed"; fail=1
+ else echo "ok   journal-leaf-child-blocked"; fi
+ rm -rf "$TMP/.pp"
 if [ "$fail" -eq 0 ]; then echo "=== RUN EFFECT (D13) TEST PASSED ==="; fi
 exit $fail

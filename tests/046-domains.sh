@@ -146,9 +146,122 @@ assert "plan-cache-hit" "domain kv: plan .*: hit" present "$TMP/why-out"
 assert "null-created" "created=0" present "$TMP/why-out"
 assert "null-updated" "updated=0" present "$TMP/why-out"
 assert "null-deleted" "deleted=0" present "$TMP/why-out"
+# =====================================================================
+# (3) descriptor-safe materialize/remove: parent symlinks escaping the
+#     grant are rejected, while final symlink objects may be replaced or
+#     removed without touching their outside targets.
+# =====================================================================
+SAFE_ROOT="$TMP/safe-root"
+SAFE_OUTSIDE="$TMP/safe-outside"
+mkdir -p "$SAFE_ROOT" "$SAFE_OUTSIDE"
+
+# A parent symlink resolves outside the authorized root.  The apply path
+# must reject this before writing the outside target.
+mkdir -p "$SAFE_OUTSIDE/parent"
+ln -s "$SAFE_OUTSIDE/parent" "$SAFE_ROOT/parent"
+{ kv_domain_source "$SAFE_ROOT"
+  cat <<EOF
+do {
+  register-kv-domain()
+  {"kv" -> {"parent/escaped" -> "must-not-write"}}
+}
+EOF
+} > "$TMP/parent-symlink.pp"
+rm -rf "$TMP/.pp"
+if run --grant "fs:$SAFE_ROOT:wo" "$TMP/parent-symlink.pp"; then
+  echo "FAIL parent-symlink-rejected: apply unexpectedly succeeded"; fail=1
+else
+  assert "parent-symlink-rejected" "apability|outside|invalid|denied|anonical" present
+fi
+if [ ! -e "$SAFE_OUTSIDE/parent/escaped" ]; then
+  echo "ok   parent-symlink-outside-untouched"
+else
+  echo "FAIL parent-symlink-outside-untouched: escaped file exists"; fail=1
+fi
+
+# A final symlink is canonicalized through its target and therefore
+# rejected by the capability check; neither object nor target may change.
+printf 'outside-original' > "$SAFE_OUTSIDE/final-target"
+ln -s "$SAFE_OUTSIDE/final-target" "$SAFE_ROOT/final"
+{ kv_domain_source "$SAFE_ROOT"
+  cat <<EOF
+do {
+  register-kv-domain()
+  {"kv" -> {"final" -> "inside-value"}}
+}
+EOF
+} > "$TMP/final-symlink.pp"
+rm -rf "$TMP/.pp"
+if run --grant "fs:$SAFE_ROOT:wo" "$TMP/final-symlink.pp"; then
+  echo "FAIL final-symlink-materialize-denied: apply unexpectedly succeeded"; fail=1
+else
+  assert "final-symlink-materialize-denied" "apability|outside|invalid|denied|anonical" present
+fi
+if [ -L "$SAFE_ROOT/final" ] \
+   && [ "$(cat "$SAFE_OUTSIDE/final-target")" = "outside-original" ]; then
+  echo "ok   final-symlink-materialize-untouched"
+else
+  echo "FAIL final-symlink-materialize-untouched"; fail=1
+fi
+
+# Removal of a final symlink is likewise rejected; the link and target stay.
+printf 'outside-delete-target' > "$SAFE_OUTSIDE/delete-target"
+ln -s "$SAFE_OUTSIDE/delete-target" "$SAFE_ROOT/delete"
+{ kv_domain_source "$SAFE_ROOT"
+  cat <<EOF
+do {
+  register-domain({:name -> "kv", :namespace -> vec[string-append("file:", "$SAFE_ROOT"), string-append("tree:", "$SAFE_ROOT")], :observe -> (
+fn() { {"delete" -> hash-string("observed")} }), :diff -> kv-diff, :apply -> kv-apply, :write-cap -> cap-restrict(current-capabilities(), "$SAFE_ROOT", :wo)})
+  {"kv" -> {}}
+}
+EOF
+} > "$TMP/remove-symlink.pp"
+rm -rf "$TMP/.pp"
+if run --grant "fs:$SAFE_ROOT:wo" "$TMP/remove-symlink.pp"; then
+  echo "FAIL final-symlink-remove-denied: apply unexpectedly succeeded"; fail=1
+else
+  assert "final-symlink-remove-denied" "apability|outside|invalid|denied|anonical" present
+fi
+if [ -L "$SAFE_ROOT/delete" ] \
+   && [ "$(cat "$SAFE_OUTSIDE/delete-target")" = "outside-delete-target" ]; then
+  echo "ok   final-symlink-remove-untouched"
+else
+  echo "FAIL final-symlink-remove-untouched"; fail=1
+fi
+
+# Deleting the last nested file prunes empty nested parents, but not the
+# authorized root itself.
+NESTED_ROOT="$TMP/nested-root"
+mkdir -p "$NESTED_ROOT"
+{ kv_domain_source "$NESTED_ROOT"
+  cat <<EOF
+do {
+  register-kv-domain()
+  {"kv" -> {"one/two/leaf" -> "nested"}}
+}
+EOF
+} > "$TMP/nested-create.pp"
+rm -rf "$TMP/.pp"
+run --grant "fs:$NESTED_ROOT:wo" "$TMP/nested-create.pp"
+{ kv_domain_source "$NESTED_ROOT"
+  cat <<EOF
+do {
+  register-kv-domain()
+  {"kv" -> {}}
+}
+EOF
+} > "$TMP/nested-remove.pp"
+rm -rf "$TMP/.pp"
+run --grant "fs:$NESTED_ROOT:wo" "$TMP/nested-remove.pp"
+if [ ! -e "$NESTED_ROOT/one" ] && [ -d "$NESTED_ROOT" ]; then
+  echo "ok   nested-empty-parents-pruned-root-kept"
+else
+  echo "FAIL nested-empty-parents-pruned-root-kept"; fail=1
+fi
+
 
 # =====================================================================
-# (3) stratification: a desired-state computation that reads its OWN
+# (4) stratification: a desired-state computation that reads its OWN
 #     domain is refused (SPEC law 30), generalized to a domain pp's own
 #     stdlib never defines.
 # =====================================================================
@@ -170,7 +283,7 @@ assert "stratification-rejected" "tratification" present
   || echo "ok   stratification-untouched"
 
 # =====================================================================
-# (4) verify-after-write failure surfaced: a domain whose apply
+# (5) verify-after-write failure surfaced: a domain whose apply
 #     deliberately under-converges (a no-op) must fail loudly, not
 #     silently accept a still-diverged domain.
 # =====================================================================
@@ -198,7 +311,7 @@ if [ -e "$KV4/a" ]; then echo "FAIL verify-broken-no-write: apply was a no-op ye
 else echo "ok   verify-broken-no-write"; fi
 
 # =====================================================================
-# (5) fenced-after-domains ordering: a fenced action registered in the
+# (6) fenced-after-domains ordering: a fenced action registered in the
 #     SAME program runs after the domain's own converge/verify, and its
 #     journal entries land AFTER the domain's in the log.
 # =====================================================================
@@ -230,6 +343,31 @@ else
   echo "FAIL fenced-after-domains-ordering: no journal"; fail=1
 fi
 
+
+ # =====================================================================
+ # (6) corrupt domain state aborts observe before diff/apply.
+ # =====================================================================
+ STATE_DOMAIN="state-probe"
+ STATE_KEY="key"
+ STATE_HASH=$(printf '%s' "$STATE_KEY" | sha256sum | cut -d' ' -f1)
+ STATE_DIR="$TMP/.pp/store/domain-state/$STATE_DOMAIN"
+ STATE_SENTINEL="$TMP/state-apply-sentinel"
+ rm -rf "$TMP/.pp" "$STATE_SENTINEL"
+ mkdir -p "$STATE_DIR"
+ printf 'not-a-codec-value' > "$STATE_DIR/$STATE_HASH"
+ cat > "$TMP/corrupt-state.pp" <<EOF
+do {
+  register-domain({:name -> "$STATE_DOMAIN", :namespace -> vec["file:$TMP/state-probe"], :observe -> (
+fn() { perform domain-state-get("$STATE_KEY") }), :diff -> (
+fn(observed, desired) { {"items" -> [1]} }), :apply -> (
+fn(plan) { perform write-file("$STATE_SENTINEL", "leak") }), :write-cap -> cap-restrict(current-capabilities(), "$TMP", :wo)})
+  {"$STATE_DOMAIN" -> {"wanted" -> "value"}}
+}
+EOF
+run --grant "fs:$TMP:wo" "$TMP/corrupt-state.pp"
+assert "domain-state-corrupt" "corrupt state" present
+if [ -e "$STATE_SENTINEL" ]; then echo "FAIL domain-state-no-apply"; fail=1
+else echo "ok   domain-state-no-diff-apply"; fi
 
 rm -rf "$TMP"
 if [ "$fail" -eq 0 ]; then echo "=== DOMAINS (Q13) TEST PASSED ==="; fi

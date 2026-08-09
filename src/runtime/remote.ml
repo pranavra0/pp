@@ -12,9 +12,12 @@ open Core_model
    node's own $HOME/.pp/store). Blank lines and '#' comments ignored. *)
 
 let members_path () : string =
-  match Sys.getenv_opt "PP_CLUSTER_MEMBERS" with
-  | Some p -> p
-  | None -> Filename.concat (Sys.getenv "HOME") ".pp/cluster/members"
+  match Sys.getenv_opt "PP_CLUSTER_MEMBERS", Sys.getenv_opt "HOME" with
+  | Some path, _ -> path
+  | None, Some home when home <> "" ->
+      Filename.concat home ".pp/cluster/members"
+  | None, _ ->
+      failwith "remote scheduling requires HOME or PP_CLUSTER_MEMBERS"
 
 let load_members () : (string * string) list =
   let path = members_path () in
@@ -55,10 +58,6 @@ let member_home_of_root (root : string) : (string, string) result =
 
 let pin_line cell hash = Remote_protocol.encode_file_pin ~cell ~hash
 
-let pin_probe_line name value =
-  match Remote_protocol.encode_probe_pin ~name value with
-  | Ok line -> line
-  | Error message -> failwith message
 
 (* ---- Member side: pre-seed observation pins from the wire BEFORE anything
    runs — the soundness crux of remote placement ----
@@ -149,9 +148,16 @@ let serve_assigned_keys host ~(token_text : string) ~(keys_file : string)
         (match Object_repository.get (Runtime_context.objects ()) ~key:result_hash with
          | None -> ()
          | Some v ->
-             List.iter (fun h -> try Transport.LocalDir.push_blob shared_root ~hash:h with _ -> ())
+             List.iter (fun h ->
+               Transport.LocalDir.push_blob shared_root ~hash:h)
                (Artifact_tree.reachable_blobs v))
-    | _ -> ())
+    | Some (Transport.RMiss _ | Transport.RDeny _) -> ()
+    | None ->
+        raise (Source_error.Error
+          (Source_error.Transport
+             (Source_error.Integrity {
+                artifact = "remote reply";
+                message = "member generated a malformed reply" }))))
     replies;
   Store_layout.atomic_replace reply_file (String.concat "" replies)
 
@@ -292,29 +298,25 @@ let ship_and_pull host invocation ~(member_home : string) (closed : Scheduler.jo
      | Some cmd when cmd <> "" -> ignore (Sys.command cmd)
      | _ -> ());
     if code <> 0 then
-      Cache_policy.diagnose (Runtime_context.cache ()) "remote: member subprocess for %s exited %d (see %s) — \
-                 degrading this batch to local compute"
+      Printf.eprintf
+        "pp: warning: remote member subprocess for %s exited %d (see %s); batch stays local\n%!"
         member_home code log_file
     else if Sys.file_exists reply_file then
       String.split_on_char '\n' (Cell_repository.read_raw reply_file)
       |> List.iter (fun line ->
            let line = String.trim line in
            if line <> "" then
-             try
-               match Transport.recv_hit ~reply_text:line ~shared_root with
-               | Transport.RHit { result_hash; _ } ->
-                   (match Object_repository.get (Runtime_context.objects ()) ~key:result_hash with
-                    | None -> ()
-                    | Some v ->
-                        List.iter (fun h ->
-                          try Transport.LocalDir.pull_blob shared_root ~hash:h
-                          with _ -> ())
-                          (Artifact_tree.reachable_blobs v))
-               | Transport.RMiss _ | Transport.RDeny _ -> ()
-             with e ->
-               Cache_policy.diagnose (Runtime_context.cache ()) "remote: recv-hit failed (%s) — that key stays a \
-                          local miss and recomputes in-process"
-                 (Printexc.to_string e)))
+             match Transport.recv_hit ~reply_text:line ~shared_root with
+             | Transport.RHit { result_hash; _ } ->
+                 (match Object_repository.get (Runtime_context.objects ())
+                          ~key:result_hash with
+                  | None -> ()
+                  | Some v ->
+                      List.iter (fun h ->
+                        Transport.LocalDir.pull_blob shared_root ~hash:h)
+                        (Artifact_tree.reachable_blobs v))
+             | Transport.RMiss _ | Transport.RDeny _ -> ())
+  )
 
 (* The scheduler dispatcher filters [jobs] to the
    data-closed subset (contract point 2 — the codec's non-data predicate,
@@ -329,17 +331,25 @@ let dispatch_remote host invocation ~(member : string) (jobs : Scheduler.job lis
   try
     match find_member_root member with
     | None ->
-        Cache_policy.diagnose (Runtime_context.cache ()) "remote: unknown cluster member %s (see %s) — batch stays local"
+        Printf.eprintf
+          "pp: warning: unknown cluster member %s (see %s); batch stays local\n%!"
           member (members_path ())
     | Some root ->
         (match member_home_of_root root with
-         | Error msg -> Cache_policy.diagnose (Runtime_context.cache ()) "remote: %s — batch stays local" msg
+         | Error message ->
+             Printf.eprintf "pp: warning: remote: %s; batch stays local\n%!"
+               message
          | Ok member_home ->
-             let closed = List.filter (fun j -> Evaluator.is_data_closed j.Scheduler.j_thunk) jobs in
-             if closed <> [] then ship_and_pull host invocation ~member_home closed)
-  with e ->
-    Cache_policy.diagnose (Runtime_context.cache ()) "remote: dispatch to %s failed (%s) — batch stays local"
-      member (Printexc.to_string e)
+             let closed =
+               List.filter (fun job ->
+                 Evaluator.is_data_closed job.Scheduler.j_thunk) jobs
+             in
+             if closed <> [] then
+               ship_and_pull host invocation ~member_home closed)
+  with error ->
+    Printf.eprintf
+      "pp: warning: remote dispatch to %s failed (%s); batch stays local\n%!"
+      member (Printexc.to_string error)
 
 let dispatcher host invocation : member:string -> Scheduler.job list -> unit =
   dispatch_remote host invocation

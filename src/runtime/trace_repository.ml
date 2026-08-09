@@ -8,7 +8,6 @@ type trace = {
 }
 type t = { layout : Store_layout.t }
 let create layout = { layout }
-let default = create Store_layout.default
 
 let to_line (tr : trace) : string =
   let outcome_s = match tr.outcome with Ok -> "ok" | Failed -> "failed" in
@@ -23,71 +22,99 @@ let to_line (tr : trace) : string =
          (Identity_types.Object_hash.to_string tr.result_hash))
     (String.concat " " (List.map read_s tr.reads))
 
-(* Hand-rolled parser matching [to_line] exactly; [None] on anything
-   that doesn't (a corrupted or old-format line → the caller drops it).
-   Thin adapters that delegate to Codec's expect_char/expect_lit/bind — the line
-   and len are baked in so callers don't pass them every time. *)
-let of_line (line : string) : trace option =
-  let len = String.length line in
-  let expect_char i c = Codec.expect_char line i c in
-  let expect_lit i lit = Codec.expect_lit line i lit in
-  let (>>=) = Codec.bind in
-  let parse_outcome i =
-    match expect_lit i "ok " with
-    | Some j -> Some (Ok, j)
-    | None ->
-        (match expect_lit i "failed " with
-         | Some j -> Some (Failed, j)
-         | None -> None)
-  in
-  (* One "(CELL . HASH)" entry. *)
-  let parse_read i =
-    expect_char i '(' >>= fun i ->
-    Codec.parse_quoted_string line i >>= fun (cell, i) ->
-    expect_lit i " . " >>= fun i ->
-    Codec.parse_quoted_string line i >>= fun (hash, i) ->
-    expect_char i ')' >>= fun i ->
-    Some ((Identity_types.Cell_id.of_string cell,
-           Identity_types.Observed_hash.of_digest hash), i)
-  in
-  let rec parse_reads i acc =
-    if i < len && line.[i] = ')' then Some (List.rev acc, i + 1)
-    else
-      parse_read i >>= fun (r, i) ->
-      let i = match expect_char i ' ' with Some i -> i | None -> i in
-      parse_reads i (r :: acc)
-  in
-  expect_lit 0 "(trace " >>= fun i ->
-  parse_outcome i >>= fun (outcome, i) ->
-  Codec.parse_quoted_string line i >>= fun (result_hash, i) ->
-  expect_char i ' ' >>= fun i ->
-  expect_char i '(' >>= fun i ->
-  parse_reads i [] >>= fun (reads, i) ->
-  expect_char i ')' >>= fun i ->
-  if i = len then
-    Some { outcome = outcome;
-           result_hash = Identity_types.Object_hash.of_digest result_hash;
-           reads = reads }
-  else None
+(* Hand-rolled parser matching [to_line] exactly; malformed or noncanonical
+   records are ignored when loading the append-only trace set. *)
+let is_canonical_digest s =
+  String.length s = 64
+  && String.for_all
+       (fun c -> (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) s
 
+let valid_cell_string s =
+  String.length s > 0
+  && String.for_all (fun c -> Char.code c >= 32 && Char.code c <> 127) s
+  &&
+  try Cell.serialize (Cell.parse s) = s with _ -> false
+
+let of_line (line : string) : trace option =
+  if String.exists (fun c -> c = '\r' || c = '\n') line then None else
+  try
+    let len = String.length line in
+    let expect_char i c = Codec.expect_char line i c in
+    let expect_lit i lit = Codec.expect_lit line i lit in
+    let (>>=) = Codec.bind in
+    let parse_outcome i =
+      match expect_lit i "ok " with
+      | Some j -> Some (Ok, j)
+      | None ->
+          (match expect_lit i "failed " with
+           | Some j -> Some (Failed, j)
+           | None -> None)
+    in
+    let parse_read i =
+      expect_char i '(' >>= fun i ->
+      Codec.parse_quoted_string line i >>= fun (cell, i) ->
+      expect_lit i " . " >>= fun i ->
+      Codec.parse_quoted_string line i >>= fun (hash, i) ->
+      expect_char i ')' >>= fun i ->
+      if valid_cell_string cell && is_canonical_digest hash then
+        Some ((Identity_types.Cell_id.of_string cell,
+               Identity_types.Observed_hash.of_digest hash), i)
+      else None
+    in
+    let rec parse_reads i acc =
+      if i < len && line.[i] = ')' then Some (List.rev acc, i + 1)
+      else
+        parse_read i >>= fun (r, next) ->
+        if next < len && line.[next] = ')' then
+          parse_reads next (r :: acc)
+        else
+          expect_char next ' ' >>= fun after_space ->
+          parse_reads after_space (r :: acc)
+    in
+    expect_lit 0 "(trace " >>= fun i ->
+    parse_outcome i >>= fun (outcome, i) ->
+    Codec.parse_quoted_string line i >>= fun (result_hash, i) ->
+    if not (is_canonical_digest result_hash) then None else
+    expect_char i ' ' >>= fun i ->
+    expect_char i '(' >>= fun i ->
+    parse_reads i [] >>= fun (reads, i) ->
+    expect_char i ')' >>= fun i ->
+    if i = len then
+      let tr = { outcome = outcome;
+                 result_hash = Identity_types.Object_hash.of_digest result_hash;
+                 reads = reads } in
+      if to_line tr = line then Some tr else None
+    else None
+  with _ -> None
 let load t ~(key : Identity_types.Cache_key.t) : trace list =
   let path = Store_layout.path t.layout Store_layout.Traces
     (Identity_types.Cache_key.to_string key) in
-  if Sys.file_exists path then (
-    try
-      let ic = open_in path in
-      Fun.protect
-        ~finally:(fun () -> close_in_noerr ic)
-        (fun () ->
-          let lines = ref [] in
-          (try
-             while true do lines := input_line ic :: !lines done
-           with End_of_file -> ());
-          List.filter_map of_line (List.rev !lines))
-    with
-    | Sys_error _ | Unix.Unix_error _ -> []
-  ) else
-    []
+  try
+    let fd = Store_layout.open_read path in
+    let ic = Unix.in_channel_of_descr fd in
+    Fun.protect
+      ~finally:(fun () -> close_in_noerr ic)
+      (fun () ->
+        let len = in_channel_length ic in
+        if len = 0 then []
+        else begin
+          seek_in ic (len - 1);
+          if input_char ic <> '\n' then []
+          else begin
+            seek_in ic 0;
+            let rec read_lines acc =
+              try
+                let line = input_line ic in
+                match of_line line with
+                | Some tr -> read_lines (tr :: acc)
+                | None -> read_lines acc
+              with End_of_file -> List.rev acc
+            in
+            read_lines []
+          end
+        end)
+  with
+  | Exit | Sys_error _ | Unix.Unix_error _ | End_of_file -> []
 
 (* ---- Concurrent-writer safety: per-key lock around the traces/<key> RMW ----
 
@@ -115,10 +142,11 @@ let with_trace_lock t (key : Identity_types.Cache_key.t) (f : unit -> unit) : un
     Store_layout.ensure_area t.layout Store_layout.Locks;
     let lock_path = Store_layout.path t.layout Store_layout.Locks
       (Identity_types.Cache_key.to_string key) in
-    match (try Some (Unix.openfile lock_path [Unix.O_CREAT; Unix.O_WRONLY] 0o644)
+    match (try Some (Store_layout.open_rw lock_path)
            with Unix.Unix_error _ -> None) with
     | None -> f ()  (* lock acquisition is best-effort; correctness is atomic replace *)
     | Some fd ->
+        Unix.fchmod fd 0o600;
         Fun.protect
           ~finally:(fun () ->
             try Unix.close fd with Unix.Unix_error _ -> ())
@@ -129,7 +157,6 @@ let with_trace_lock t (key : Identity_types.Cache_key.t) (f : unit -> unit) : un
                 try Unix.lockf fd Unix.F_ULOCK 0 with Unix.Unix_error _ -> ())
               f)
   end
-
 let put t ~key ~outcome ~result_hash ~reads =
   Store_layout.ensure_area t.layout Store_layout.Traces;
   with_trace_lock t key (fun () ->
@@ -144,4 +171,5 @@ let put t ~key ~outcome ~result_hash ~reads =
            (Identity_types.Cache_key.to_string key)) content
     ))
 let keys t = Store_layout.list t.layout Store_layout.Traces
+  |> List.filter is_canonical_digest
   |> List.map Identity_types.Cache_key.of_string

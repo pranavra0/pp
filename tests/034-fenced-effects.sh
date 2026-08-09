@@ -45,6 +45,17 @@ EOF
 "$PP" "$TMP/noop.pp" > "$TMP/outlog" 2>&1
 assert "scripting-noop" "^42$" present
 
+# --- (c) kind tokens cannot corrupt the space-delimited recovery record ---
+cat > "$TMP/bad-kind.pp" <<'EOF'
+do {
+  fenced("touch file", {"run" -> ["/usr/bin/false"]})
+  {:tree -> {}}
+}
+EOF
+"$PP" --fenced-policy retry --reconcile "$OUT" --grant "fs:$OUT:rw" \
+  "$TMP/bad-kind.pp" > "$TMP/outlog" 2>&1 || true
+assert "kind-whitespace-rejected" "kind must be a nonempty token" present
+
 # --- (c) a simple fenced action executes once and journals intent/done ---
 rm -rf "$TMP/.pp" "$OUT"
 rm -f "$TMP/touched"
@@ -69,22 +80,112 @@ fi
 
 # --- (e) simulated crash recovery: retry re-runs the unknown action once ---
 rm -rf "$TMP/.pp" "$OUT"
-rm -f "$TMP/touched"
-"$PP" --fenced-policy retry --reconcile "$OUT" --grant "fs:$OUT:rw" "$TMP/simple.pp" > "$TMP/outlog" 2>&1
+rm -f "$TMP/touched" "$TMP/retry-runs"
+cat > "$TMP/retry-action.sh" <<'EOF'
+#!/bin/sh
+printf 'run\n' >> "$1"
+EOF
+chmod +x "$TMP/retry-action.sh"
+cat > "$TMP/retry.pp" <<EOF
+do {
+  fenced("retry-once", {"run" -> ["$TMP/retry-action.sh", "$TMP/retry-runs"]})
+  {:tree -> {"file.txt" -> {:kind -> :file, :mode -> 420, :blob -> blob("hello")}}}
+}
+EOF
+"$PP" --fenced-policy retry --reconcile "$OUT" --grant "fs:$OUT:rw" "$TMP/retry.pp" > "$TMP/outlog" 2>&1
+initial_count=$(wc -l < "$TMP/retry-runs" | tr -d ' ')
+if [ "$initial_count" -eq 1 ]; then
+  echo "ok   recovery-retry-initial-execution"
+else
+  echo "FAIL recovery-retry-initial-execution: expected 1 run, got $initial_count"; fail=1
+fi
 # Simulate a crash between intent and done by removing the done fenced line.
+rm -f "$TMP/retry-runs"
 perl -ni -e 'print unless /^done fenced/' "$JOURNAL"
-rm -f "$TMP/touched"
-# Rerun with retry policy.  Recovery resumes the crashed pass's epoch, so the
-# fresh pass's identical action deduplicates: exactly one recovery retry.
-"$PP" --fenced-policy retry --reconcile "$OUT" --grant "fs:$OUT:rw" "$TMP/simple.pp" > "$TMP/outlog" 2>&1
-[ -f "$TMP/touched" ] && echo "ok   recovery-retry-ran" \
-  || { echo "FAIL recovery-retry-ran: action did not run after recovery"; fail=1; }
-done_count=$(grep -c '^done fenced' "$JOURNAL" || true)
+# Keep the recovery journal otherwise valid: one pending intent is retried.
+"$PP" --fenced-policy retry --reconcile "$OUT" --grant "fs:$OUT:rw" "$TMP/retry.pp" > "$TMP/outlog" 2>&1
+ retry_count=$(wc -l < "$TMP/retry-runs" | tr -d ' ')
+ if [ "$retry_count" -eq 1 ]; then
+   echo "ok   retry-recovery-ran"
+ else
+   echo "FAIL retry-recovery-ran: expected 1 run, got $retry_count"; fail=1
+ fi
+ done_count=$(grep -Ec '^done fenced [0-9a-f]{64} [0-9a-f]{64}$' "$JOURNAL" || true)
+ if [ "$done_count" -eq 1 ]; then
+   echo "ok   retry-recovery-done"
+ else
+   echo "FAIL retry-recovery-done: expected 1, got $done_count"; fail=1
+ fi
+ 
+ # Every malformed journal shape is a hard stop, before the action can run.
+bad_journal_case() {
+  local name="$1" record="$2" status
+  rm -rf "$TMP/.pp" "$OUT"
+  rm -f "$TMP/retry-runs"
+  "$PP" --fenced-policy retry --reconcile "$OUT" --grant "fs:$OUT:rw" "$TMP/retry.pp" > "$TMP/outlog" 2>&1 || true
+  rm -f "$TMP/retry-runs"
+  perl -ni -e 'print unless /^done fenced/' "$JOURNAL"
+  printf '%s\n' "$record" >> "$JOURNAL"
+  "$PP" --fenced-policy retry --reconcile "$OUT" --grant "fs:$OUT:rw" "$TMP/retry.pp" > "$TMP/outlog" 2>&1
+  status=$?
+  if [ "$status" -ne 0 ] && grep -Eqi 'malformed|unterminated|invalid journal' "$TMP/outlog" &&
+     [ ! -s "$TMP/retry-runs" ]; then
+    echo "ok   $name"
+  else
+    echo "FAIL $name: status=$status"; cat "$TMP/outlog"; fail=1
+  fi
+}
+ bad_journal_case "journal-extra-fields" \
+   'done fenced 0000000000000000000000000000000000000000000000000000000000000000 0000000000000000000000000000000000000000000000000000000000000000 extra'
+ bad_journal_case "journal-truncated-record" \
+   'intent fenced 0000000000000000000000000000000000000000000000000000000000000000'
+ bad_journal_case "journal-bad-digest" \
+   'done fenced 0000000000000000000000000000000000000000000000000000000000000000 1111111111111111111111111111111111111111111111111111111111111111'
+ bad_journal_case "journal-corrupt-key" \
+  'intent fenced corrupt-key 0000000000000000000000000000000000000000000000000000000000000000 retry 0000000000000000000000000000000000000000000000000000000000000000'
+rm -rf "$TMP/.pp" "$OUT"
+rm -f "$TMP/retry-runs"
+"$PP" --fenced-policy retry --reconcile "$OUT" --grant "fs:$OUT:rw" "$TMP/retry.pp" > "$TMP/outlog" 2>&1 || true
+rm -f "$TMP/retry-runs"
+perl -ni -e 'print unless /^done fenced/' "$JOURNAL"
+"$PP" --fenced-policy retry --reconcile "$OUT" --grant "fs:$OUT:rw" "$TMP/retry.pp" > "$TMP/outlog" 2>&1
+retry_count=$(wc -l < "$TMP/retry-runs" | tr -d ' ')
+if [ "$retry_count" -eq 1 ]; then
+  echo "ok   recovery-retry-ran"
+else
+  echo "FAIL recovery-retry-ran: expected exactly 1 recovery execution, got $retry_count"; fail=1
+fi
+done_count=$(grep -Ec '^done fenced [0-9a-f]{64} [0-9a-f]{64}$' "$JOURNAL" || true)
 if [ "$done_count" -eq 1 ]; then
   echo "ok   recovery-retry-journal (done_count=$done_count)"
 else
   echo "FAIL recovery-retry-journal: expected 1 done fenced, got $done_count"; fail=1
 fi
+# --- (f) a corrupted action key is never executed during recovery ---
+rm -rf "$TMP/.pp" "$OUT"
+cat > "$TMP/count-action.sh" <<'EOF'
+#!/bin/sh
+printf 'run\n' >> "$1"
+EOF
+chmod +x "$TMP/count-action.sh"
+cat > "$TMP/corrupt-key.pp" <<EOF
+do {
+  fenced("count", {"run" -> ["$TMP/count-action.sh", "$TMP/count-runs"]})
+  {:tree -> {}}
+}
+EOF
+"$PP" --fenced-policy retry --reconcile "$OUT" --grant "fs:$OUT:rw" \
+  "$TMP/corrupt-key.pp" > "$TMP/outlog" 2>&1
+perl -ni -e 's/^(intent fenced) \S+/$1 corrupt-key/; print unless /^done fenced/' \
+  "$JOURNAL"
+rm -f "$TMP/count-runs"
+"$PP" --fenced-policy retry --reconcile "$OUT" --grant "fs:$OUT:rw" \
+  "$TMP/corrupt-key.pp" > "$TMP/outlog" 2>&1
+run_count=0
+[ -f "$TMP/count-runs" ] && run_count=$(wc -l < "$TMP/count-runs" | tr -d ' ')
+if [ "$run_count" -eq 0 ]; then echo "ok   corrupt-key-no-recovery-execution"
+else echo "FAIL corrupt-key-no-recovery-execution: expected 0 recovery runs, got $run_count"; fail=1; fi
+
 
 # --- (f) simulated crash recovery: abort marks the unknown action done ---
 rm -rf "$TMP/.pp" "$OUT"
@@ -94,8 +195,13 @@ perl -ni -e 'print unless /^done fenced/' "$JOURNAL"
 rm -f "$TMP/touched"
 "$PP" --fenced-policy abort --reconcile "$OUT" --grant "fs:$OUT:rw" "$TMP/simple.pp" > "$TMP/outlog" 2>&1
 assert "recovery-abort-policy" "applying policy=abort" present
+if [ ! -f "$TMP/touched" ]; then
+  echo "ok   recovery-abort-action-skipped"
+else
+  echo "FAIL recovery-abort-action-skipped: action marker was created"; fail=1
+fi
 # Recovery appended an abort done; the fresh pass skipped.
-done_count=$(grep -c '^done fenced' "$JOURNAL" || true)
+done_count=$(grep -Ec '^done fenced [0-9a-f]{64} [0-9a-f]{64}$' "$JOURNAL" || true)
 if [ "$done_count" -eq 1 ]; then echo "ok   recovery-abort-done-count"
 else echo "FAIL recovery-abort-done-count: expected 1, got $done_count"; fail=1; fi
 
@@ -153,7 +259,7 @@ touch "$TMP/fenced-continue"
 "$PP" --fenced-policy retry --reconcile "$OUT" --grant "fs:$OUT:rw" "$TMP/watch-crash.pp" > "$TMP/outlog" 2>&1
 [ -f "$TMP/fenced-active" ] && echo "ok   watch-crash-recovery-ran" \
   || { echo "FAIL watch-crash-recovery-ran"; fail=1; }
-done_count=$(grep -c '^done fenced' "$JOURNAL" || true)
+done_count=$(grep -Ec '^done fenced [0-9a-f]{64} [0-9a-f]{64}$' "$JOURNAL" || true)
 if [ "$done_count" -eq 1 ]; then echo "ok   watch-crash-done-count"
 else echo "FAIL watch-crash-done-count: expected 1, got $done_count"; fail=1; fi
 trap - EXIT

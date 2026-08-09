@@ -73,53 +73,37 @@ let tree_observe (root : string) : value =
   VMap (List.map (fun (rel, file_hash) ->
     VString rel, VString file_hash) files)
 
-let rec mkdir_p dir =
-  if not (Sys.file_exists dir) then begin
-    (try mkdir_p (Filename.dirname dir) with _ -> ());
-    try Unix.mkdir dir 0o755 with
-    | Unix.Unix_error (Unix.EEXIST, _, _) -> ()
-  end
+external secure_materialize_file : string -> string -> bool -> unit =
+  "pp_secure_materialize_file"
+
+external secure_remove_file : string -> string -> unit =
+  "pp_secure_remove_file"
+
+external secure_read_file : string -> string = "pp_secure_read_file"
+
+let write_boundary path =
+  let rec loop current =
+    let parent = Filename.dirname current in
+    if parent = current || not (has_fs_write parent) then current
+    else loop parent
+  in
+  loop path
 
 let materialize_file (path : string) (content : string) (executable : bool) : unit =
   require_no_node_body "materialize-file";
-  let path_canon = World_path.canonical path in
-  let path = (path_canon :> string) in
+  let path = (World_path.canonical path :> string) in
   if not (has_fs_write path) then
     capability ("materialize-file: capability error: no write access for " ^ path);
-  mkdir_p (Filename.dirname path);
-  let tmp = path ^ ".pp-tmp." ^ string_of_int (Unix.getpid ()) in
-  let oc = open_out_bin tmp in
-  let renamed = ref false in
-  Fun.protect
-    ~finally:(fun () ->
-      close_out_noerr oc;
-      if not !renamed then (try Sys.remove tmp with Sys_error _ -> ()))
-    (fun () ->
-      output_string oc content;
-      close_out oc;
-      (* Atomic replacement of requested world state, not repository persistence. *)
-      Unix.rename tmp path;
-      renamed := true);
-  if executable then (try Unix.chmod path 0o755 with _ -> ());
+  secure_materialize_file path content executable;
   Cell_repository.unpin_file path
-
-
-let rec prune_empty_dirs (dir : string) : unit =
-  if has_fs_write dir then
-    match Sys.readdir dir with
-    | [||] -> (try Unix.rmdir dir with _ -> ()); prune_empty_dirs (Filename.dirname dir)
-    | _ -> ()
-    | exception _ -> ()
 
 let remove_file (path : string) : unit =
   require_no_node_body "remove-file";
-  let path_canon = World_path.canonical path in
-  let path = (path_canon :> string) in
+  let path = (World_path.canonical path :> string) in
   if not (has_fs_write path) then
     capability ("remove-file: capability error: no write access for " ^ path);
-  (try Sys.remove path with _ -> ());
-  Cell_repository.unpin_file path;
-  prune_empty_dirs (Filename.dirname path)
+  secure_remove_file path (write_boundary path);
+  Cell_repository.unpin_file path
 
 
 (* ---- domain-state-get/put: per-domain persistent KV, replacing procs/'s
@@ -145,33 +129,53 @@ let require_domain_context (who : string) : Session.domain_entry * string =
            else capability
                     (who ^ ": capability error: no authority for domain " ^ name))
 
+let validate_domain_state_name (name : string) : unit =
+  if name = "" || name = "." || name = ".." ||
+     String.contains name '/' || String.contains name '\000'
+  then
+    failwith ("domain-state: invalid domain name for state path: " ^ name)
+
 let domain_state_root (domain_name : string) : string =
-  Filename.concat (Store_layout.root (Runtime_context.layout ())) (Filename.concat "domain-state" domain_name)
+  validate_domain_state_name domain_name;
+  Filename.concat (Store_layout.root (Runtime_context.layout ()))
+    (Filename.concat "domain-state" domain_name)
 
 let state_key_file (domain_name : string) (key : string) : string =
+  if String.contains key '\000' then
+    failwith "domain-state: invalid NUL in state key";
   Filename.concat (domain_state_root domain_name) (Hasher.hash_string key)
 
 let domain_state_get (key : string) : value =
   let (_, name) = require_domain_context "domain-state-get" in
   let path = state_key_file name key in
-  if Sys.file_exists path then
-    (try
-       let ic = open_in_bin path in
-       let s = Fun.protect
-         ~finally:(fun () -> close_in_noerr ic)
-         (fun () -> really_input_string ic (in_channel_length ic)) in
-       match Codec.decode_value s with
-       | Some v -> v
-       | None -> VNil
-     with Sys_error _ | Unix.Unix_error _ | End_of_file -> VNil)
-  else VNil
+  let content =
+    try Some (secure_read_file path) with
+    | Unix.Unix_error (Unix.ENOENT, _, _) -> None
+    | Unix.Unix_error (e, fn, arg) ->
+        failwith (Printf.sprintf
+          "domain-state-get: %s/%s: %s (%s %s)" name key
+          (Unix.error_message e) fn arg)
+  in
+  match content with
+  | None -> VNil
+  | Some s ->
+      (match Codec.decode_value s with
+       | Some v when Codec.encode_value v = Some s -> v
+       | _ ->
+           failwith (Printf.sprintf
+             "domain-state-get: corrupt state for domain %s key %s" name key))
 
 let domain_state_put (key : string) (v : value) : unit =
   let (_, name) = require_domain_context "domain-state-put" in
   let dir = domain_state_root name in
   let path = state_key_file name key in
   match v with
-  | VNil -> if Sys.file_exists path then (try Sys.remove path with _ -> ())
+  | VNil ->
+      (try secure_remove_file path dir with
+       | Unix.Unix_error (Unix.ENOENT, _, _) -> ()
+       | Unix.Unix_error (e, fn, arg) ->
+           failwith (Printf.sprintf "domain-state-put: delete %s/%s: %s (%s) %s"
+             name key (Unix.error_message e) fn arg))
   | _ ->
       Store_layout.ensure_dir dir;
       let forced = Force_deep.force_deep_plain ~force v in
@@ -271,8 +275,8 @@ let proc_spawn (spec : value) : value =
         (try
            Unix.chdir cwd;
            let fd_in = Unix.openfile "/dev/null" [Unix.O_RDONLY] 0 in
-           let fd_out = Unix.openfile out_f [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o644 in
-           let fd_err = Unix.openfile err_f [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o644 in
+           let fd_out = Store_layout.open_trunc out_f in
+           let fd_err = Store_layout.open_trunc err_f in
            Unix.dup2 fd_in Unix.stdin;
            Unix.dup2 fd_out Unix.stdout;
            Unix.dup2 fd_err Unix.stderr;
@@ -316,14 +320,16 @@ let proc_stop (name : string) (pid : int) : unit =
      wait ()
    with Unix.Unix_error _ -> ());
   let o = out_file name and e = err_file name in
-  (try Sys.remove o with _ -> ());
-  (try Sys.remove e with _ -> ());
+  (try Store_layout.remove o with _ -> ());
+  (try Store_layout.remove e with _ -> ());
   Journal.append (Journal.ProcStopDone { name })
 
 (* (perform proc-reap) — reap zombie children; the supervisor tracks only
    its OWN spawned pids (no OS process enumeration). *)
 let proc_reap () : unit =
   require_no_node_body "proc-reap";
+  if not (has_process_cap ()) then
+    capability "proc-reap: capability error: no process authority";
   let rec loop () =
     try
       match Unix.waitpid [Unix.WNOHANG] (-1) with

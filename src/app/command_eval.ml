@@ -6,9 +6,10 @@ let dump_pins ctx path =
   Session.iter_run_pins session (fun cell hash ->
     Buffer.add_string buffer (Remote.pin_line cell hash));
   Session.iter_probes session (fun name value ->
-    try Buffer.add_string buffer (Remote.pin_probe_line name value)
-    with Failure _ -> Printf.eprintf
-      "[dump-pins] skipping non-data probe value for %s (code/handle/sealed)\n%!" name);
+    match Remote_protocol.encode_probe_pin ~name value with
+    | Ok line -> Buffer.add_string buffer line
+    | Error _ -> Printf.eprintf
+        "[dump-pins] skipping non-data probe value for %s (code/handle/sealed)\n%!" name);
   Store_layout.atomic_replace path (Buffer.contents buffer)
 
 let run_reporters ctx =
@@ -45,13 +46,18 @@ let run ctx cli =
   Command_island.update cli;
   Dynamic_scope.with_top_level (App_context.session ctx) (App_context.invocation ctx)
     ~f:(fun () ->
-      match Cli.eval_string cli, Cli.files cli with
-      | Some expression, [] ->
+      match Cli.eval_string cli, Cli.files cli, Cli.desired_object cli with
+      | Some expression, [], _ ->
           List.iter (fun value ->
             Printf.printf "%s\n" (Presentation.string_of_value value))
             (Repl.execute_string expression)
-      | None, [] -> Repl.repl ()
-      | _, files ->
+      | None, [], Some _ ->
+          ignore (Command_run.run_files ctx cli []);
+          Command_reconcile.run_pass ctx cli None;
+          run_reporters ctx;
+          (match Cli.dump_pins_file cli with Some path -> dump_pins ctx path | None -> ())
+      | None, [], None -> Repl.repl ()
+      | _, files, _ ->
           if Cli.watch cli then Command_watch.run ctx cli files
           else begin
             let last = Command_run.run_files ctx cli files in

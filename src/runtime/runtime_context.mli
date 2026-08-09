@@ -1,6 +1,6 @@
 type t
 
-val create : ?layout:Store_layout.t -> ?cache:Cache_policy.t -> unit -> t
+val create : layout:Store_layout.t -> ?cache:Cache_policy.t -> unit -> t
 val current : unit -> t
 val with_current : t -> ('a -> 'b) -> 'a -> 'b
 val layout : unit -> Store_layout.t

@@ -1,93 +1,54 @@
 # Releasing pp
 
-This explains how to cut a tagged release, and how to prove the tarball
-builds for a stranger on a clean opam switch.
+This guide describes the release process and the clean exported-source gate used
+by CI.
 
-## Version wiring (how it works)
+## Version wiring
 
-`pp --version` and the REPL banner both read `Version.string` in
-`src/kernel/version.ml`. This calls `Build_info.V1.version ()` from the
-`dune-build-info` library. Dune embeds the version at build time from the
-top-level `(version ...)` field in `dune-project`, because `src/dune` ties
-the `main` executable to the `pp` package through `(public_name pp)`.
-
-This works the same way in two cases:
-
-- from a git checkout, where the version is the literal string in
-  `dune-project`, not something `git describe` derives
-- from an unpacked release tarball with no `.git` present, verified by the
-  smoke test below
-
-The `fallback` value in `src/kernel/version.ml` only fires if someone builds the
-executable outside dune's package machinery, for example by removing
-`public_name`. It should track the same string as `(version ...)` in
-`dune-project`, but it is not the source of truth.
+`pp --version` and the REPL banner read `Version.string`, which is populated by
+`dune-build-info` from the top-level `(version ...)` field in `dune-project`.
+That field is the version source of truth in both a checkout and a `.git`-free
+archive. The fallback in `src/kernel/version.ml` is only for builds outside
+Dune's package machinery and must remain consistent with `dune-project`.
 
 ## Cutting vX.Y.Z
 
-1. Update the version. In `dune-project`, bump `(version ...)` to `X.Y.Z`
-   and drop the `-dev` suffix. Then run `dune build` once, so dune
-   regenerates `pp.opam` in the repo root (it does this because
-   `(generate_opam_files true)` is set) with the new version, and check in
-   the regenerated file.
-2. Write the release notes from git history. This repo has no CHANGELOG
-   file: commits follow Conventional Commits, so `git log --oneline
-   <last-tag>..HEAD` grouped by type (`feat:`, `fix:`, and so on) is the
-   changelog. Put the result in the tag annotation, and in the GitHub
-   release body if you make one.
-3. Update the status table in `docs/SPEC.md` wherever it references version
-   numbers or open items that this release closes.
-4. Run the full local gate before tagging:
-   ```sh
-   eval "$(opam env)"
-   dune build
-   dune runtest --force
-   dune exec ./tools/fuzz.exe -- --grammar core --count 2000
-   dune exec ./tools/fuzz.exe -- --grammar full --count 2000
-   ```
-5. Commit your changes: `git commit -am "release vX.Y.Z"`.
-6. Tag the release: `git tag -a vX.Y.Z -m "vX.Y.Z"`.
-7. Push the commit and the tag: `git push && git push --tags`.
-8. Build the release tarball from the tag:
-   ```sh
-   git archive --format=tar.gz -o pp-X.Y.Z.tar.gz vX.Y.Z
-   ```
-   You do not need to run `dune subst`. pp does not use the `%%VERSION%%`
-   watermarking convention, and no source file contains that placeholder,
-   because the version comes directly from the `(version ...)` field in
-   `dune-project`. `git archive` on the tag is enough: there is no
-   separate subst step, and no `.git` directory needed downstream.
+1. Change `(version ...)` in `dune-project` from the development value to
+   `X.Y.Z`, run `dune build` to regenerate `pp.opam`, and commit both files.
+2. Write release notes from the Conventional Commits range since the last tag.
+3. Update version references and closed items in `docs/SPEC.md`.
+4. Run the local gates: `dune build`, `dune runtest --force`, and the core and
+   full fuzzers with count 2000.
+5. Commit, tag `vX.Y.Z`, and push the commit and tag.
 
-## From-tarball smoke test (do this before every release)
+Do not invent a tag or version: use the value in `dune-project`.
 
-Do this to prove that a stranger can build from the tarball alone, with no
-`.git` directory and no opam packages beyond `dune`, `cryptokit`, and
-`dune-build-info` already installed:
+## Clean exported-source gate
+
+The executable gate is one command:
 
 ```sh
-# From the tagged commit (or working tree for a dry run):
-rm -rf /tmp/pp-release-test && mkdir -p /tmp/pp-release-test
-git archive vX.Y.Z | tar -x -C /tmp/pp-release-test   # or HEAD for a dry run
-cd /tmp/pp-release-test
-test -d .git && echo "FAIL: .git present" || echo "ok: no .git"
-
-# On a clean opam switch:
-opam switch create ./_opam --empty   # or any fresh switch
-eval "$(opam env)"
-opam install dune cryptokit dune-build-info -y
-dune build
-dune runtest --force
-./_build/default/src/app/main.exe --version   # must print the real version, not 0.1.0/None
+./scripts/check-clean-export.sh
 ```
 
-If `--version` prints the correct `vX.Y.Z` with no `.git` directory
-present, and `dune runtest` passes, the release builds from the tarball
-alone.
+It archives `HEAD` with `git archive`, extracts into a fresh temporary
+ directory with no `.git`, then uses the CI opam environment to run `dune build`
+and the canonical `dune runtest --force`. It runs the exported
+`_build/default/src/app/main.exe --version` and compares its output exactly with
+the version parsed from the exported `dune-project`. CI runs this gate on every
+push and pull request (in addition to the normal Linux and macOS gates).
 
-### What this repo's CI proves, and what it does not prove
+The archive gate deliberately reuses `dune runtest --force`; closed-runner
+confinement remains covered by `tests/102` in that suite rather than being
+copied into the release script.
 
-`.github/workflows/ci.yml` runs `dune build`, `dune runtest --force`, and the
-fuzzer on Linux and macOS, on every push and
-pull request to `master`, from a git checkout using `actions/checkout`. It
-does not re-run the from-tarball smoke test above. Do that by hand before
-tagging, or add a release workflow that does it for you.
+## CI and unreleased metadata
+
+Pushes and pull requests to `master` run the canonical build, architecture and
+unit gates, `dune runtest --force`, core fuzzing at count 2000, full grammar
+fuzzing at count 2000, and the clean exported-source gate. A weekly scheduled
+Ubuntu workflow runs both grammars for seeds 0, 1, 2, and 3 at count 2000.
+
+The current `0.2.0-dev` value in `dune-project` is unreleased development
+metadata, not a release tag or promised release version. A release must replace
+it with the intended `X.Y.Z` value before tagging.

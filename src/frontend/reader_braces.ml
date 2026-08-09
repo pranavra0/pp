@@ -1577,8 +1577,8 @@ and parse_head ps c (n : string) : expr =
                    | EApply (ESymbol d, [e]) as orig ->
                        (match Surface_tables.find_grant_sugar d with
                         | Some g -> needs_restrict e g.Surface_tables.restrict_mode
-                        | None -> orig)
-                   | e -> e
+                        | None -> EApply (ESymbol "\000needs-value", [orig]))
+                   | e -> EApply (ESymbol "\000needs-value", [e])
                  in
                  let lowered = List.map lower_item items in
                  let cap = match lowered with

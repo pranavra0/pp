@@ -252,7 +252,23 @@ for f in "$ROOT"/tests/[0-9]*.pp \
 done
 [ "$sweep_fail" = 0 ] && ok "whole-tree-fmt-roundtrip ($sweep_count files, $sweep_comments comments)"
 
-if [ "$fail" = 0 ]; then
+# Atomic in-place failure: an unwritable directory must not damage the source.
+mkdir "$TMP/atomic-ro"
+cat >"$TMP/atomic-ro/source.ppl" <<'EOF'
+(print 1)
+EOF
+cp "$TMP/atomic-ro/source.ppl" "$TMP/atomic-ro/original.ppl"
+chmod a-w "$TMP/atomic-ro"
+if "$PP" fmt --to-braces "$TMP/atomic-ro/source.ppl" -i >"$TMP/atomic.out" 2>&1; then
+  bad "atomic-fmt-write-failure" "unexpectedly succeeded"
+elif cmp -s "$TMP/atomic-ro/source.ppl" "$TMP/atomic-ro/original.ppl"; then
+  ok "atomic-fmt-write-failure"
+else
+  bad "atomic-fmt-write-failure" "source bytes changed"
+fi
+chmod u+w "$TMP/atomic-ro"
+
+if [ "$fail" = 0 ] && [ "$sweep_fail" = 0 ]; then
   echo "=== 055 FMT: ALL PASS ==="
   exit 0
 else

@@ -39,8 +39,7 @@ let exec (argv : string list) : int * string * string =
     | program :: _ -> program
     | [] -> invalid_arg "Process.exec: empty argv"
   in
-  (try Journal.append (Journal.Exec argv) with
-   | Sys_error _ | Unix.Unix_error _ -> ());
+  Journal.append (Journal.Exec argv);
   let out_f = Filename.temp_file "pp-run" ".out" in
   let err_f = Filename.temp_file "pp-run" ".err" in
   let cleanup () =
@@ -70,6 +69,9 @@ let exec (argv : string list) : int * string * string =
                   | Unix.WSIGNALED s | Unix.WSTOPPED s -> 128 + s
                 in
                 (code, read_all out_f, read_all err_f)))))
+
+external secure_write_file : string -> string -> unit =
+  "pp_secure_write_file"
 
 let run_effect (args : value list) : value =
   Dynamic_scope.require_script_tier
@@ -113,16 +115,20 @@ let write_file_effect ~(has_cap : string -> bool) (path : string)
         failwith ("write-file: node writes are sandbox-scratch only (LAW 18): "
                   ^ path)
       else begin
+        let target = (World_path.canonical path :> string) in
+        if not (has_cap target) then
+          failwith ("write-file: capability error: no write access for " ^ target);
         (try
-           let ch = open_out path in
-           output_string ch content;
-           close_out ch;
+           secure_write_file target content;
            (* pp's own write supersedes this run's CAS-ingest pin of the
               cell — later node reads must see the new content, not the
               pre-write pin. *)
-           Cell_repository.unpin_file path;
+           Cell_repository.unpin_file target;
            VNil
-         with Sys_error msg -> failwith ("write-file: " ^ msg))
+         with
+         | Unix.Unix_error ((Unix.ELOOP | Unix.ENOTDIR), _, _) ->
+             failwith ("write-file: refusing symlink path: " ^ target)
+         | Sys_error msg -> failwith ("write-file: " ^ msg))
       end
 
 (* ---- capability-free sandbox read, shared by slurp/read-file ----
@@ -253,7 +259,7 @@ let http_request ~(method_ : string) ~(url : string) ~(body : string option) : v
     capability
       (Printf.sprintf "capability error: no network authority for %s:%d" host port);
   let curl = curl_bin () in
-  let base_argv = [curl; "-sS"; "--max-time"; "30"; "-w"; "\n%{http_code}"] in
+  let base_argv = [curl; "-sS"; "--max-time"; "30"; "-w"; "\\n%{http_code}"] in
   let (argv, cleanup) =
     match body with
     | None -> (base_argv @ [url], fun () -> ())

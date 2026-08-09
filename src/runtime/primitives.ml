@@ -120,11 +120,10 @@ let register_arith () =
 
   (* Comparison — strict, variadic chaining *)
   register "=" (fun args _env ->
-    let args = force_args args in
-    match args with
+    match List.map Force_deep.force_deep args with
     | [] | [_] -> VBool true
     | a :: rest ->
-        VBool (List.for_all (fun b -> try a = b with Invalid_argument _ -> a == b) rest));
+        VBool (List.for_all (Identity.equal_value a) rest));
 
   chained_cmp ~declare "<"  ( < )  ( < );
   chained_cmp ~declare ">"  ( > )  ( > );
@@ -256,28 +255,33 @@ let register_collections () =
   register "hash-map" (fun args _env ->
     let rec make_pairs = function
       | [] -> []
-      | k :: v :: rest -> (force_val k, v) :: make_pairs rest
+      | k :: v :: rest -> (Force_deep.force_deep k, v) :: make_pairs rest
       | _ -> failwith "hash-map expects even number of arguments"
     in
-    VMap (make_pairs args));  (* keys forced, values lazy *)
+    VMap (Identity.canonical_map_entries (make_pairs args)));
 
   register "hash-map-get" (fun args _env ->
     let args = force_args args in
     match args with
     | [VMap kvs; key] ->
-        (match List.find_opt (fun (k, _) -> force_val k = key) kvs with
+        let key = Force_deep.force_deep key in
+        (match List.find_opt (fun (k, _) ->
+           Identity.same_content k key) kvs with
          | Some (_, v) -> v
          | None -> VNil)
     | _ -> failwith "hash-map-get expects a map and a key");
 
   (* Set operations *)
   register "hash-set" (fun args _env ->
-    VSet args);  (* lazy *)
+    VSet args);  (* lazy; canonicalized when its elements are observed *)
 
   register "set->list" (fun args _env ->
-    match force_args args with
-    | [VSet values] ->
-        List.fold_right (fun value acc -> VPair (value, acc)) values VNil
+    match args with
+    | [set] ->
+        (match Force_deep.force_deep set with
+         | VSet values ->
+             List.fold_right (fun value acc -> VPair (value, acc)) values VNil
+         | _ -> failwith "set->list expects a set")
     | _ -> failwith "set->list expects a set");
 
   (* Type predicates — force to check *)
@@ -348,14 +352,16 @@ let register_caps () =
     match args with
     | [] -> current_capabilities ()
     | _ -> failwith "current-capabilities takes no arguments");
-
   register "\000needs-current-capabilities" (fun args _env ->
     match args with
     | [] ->
         VCapability
           (Capability.compose (Effect.perform Dynamic_scope.Get_capabilities))
     | _ -> failwith "needs capability projection takes no arguments");
-
+  register "\000needs-value" (fun args _env ->
+    match args with
+    | [value] -> value
+    | _ -> failwith "needs value wrapper takes one argument");
   register "cap-restrict" (fun args _env ->
     let args = force_args args in
     match args with
@@ -509,9 +515,8 @@ let register_io () =
     match args with
     | [VString hash] ->
         (match Blob_repository.get (Runtime_context.blobs ()) hash with
-         | Some bytes when Hasher.hash_string bytes = hash -> VString bytes
-         | Some _ -> failwith ("blob-get: blob hash mismatch: " ^ hash)
-         | None -> failwith ("blob-get: blob missing from store: " ^ hash))
+         | Some bytes -> VString bytes
+         | None -> failwith ("blob-get: blob missing or corrupt: " ^ hash))
     | _ -> failwith "blob-get expects a blob identity string");
   ()
 
@@ -519,16 +524,6 @@ let register_stdlib () =
   let register = register ~category:Other in
   (* ---- stdlib primitives ---- *)
 
-  (* (hash-value V) — a canonical, structural content hash of ANY value
-     (Identity.hash_value, force-deep'd first) — order-INDEPENDENT for maps/
-     sets (Identity.hash_value sorts a VMap's entries by encoded-key hash before
-     hashing, exactly like Codec's on-disk canonicalization). Needed because pp's `=` on two maps is
-     plain structural (assoc-list, ORDER-sensitive) list equality: a spec
-     value that round-tripped through `domain-state-get/put` (Codec sorts
-     VMap entries for canonical on-disk text) compares as "different" from
-     the in-memory original via `=` even with identical bindings, purely
-     because of key order — domain-proc.pp's diff needs a comparison that
-     is not fooled by that. *)
   register "hash-value" (fun args _env ->
     match args with
     | [v] -> VString (Identity.hash_value (Force_deep.force_deep (force_val v)))
@@ -604,12 +599,14 @@ let register_stdlib () =
   (* Map utilities — keys were forced at construction; values stay lazy. *)
   register "map-keys" (fun args _env ->
     match force_args args with
-    | [VMap kvs] -> List.fold_right (fun (k, _) acc -> VPair (k, acc)) kvs VNil
+    | [VMap kvs] ->
+        List.fold_right (fun (k, _) acc -> VPair (k, acc)) kvs VNil
     | _ -> failwith "map-keys expects a map");
 
   register "map-vals" (fun args _env ->
     match force_args args with
-    | [VMap kvs] -> List.fold_right (fun (_, v) acc -> VPair (v, acc)) kvs VNil
+    | [VMap kvs] ->
+        List.fold_right (fun (_, v) acc -> VPair (v, acc)) kvs VNil
     | _ -> failwith "map-vals expects a map");
 
   register "map-remove" (fun args _env ->
@@ -617,8 +614,9 @@ let register_stdlib () =
     | [m; k] ->
         (match force_val m with
          | VMap kvs ->
-             let key = force_val k in
-             VMap (List.filter (fun (k', _) -> k' <> key) kvs)
+             let key = Force_deep.force_deep k in
+             VMap (List.filter (fun (key', _) ->
+               not (Identity.same_content key' key)) kvs)
          | _ -> failwith "map-remove expects a map and a key")
     | _ -> failwith "map-remove expects a map and a key");
 
@@ -697,21 +695,19 @@ let register_stdlib () =
     | [m; k; v] ->
         (match force_val m with
          | VMap kvs ->
-             let key = force_val k in
-             VMap ((key, v) :: List.filter (fun (k', _) -> k' <> key) kvs)
+             let key = Force_deep.force_deep k in
+             VMap (Identity.canonical_map_entries (kvs @ [key, v]))
          | _ -> failwith "map-insert expects a map, a key, and a value")
     | _ -> failwith "map-insert expects a map, a key, and a value");
 
   (* map-merge(a, b) — a with every binding of b inserted; b wins on collision.
-     The lowering target for map spread `{ ...a, ...b }`. Keys in a VMap
-     are already forced values, so structural comparison is exact. *)
+     The lowering target for map spread `{ ...a, ...b }`. *)
   register "map-merge" (fun args _env ->
     match args with
     | [a; b] ->
         (match force_val a, force_val b with
          | VMap akvs, VMap bkvs ->
-             let b_has k = List.exists (fun (k', _) -> k' = k) bkvs in
-             VMap (bkvs @ List.filter (fun (k, _) -> not (b_has k)) akvs)
+             VMap (Identity.canonical_map_entries (akvs @ bkvs))
          | _ -> failwith "map-merge expects two maps")
     | _ -> failwith "map-merge expects two maps");
 

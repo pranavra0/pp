@@ -212,17 +212,11 @@ and gen_value_of_tag ~(mode : mode) (st : rng) (depth : int) (tag : value_tag) :
       VVector (Array.init (small st) (fun _ -> g ()))
   | Vt_map ->
       let n = small st in
-      VMap (List.init n (fun _ -> (g (), g ())))
+      VMap (Identity.canonical_map_entries
+        (List.init n (fun _ -> (g (), g ()))))
   | Vt_set ->
-      (* Identity.hash_value sorts a set's element hashes, so structural (=) and the
-         hash agree only if the element list is itself canonically ordered and
-         duplicate-free; otherwise a reordering would read as a spurious
-         injectivity collision.  Canonicalize by content hash. *)
       let n = small st in
-      let elts = List.init n (fun _ -> g ()) in
-      let uniq =
-        List.sort_uniq (fun a b -> compare (Identity.hash_value a) (Identity.hash_value b)) elts in
-      VSet uniq
+      VSet (Identity.canonical_set_elements (List.init n (fun _ -> g ())))
   | Vt_closure | Vt_builtin | Vt_capability | Vt_thunk | Vt_envmap
   | Vt_sealed ->
       failwith "gen_value_of_tag: runtime-only value has no syntax"
@@ -983,11 +977,16 @@ let observation_boundary_property () =
     fail "observation:legacy-proc" "legacy proc cell did not conservatively miss";
   if Observation.env_hash None = Observation.env_hash (Some "absent") then
     fail "observation:env-framing" "absence collided with a present value";
+  let result_hash = String.make 64 'a' in
+  let observed_hash = String.make 64 'b' in
   let trace = Trace_repository.{ outcome = Failed;
-    result_hash = Identity_types.Object_hash.of_digest "r";
+    result_hash = Identity_types.Object_hash.of_digest result_hash;
     reads = [ (Identity_types.Cell_id.of_string "file:/x",
-               Identity_types.Observed_hash.of_digest "h") ] } in
-  let line = "(trace failed \"r\" ((\"file:/x\" . \"h\")))" in
+               Identity_types.Observed_hash.of_digest observed_hash) ] } in
+  let line =
+    Printf.sprintf "(trace failed \"%s\" ((\"file:/x\" . \"%s\")))"
+      result_hash observed_hash
+  in
   if Trace_repository.to_line trace <> line
      || Trace_repository.of_line line <> Some trace then
     fail "repository:trace-bytes" "canonical trace bytes changed";

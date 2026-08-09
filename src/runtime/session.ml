@@ -127,9 +127,7 @@ let begin_evaluation ~retain_thunks t =
   t.evaluation.cache_bust <- 0;
   reset_pass_state t;
   t.runtime_manifest <- None;
-  t.run.reporters <- [];
-  if t.fenced.fenced_epoch_recovered then t.fenced.fenced_epoch_recovered <- false
-  else t.fenced.fenced_epoch <- ""
+  t.run.reporters <- []
 let begin_watch t =
   Hashtbl.clear t.evaluation.node_thunks;
   Hashtbl.clear t.evaluation.node_keys;

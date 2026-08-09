@@ -70,7 +70,9 @@ let manifest_policy () =
 
 let runner () =
   ["/usr/bin/bwrap"; "/bin/bwrap"]
-  |> List.find_opt Sys.file_exists
+  |> List.find_opt (fun path ->
+       Sys.file_exists path &&
+       try Unix.access path [Unix.X_OK]; true with Unix.Unix_error _ -> false)
   |> Option.value ~default:""
 
 let execute root tool arguments environment =

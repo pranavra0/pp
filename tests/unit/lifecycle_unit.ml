@@ -3,6 +3,48 @@ open Pp_runtime
 
 let check condition message = if not condition then failwith message
 
+let check_journal_contexts () =
+  let make_root prefix =
+    let path = Filename.temp_file prefix "" in
+    Sys.remove path;
+    path
+  in
+  let root_a = make_root "pp-journal-a-" in
+  let root_b = make_root "pp-journal-b-" in
+  let context root =
+    Runtime_context.create ~layout:(Store_layout.of_root root) ()
+  in
+  let context_a = context root_a in
+  let context_b = context root_b in
+  let append context logical_key =
+    let key = Hasher.hash_string logical_key in
+    let epoch = Hasher.hash_string "epoch" in
+    let spec_hash = Hasher.hash_string "spec" in
+    Runtime_context.with_current context
+      (fun () ->
+        Journal.append (Journal.FencedIntent {
+          key; epoch; kind = "test"; spec_hash;
+        })) ()
+  in
+  let pending context =
+    Runtime_context.with_current context Journal.pending_fenced_actions ()
+  in
+  Fun.protect
+    ~finally:(fun () ->
+      Fswalk.remove_tree root_a;
+      Fswalk.remove_tree root_b)
+    (fun () ->
+      append context_a "a";
+      append context_b "b";
+      check
+        (List.map (fun entry -> entry.Journal.fe_key) (pending context_a) =
+         [Hasher.hash_string "a"])
+        "journal entry leaked out of the first runtime context";
+      check
+        (List.map (fun entry -> entry.Journal.fe_key) (pending context_b) =
+         [Hasher.hash_string "b"])
+        "journal path was cached across runtime contexts")
+
 let scheduler = Scheduler.create ~handler:Scheduler.serial
 
 let operations = {
@@ -20,6 +62,7 @@ let operations = {
 
 let () =
   let session = Session.create ~scheduler operations in
+  check_journal_contexts ();
   check (Session.executor session = None)
     "session installed an ambient executor";
   check (Session.next_gensym session = 1) "session gensym did not start at one";

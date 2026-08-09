@@ -1,2 +1,2 @@
-[{:kind :runtime-schedule, :handler "parallel:2"} {:kind :library-event, :value "ok"}]
+[{:handler "parallel:2", :kind :runtime-schedule} {:value "ok", :kind :library-event}]
 # exit: 0

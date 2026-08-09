@@ -9,4 +9,4 @@ let entries kind =
       | stat -> Some stat.Unix.st_mtime | exception _ -> None in
     { id; modified })
 let remove kind id =
-  try Sys.remove (Store_layout.path (Runtime_context.layout ()) (area kind) id) with _ -> ()
+  try Store_layout.remove (Store_layout.path (Runtime_context.layout ()) (area kind) id) with _ -> ()
