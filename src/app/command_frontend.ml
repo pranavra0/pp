@@ -6,6 +6,32 @@ let read_whole path =
   Fun.protect ~finally:(fun () -> close_in_noerr ic)
     (fun () -> really_input_string ic (in_channel_length ic))
 
+let fsync_directory dir =
+  let fd = Unix.openfile dir [Unix.O_RDONLY] 0 in
+  Fun.protect ~finally:(fun () -> Unix.close fd) (fun () -> Unix.fsync fd)
+
+let atomic_replace path output =
+  let source_mode = (Unix.stat path).Unix.st_perm in
+  let dir = Filename.dirname path in
+  let temp = Filename.temp_file ~temp_dir:dir ".pp-fmt-" ".tmp" in
+  let committed = ref false in
+  Fun.protect
+    ~finally:(fun () -> if not !committed then Sys.remove temp |> ignore)
+    (fun () ->
+      let oc = open_out_bin temp in
+      (try
+         output_string oc output;
+         flush oc;
+         Unix.fsync (Unix.descr_of_out_channel oc);
+         close_out oc
+       with exn ->
+         close_out_noerr oc;
+         raise exn);
+      Unix.chmod temp source_mode;
+      Unix.rename temp path;
+      committed := true;
+      fsync_directory dir)
+
 let run cli =
   match Cli.emit_braces_file cli, Cli.roundtrip_braces_file cli, Cli.fmt cli,
         Cli.compare_hash cli, Cli.list_comments cli with
@@ -54,10 +80,8 @@ let run cli =
               with Printer_sexpr.Unprintable msg -> command ("pp fmt --to-sexpr: " ^ msg) in
             Comments.splice comments ~delim:';' base
       in
-      if in_place then begin
-        let oc = open_out file in
-        Fun.protect ~finally:(fun () -> close_out_noerr oc) (fun () -> output_string oc output)
-      end else print_string output;
+      if in_place then atomic_replace file output
+      else print_string output;
       true
   | None, None, None, Some (file1, file2), _ ->
       let forms1 = Reader_braces.read_dispatch ~source:file1 ~path:file1 (read_whole file1) in

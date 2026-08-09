@@ -93,6 +93,9 @@ let run_command (spec : value) : value =
 let result_hash (v : value) : string = Identity.hash_value v
 
 let register (kind : string) (spec : value) : unit =
+  if kind = "" ||
+     String.exists (fun char -> Char.code char <= 32 || Char.code char = 127) kind
+  then failwith "fenced: kind must be a nonempty token without whitespace";
   Dynamic_scope.require_script_tier
     "fenced: fenced effects may not appear inside node bodies (LAW 31)";
   let forced = Force_deep.force_deep_plain ~force spec in
@@ -131,25 +134,32 @@ let execute_current ~(kind : string) ~(spec : value) : unit =
    hash so the action runs with the same inputs. *)
 let execute_recovery
     ~(decide : Journal.fenced_entry -> recovery_decision)
-    ~(entry : Journal.fenced_entry) : unit =
-  let result = match Object_repository.get_fenced (Runtime_context.objects ())
-      ~hash:entry.Journal.fe_spec_hash with
-    | None ->
-        (* A missing spec cannot be retried safely. *)
-        VMap [(VString "aborted", VBool true);
-              (VString "reason", VString "spec missing from store");
-              (VString "kind", VString entry.Journal.fe_kind);
-              (VString "spec-hash", VString entry.Journal.fe_spec_hash)]
-    | Some spec ->
-        (match decide entry with
-         | Retry -> run_command spec
-         | Abort ->
-             VMap [(VString "aborted", VBool true);
-                   (VString "kind", VString entry.Journal.fe_kind);
-                   (VString "spec-hash", VString entry.Journal.fe_spec_hash)])
+    ~(entry : Journal.fenced_entry) : bool =
+  let aborted reason =
+    VMap [(VString "aborted", VBool true);
+          (VString "reason", VString reason);
+          (VString "kind", VString entry.Journal.fe_kind);
+          (VString "spec-hash", VString entry.Journal.fe_spec_hash)]
+  in
+  let valid_key =
+    entry.Journal.fe_key =
+    action_key ~epoch:entry.Journal.fe_epoch ~kind:entry.Journal.fe_kind
+      ~spec_hash:entry.Journal.fe_spec_hash
+  in
+  let result =
+    if not valid_key then aborted "action identity mismatch"
+    else
+      match Object_repository.get_fenced (Runtime_context.objects ())
+              ~hash:entry.Journal.fe_spec_hash with
+      | None -> aborted "spec missing from store"
+      | Some spec ->
+          (match decide entry with
+           | Retry -> run_command spec
+           | Abort -> aborted "recovery policy aborted action")
   in
   Journal.append (Journal.FencedDone {
-    key = entry.Journal.fe_key; result_hash = result_hash result })
+    key = entry.Journal.fe_key; result_hash = result_hash result });
+  valid_key
 
 (* Resolve unknown-status actions from durable journal state. Recovery policy
    and prompting live at the command boundary; this module only executes the
@@ -158,15 +168,16 @@ let recover_unknown
     ~(decide : Journal.fenced_entry -> recovery_decision) : int =
   let unknowns = Journal.pending_fenced_actions () in
   List.iter (fun entry ->
-    execute_recovery ~decide ~entry;
-    Session.resume_fenced_epoch (Effect.perform Dynamic_scope.Get_session) entry.Journal.fe_epoch) unknowns;
+    if execute_recovery ~decide ~entry then
+      Session.resume_fenced_epoch
+        (Effect.perform Dynamic_scope.Get_session) entry.Journal.fe_epoch)
+    unknowns;
   List.length unknowns
 
 (* Drain all fenced actions registered during this evaluation.  Called once
    per reconcile pass, after all convergent fs/proc work.  Uses an existing
    epoch when resuming a crashed pass (set by recover_unknown); otherwise
-   generates a fresh epoch.  The epoch is cleared at the end so the next pass
-   starts fresh. *)
+   generates a fresh epoch. *)
 let drain () : unit =
   ensure_epoch ();
   let actions = Session.take_fenced_actions (Effect.perform Dynamic_scope.Get_session) in

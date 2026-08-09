@@ -128,10 +128,12 @@ let rec value_to_expr (v : value) : expr =
   | VVector vs ->
       EApply (ESymbol "vector", Array.to_list (Array.map value_to_expr vs))
   | VMap kvs ->
+      let kvs = Identity.canonical_map_entries kvs in
       EApply (ESymbol "hash-map",
               List.concat_map (fun (k, v) -> [value_to_expr k; value_to_expr v]) kvs)
   | VSet vs ->
-      EApply (ESymbol "hash-set", List.map value_to_expr vs)
+      EApply (ESymbol "hash-set",
+              List.map value_to_expr (Identity.canonical_set_elements vs))
   | VPair _ ->
       (match value_list_opt v with
        | Some items -> expr_of_list items

@@ -45,6 +45,20 @@ else
   echo "ok   d16-no-fake-recursion"
 fi
 
+# The REPL catches each line's error while retaining the node memo table.
+# Repeating the byte-identical form reaches the same thunk in one process.
+rm -rf "$TMP/.pp"
+prog='force(node { car(5) })
+force(node { car(5) })'
+out=$(printf '%s\n' "$prog" | "$PP" 2>&1)
+if printf '%s\n' "$out" | grep -qi "infinite recursion"; then
+  echo "FAIL d16-reforce-no-fake-recursion: second force reported a cycle"; fail=1
+elif [ "$(printf '%s\n' "$out" | grep -ci "car expects a pair")" -ne 2 ]; then
+  echo "FAIL d16-reforce-no-fake-recursion: expected both failures"; printf '%s\n' "$out"; fail=1
+else
+  echo "ok   d16-reforce-no-fake-recursion"
+fi
+
 # --- (2) a failure re-runs when a recorded input changes ---
 rm -rf "$TMP/.pp"
 printf 'V1\n' > "$TMP/d.txt"
@@ -64,18 +78,24 @@ printf 'V2\n' > "$TMP/d.txt"
 rm -rf "$TMP/.pp"
 printf 'bad\n' > "$TMP/n.txt"
 cat > "$TMP/cond.pp" <<EOF
-force(node {
+print(force(node {
   perform log("ATTEMPT")
   if slurp("$TMP/n.txt") = "ok\n" { 42 } else { car(5) }
-})
+}))
 EOF
 "$PP" --grant "fs:$TMP:ro" "$TMP/cond.pp" > "$TMP/o" 2>&1; check "cond-fail-first" "$TMP/o" present "car expects a pair"
 printf 'ok\n' > "$TMP/n.txt"
-"$PP" --grant "fs:$TMP:ro" "$TMP/cond.pp" > "$TMP/o" 2>&1
-if grep -qE "ATTEMPT" "$TMP/o" && ! grep -qi "car expects" "$TMP/o"; then
+if "$PP" --grant "fs:$TMP:ro" "$TMP/cond.pp" > "$TMP/o" 2>&1; then
+  cond_status=0
+else
+  cond_status=$?
+fi
+if [ "$cond_status" -eq 0 ] &&
+   grep -qE "ATTEMPT" "$TMP/o" &&
+   grep -qx "42" "$TMP/o"; then
   echo "ok   cond-success-after-fix"
 else
-  echo "FAIL cond-success-after-fix"; cat "$TMP/o"; fail=1
+  echo "FAIL cond-success-after-fix: expected status 0, ATTEMPT trace, and exact result 42"; cat "$TMP/o"; fail=1
 fi
 
 rm -rf "$TMP"

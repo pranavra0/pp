@@ -25,13 +25,14 @@ executables, then `scripts/run-tests.sh` does two things:
 
 The shell suites cover what a single-process stdout diff cannot:
 multi-process store scenarios (mutating files, grants or globals between
-`pp` invocations), expected-output oracles, watch loops, and simulated
-cluster members.
+`pp` invocations), expected-output oracles, watch loops, and tested local and
+remote transport paths. Network simulation is not part of this gate.
 
 The category counts are printed by `scripts/test-categories.sh`. The focused
 executables are deliberately small and use real kernel, repository,
 observation, lifecycle, and reader implementations; they do not replace the
 process and filesystem integration tests.
+
 
 ## Smallest relevant gate
 
@@ -99,31 +100,32 @@ obligation to the build, so a change cannot ship unexamined.
   must have either an adversarial fixture in
   `tests/fixtures/adversarial/<head>.sh` or a documented honest-edge
   entry in DESIGN.md. The head set comes from the surface table, so a
-  new head fails the build until it gets a fixture or an edge entry.
 - tests/071-kernel-props.sh and tests/075-cap-props.sh — kernel property
   sweeps. QuickCheck-style generators in src/app/kernel_props.ml prove hash
   injectivity, the quote round-trip and the print round-trip over random
   ASTs and values (071), and the capability algebra — restriction only
-  narrows, composition is exactly union, the subset gate is sound, and
-  the node-boundary ban catches buried authority (075). The generators
-  match exhaustively on the constructor tags, so a new AST or capability
-  kind breaks the build until it is generated and covered.
+  narrows, composition is exactly union, the subset gate is sound, and the
+  node-boundary ban catches buried authority (075). These are kernel
+  AST/capability properties, not durable repository integration; the latter
+  is covered by the process/filesystem suites and crash gate.
+  The generators match exhaustively on the constructor tags, so a new AST or
+  capability kind breaks the build until it is generated and covered.
 - tests/073-crash-injection.sh — crash injection. Every durable store
   write funnels through one atomic-write choke point. `PP_CRASH_AT`
   kills pp with SIGKILL at each write boundary of a real build, and a
   plain restart must neither crash nor produce anything but the
   byte-identical clean-build result.
 
-## The metamorphic fuzzer
-
 `tools/fuzz.ml` generates random pp programs, then applies
-semantics-preserving transforms to produce a twin — a program that must
-behave identically to the original. It runs both the original and the
-twin, and asserts identical observable behavior: same exit status, same
-stdout, same effect log. A mismatch is deduplicated by signature, shrunk
-to a minimal repro, and written to a failure directory. The fuzzer
-depends only on OCaml's `unix` library and is fully deterministic:
-program i under seed S is always the same program.
+semantics-preserving transforms to produce a twin. It runs both the original
+and the twin and compares observable behavior: same successful exit status,
+stdout, and effect log, or (for failures) the same normalized error tag.
+Unmatched errors, mismatched successful results or effect logs, and crashes
+are failures. A mismatch is deduplicated by signature, shrunk to a minimal
+repro, and written to a failure directory. The fuzzer depends only on OCaml's
+`unix` library and is fully deterministic: program i under seed S is always
+the same program.
+
 
 ### The twin transforms
 
@@ -141,12 +143,16 @@ Transforms skip subtrees containing `def`, `fn`, `quote`, `quasiquote`,
 `load`, `load-module`, `defmacro` arguments, or `match` patterns, where
 the transform would change semantics or scoping.
 
-### The reader round-trip gate
+Every generated program also passes through `pp --roundtrip-braces`, which
+prints the sexpr AST as brace text, re-reads it with the brace reader, and
+asserts structural AST equality and hash equality (SPEC law 20). Generated
+persistent nodes additionally exercise explicit cache-hit probes. A probe
+passes only when diagnostics contain a line-structured
+`node <shortkey>: hit — ok trace verified (` or
+`node <shortkey>: hit — failing trace verified (` line after the main
+execution; arbitrary `hit` text is not sufficient. Any round-trip or
+cache-probe failure gates the run like a twin mismatch.
 
-Every generated program also passes through `pp --roundtrip-braces`,
-which prints the sexpr AST as brace text, re-reads it with the brace
-reader, and asserts structural AST equality and hash equality (SPEC law
-20). Any failure gates the run like a twin mismatch.
 
 ```sh
 dune build                                              # builds bin/pp + the fuzzer
@@ -188,27 +194,23 @@ forms: `random`, wall-clock reads, file writes, capability constructors
 and grants, probes, sealed cells, or network. Cluster distribution has
 no language surface at all, so there is nothing to generate for it.
 
-### Verdicts
-
 | verdict | condition | CI effect |
 |---|---|---|
-| PASS | twin exit 0, stdout identical, stderr identical | — |
-| MISMATCH | stdout differs, effect-log (stderr) differs while twin exit 0 | fails |
-| BOTH-ERROR | twin exit non-zero; grouped by normalized error tag | soft class for now |
+| PASS | both sides succeed with identical stdout and effect log | — |
+| MATCHED-ERROR | both sides fail with the same normalized error tag | — |
+| MISMATCH | successful results or effect logs differ | fails |
+| UNMATCHED-ERROR | no derived twin, metamorphic checking disabled, only one side fails, or failure tags do not match | fails |
 | CRASH | either side times out, dies by signal, or exits > 128 | fails |
 
-Exit code is non-zero if and only if MISMATCH + CRASH > 0. Signatures
-normalize the payload (digits become `#`, wrappers stripped) so
+Exit code is non-zero for any MISMATCH, UNMATCHED-ERROR, or CRASH. A clean
+successful summary reports zero unmatched errors and a nonzero count of full
+cache probes. PASS may include a separately reported MATCHED-ERROR subcount.
+Signatures normalize the payload (digits become `#`, wrappers stripped) so
 thousands of failures collapse to a handful of bug classes.
 
 ### Failure artifacts
 
-```
-fuzz-failures/<sanitized-signature>/
-  <iter>.ppl         # up to 3 raw failing programs (sexpr text)
-  <iter>.tw.out      # tree-walker status + stdout + stderr
-  <iter>.twin.out    # twin status + stdout + stderr
-  min.ppl            # shrunk minimal repro (not for BOTH-ERROR)
+  min.ppl            # shrunk minimal repro
   min.tw.out / min.twin.out
 ```
 
@@ -243,6 +245,8 @@ and `--stdlib` must match the original run for byte-identity.
    and register it with a weight in `gen_program`. If it needs the
    stdlib, set `env.stdlib <- true`.
 4. Nondeterministic forms stay banned until the roadmap gates them.
-5. Sanity-check with `--dump 0..5` and a 100-program run. A rule that
-   produces matching BOTH-ERRORs on most programs is a generator bug,
-   not a finding.
+5. For every grammar change, run a sanity sample of at least 100 generated
+   programs and check these invariants: successful twins have identical
+   stdout and effect logs; failed twins either have the identical normalized
+   error tag or produce UNMATCHED-ERROR; no crash is accepted; round-trip
+   checks pass; and generated node programs produce a full cache probe.

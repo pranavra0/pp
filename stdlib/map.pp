@@ -3,7 +3,7 @@
 # Depends on stdlib/list.pp (member?, foldl) — load that first.
 
 # map-has?(m, k) — whether k is a key of m
-def map-has?(m, k) { member?(k, map-keys(m)) }
+def map-has?(m, k) { member?(hash-value(k), map(fn(existing) { hash-value(existing) }, map-keys(m))) }
 
 
 # map-merge(a, b) — a with every binding of b inserted (b wins on collision)

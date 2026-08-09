@@ -5,9 +5,15 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  schedule:
+    - cron: "23 3 * * 6"
+
+permissions:
+  contents: read
 
 jobs:
   build:
+    if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:
@@ -41,5 +47,39 @@ jobs:
       - name: Fuzzer (core grammar — gating, per docs/TESTING.md)
         run: opam exec -- dune exec ./tools/fuzz.exe -- --grammar core --count 2000
 
-      - name: Fuzzer (full grammar — gating, green today per docs/TESTING.md)
-        run: opam exec -- dune exec ./tools/fuzz.exe -- --grammar full --count 500
+      - name: Fuzzer (full grammar — gating, per docs/TESTING.md)
+        run: opam exec -- dune exec ./tools/fuzz.exe -- --grammar full --count 2000
+
+  scheduled-fuzz:
+    if: github.event_name == 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        grammar: [core, full]
+        seed: [0, 1, 2, 3]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5.4.1"
+      - name: Install OCaml dependencies
+        run: opam install . --deps-only --with-test
+      - name: Fuzzer (scheduled multi-seed gate)
+        run: opam exec -- dune exec ./tools/fuzz.exe -- --grammar ${{ matrix.grammar }} --seed ${{ matrix.seed }} --count 2000
+
+  clean-export:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5.4.1"
+      - name: Install OCaml dependencies
+        run: opam install . --deps-only --with-test
+      - name: Clean exported-source gate
+        run: ./scripts/check-clean-export.sh
+

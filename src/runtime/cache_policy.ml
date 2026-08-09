@@ -10,7 +10,6 @@ type t = {
 }
 let create () = { no_cache = false; why_enabled = false; check_enabled = false;
   volatile_count = 0 }
-let default = create ()
 let configure t ~no_cache ~why ~check =
   t.no_cache <- no_cache; t.why_enabled <- why; t.check_enabled <- check
 let enable_no_cache t = t.no_cache <- true
@@ -83,14 +82,37 @@ let lookup t ~(traces : Trace_repository.t) ~(objects : Object_repository.t)
               (List.length traces) (describe c)
         | `Usable -> ())
         classified;
-    let usable_traces =
-      List.filter_map (fun (_, t, cls) -> if cls = `Usable then Some t else None)
+    let load_result tr =
+      match Object_repository.get objects
+              ~key:(Identity_types.Object_hash.to_string
+                      tr.Trace_repository.result_hash) with
+      | None ->
+          diagnose t "node %s: trace result object missing or corrupt"
+            (short_key (Identity_types.Cache_key.to_string key));
+          None
+      | Some value ->
+          (match List.find_opt (fun hash ->
+                   Option.is_none (Blob_repository.get blobs hash))
+                   (Artifact_tree.reachable_blobs value) with
+           | Some hash ->
+               diagnose t "node %s: trace tree blob %s missing or corrupt"
+                 (short_key (Identity_types.Cache_key.to_string key))
+                 (short_key hash);
+               None
+           | None -> Some (tr, value))
+    in
+    let candidates =
+      List.filter_map (fun (_, trace, classification) ->
+        if classification = `Usable then load_result trace else None)
         classified
     in
     let chosen =
-      match List.find_opt (fun t -> t.Trace_repository.outcome = Trace_repository.Ok) usable_traces with
-      | Some t -> Some t
-      | None -> List.find_opt (fun t -> t.Trace_repository.outcome = Trace_repository.Failed) usable_traces
+      match List.find_opt (fun (trace, _) ->
+              trace.Trace_repository.outcome = Trace_repository.Ok) candidates with
+      | Some result -> Some result
+      | None ->
+          List.find_opt (fun (trace, _) ->
+            trace.Trace_repository.outcome = Trace_repository.Failed) candidates
     in
     match chosen with
     | None ->
@@ -102,35 +124,16 @@ let lookup t ~(traces : Trace_repository.t) ~(objects : Object_repository.t)
            diagnose t "node %s: miss — no stored trace usable"
              (short_key (Identity_types.Cache_key.to_string key)));
         Miss
-    | Some tr ->
-        (match Object_repository.get objects
-                 ~key:(Identity_types.Object_hash.to_string
-                         tr.Trace_repository.result_hash) with
-         | None ->
-             diagnose t "node %s: miss — result object missing from store"
-               (short_key (Identity_types.Cache_key.to_string key));
-             Miss  (* object gone → recompute *)
-         | Some v ->
-             let tree_blobs = Artifact_tree.reachable_blobs v in
-             let missing_blob =
-               List.find_opt (fun hash ->
-                 match Blob_repository.get blobs hash with
-                 | Some bytes -> Hasher.hash_string bytes <> hash
-                 | None -> true)
-                 tree_blobs
-             in
-             match missing_blob with
-             | Some hash ->
-                 diagnose t "node %s: miss — tree blob %s missing or corrupt"
-                   (short_key (Identity_types.Cache_key.to_string key))
-                   (short_key hash);
-                 Miss
-             | None ->
-                 event "node-cache" (Identity_types.Cache_key.to_string key) "hit";
-             diagnose t "node %s: hit — %s trace verified (%d cells)"
-               (short_key (Identity_types.Cache_key.to_string key))
-               (match tr.Trace_repository.outcome with Trace_repository.Ok -> "ok" | Trace_repository.Failed -> "failing")
-               (List.length tr.Trace_repository.reads);
-             replay tr.Trace_repository.reads;
-             (match tr.Trace_repository.outcome with Trace_repository.Ok -> HitOk v | Trace_repository.Failed -> HitFailed v))
+    | Some (trace, value) ->
+        event "node-cache" (Identity_types.Cache_key.to_string key) "hit";
+        diagnose t "node %s: hit — %s trace verified (%d cells)"
+          (short_key (Identity_types.Cache_key.to_string key))
+          (match trace.Trace_repository.outcome with
+           | Trace_repository.Ok -> "ok"
+           | Trace_repository.Failed -> "failing")
+          (List.length trace.Trace_repository.reads);
+        replay trace.Trace_repository.reads;
+        (match trace.Trace_repository.outcome with
+         | Trace_repository.Ok -> HitOk value
+         | Trace_repository.Failed -> HitFailed value)
   end

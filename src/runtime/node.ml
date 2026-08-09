@@ -124,8 +124,10 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
   let frame : (string * string) list ref = ref [] in
   let sandbox_slot = ref None in
   let persist_failure value =
-    try ignore (persist ~key ~reads:(List.rev !frame)
-      ~outcome:Trace_repository.Failed value)
+    try
+      ignore (persist ~key ~reads:(List.rev !frame)
+        ~outcome:Trace_repository.Failed value);
+      t.thunk_status <- Unevaluated
     with e ->
       t.thunk_status <- Unevaluated;
       raise e

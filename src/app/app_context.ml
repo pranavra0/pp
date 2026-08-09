@@ -28,7 +28,11 @@ let write_secret path content =
 let production_host () =
   Host_services.make
     ~canonical_realpath:World_path.canonical_impl ~unix_time:Unix.time
-    ~home_dir:(fun () -> Sys.getenv "HOME") ~read_secret ~write_secret
+    ~home_dir:(fun () ->
+      match Sys.getenv_opt "HOME" with
+      | Some home when home <> "" -> home
+      | _ -> failwith "HOME is not set")
+    ~read_secret ~write_secret
 
 let source_roots cli =
   let raw = Sys.getcwd () :: List.map Filename.dirname (Cli.files cli) in
@@ -71,7 +75,11 @@ let create host cli =
   Cache_policy.configure cache
     ~no_cache:(Cli.no_cache cli) ~why:(Cli.why cli) ~check:(Cli.check cli);
   Cache_policy.reset_volatile cache;
-  let runtime_context = Runtime_context.create ~cache () in
+  let layout =
+    Store_layout.of_root
+      (Filename.concat (host.Host_services.home_dir ()) ".pp/store")
+  in
+  let runtime_context = Runtime_context.create ~layout ~cache () in
   let session =
     Session.create ~executor:(Closed_action.linux_executor ())
       ~remote_dispatch:(Remote.dispatcher host invocation)

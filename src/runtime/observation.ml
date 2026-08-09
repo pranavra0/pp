@@ -33,29 +33,37 @@ let argv_hash argv = Hasher.hash_concat ("argv" :: argv)
 let tree_snapshot root =
   let entries = ref [] in
   let files = ref [] in
-  let add rel part = entries := (rel ^ "=" ^ part) :: !entries in
+  let add kind rel payload =
+    entries := (kind, rel, payload) :: !entries
+  in
   Fswalk.walk ~root ~cb:(fun ~rel ~path visit ->
     match visit with
-    | Fswalk.Lstat_failed -> add rel (if rel = "" then "missing" else "unstattable")
-    | Fswalk.Readdir_failed -> add rel "unreadable-dir"
+    | Fswalk.Lstat_failed ->
+        add "lstat-failed" rel (if rel = "" then "missing" else "unstattable")
+    | Fswalk.Readdir_failed -> add "readdir-failed" rel "unreadable-dir"
     | Fswalk.Entry st ->
         if rel = "" then
           (match st.Unix.st_kind with
            | Unix.S_DIR -> ()
-           | _ -> add "" (Option.value ~default:"unreadable" (hash_file root)))
+           | _ -> add "file" "" (Option.value ~default:"unreadable" (hash_file root)))
         else
           match st.Unix.st_kind with
           | Unix.S_DIR -> ()
           | Unix.S_REG ->
               let hash = Option.value ~default:"unreadable" (hash_file path) in
-              add rel hash;
+              add "file" rel hash;
               files := (rel, hash) :: !files
           | Unix.S_LNK ->
-              add rel ("link->" ^
-                (try Unix.readlink path
-                 with Sys_error _ | Unix.Unix_error _ -> "?"))
-          | _ -> add rel "special");
-  Hasher.hash_concat ("tree" :: List.sort compare !entries), !files
+              add "symlink" rel
+                ("link->" ^
+                 (try Unix.readlink path
+                  with Sys_error _ | Unix.Unix_error _ -> "?"))
+          | _ -> add "special" rel "special");
+  let framed_entries =
+    List.sort compare !entries
+    |> List.concat_map (fun (kind, rel, payload) -> [kind; rel; payload])
+  in
+  Hasher.hash_concat ("tree" :: framed_entries), !files
 
 let tree_hash root = fst (tree_snapshot root)
 

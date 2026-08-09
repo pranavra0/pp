@@ -1,18 +1,15 @@
 open Core_model
 
 
-(* THE canonical float spelling — bit-exact via %h (so two doubles that differ
-   anywhere in their bits hash and encode differently; string_of_float's ~12
-   significant digits could collide two distinct doubles into one content key
-   and serve a wrong cached result), with nan/inf/-inf as fixed tokens (NaN
-   payloads deliberately merge). Shared by hash_value below and the store
-   codec (Codec.encode_float) so content identity and on-disk bytes can never
-   disagree about whether two floats are the same value. *)
+(* THE canonical float spelling. Finite values use the exact [%h]
+   representation; all NaN payloads have one semantic identity. Codec uses
+   the same spelling, so equality, hashes, and stored bytes agree. *)
 let canonical_float_string (f : float) : string =
   if f <> f then "nan"
   else if f = Float.infinity then "inf"
   else if f = Float.neg_infinity then "-inf"
   else Printf.sprintf "%h" f
+
 
 let rec hash_expr (e : expr) : string =
   match e with
@@ -81,13 +78,16 @@ let rec hash_expr (e : expr) : string =
       Hasher.hash_concat ["typed"; hash_expr e; hash_expr ty]
   | ELocated (range, e) ->
       let position = Source_range.start range in
-      Hasher.hash_concat ["located"; Source_range.source range;
-                          string_of_int position.line; hash_expr e]
+      Hasher.hash_concat
+        ["located"; Source_range.source range;
+         string_of_int position.line; hash_expr e]
   | EMatch (scrutinee, arms) ->
       let arm_hashes = List.map (fun (p, guard, body) ->
         match guard with
         | None -> Hasher.hash_concat ["arm"; hash_pattern p; hash_expr body]
-        | Some g -> Hasher.hash_concat ["arm-guard"; hash_pattern p; hash_expr g; hash_expr body]
+        | Some g ->
+            Hasher.hash_concat
+              ["arm-guard"; hash_pattern p; hash_expr g; hash_expr body]
       ) arms in
       Hasher.hash_concat ("match" :: hash_expr scrutinee :: arm_hashes)
 
@@ -139,13 +139,23 @@ and hash_value (v : value) : string =
           | None -> "untyped"
           | Some ty -> Hasher.hash_concat ["type"; hash_expr ty]
         in
-        let arguments = match t.thunk_kind with
-          | Ephemeral -> []
+        let location_part = match t.thunk_loc with
+          | None -> Hasher.hash_concat ["location"; "none"]
+          | Some range ->
+              let start = Source_range.start range in
+              Hasher.hash_concat
+                ["location"; "some"; Source_range.source range;
+                 string_of_int start.line]
+        in
+        let kind_parts = match t.thunk_kind with
+          | Ephemeral -> ["ephemeral"]
           | Persistent { argument_values; _ } ->
-              List.map (hash_val active) argument_values
+              "persistent" :: List.map (hash_val active) argument_values
         in
         Hasher.hash_concat ("thunk" :: hash_expr t.thunk_expr :: type_part ::
-          hash_captures active t.thunk_expr t.thunk_env :: arguments)
+          location_part :: t.config_hash ::
+          hash_captures active t.thunk_expr t.thunk_env ::
+          kind_parts)
     | VNil -> Hasher.hash_string "nil"
     | VBool true -> Hasher.hash_string "bool:true"
     | VBool false -> Hasher.hash_string "bool:false"
@@ -160,13 +170,24 @@ and hash_value (v : value) : string =
         let parts = Array.to_list (Array.map (hash_val active) vs) in
         Hasher.hash_concat ("vector" :: parts)
     | VMap kvs ->
-        let hashed = List.map (fun (k, v) -> (hash_val active k, hash_val active v)) kvs in
-        let sorted = List.sort (fun (kh1,_) (kh2,_) ->
-          String.compare kh1 kh2) hashed in
-        let parts = List.map (fun (kh, vh) -> Hasher.hash_concat [kh; vh]) sorted in
+        let by_key = Hashtbl.create (List.length kvs) in
+        List.iter (fun (key, value) ->
+          Hashtbl.replace by_key (hash_val active key) value) kvs;
+        let sorted =
+          Hashtbl.to_seq by_key
+          |> List.of_seq
+          |> List.sort (fun (kh1, _) (kh2, _) -> String.compare kh1 kh2)
+        in
+        let parts = List.map (fun (kh, value) ->
+          Hasher.hash_concat [kh; hash_val active value]) sorted in
         Hasher.hash_concat ("map" :: parts)
     | VSet vs ->
-        let sorted = List.sort String.compare (List.map (hash_val active) vs) in
+        let unique = Hashtbl.create (List.length vs) in
+        List.iter (fun value ->
+          Hashtbl.replace unique (hash_val active value) ()) vs;
+        let sorted =
+          Hashtbl.to_seq_keys unique |> List.of_seq |> List.sort String.compare
+        in
         Hasher.hash_concat ("set" :: sorted)
     | VClosure { fn_name; params; body; env; closure_kind } ->
         let name_part = match fn_name with Some n -> n | None -> "anon" in
@@ -189,6 +210,27 @@ and hash_value (v : value) : string =
         Hasher.hash_concat ["sealed"; bytes]
   in
   hash_val [] v
+
+let same_content a b = hash_value a = hash_value b
+let equal_value = same_content
+
+let canonical_map_entries (kvs : (value * value) list) : (value * value) list =
+  let by_key = Hashtbl.create (List.length kvs) in
+  List.iter (fun (key, value) ->
+    Hashtbl.replace by_key (hash_value key) (key, value)) kvs;
+  Hashtbl.to_seq by_key
+  |> List.of_seq
+  |> List.sort (fun (hash1, _) (hash2, _) -> String.compare hash1 hash2)
+  |> List.map snd
+
+let canonical_set_elements (values : value list) : value list =
+  let by_hash = Hashtbl.create (List.length values) in
+  List.iter (fun value ->
+    Hashtbl.replace by_hash (hash_value value) value) values;
+  Hashtbl.to_seq by_hash
+  |> List.of_seq
+  |> List.sort (fun (hash1, _) (hash2, _) -> String.compare hash1 hash2)
+  |> List.map snd
 
 let node_key ~(code : expr)
     ~(free_variables : (string * value option) list)

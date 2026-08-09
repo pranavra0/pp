@@ -6,20 +6,19 @@ type t = {
   cache : Cache_policy.t;
 }
 
-let create ?(layout = Store_layout.default) ?(cache = Cache_policy.create ()) () =
+let create ~layout ?(cache = Cache_policy.create ()) () =
   { layout;
     objects = Object_repository.create layout;
     traces = Trace_repository.create layout;
     blobs = Blob_repository.create layout;
     cache }
 
-let default = lazy (create ())
 let current_context : t option ref = ref None
 
 let current () =
   match !current_context with
   | Some context -> context
-  | None -> Lazy.force default
+  | None -> failwith "runtime context is not installed"
 
 let with_current context f x =
   let previous = !current_context in

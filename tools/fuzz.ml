@@ -507,8 +507,8 @@ let stmt_typed_def env d =
 
 let stmt_param_typed_def env d =
   (* (def (f p : ty) body) then call — per-parameter annotations are CHECKED
-     (reader desugar); a 0.4-probability ill-typed call is a matched
-     both-error probe, a well-typed call must return the body's value. *)
+     (reader desugar); a 0.4-probability ill-typed call is an error-twin
+     probe, while a well-typed call must return the body's value. *)
   let f = fresh "f" in
   let p = fresh "p" in
   let declared = [| TInt; TStr; TBool |].(Random.int 3) in
@@ -696,6 +696,10 @@ let stmt_eq_list env d =
   (* (= E E) with textually identical E — tree-walker dedups thunks *)
   let e = gen_list_ne env (d - 1) in
   [S [A "print"; S [A "="; e; e]]]
+let stmt_node_cache env d =
+  let value = gen_of_ty env (d - 1) (random_ty env) in
+  [S [A "print"; S [A "force"; S [A "node"; value]]]]
+
 
 let stmt_seq_let env d =
   (* let binding referencing a sibling *)
@@ -761,6 +765,7 @@ let gen_program (gram : string) (iter : int) : string =
     2, (fun () -> stmt_def_rec env d);
     3, (fun () -> stmt_def_value env d);
     2, (fun () -> stmt_with_config env d);
+    2, (fun () -> stmt_node_cache env d);
   ] in
   let full_stmts = core_stmts @ [
     2, (fun () -> stmt_typed_let env d);
@@ -854,7 +859,7 @@ let run_pp (args : string list) (file : string) : outcome =
 type verdict =
   | Pass
   | Mismatch of string   (* signature *)
-  | BothError of string  (* signature *)
+  | UnmatchedError of string  (* signature *)
   | Crash of string      (* signature *)
 
 (* normalize for signature grouping: quoted strings -> "S", digit runs -> #,
@@ -894,6 +899,14 @@ let norm ?(max_len = 48) s =
   done;
   let s = Buffer.contents b in
   if String.length s > max_len then String.sub s 0 max_len else s
+let contains_substring text needle =
+  let text_length = String.length text and needle_length = String.length needle in
+  let rec loop index =
+    index + needle_length <= text_length
+    && (String.sub text index needle_length = needle || loop (index + 1))
+  in
+  needle_length = 0 || loop 0
+
 
 (* extract a stable error tag from stderr *)
 let error_tag (err : string) : string =
@@ -961,7 +974,7 @@ let error_tag (err : string) : string =
 
 let sig_of_verdict = function
   | Pass -> None
-  | Mismatch s | BothError s | Crash s -> Some s
+  | Mismatch s | UnmatchedError s | Crash s -> Some s
 
 
 
@@ -1108,10 +1121,38 @@ let run_walker (src : string) : outcome =
   let ch = open_out f in
   output_string ch src; close_out ch;
   run_pp [] f
+let cache_hit_line line =
+  let line =
+    if String.length line >= 6 && String.sub line 0 6 = "[why] "
+    then String.sub line 6 (String.length line - 6)
+    else line
+  in
+  let prefix = "node " and suffix = " cells)" in
+  let lp = String.length prefix and ls = String.length suffix in
+  let middle_ok = ": hit — ok trace verified (" in
+  let middle_fail = ": hit — failing trace verified (" in
+  String.length line > lp + ls
+  && String.sub line 0 lp = prefix
+  && String.sub line (String.length line - ls) ls = suffix
+  && (contains_substring line middle_ok || contains_substring line middle_fail)
+let has_cache_hit err =
+  List.exists cache_hit_line (String.split_on_char '\n' err)
 
+let run_cache_probe (src : string) : verdict option =
+  if not (contains_substring src "(node ") then None
+  else
+    let file = Lazy.force prog_file in
+    let channel = open_out file in
+    output_string channel src;
+    close_out channel;
+    let outcome = run_pp ["--why"] file in
+    if outcome.status <> `Exit 0 then
+      Some (Mismatch ("cache-probe:exit:" ^ error_tag outcome.err))
+    else if has_cache_hit outcome.err then Some Pass
+    else Some (Mismatch "cache-probe:no-hit")
 (* Single-engine verdict: a roundtrip failure always gates as Mismatch.
-   Otherwise, check the walker outcome: crashes are hard failures,
-   non-zero exits with known error tags are soft (BothError). *)
+   A non-zero walker exit is initially unmatched until a derived twin proves
+   the same normalized error tag. *)
 let judge_walker (w : outcome) : verdict =
   let crash_of o =
     match o.status with
@@ -1126,7 +1167,8 @@ let judge_walker (w : outcome) : verdict =
       if w.status = `Exit 0 then Pass
       else
         let tag = error_tag w.err in
-        BothError ("error:" ^ tag)
+        UnmatchedError ("error:" ^ tag)
+
 
 let judge_full (rt : outcome) (w : outcome) : verdict =
   if rt.status <> `Exit 0 then Mismatch ("roundtrip:" ^ error_tag rt.err)
@@ -1302,7 +1344,7 @@ let judge_meta (a : outcome) (b : outcome) : verdict =
       else
         let ta = error_tag a.err and tb = error_tag b.err in
         if ta = tb then Pass
-        else Mismatch ("metamorphic:both-error:" ^ ta ^ "|" ^ tb)
+        else Mismatch ("metamorphic:unmatched-error:" ^ ta ^ "|" ^ tb)
 
 (* Run a single program through pp f and return the outcome *)
 let run_single (src : string) : outcome =
@@ -1394,7 +1436,7 @@ let write_file path content =
 type sig_info = {
   mutable n_hits : int;
   mutable examples : int;    (* how many example programs saved *)
-  kind : [ `Mismatch | `BothError | `Crash ];
+  kind : [ `Mismatch | `UnmatchedError | `Crash ];
   first_iter : int;
   mutable min_repro : string;
 }
@@ -1406,13 +1448,11 @@ let () =
     exit 0
   end;
   let sigs : (string, sig_info) Hashtbl.t = Hashtbl.create 64 in
-  let n_pass = ref 0 and n_mismatch = ref 0 and n_both = ref 0 and n_crash = ref 0 in
-  (* Programs whose error tag is whitelisted stay a soft class. *)
-  let n_errpass = ref 0 in
-  (* Round-trip accounting — every program is checked; failures are
-     gating mismatches with a `roundtrip:` signature. *)
+  let n_pass = ref 0 and n_mismatch = ref 0 and n_unmatched = ref 0
+      and n_crash = ref 0 and n_errpass = ref 0 in
   let n_rt_checked = ref 0 and n_rt_fail = ref 0 in
   let n_meta_checked = ref 0 and n_meta_fail = ref 0 in
+  let n_cache_checked = ref 0 and n_cache_fail = ref 0 in
   Printf.printf "pp-fuzz: grammar=%s seed=%d start=%d count=%d depth=%d timeout=%dms pp=%s\n%!"
     !grammar !seed !start_iter !count !max_depth !timeout_ms !pp_bin;
   (* Exercise the library directly as part of every fuzzer invocation.  The
@@ -1431,31 +1471,43 @@ let () =
     incr n_rt_checked;
     if rt.status <> `Exit 0 then incr n_rt_fail;
     let v0 = judge_full rt w in
-    let v = match v0 with
-      | Pass when not !no_metamorphic ->
+    let base =
+      match v0 with
+      | Pass ->
+          (match run_cache_probe src with
+           | Some cache_verdict ->
+               incr n_cache_checked;
+               if cache_verdict <> Pass then incr n_cache_fail;
+               cache_verdict
+           | None -> Pass)
+      | verdict -> verdict
+    in
+    let v =
+      match base with
+      | (Pass | UnmatchedError _) when not !no_metamorphic ->
           incr n_meta_checked;
           Random.full_init [| !seed; i; 0x4D354124 |];
           (match derive_twin src with
            | Some twin ->
                meta_twin_src := Some twin;
-               let mv = run_metamorphic src twin in
-               if mv <> Pass then incr n_meta_fail;
-               mv
-           | None -> Pass)
-      | _ -> v0
+               let verdict = judge_meta w (run_single twin) in
+               if verdict <> Pass then incr n_meta_fail;
+               verdict
+           | None -> base)
+      | _ -> base
     in
     (match v with
      | Pass ->
          incr n_pass;
          if w.status <> `Exit 0 then incr n_errpass
      | Mismatch _ -> incr n_mismatch
-     | BothError _ -> incr n_both
+     | UnmatchedError _ -> incr n_unmatched
      | Crash _ -> incr n_crash);
     (match sig_of_verdict v with
      | None -> ()
      | Some s ->
          let kind = (match v with
-           | Mismatch _ -> `Mismatch | BothError _ -> `BothError
+           | Mismatch _ -> `Mismatch | UnmatchedError _ -> `UnmatchedError
            | Crash _ -> `Crash | Pass -> assert false) in
          let info =
            match Hashtbl.find_opt sigs s with
@@ -1465,8 +1517,8 @@ let () =
                             min_repro = "" } in
                Hashtbl.add sigs s info;
                Printf.printf "[iter %d] NEW %s signature: %s\n%!" i
-                 (match kind with `Mismatch -> "MISMATCH"
-                                | `BothError -> "BOTH-ERROR"
+               (match kind with `Mismatch -> "MISMATCH"
+                                | `UnmatchedError -> "UNMATCHED-ERROR"
                                 | `Crash -> "CRASH") s;
                info
          in
@@ -1485,9 +1537,9 @@ let () =
                write_file (Filename.concat dir (Printf.sprintf "%d.twin.ppl" i)) twin
            | None -> ())
         end;
-        (* shrink only the first exemplar of a signature; both-error is a
-           soft class — shrink mismatches and crashes only *)
-        if info.n_hits = 1 && kind <> `BothError then begin
+        (* shrink only the first exemplar of a signature; unmatched errors
+           are retained as gating reproducers just like other failures *)
+        if info.n_hits = 1 then begin
           let small = shrink src s in
           info.min_repro <- small;
           write_file (Filename.concat dir "min.ppl") small;
@@ -1510,17 +1562,19 @@ let () =
         end);
     let done_n = i - !start_iter + 1 in
     if done_n mod 200 = 0 then
-      Printf.printf "  ... %d/%d  pass=%d mismatch=%d both-error=%d crash=%d meta-fail=%d distinct-sigs=%d\n%!"
-        done_n !count !n_pass !n_mismatch !n_both !n_crash !n_meta_fail (Hashtbl.length sigs)
+      Printf.printf "  ... %d/%d  pass=%d mismatch=%d unmatched-error=%d crash=%d meta-fail=%d distinct-sigs=%d\n%!"
+        done_n !count !n_pass !n_mismatch !n_unmatched !n_crash !n_meta_fail (Hashtbl.length sigs)
   done;
   Printf.printf "\n==== pp-fuzz summary (grammar=%s, seed=%d, count=%d) ====\n"
     !grammar !seed !count;
-  Printf.printf "PASS       %d (of which %d matched-error)\nMISMATCH   %d\nBOTH-ERROR %d\nCRASH      %d\n"
-    !n_pass !n_errpass !n_mismatch !n_both !n_crash;
+  Printf.printf "PASS       %d (of which %d matched-error)\nMISMATCH   %d\nUNMATCHED-ERROR %d\nCRASH      %d\n"
+    !n_pass !n_errpass !n_mismatch !n_unmatched !n_crash;
   Printf.printf "roundtrip  %d checked, %d failed (sexpr->braces->re-read)\n"
     !n_rt_checked !n_rt_fail;
   Printf.printf "metamorphic %d checked, %d failed (single-engine oracle)\n"
     !n_meta_checked !n_meta_fail;
+  Printf.printf "node-cache %d checked, %d failed (generated persistent nodes)\n"
+    !n_cache_checked !n_cache_fail;
   Printf.printf "distinct signatures: %d\n" (Hashtbl.length sigs);
   let sorted =
     Hashtbl.fold (fun s info acc -> (s, info) :: acc) sigs []
@@ -1528,7 +1582,7 @@ let () =
   List.iter (fun (s, info) ->
     Printf.printf "\n[%s] x%d (first at iter %d)\n  %s\n  dir: %s\n"
       (match info.kind with `Mismatch -> "MISMATCH"
-                          | `BothError -> "BOTH-ERROR" | `Crash -> "CRASH")
+                          | `UnmatchedError -> "UNMATCHED-ERROR" | `Crash -> "CRASH")
       info.n_hits info.first_iter s
       (Filename.concat !out_dir (sanitize_sig s));
     if info.min_repro <> "" && String.length info.min_repro < 400 then begin
@@ -1537,12 +1591,15 @@ let () =
         (String.split_on_char '\n' info.min_repro)
     end
   ) sorted;
-  (* CI verdict: BOTH-ERROR is whitelisted (soft class) *)
-  if !n_mismatch > 0 || !n_crash > 0 then begin
-    Printf.printf "\nRESULT: FAIL (%d mismatches, %d crashes)\n" !n_mismatch !n_crash;
+  if !n_mismatch > 0 || !n_crash > 0 || !n_unmatched > 0 ||
+     (!grammar = "full" && !n_cache_checked = 0) then begin
+    Printf.printf
+      "\nRESULT: FAIL (%d mismatches, %d unmatched errors, %d crashes, %d cache probes)\n"
+      !n_mismatch !n_unmatched !n_crash !n_cache_checked;
     exit 1
   end else begin
-    Printf.printf "\nRESULT: OK (no mismatches or crashes; %d matched-error, %d both-error programs)\n"
-      !n_errpass !n_both;
+    Printf.printf
+      "\nRESULT: OK (no mismatches, unmatched errors, or crashes; %d matched-error programs, %d cache probes)\n"
+      !n_errpass !n_cache_checked;
     exit 0
   end

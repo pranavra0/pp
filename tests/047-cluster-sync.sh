@@ -110,6 +110,40 @@ assert "buildA-result" "\[info\] V1" present
 KEY=$(ls "$NODEA/.pp/store/traces")
 RESULT_HASH=$(grep -oE '"[0-9a-f]{64,}"' "$NODEA/.pp/store/traces/$KEY" | head -1 | tr -d '"')
 [ -n "$KEY" ] && [ -n "$RESULT_HASH" ] || { echo "FAIL setup: could not read key/result-hash"; exit 1; }
+# Source-free desired-object convergence: publish a canonical tree object,
+# then materialize it on a fresh root without a program or REPL input.
+DESIRED_OUT="$TMP/desired-out"; DESIRED_SHARED="$TMP/desired-shared"
+cat > "$TMP/desired-tree.pp" <<EOF
+{:fs -> {:tree -> {
+  "a.txt" -> {:kind -> :file, :mode -> 420, :blob -> blob("DESIRED-A")},
+  "sub" -> {:kind -> :directory, :mode -> 493},
+  "sub/b.txt" -> {:kind -> :file, :mode -> 420, :blob -> blob("DESIRED-B")}
+}}}
+EOF
+PUBLISH_OUT=$(HOME="$NODEA" "$PP" --publish-object "$DESIRED_SHARED" \
+  "$TMP/desired-tree.pp" 2>&1)
+DESIRED_HASH=$(printf '%s\n' "$PUBLISH_OUT" | grep -oE '[0-9a-f]{64}' | head -1)
+[ -n "$DESIRED_HASH" ] || { echo "FAIL desired-object-publish-hash"; fail=1; }
+rm -rf "$DESIRED_OUT"
+HOME="$NODEC" "$PP" --desired-object "$DESIRED_HASH" "$DESIRED_SHARED" \
+  --reconcile "$DESIRED_OUT" --grant "fs:${DESIRED_OUT}:rw" \
+  </dev/null > "$TMP/desired-object.out" 2>&1
+CODE=$?
+assert_exit "desired-object-converges-exit" 0 "$CODE"
+assert "desired-object-no-repl" "REPL|pp>" absent "$TMP/desired-object.out"
+if [ -f "$DESIRED_OUT/a.txt" ] && [ "$(cat "$DESIRED_OUT/a.txt")" = "DESIRED-A" ] \
+  && [ -f "$DESIRED_OUT/sub/b.txt" ] && [ "$(cat "$DESIRED_OUT/sub/b.txt")" = "DESIRED-B" ]; then
+  echo "ok   desired-object-materializes-tree"
+else
+  echo "FAIL desired-object-materializes-tree: expected files/content"; fail=1
+fi
+if [ "$(stat -c '%a' "$DESIRED_OUT/a.txt" 2>/dev/null)" = "644" ] \
+  && [ "$(stat -c '%a' "$DESIRED_OUT/sub" 2>/dev/null)" = "755" ]; then
+  echo "ok   desired-object-materializes-modes"
+else
+  echo "FAIL desired-object-materializes-modes: expected 644/755"; fail=1
+fi
+
 
 # ---------------------------------------------------------------------
 # Tokens: a broad grant covering WORK, a narrow grant that doesn't, a
@@ -256,9 +290,11 @@ fi
 # T6 below, partial).
 # ---------------------------------------------------------------------
 HOME="$NODEC" "$PP" --grant "fs:${WORK}:ro" "$TMP/prog.pp" > "$TMP/out" 2>&1
-KEY_C=$(ls "$NODEC/.pp/store/traces" | head -1)
-if [ "$KEY_C" = "$KEY" ]; then echo "ok   T6-same-key-independent-build"
-else echo "FAIL T6-same-key-independent-build: A=$KEY C=$KEY_C"; fail=1; fi
+if [ -f "$NODEC/.pp/store/traces/$KEY" ]; then
+  echo "ok   T6-same-key-independent-build"
+else
+  echo "FAIL T6-same-key-independent-build: missing $KEY in node C"; fail=1
+fi
 if diff -q "$NODEA/.pp/store/objects/$RESULT_HASH" "$NODEC/.pp/store/objects/$RESULT_HASH" > /dev/null 2>&1; then
   echo "ok   T6-byte-identical-object-independent-build"
 else

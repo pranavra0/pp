@@ -25,8 +25,9 @@ reader -> expr AST -> macro expansion -> tree-walking evaluator
 The reader produces one `Core_model.expr` tree. Both readers produce the same
 tree. The evaluator has one expression dispatch and one tail-call mechanism.
 The helper modules called `evaluator_*` support this dispatch. They do not
-define another evaluator.
-
+define another evaluator. The transport and cluster descriptions below are
+implementation surfaces; their tested scope is the local and remote paths
+covered by the integration suites, not a network simulator.
 The application creates the services for one command. It creates one session,
 one scheduler, and one evaluator operation value. The session owns mutable
 run state. Dynamic scope carries values that must follow the current call.

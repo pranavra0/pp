@@ -21,6 +21,8 @@ print(list->vector(list(6, 7)))
 print(set-has?(list->set(list(:a, :b)), :b))
 print(set->list(set-difference(list->set(list(:a, :b)), list->set(list(:b)))))
 print(map-to-pairs(map-from-pairs(list(list(:a, 1), list(:b, 2)))))
+print(path-dirname("/usr/local/bin"))
+print(path-dirname("/usr"))
 print(path-normalize("a/./b/../c"))
 print(path-join("/tmp", "x"))
 print(path-extension("archive.tar.gz"))
@@ -28,7 +30,7 @@ print(path-stem("archive.tar.gz"))
 print(path-extension(".profile"))
 EOF
 
-expected=$'(5 3 1)\n((1 :a) (2 :b))\n{:matched (1 2), :rest (4)}\n("a" "b-")\n("a" "" "b")\n"a-x-x"\n(4 5)\n[6 7]\ntrue\n(:a)\n((:b 2) (:a 1))\n"a/c"\n"/tmp/x"\n".gz"\n"archive.tar"\n""'
+expected=$'(5 3 1)\n((1 :a) (2 :b))\n{:rest (4), :matched (1 2)}\n("a" "b-")\n("a" "" "b")\n"a-x-x"\n(4 5)\n[6 7]\ntrue\n(:a)\n((:a 1) (:b 2))\n"/usr/local"\n"/"\n"a/c"\n"/tmp/x"\n".gz"\n"archive.tar"\n""'
 got=$($PP "$TMP/stdlib.pp" 2>"$TMP/err")
 if [ "$got" = "$expected" ]; then ok "stdlib-expansion"; else bad "stdlib-expansion" "expected: $expected" "got: $got" "err: $(cat "$TMP/err")"; fi
 

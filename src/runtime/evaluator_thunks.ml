@@ -17,6 +17,15 @@ let make_with_hash ?name ?(kind = Ephemeral) ~tag (expr : expr)
     | None -> []
     | Some ty -> [Identity.hash_expr ty]
   in
+  let location_hash =
+    match loc with
+    | None -> []
+    | Some range ->
+        let position = Source_range.start range in
+        [Hasher.hash_concat
+           ["location"; Source_range.source range;
+            string_of_int position.line]]
+  in
   let argument_values = match kind with
     | Ephemeral -> []
     | Persistent { argument_values; _ } -> argument_values
@@ -25,7 +34,7 @@ let make_with_hash ?name ?(kind = Ephemeral) ~tag (expr : expr)
       argument_values
   in
   let hash = Hasher.hash_concat
-      (tag :: expr_hash :: type_hash @ arg_hashes @
+      (tag :: expr_hash :: type_hash @ location_hash @ arg_hashes @
        [env.env_hash; caps_hash; cfg_hash; handlers_hash])
   in
   let make_fresh () =

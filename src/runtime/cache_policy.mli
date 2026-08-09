@@ -2,7 +2,6 @@ open Pp_kernel
 type result = HitOk of Core_model.value | HitFailed of Core_model.value | Miss
 type t
 val create : unit -> t
-val default : t
 val configure : t -> no_cache:bool -> why:bool -> check:bool -> unit
 val enable_no_cache : t -> unit
 val enable_why : t -> unit

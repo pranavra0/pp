@@ -32,8 +32,8 @@ Highlights:
   back within one interval
 - parallel builds: `--schedule parallel:4` forks workers to handle node
   misses
-- cluster distribution: signed tokens, by-hash sync, remote placement,
-  host-qualified distribution, and store garbage collection
+- cluster distribution: signed tokens, by-hash sync, remote placement, and
+  store garbage collection, within the tested transport and store scenarios
 - two syntaxes: `.pp` uses braces and infix notation; `.ppl` uses
   s-expressions, the AST written as text, for macros. `pp fmt` converts
   between them

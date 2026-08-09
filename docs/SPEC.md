@@ -4,19 +4,19 @@
 > laws. It does not describe the current implementation — this project's docs
 > have described aspirations as facts before, and this document exists partly
 > to stop that. Every law carries an explicit status marker:
->
-> - holds: the tree-walker satisfies it, verified by tests or the
->   metamorphic fuzzer.
+> - holds: the tree-walker satisfies the law within the tested scope cited
+>   for that law, using pinned tests, targeted/property tests, or the
+>   strengthened metamorphic fuzzer.
 > - partial: the mechanism exists but is buggy or incomplete. The prose
 >   cites the matching test, fuzzer signature, or status-table entry.
 > - unimplemented: a target only. Nothing in `src/` does this yet.
 >
 > The enforcement mechanism is the metamorphic fuzzer (`tools/fuzz.ml`; see
-> [TESTING.md](TESTING.md)) plus the expected-output test suite. Every law is
-> written so a program could falsify it. The project did not declare its first
-> build phase complete until every law marked holds below had a passing test
-> and no law was silently violated.
->
+> [TESTING.md](TESTING.md)) plus the expected-output, property, and integration
+> test suites. Fuzzer failures are holds only when successful twins agree or
+> both semantics-preserving twins produce the same normalized error tag;
+> unmatched errors, mismatches, and crashes fail the gate. Claims below are
+> limited to the evidence cited for each law.
 > Law-linkage gate (`tests/072`). A holds claim is not self-certifying:
 > `tests/072-law-pins.sh` cross-references every LAW id here against the
 > `# pins: LAW-<n>` markers declared by the suite, and fails the build if a
@@ -1379,6 +1379,9 @@ divergence this law forbids. It does not, by construction: expansion
 before the evaluator consumes it — `stmt_defmacro` (fuzzer, full grammar) and
 `tests/041-defmacro.pp` exercise this the same way every other shared-AST
 feature is verified.
+VInt persistence uses the OCaml [int] representation: the supported runtime
+contract is the signed 63-bit range on 64-bit runtimes, not arbitrary
+cross-architecture portability.
 
 Test: `dune exec ./tools/fuzz.exe -- --grammar core` exits zero (the CI
 gate); the build-engine milestone's exit criterion extends this to the

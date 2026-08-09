@@ -11,7 +11,7 @@ def path-dirname(p) {
   let (parts = filter(fn(x) { not(x = "") }, string-split(p, "/")), n = length(parts)) {
     if n = 0 { if absolute-path?(p) { "/" } else { "." } }
     else if n = 1 { if absolute-path?(p) { "/" } else { "." } }
-    else { string-join("/", take(n - 1, parts)) }
+    else { let (body = string-join("/", take(n - 1, parts))) { if absolute-path?(p) { string-append("/", body) } else { body } } }
   }
 }
 def path-extension(p) {

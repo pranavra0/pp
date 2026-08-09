@@ -22,9 +22,11 @@ let rec string_of_value (v : value) : string =
       "[" ^ String.concat " " (List.map string_of_value (Array.to_list vs)) ^ "]"
   | VMap kvs ->
       "{" ^ String.concat ", "
-        (List.map (fun (k, v) -> string_of_value k ^ " " ^ string_of_value v) kvs) ^ "}"
+        (List.map (fun (k, v) -> string_of_value k ^ " " ^ string_of_value v)
+           (Identity.canonical_map_entries kvs)) ^ "}"
   | VSet vs ->
-      "#{" ^ String.concat " " (List.map string_of_value vs) ^ "}"
+      "#{" ^ String.concat " "
+        (List.map string_of_value (Identity.canonical_set_elements vs)) ^ "}"
   | VClosure { fn_name = Some n; _ } -> "#<fn " ^ n ^ ">"
   | VClosure { fn_name = None; _ } -> "#<fn>"
   | VBuiltin (name, _) -> "#<builtin " ^ name ^ ">"

@@ -1,6 +1,6 @@
 (* pp store codec — one canonical, versioned, byte-stable TEXT encoding for
-   DATA values: the store must be readable across
-   OS/arch/compiler, which OCaml Marshal is not.
+   DATA values. The VInt representation is OCaml [int]: signed 63-bit range
+   on supported 64-bit runtimes (Sys.int_size = 63).
 
    THE NON-DATA LAW: [encode_value] returns [Some text] only for values built
    entirely from VNil/VBool/VInt/VFloat/VString/VKeyword/VSymbol/VPair/
@@ -29,15 +29,17 @@
      (p CAR CDR)             VPair     — both sides encoded; need not be a
                                           proper list
      (v E1 E2 ...)           VVector   — order preserved, "(v)" if empty
-     (m (K V) (K V) ...)     VMap      — entries sorted by encoded-key byte
-                                          string ascending (String.compare);
+     (m (K V) (K V) ...)     VMap      — unique keys in content-hash order;
+                                          rightmost input binding wins;
                                           "(m)" if empty
-     (t E1 E2 ...)           VSet      — elements sorted by encoded-element
-                                          byte string ascending; "(t)" if empty
+     (t E1 E2 ...)           VSet      — unique elements in content-hash order;
+                                          "(t)" if empty
 
    [decode_value] is a total inverse on encoder output: malformed or
    unrecognized input returns [None] (defense in depth — callers already
    treat [None] as a cache miss). *)
+(* VInt values therefore have a signed 63-bit portability contract on the
+   supported 64-bit runtime, rather than an arbitrary-architecture guarantee. *)
 
 open Core_model
 
@@ -130,26 +132,17 @@ let rec encode (v : value) : string option =
   | VVector vs -> encode_list_opt (Array.to_list vs) |> Option.map (wrap "v")
   | VMap kvs ->
       let encoded =
-        List.map (fun (k, v) -> (encode k, encode v)) kvs
+        Identity.canonical_map_entries kvs
+        |> List.map (fun (k, v) -> (encode k, encode v))
       in
-      let pairs =
-        List.fold_right (fun pair acc ->
-          match pair, acc with
-          | (Some k, Some v), Some pairs -> Some ((k, v) :: pairs)
-          | _ -> None) encoded (Some [])
-      in
-      (match pairs with
-       | None -> None
-       | Some pairs ->
-        (* stable_sort: VMap is an assoc list that tolerates duplicate keys;
-           stability makes the duplicate-key entry order deterministic across
-           OCaml stdlib versions (List.sort's tie-breaking is unspecified). *)
-        let sorted = List.stable_sort (fun (k1, _) (k2, _) -> String.compare k1 k2) pairs in
-        Some (wrap "m" (List.map (fun (k, v) -> "(" ^ k ^ " " ^ v ^ ")") sorted)))
+      if List.exists (fun (k, v) -> k = None || v = None) encoded then None
+      else
+        let pairs = List.map (function (Some k, Some v) -> (k, v) | _ -> assert false) encoded in
+        Some (wrap "m" (List.map (fun (k, v) -> "(" ^ k ^ " " ^ v ^ ")") pairs))
   | VSet vs ->
-      (match encode_list_opt vs with
+      (match encode_list_opt (Identity.canonical_set_elements vs) with
        | None -> None
-       | Some parts -> Some (wrap "t" (List.stable_sort String.compare parts)))
+       | Some parts -> Some (wrap "t" parts))
   (* Non-data: code, captured environments, or handles. Process-local only.
      VSealed: confidentiality — encoding it would put secret bytes into
      ~/.pp/store/objects; the non-data law already covers it for free, same
@@ -243,7 +236,8 @@ let rec parse (s : string) (i : int) : (value * int) option =
                                     | Some next -> Some (VPair (car, cdr), next)
                                     | None -> None)))))
            | 'v' -> parse_seq s j (fun lst -> VVector (Array.of_list lst))
-           | 't' -> parse_seq s j (fun lst -> VSet lst)
+           | 't' -> parse_seq s j (fun lst ->
+               VSet (Identity.canonical_set_elements lst))
            | 'm' -> parse_map s j
            | _ -> None)
     | _ -> None
@@ -317,7 +311,8 @@ and parse_map (s : string) (j : int) : (value * int) option =
         in
         (match loop j [] with
          | None -> None
-         | Some (kvs, next) -> Some (VMap kvs, next))
+         | Some (kvs, next) ->
+             Some (VMap (Identity.canonical_map_entries kvs), next))
 
 let encode_value (v : value) : string option = encode v
 

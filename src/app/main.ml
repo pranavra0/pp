@@ -16,6 +16,16 @@ let () =
       Printf.eprintf "pp: error: %s\n%!"
         (Source_error.string_of_t (Source_error.Reader error));
       exit 1
-  | Failure msg | Sys_error msg ->
+  | Failure msg | Sys_error msg | Invalid_argument msg ->
       Printf.eprintf "pp: error: %s\n%!" msg;
       exit 1
+  | Unix.Unix_error (error, operation, argument) ->
+      let context =
+        if argument = "" then operation else operation ^ " " ^ argument
+      in
+      Printf.eprintf "pp: error: %s: %s\n%!"
+        context (Unix.error_message error);
+      exit 1
+  | error ->
+      Printf.eprintf "pp: internal error: %s\n%!" (Printexc.to_string error);
+      exit 2

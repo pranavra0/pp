@@ -3,7 +3,7 @@
 #
 #   ~/.pp/store serializes with a canonical, byte-stable TEXT codec
 #   (src/kernel/codec.ml) instead of OCaml Marshal, stamped by store/VERSION
-#   ("pp-store 1"). The bytes must be identical on any OS/arch/compiler.
+#   ("pp-store 2"). The bytes must be identical on any OS/arch/compiler.
 #
 #   Covers:
 #     (a) golden bytes — a fixed program's stored object file and trace file
@@ -16,7 +16,7 @@
 #         maps with map keys and mixed-type keys, sets, improper pairs:
 #         stored in one process, HIT in a second process (pp why says so),
 #         printed byte-identically — and the store round-trip works;
-#     (c) version bump — VERSION overwritten with "pp-store 0": next run
+#     (c) version bump — VERSION overwritten with "pp-store 1": next run
 #         exits 0, recomputes cold, re-stamps VERSION, wipes objects/ but
 #         preserves journal/ and blobs/;
 #     (d) closure result — a closure-valued node stores NO object (the
@@ -122,7 +122,7 @@ printf 'pp-store 0\n' > "$STORE/VERSION"
 if [ $? -eq 0 ]; then echo "ok   bump-exit-0"
 else echo "FAIL bump-exit-0"; cat "$TMP/out"; fail=1; fi
 assert "bump-recomputes-cold" "COMPUTE" present
-if [ "$(cat "$STORE/VERSION")" = "pp-store 1" ]; then echo "ok   bump-restamped"
+if [ "$(cat "$STORE/VERSION")" = "pp-store 2" ]; then echo "ok   bump-restamped"
 else echo "FAIL bump-restamped: $(cat "$STORE/VERSION" 2>/dev/null)"; fail=1; fi
 [ -f "$STORE/objects/stale-format-leftover" ] \
   && { echo "FAIL bump-wipes-objects: stale file survived"; fail=1; } \
@@ -167,9 +167,71 @@ closure_case() {  # LABEL FLAGS...
 }
 closure_case "closure"
 
-# --- (e) legacy (Marshal-era) store: garbage bytes, no VERSION → clean wipe ---
+# --- (f) descriptor-relative store confinement: objects/ symlink cannot
+#         redirect migration or initialization into an outside directory ---
+rm -rf "$TMP/.pp" "$TMP/store-objects-outside"
+mkdir -p "$TMP/store-objects-outside" "$STORE/traces" "$STORE/journal" "$STORE/blobs"
+printf 'objects-outside-sentinel\n' > "$TMP/store-objects-outside/sentinel"
+printf 'pp-store 1\n' > "$STORE/VERSION"
+ln -s "$TMP/store-objects-outside" "$STORE/objects"
+"$PP" "$TMP/battery.pp" > "$TMP/out" 2>&1
+objects_rc=$?
+if [ "$objects_rc" -ne 0 ]; then echo "ok   objects-symlink-rejected"
+else echo "FAIL objects-symlink-rejected: battery unexpectedly succeeded"; fail=1; fi
+if cmp -s "$TMP/store-objects-outside/sentinel" \
+         <(printf 'objects-outside-sentinel\n'); then
+  echo "ok   objects-symlink-sentinel-unchanged"
+else
+  echo "FAIL objects-symlink-sentinel-unchanged"; fail=1
+fi
+if [ -e "$TMP/store-objects-outside/"* ] 2>/dev/null; then
+  outside_extra=0
+  for outside_entry in "$TMP/store-objects-outside/"*; do
+    [ "$outside_entry" = "$TMP/store-objects-outside/sentinel" ] || outside_extra=1
+  done
+  if [ "$outside_extra" -eq 0 ]; then echo "ok   objects-symlink-no-outside-additions"
+  else echo "FAIL objects-symlink-no-outside-additions"; fail=1; fi
+else
+  echo "FAIL objects-symlink-no-outside-additions: sentinel missing"; fail=1
+fi
+
+# --- (g) descriptor-relative store confinement: locks/ symlink cannot
+#         redirect lifecycle lock creation into an outside directory ---
+rm -rf "$TMP/.pp" "$TMP/store-locks-outside" "$TMP/reconcile-empty.pp"
+mkdir -p "$TMP/store-locks-outside" "$STORE/objects" "$STORE/traces" \
+  "$STORE/journal" "$STORE/blobs"
+printf 'locks-outside-sentinel\n' > "$TMP/store-locks-outside/sentinel"
+printf 'pp-store 2\n' > "$STORE/VERSION"
+ln -s "$TMP/store-locks-outside" "$STORE/locks"
+cat > "$TMP/reconcile-empty.pp" <<'EOF'
+{:tree -> {}}
+EOF
+"$PP" --grant "fs:$TMP/reconcile-target:rw" --reconcile \
+  "$TMP/reconcile-target" "$TMP/reconcile-empty.pp" > "$TMP/out" 2>&1
+locks_rc=$?
+if [ "$locks_rc" -ne 0 ]; then echo "ok   locks-symlink-rejected"
+else echo "FAIL locks-symlink-rejected: reconcile unexpectedly succeeded"; fail=1; fi
+if cmp -s "$TMP/store-locks-outside/sentinel" \
+         <(printf 'locks-outside-sentinel\n'); then
+  echo "ok   locks-symlink-sentinel-unchanged"
+else
+  echo "FAIL locks-symlink-sentinel-unchanged"; fail=1
+fi
+if [ -e "$TMP/store-locks-outside/"* ] 2>/dev/null; then
+  outside_extra=0
+  for outside_entry in "$TMP/store-locks-outside/"*; do
+    [ "$outside_entry" = "$TMP/store-locks-outside/sentinel" ] || outside_extra=1
+  done
+  if [ "$outside_extra" -eq 0 ]; then echo "ok   locks-symlink-no-outside-additions"
+  else echo "FAIL locks-symlink-no-outside-additions"; fail=1; fi
+else
+  echo "FAIL locks-symlink-no-outside-additions: sentinel missing"; fail=1
+fi
+
+# --- (e) legacy (pp-store 1) store: garbage bytes → clean wipe + migration ---
 rm -rf "$TMP/.pp"
 mkdir -p "$STORE/objects" "$STORE/traces" "$STORE/journal"
+printf 'pp-store 1\n' > "$STORE/VERSION"
 printf '\x84\x95\xa6\xbe\x00\x00\x00\x1cMarshal-era garbage\x01\x02' \
   > "$STORE/objects/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 printf '\x84\x95\xa6\xbe binary trace junk \xff\xfe' \
@@ -185,7 +247,7 @@ assert "legacy-recomputes" "COMPUTE" present
 [ -f "$STORE/traces/fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210" ] \
   && { echo "FAIL legacy-wipes-garbage-trace"; fail=1; } \
   || echo "ok   legacy-wipes-garbage-trace"
-if [ "$(cat "$STORE/VERSION" 2>/dev/null)" = "pp-store 1" ]; then echo "ok   legacy-stamped"
+if [ "$(cat "$STORE/VERSION" 2>/dev/null)" = "pp-store 2" ]; then echo "ok   legacy-stamped"
 else echo "FAIL legacy-stamped"; fail=1; fi
 grep -q "pre-migration-audit-line" "$STORE/journal/log" \
   && echo "ok   legacy-keeps-journal" \

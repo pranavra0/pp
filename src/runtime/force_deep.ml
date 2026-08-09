@@ -9,8 +9,11 @@ let rec force_deep_plain ~force (v : value) : value =
   match force v with
   | VPair (a, d) -> VPair (force_deep_plain ~force a, force_deep_plain ~force d)
   | VVector vs -> VVector (Array.map (force_deep_plain ~force) vs)
-  | VMap kvs -> VMap (List.map (fun (k, v) -> (force_deep_plain ~force k, force_deep_plain ~force v)) kvs)
-  | VSet vs -> VSet (List.map (force_deep_plain ~force) vs)
+  | VMap kvs ->
+      VMap (Identity.canonical_map_entries
+              (List.map (fun (k, v) -> (force_deep_plain ~force k, force_deep_plain ~force v)) kvs))
+  | VSet vs ->
+      VSet (Identity.canonical_set_elements (List.map (force_deep_plain ~force) vs))
   | other -> other
 
 let find_kv ~force (kvs : (value * value) list) (key : string) : value option =
