@@ -44,10 +44,11 @@ copied into the release script.
 
 ## CI and unreleased metadata
 
-Pushes and pull requests to `master` run the canonical build, architecture and
-unit gates, `dune runtest --force`, core fuzzing at count 2000, full grammar
-fuzzing at count 2000, and the clean exported-source gate. A weekly scheduled
-Ubuntu workflow runs both grammars for seeds 0, 1, 2, and 3 at count 2000.
+Pushes and pull requests to `master` run the canonical build on Ubuntu and
+macOS, architecture and unit gates, `dune runtest --force`, core fuzzing at
+count 2000, full grammar fuzzing at count 2000, and the clean exported-source
+gate. Fuzzing is part of PR validation; there is no separate scheduled-fuzz
+workflow.
 
 The current `0.2.0-dev` value in `dune-project` is unreleased development
 metadata, not a release tag or promised release version. A release must replace
