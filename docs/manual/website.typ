@@ -2,7 +2,7 @@
 
 #set document(title: "pp", author: "Pranav Rao")
 #set par(justify: true)
-#set raw(theme: "/pp.tmTheme")
+#set raw(syntaxes: "pp.sublime-syntax", theme: "/pp.tmTheme")
 
 #context {
   if target() == "html" {
