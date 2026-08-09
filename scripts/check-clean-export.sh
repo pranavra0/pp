@@ -25,7 +25,7 @@ else
 fi
 cd "$EXPORT"
 "${DUNE[@]}" build
-"${DUNE[@]}" runtest --force
+TEST_JOBS="${TEST_JOBS:-1}" "${DUNE[@]}" runtest --force
 ./_build/default/src/app/main.exe --version > version.out
 expected=$(sed -nE 's/^[[:space:]]*\(version[[:space:]]+([^ )]+)\).*/\1/p' dune-project)
 actual=$(sed -n 's/^pp v//p' version.out)

@@ -31,11 +31,22 @@ if [ "${1:-}" = "--worker" ]; then
   IFS='|' read -r kind file <<<"$2"
   scratch=$(mktemp -d)
   trap 'rm -rf "$scratch"' EXIT
+  run_bounded() {
+    local seconds="$1"
+    shift
+    if command -v timeout >/dev/null 2>&1; then
+      timeout "$seconds" "$@"
+    elif command -v perl >/dev/null 2>&1; then
+      perl -e 'alarm shift; exec @ARGV' "$seconds" "$@"
+    else
+      "$@"
+    fi
+  }
   case "$kind" in
     pp)
       scratch_home=$(mktemp -d)
       export HOME="$scratch_home"
-      "$PP" "$file" >"$scratch/actual" 2>&1
+      run_bounded "${TEST_CASE_TIMEOUT:-120}" "$PP" "$file" >"$scratch/actual" 2>&1
       ec=$?
       printf '# exit: %d\n' $ec >> "$scratch/actual"
       expected="${file}.expected"
@@ -52,7 +63,7 @@ if [ "${1:-}" = "--worker" ]; then
     sh)
       name=$(basename "$file" .sh)
       desc=$(sed -n '2s/^#[[:space:]]*//p' "$file")
-      if bash "$file" >"$scratch/out" 2>&1; then verdict=PASS; endline="ok   $name"
+      if run_bounded "${TEST_CASE_TIMEOUT:-120}" bash "$file" >"$scratch/out" 2>&1; then verdict=PASS; endline="ok   $name"
       else verdict=FAIL; endline="FAIL $name"; fi
       printf '%s\n--- %s — %s ---\n' "$verdict" "$name" "$desc"
       cat "$scratch/out"
@@ -88,11 +99,19 @@ JOBS="${TEST_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
 # own file under $RESULTS.
 tagged=()
 for i in "${!jobs[@]}"; do tagged+=("$(printf '%03d' "$i")|${jobs[$i]}"); done
-printf '%s\n' "${tagged[@]}" |
-  xargs -P "$JOBS" -I{} bash -c '
-    line="$1"; idx="${line%%|*}"; spec="${line#*|}"
-    "$0" --worker "$spec" >"$RESULTS/$idx.out" 2>&1
-  ' "$SELF" "{}"
+if [ "$JOBS" -eq 1 ]; then
+  for line in "${tagged[@]}"; do
+    idx="${line%%|*}"; spec="${line#*|}"
+    printf 'running test %s\n' "$spec" >&2
+    "$SELF" --worker "$spec" >"$RESULTS/$idx.out" 2>&1
+  done
+else
+  printf '%s\n' "${tagged[@]}" |
+    xargs -P "$JOBS" -I{} bash -c '
+      line="$1"; idx="${line%%|*}"; spec="${line#*|}"
+      "$0" --worker "$spec" >"$RESULTS/$idx.out" 2>&1
+    ' "$SELF" "{}"
+fi
 
 # ---- Replay results in enumeration order; a leading FAIL line flips the exit
 # code.
