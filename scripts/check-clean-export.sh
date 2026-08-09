@@ -6,15 +6,24 @@ EXPORT=$(mktemp -d)
 trap 'rm -rf "$EXPORT"' EXIT
 
 # Archive and extract in a directory that cannot contain the checkout's .git.
-git -C "$ROOT" archive HEAD | tar -x -C "$EXPORT"
-[ ! -e "$EXPORT/.git" ] || { echo 'clean export unexpectedly contains .git' >&2; exit 1; }
+if ! git -C "$ROOT" archive HEAD | tar -x -C "$EXPORT"; then
+  printf '::error title=clean-export::failed to create clean archive (root=%s export=%s)\n' "$ROOT" "$EXPORT"
+  exit 1
+fi
+if [ -e "$EXPORT/.git" ]; then
+  printf '::error title=clean-export::clean export unexpectedly contains .git (export=%s)\n' "$EXPORT"
+  exit 1
+fi
 
 if DUNE=$(command -v dune 2>/dev/null); then
   :
 elif command -v opam >/dev/null 2>&1; then
-  DUNE=$(opam exec -- which dune)
+  DUNE=$(opam exec -- which dune) || {
+    printf '::error title=clean-export::could not locate dune through opam (root=%s export=%s)\n' "$ROOT" "$EXPORT"
+    exit 1
+  }
 else
-  echo 'could not locate dune' >&2
+  printf '::error title=clean-export::could not locate dune (root=%s export=%s)\n' "$ROOT" "$EXPORT"
   exit 1
 fi
 cd "$EXPORT"
