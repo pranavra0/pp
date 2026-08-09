@@ -7,7 +7,7 @@
 #set document(title: "pp reference manual", author: "Pranav Rao")
 #set heading(numbering: "1.1")
 #set par(justify: true)
-#set raw(theme: "/pp.tmTheme")  // muted, Zig-like syntax colours
+#set raw(syntaxes: "pp.sublime-syntax", theme: "/pp.tmTheme")
 
 // HTML export: inline the stylesheet, dark-mode toggle, and script.
 // read() makes style.css and dark-mode.js tracked dependencies, so a CSS or

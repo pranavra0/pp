@@ -39,6 +39,12 @@
   --nav-link-color: #ccc;
 }
 
+[data-theme="dark"] pre code span[style*="color: #333333"] { color: #d6deeb !important; }
+[data-theme="dark"] pre code span[style*="color: #900000"] { color: #ff7b72 !important; }
+[data-theme="dark"] pre code span[style*="color: #dd1144"] { color: #f2cc60 !important; }
+[data-theme="dark"] pre code span[style*="color: #005c5c"] { color: #56d4dd !important; }
+[data-theme="dark"] pre code span[style*="color: #545454"] { color: #8b949e !important; }
+
 body {
   font-family: system-ui, -apple-system, Roboto, "Segoe UI", sans-serif;
   line-height: 1.5;

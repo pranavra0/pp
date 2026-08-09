@@ -39,6 +39,12 @@
   --nav-link-color: #ccc;
 }
 
+[data-theme="dark"] pre code span[style*="color: #333333"] { color: #d6deeb !important; }
+[data-theme="dark"] pre code span[style*="color: #900000"] { color: #ff7b72 !important; }
+[data-theme="dark"] pre code span[style*="color: #dd1144"] { color: #f2cc60 !important; }
+[data-theme="dark"] pre code span[style*="color: #005c5c"] { color: #56d4dd !important; }
+[data-theme="dark"] pre code span[style*="color: #545454"] { color: #8b949e !important; }
+
 body {
   font-family: system-ui, -apple-system, Roboto, "Segoe UI", sans-serif;
   line-height: 1.5;
@@ -177,7 +183,7 @@ strong { color: var(--text-color); }
     setTheme(root.getAttribute('data-theme') !== 'dark');
   });
 })();
-</script><h1>pp</h1><nav class="site-nav"><a href="index.html">pp</a><a href="manual.html">Manual</a></nav><p>pp is a content-addressed, capability-scoped language for computations that should be reusable, inspectable, and safe to move.</p><p>The <a href="manual.html">reference manual</a> is the source of truth. It contains the language, runtime, domains, distribution, CLI, standard library, and tested examples. The <a href="pp-manual.pdf">PDF</a> is the same manual in a printable format.</p><h3>The short version</h3><pre><code data-lang="text">value → node → desired state → reconciled world</code></pre><p>Values have content identity. Nodes reuse computations across processes. Capabilities make authority explicit. Domains apply desired state and repair drift. Scheduling chooses where a force runs without changing the program’s identity.</p><h3>One graph, several jobs</h3><p>This is the scale to keep in mind: source files become cached artifacts, the artifacts become desired state, the filesystem domain deploys them, and the same graph can be forced again after a source edit or a deleted output.</p><div><div class="ex-file">release-pipeline.sh</div><pre><code data-lang="bash"><em><span style="color: #545454">#</span></em><em><span style="color: #545454">!/bin/sh</span></em>
+</script><h1>pp</h1><nav class="site-nav"><a href="index.html">pp</a><a href="manual.html">Manual</a></nav><p>pp is a content-addressed, capability-scoped language for computations that should be reusable, inspectable, and safe to move.</p><p>The <a href="manual.html">reference manual</a> contains the language, runtime, domains, distribution, CLI, standard library, and tested examples. The <a href="pp-manual.pdf">PDF</a> is the same manual in a printable format.</p><h3>The short version</h3><pre><code data-lang="text">value → node → desired state → reconciled world</code></pre><p>Values have content identity. Nodes reuse computations across processes. Capabilities make authority explicit. Domains apply desired state and repair drift. Scheduling chooses where a force runs without changing the program’s identity.</p><h3>Programming language as a graph</h3><p>This is the scale to keep in mind: source files become cached artifacts, the artifacts become desired state, the filesystem domain deploys them, and the same graph can be forced again after a source edit or a deleted output.</p><div><div class="ex-file">release-pipeline.sh</div><pre><code data-lang="bash"><em><span style="color: #545454">#</span></em><em><span style="color: #545454">!/bin/sh</span></em>
 <em><span style="color: #545454">#</span></em><em><span style="color: #545454"> One graph: source files become cached artifacts, then a desired tree. The</span></em>
 <em><span style="color: #545454">#</span></em><em><span style="color: #545454"> filesystem domain applies that tree and repairs drift. The transcript keeps</span></em>
 <em><span style="color: #545454">#</span></em><em><span style="color: #545454"> the high-level events and hides temporary paths.</span></em>
@@ -189,22 +195,20 @@ OUT<strong><span style="color: #333333">=</span></strong><span style="color: #dd
 <span style="color: #900000">printf</span><span style="color: #900000"> </span><span style="color: #dd1144">'</span><span style="color: #dd1144">main-v1\n</span><span style="color: #dd1144">'</span><span style="color: #900000"> </span><strong><span style="color: #333333">></span></strong><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">$</span><span style="color: #dd1144">SRC</span><span style="color: #dd1144">/main.src</span><span style="color: #dd1144">"</span>
 <span style="color: #900000">printf</span><span style="color: #900000"> </span><span style="color: #dd1144">'</span><span style="color: #dd1144">util-v1\n</span><span style="color: #dd1144">'</span><span style="color: #900000"> </span><strong><span style="color: #333333">></span></strong><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">$</span><span style="color: #dd1144">SRC</span><span style="color: #dd1144">/util.src</span><span style="color: #dd1144">"</span>
 
-<span style="color: #900000">cat</span><span style="color: #900000"> </span><strong><span style="color: #333333">></span></strong><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">$</span><span style="color: #dd1144">HOME</span><span style="color: #dd1144">/release.pp</span><span style="color: #dd1144">"</span><span style="color: #900000"> </span><strong><span style="color: #333333">&lt;&lt;</span></strong><strong><span style="color: #333333">EOF</span></strong>
-<span style="color: #dd1144">def compile(path, name) {</span>
-<span style="color: #dd1144">  node {</span>
-<span style="color: #dd1144">    print(string-append("compile ", name))</span>
-<span style="color: #dd1144">    blob(string-append(slurp(path), "compiled</span><span style="color: #005c5c">\\</span><span style="color: #dd1144">n"))</span>
-<span style="color: #dd1144">  }</span>
-<span style="color: #dd1144">}</span>
+<span style="color: #900000">cat</span><span style="color: #900000"> </span><strong><span style="color: #333333">></span></strong><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">$</span><span style="color: #dd1144">HOME</span><span style="color: #dd1144">/release.pp</span><span style="color: #dd1144">"</span><span style="color: #900000"> </span><strong><span style="color: #333333">&lt;&lt;</span></strong><strong><span style="color: #333333">EOF</span></strong></code></pre><pre><code data-lang="pp"><strong><span style="color: #333333">def</span></strong> <span style="color: #900000">compile</span>(path, name) {
+  <strong><span style="color: #333333">node</span></strong> {
+    <span style="color: #900000">print</span>(<span style="color: #900000">string-append</span>(<span style="color: #dd1144">"compile "</span>, name))
+    <span style="color: #900000">blob</span>(<span style="color: #900000">string-append</span>(<span style="color: #900000">slurp</span>(path), <span style="color: #dd1144">"compiled</span><span style="color: #005c5c">\\</span><span style="color: #dd1144">n"</span>))
+  }
+}
 
-<span style="color: #dd1144">let main = compile("</span><span style="color: #dd1144">$</span><span style="color: #dd1144">SRC</span><span style="color: #dd1144">/main.src", "main")</span>
-<span style="color: #dd1144">let util = compile("</span><span style="color: #dd1144">$</span><span style="color: #dd1144">SRC</span><span style="color: #dd1144">/util.src", "util")</span>
-<span style="color: #dd1144">{:tree -> {</span>
-<span style="color: #dd1144">  "bin" -> {:kind -> :directory, :mode -> 493},</span>
-<span style="color: #dd1144">  "bin/main.o" -> {:kind -> :file, :mode -> 420, :blob -> main},</span>
-<span style="color: #dd1144">  "bin/util.o" -> {:kind -> :file, :mode -> 420, :blob -> util}</span>
-<span style="color: #dd1144">}}</span>
-<strong><span style="color: #333333">EOF</span></strong>
+<strong><span style="color: #333333">let</span></strong> main = <span style="color: #900000">compile</span>(<span style="color: #dd1144">"$SRC/main.src"</span>, <span style="color: #dd1144">"main"</span>)
+<strong><span style="color: #333333">let</span></strong> util = <span style="color: #900000">compile</span>(<span style="color: #dd1144">"$SRC/util.src"</span>, <span style="color: #dd1144">"util"</span>)
+{<span style="color: #005c5c">:tree</span> <strong><span style="color: #333333">-></span></strong> {
+  <span style="color: #dd1144">"bin"</span> <strong><span style="color: #333333">-></span></strong> {<span style="color: #005c5c">:kind</span> <strong><span style="color: #333333">-></span></strong> <span style="color: #005c5c">:directory</span>, <span style="color: #005c5c">:mode</span> <strong><span style="color: #333333">-></span></strong> <span style="color: #005c5c">493</span>},
+  <span style="color: #dd1144">"bin/main.o"</span> <strong><span style="color: #333333">-></span></strong> {<span style="color: #005c5c">:kind</span> <strong><span style="color: #333333">-></span></strong> <span style="color: #005c5c">:file</span>, <span style="color: #005c5c">:mode</span> <strong><span style="color: #333333">-></span></strong> <span style="color: #005c5c">420</span>, <span style="color: #005c5c">:blob</span> <strong><span style="color: #333333">-></span></strong> main},
+  <span style="color: #dd1144">"bin/util.o"</span> <strong><span style="color: #333333">-></span></strong> {<span style="color: #005c5c">:kind</span> <strong><span style="color: #333333">-></span></strong> <span style="color: #005c5c">:file</span>, <span style="color: #005c5c">:mode</span> <strong><span style="color: #333333">-></span></strong> <span style="color: #005c5c">420</span>, <span style="color: #005c5c">:blob</span> <strong><span style="color: #333333">-></span></strong> util}
+}}</code></pre><pre><code data-lang="bash"><span style="color: #900000">EOF</span>
 
 <span style="color: #900000">run</span>() {
   <span style="color: #dd1144">"</span><span style="color: #dd1144">$</span><span style="color: #dd1144">PP</span><span style="color: #dd1144">"</span><span style="color: #900000"> --</span><span style="color: #900000">grant</span><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">fs:</span><span style="color: #dd1144">$</span><span style="color: #dd1144">SRC</span><span style="color: #dd1144">:ro</span><span style="color: #dd1144">"</span><span style="color: #900000"> --</span><span style="color: #900000">grant</span><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">fs:</span><span style="color: #dd1144">$</span><span style="color: #dd1144">OUT</span><span style="color: #dd1144">:rw</span><span style="color: #dd1144">"</span><span style="color: #900000"> --</span><span style="color: #900000">reconcile</span><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">$</span><span style="color: #dd1144">OUT</span><span style="color: #dd1144">"</span><span style="color: #900000"> </span><span style="color: #dd1144">"</span><span style="color: #dd1144">$</span><span style="color: #dd1144">HOME</span><span style="color: #dd1144">/release.pp</span><span style="color: #dd1144">"</span><span style="color: #900000"> </span><span style="color: #005c5c">2</span><strong><span style="color: #333333">>&amp;</span></strong><span style="color: #005c5c">1</span><span style="color: #900000"> </span><span style="color: #900000">\</span>
@@ -253,8 +257,8 @@ $ pp --reconcile RELEASE release.pp       # drift repair
 main artifact: main-v2
 compiled
 util artifact: util-v1
-compiled</pre></div><h3>A small example</h3><pre><code data-lang="pp">def compile(source) {
-  node { string-append(source, <span style="color: #dd1144">"</span><span style="color: #dd1144">.o</span><span style="color: #dd1144">"</span>) }
+compiled</pre></div><h3>A small example</h3><pre><code data-lang="pp"><strong><span style="color: #333333">def</span></strong> <span style="color: #900000">compile</span>(source) {
+  <strong><span style="color: #333333">node</span></strong> { <span style="color: #900000">string-append</span>(source, <span style="color: #dd1144">".o"</span>) }
 }
 
-print(force(compile(<span style="color: #dd1144">"</span><span style="color: #dd1144">main.c</span><span style="color: #dd1144">"</span>)))</code></pre><p>Read the <a href="manual.html">manual</a> when you need a form, flag, or runtime API.</p></body></html>
+<span style="color: #900000">print</span>(<strong><span style="color: #333333">force</span></strong>(<span style="color: #900000">compile</span>(<span style="color: #dd1144">"main.c"</span>)))</code></pre><p>Read the <a href="manual.html">manual</a> when you need a form, flag, or runtime API.</p></body></html>

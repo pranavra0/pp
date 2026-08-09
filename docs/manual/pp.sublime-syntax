@@ -1,0 +1,42 @@
+%YAML 1.2
+---
+name: pp
+file_extensions:
+  - pp
+scope: source.pp
+
+contexts:
+  main:
+    - include: comments
+    - include: strings
+    - match: '\b(?:true|false|nil)\b'
+      scope: constant.language.pp
+    - match: '\b(?:0x[0-9A-Fa-f]+|[0-9]+(?:\.[0-9]+)?)\b'
+      scope: constant.numeric.pp
+    - match: '\b(def|fn|node)\s+([A-Za-z_][A-Za-z0-9_!?*->]*)'
+      captures:
+        1: keyword.control.pp
+        2: entity.name.function.pp
+    - match: '\b(?:let\*?|if|else|match|do|with|module|quote|quasiquote|unquote|unquote-splicing|perform|delay|force|node|try|catch|load|load-module|import|assert|reconcile|reads|needs|type|macro|set|and|or|not)\b'
+      scope: keyword.control.pp
+    - match: ':[A-Za-z_][A-Za-z0-9_!?-]*'
+      scope: constant.language.pp
+    - match: '\b[A-Za-z_][A-Za-z0-9_!?*->]*\s*(?=\()'
+      scope: meta.function-call.pp
+    - match: '(?:->|=>|<-|\|>|\.\.\.)'
+      scope: keyword.control.pp
+
+  comments:
+    - match: '#.*$'
+      scope: comment.line.number-sign.pp
+
+  strings:
+    - match: '"'
+      push: double-string
+
+  double-string:
+    - meta_scope: string.quoted.double.pp
+    - match: '\\(?:[\\"nrt]|u\{[0-9A-Fa-f]+\})'
+      scope: constant.character.escape.pp
+    - match: '"'
+      pop: true
