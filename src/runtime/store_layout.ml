@@ -15,7 +15,14 @@ external clear_dir_c : string -> unit = "pp_store_clear_dir"
 
 let absolute path =
   if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path else path
-let of_root root = { root = absolute root }
+let rec canonical_root path =
+  if Sys.file_exists path then Unix.realpath path
+  else
+    let parent = Filename.dirname path in
+    if parent = path then path
+    else Filename.concat (canonical_root parent) (Filename.basename path)
+
+let of_root root = { root = canonical_root (absolute root) }
 let root t = t.root
 let area_name = function
   | Objects -> "objects" | Traces -> "traces" | Blobs -> "blobs"
