@@ -6,10 +6,10 @@ type custom_plan = { mode : batch_mode; batches : int list list }
 
 type job = {
   j_key : Identity_types.Node_key.t;
-  j_run : unit -> Core_model.value;
   j_width : int;
-  j_thunk : Core_model.thunk;
+  j_data_closed : bool;
 }
+type runner = job -> unit
 
 type t
 type handler
@@ -17,7 +17,7 @@ type handler
 val handler :
   name:string ->
   redundancy:int ->
-  dispatch:(job list -> unit) ->
+  dispatch:(runner -> job list -> unit) ->
   cancel:(unit -> unit) -> handler
 val handler_name : handler -> string
 val serial : handler
@@ -34,5 +34,5 @@ val current_handler : t -> handler
 val install : t -> handler -> unit
 val schedules_batches : t -> bool
 val redundancy : t -> int
-val dispatch_batch : t -> job list -> unit
+val dispatch_batch : t -> run:runner -> job list -> unit
 val with_signal_handler : t -> f:('a -> 'b) -> 'a -> 'b

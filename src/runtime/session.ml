@@ -14,8 +14,6 @@ type evaluation_state = {
   node_thunks : (Identity_types.Node_key.t, Core_model.thunk) Hashtbl.t;
   node_keys : (string, Identity_types.Node_key.t) Hashtbl.t;
   node_dependents : (string, Identity_types.Node_key.t list) Hashtbl.t;
-  mutable eval_depth : int;
-  mutable force_depth : int;
   mutable force_path : Core_model.thunk list;
   mutable cache_bust : int;
 }
@@ -34,6 +32,13 @@ type run_state = {
   preseeded_run_pins : (string, string) Hashtbl.t;
   mutable events : Core_model.value list;
   mutable reporters : Core_model.value list;
+  mutable runtime_manifest : Core_model.value option;
+}
+type node_runtime = {
+  scheduler : Scheduler.t;
+  executor : Executor.t option;
+  remote_dispatch : (member:string -> Scheduler.job list -> unit) option;
+  schedule_locked : bool;
 }
 
 type fenced_state = {
@@ -45,28 +50,20 @@ type fenced_state = {
 
 type t = {
   operations : Evaluator_ops.t;
-  scheduler : Scheduler.t;
-  executor : Executor.t option;
-  remote_dispatch : (member:string -> Scheduler.job list -> unit) option;
-  schedule_locked : bool;
+  node_runtime : node_runtime;
   evaluation : evaluation_state;
   domains : domain_state;
   run : run_state;
   fenced : fenced_state;
-  mutable runtime_manifest : Core_model.value option;
 }
 
 let create ?executor ?remote_dispatch ?(schedule_locked = false) ~scheduler operations = {
   operations;
-  scheduler;
-  executor;
-  remote_dispatch;
-  schedule_locked;
+  node_runtime = { scheduler; executor; remote_dispatch; schedule_locked };
   evaluation = {
     thunks = Hashtbl.create 1024; macros = Hashtbl.create 16; gensym = 0;
     node_thunks = Hashtbl.create 256; node_keys = Hashtbl.create 256;
     node_dependents = Hashtbl.create 256;
-    eval_depth = 0; force_depth = 0;
     force_path = [];
     cache_bust = 0;
   };
@@ -78,19 +75,18 @@ let create ?executor ?remote_dispatch ?(schedule_locked = false) ~scheduler oper
     sealed_pins = Hashtbl.create 16; observations = [];
     wanted_nodes = Hashtbl.create 64;
     run_pins = Hashtbl.create 64; preseeded_run_pins = Hashtbl.create 64;
-    events = []; reporters = [];
+    events = []; reporters = []; runtime_manifest = None;
   };
   fenced = {
     fenced_actions = []; fenced_epoch_nonce = 0; fenced_epoch = "";
     fenced_epoch_recovered = false;
   };
-  runtime_manifest = None;
 }
 let force t = t.operations.core.force
 let core_operations t = t.operations.core
 let node_operations t = t.operations.node
-let scheduler t = t.scheduler
-let executor t = t.executor
+let scheduler t = t.node_runtime.scheduler
+let executor t = t.node_runtime.executor
 let call t ~env fn args =
   match fn with
   | Core_model.VClosure c ->
@@ -122,12 +118,13 @@ let begin_evaluation ~retain_thunks t =
   end;
   Hashtbl.clear t.evaluation.macros; t.evaluation.gensym <- 0;
   Hashtbl.clear t.domains.domains;
-  t.evaluation.eval_depth <- 0; t.evaluation.force_depth <- 0;
   t.evaluation.force_path <- [];
   t.evaluation.cache_bust <- 0;
   reset_pass_state t;
-  t.runtime_manifest <- None;
-  t.run.reporters <- []
+  t.run.runtime_manifest <- None;
+  t.run.reporters <- [];
+  if t.fenced.fenced_epoch_recovered then t.fenced.fenced_epoch_recovered <- false
+  else t.fenced.fenced_epoch <- ""
 let begin_watch t =
   Hashtbl.clear t.evaluation.node_thunks;
   Hashtbl.clear t.evaluation.node_keys;
@@ -158,10 +155,10 @@ let add_event t event = t.run.events <- event :: t.run.events
 let events t = List.rev t.run.events
 let register_reporter t reporter = t.run.reporters <- reporter :: t.run.reporters
 let reporters t = List.rev t.run.reporters
-let set_runtime_manifest t value = t.runtime_manifest <- Some value
-let runtime_manifest t = t.runtime_manifest
-let remote_dispatch t = t.remote_dispatch
-let schedule_locked t = t.schedule_locked
+let set_runtime_manifest t value = t.run.runtime_manifest <- Some value
+let runtime_manifest t = t.run.runtime_manifest
+let remote_dispatch t = t.node_runtime.remote_dispatch
+let schedule_locked t = t.node_runtime.schedule_locked
 let add_wanted_node t key = Hashtbl.replace t.run.wanted_nodes key ()
 let wanted_nodes t =
   Hashtbl.to_seq_keys t.run.wanted_nodes |> List.of_seq |> List.sort compare
@@ -193,14 +190,6 @@ let add_node_dependent t id key =
   if not (List.mem key existing) then
     Hashtbl.replace t.evaluation.node_dependents id (key :: existing)
 let iter_node_dependents t f = Hashtbl.iter f t.evaluation.node_dependents
-let force_depth t = t.evaluation.force_depth
-let set_force_depth t n = t.evaluation.force_depth <- n
-let incr_force_depth t = t.evaluation.force_depth <- t.evaluation.force_depth + 1
-let decr_force_depth t = t.evaluation.force_depth <- t.evaluation.force_depth - 1
-let eval_depth t = t.evaluation.eval_depth
-let set_eval_depth t n = t.evaluation.eval_depth <- n
-let incr_eval_depth t = t.evaluation.eval_depth <- t.evaluation.eval_depth + 1
-let decr_eval_depth t = t.evaluation.eval_depth <- t.evaluation.eval_depth - 1
 let force_path t = t.evaluation.force_path
 let set_force_path t path = t.evaluation.force_path <- path
 let next_cache_bust t =

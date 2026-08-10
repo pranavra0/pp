@@ -243,8 +243,8 @@ let member_env (member_home : string) : string array =
 
    Never raises: any failure anywhere in this pipeline (unreachable member,
    a nonzero/crashed subprocess, a malformed reply, a failed pull) leaves
-   the affected keys as an ordinary store Miss — the caller (force_deep's
-   plain recursive walk) computes them in-process exactly like a dead local
+   the affected keys as an ordinary store Miss — the caller's local
+   work-queue force path computes them in-process exactly like a dead local
    race/parallel worker. Worker/member failure degrades to local, never a
    wrong answer or a hang. *)
 let ship_and_pull host invocation ~(member_home : string) (closed : Scheduler.job list) : unit =
@@ -318,15 +318,9 @@ let ship_and_pull host invocation ~(member_home : string) (closed : Scheduler.jo
              | Transport.RMiss _ | Transport.RDeny _ -> ())
   )
 
-(* The scheduler dispatcher filters [jobs] to the
-   data-closed subset (contract point 2 — the codec's non-data predicate,
-   Evaluator.is_data_closed, at this new decision point) and ships only
-   those; every non-data-closed job is left untouched here and falls
-   through to the ordinary local Miss path in the caller (force_deep_plain)
-   — "filter them back into the local pool" IS "don't touch them", since
-   that pool is simply whatever runs next in-process. An unknown member, or
-   any exception anywhere in the pipeline, degrades the WHOLE batch to
-   local the same way (never a partial-crash, never a hang). *)
+(* Ship the data-closed jobs selected by the scheduler. Jobs that carry
+   non-data dependencies remain local; transport failures leave their keys
+   for the caller's normal cache miss path. *)
 let dispatch_remote host invocation ~(member : string) (jobs : Scheduler.job list) : unit =
   try
     match find_member_root member with
@@ -340,16 +334,12 @@ let dispatch_remote host invocation ~(member : string) (jobs : Scheduler.job lis
              Printf.eprintf "pp: warning: remote: %s; batch stays local\n%!"
                message
          | Ok member_home ->
-             let closed =
-               List.filter (fun job ->
-                 Evaluator.is_data_closed job.Scheduler.j_thunk) jobs
-             in
-             if closed <> [] then
-               ship_and_pull host invocation ~member_home closed)
-  with error ->
-    Printf.eprintf
-      "pp: warning: remote dispatch to %s failed (%s); batch stays local\n%!"
-      member (Printexc.to_string error)
+             let closed = List.filter (fun j -> j.Scheduler.j_data_closed) jobs in
+             if closed <> [] then ship_and_pull host invocation ~member_home closed)
+  with e ->
+    Cache_policy.diagnose (Runtime_context.cache ())
+      "remote: dispatch to %s failed (%s) — batch stays local"
+      member (Printexc.to_string e)
 
 let dispatcher host invocation : member:string -> Scheduler.job list -> unit =
   dispatch_remote host invocation

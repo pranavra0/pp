@@ -57,6 +57,7 @@ let operations = {
     key_of = (fun _ -> Identity_types.Node_key.of_string "node");
     run_body = (fun ~key:_ ~run _ -> run ());
     resolve_hit = (fun _ _ -> false);
+    data_closed = (fun _ -> true);
   };
 }
 

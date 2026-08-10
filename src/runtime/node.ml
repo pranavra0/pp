@@ -117,21 +117,17 @@ let persist ~(key : Key.t) ~(reads : (string * string) list)
        Identity_types.Observed_hash.of_digest hash)) reads);
   result_hash
 
+let persist_or_reset t ~key ~reads ~outcome result =
+  try persist ~key ~reads ~outcome result with e ->
+    t.thunk_status <- Unevaluated;
+    raise e
+
 let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
   t.thunk_status <- Evaluating;
   let captured_caps = Evaluator_thunks.captured_capabilities t in
   let tail_depth = Dynamic_scope.tail_capability_depth () in
   let frame : (string * string) list ref = ref [] in
   let sandbox_slot = ref None in
-  let persist_failure value =
-    try
-      ignore (persist ~key ~reads:(List.rev !frame)
-        ~outcome:Trace_repository.Failed value);
-      t.thunk_status <- Unevaluated
-    with e ->
-      t.thunk_status <- Unevaluated;
-      raise e
-  in
   Fun.protect
     ~finally:(fun () -> match !sandbox_slot with Some d -> Sandbox.remove_tree d | None -> ())
     (fun () ->
@@ -153,13 +149,18 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
         | Error error as e ->
             (match cache_decision error with
              | Cacheable ->
-                 persist_failure (VString (string_of_t error));
+                 ignore (persist_or_reset t ~key ~reads:(List.rev !frame)
+                   ~outcome:Trace_repository.Failed
+                   (VString (string_of_t error)));
+                 t.thunk_status <- Unevaluated;
                  raise e
              | Do_not_cache ->
                  t.thunk_status <- Unevaluated;
                  raise e)
         | Failure msg ->
-            persist_failure (VString msg);
+            ignore (persist_or_reset t ~key ~reads:(List.rev !frame)
+              ~outcome:Trace_repository.Failed (VString msg));
+            t.thunk_status <- Unevaluated;
             raise (Error (Evaluator (diagnostic msg)))
         | e ->
             t.thunk_status <- Unevaluated;
@@ -211,7 +212,7 @@ let lookup_hit ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
     ~replay:Observation.replay
     ~key:cache_key ~authorized)
 let force ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
-    ~(run : unit -> value) (t : thunk) : value =
+    ~(data_closed : bool) ~(run : unit -> value) (t : thunk) : value =
   Stabilize.register_node_key ~key ~thunk:t;
   let nested = Effect.perform Dynamic_scope.In_node in
   let run_force () =
@@ -223,11 +224,11 @@ let force ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
         if Scheduler.schedules_batches scheduler || width > 1 then
           let job = {
             Scheduler.j_key = key;
-            j_run = (fun () -> rebuild ~key ~run t);
             j_width = width;
-            j_thunk = t;
+            j_data_closed = data_closed;
           } in
-          Scheduler.dispatch_batch scheduler [job];
+          Scheduler.dispatch_batch scheduler
+            ~run:(fun _ -> ignore (rebuild ~key ~run t)) [job];
           (match lookup_hit ~key ~authorized t with
            | Some value -> value
            | None -> rebuild ~key ~run t)

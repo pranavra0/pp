@@ -1,28 +1,9 @@
 open Pp_kernel
-(* pp scheduler — fork-at-dispatch process-pool scheduler for persistent
-   node misses.
-
-   Worker model: fork() at the dispatch
-   point inherits ALL ambient state (handler_stack closures, capabilities,
-   config, thunk memo) byte-identically via COW — no scope-state refactor and
-   no marshaling is needed. A forked worker runs the EXACT function
-   the serial miss arm calls, [Node.rebuild] (passed in as
-   [j_run] by the caller) — there is no second "evaluate node in worker"
-   code path. The child exits 0 on success / 1 on error; the failing trace
-   was already persisted by [Node.rebuild] itself. The parent never
-   reads a value from a child — it reaps and falls through to the ordinary
-   cache lookup in the active runtime context: the child's trace+object make
-   it a hit, a dead child makes it a miss and the parent recomputes in-process.
-   degrades to "computed serially," never a wrong answer, never a hang.
-
-   No value, closure, capability, or handler ever crosses a process
-   boundary this way: the store (~/.pp/store) is pp's only cross-process
-   value channel, exactly as it already is for separate `pp` invocations. *)
-
-(* [Remote member]: remote placement — the same handler, over the cluster
-   transport, to a named cluster member (ambient config,
-   ~/.pp/cluster/members — never --grant, an address is not an authority
-   ceiling). *)
+(* Scheduler placement for persistent-node jobs. A job carries identity and
+   placement metadata; the caller supplies the runner for local execution.
+   Serial execution is the reference adapter. Process and remote adapters
+   use the store as their result channel and fall back to the caller's
+   ordinary miss path when a worker does not produce a hit. *)
 type policy = Serial | Parallel of int | Race of int | Remote of string
 
 type batch_mode = Serial_batch | Parallel_batch of int | Race_batch of int
@@ -31,20 +12,14 @@ type custom_plan = { mode : batch_mode; batches : int list list }
 
 type job = {
   j_key : Identity_types.Node_key.t;
-  j_run : unit -> Core_model.value;
-  (* Redundancy for this job: 1 for an ordinary batch member, N for a
-     singleton force_node miss raced under [Race n] (N identical (key,run)
-     forks — sound because nodes are deterministic; the first
-     exit-0 wins). *)
   j_width : int;
-  (* The thunk this job forces. Every existing call site already has it in
-     scope; the narrow remote dispatcher uses it to test data-closedness. *)
-  j_thunk : Core_model.thunk;
+  j_data_closed : bool;
 }
+type runner = job -> unit
 type handler = {
   h_name : string;
   h_redundancy : int;
-  h_dispatch : t -> job list -> unit;
+  h_dispatch : t -> runner -> job list -> unit;
   h_cancel : unit -> unit;
 }
 and t = {
@@ -58,14 +33,14 @@ and t = {
 let handler ~name ~redundancy ~dispatch ~cancel = {
   h_name = name;
   h_redundancy = max 1 redundancy;
-  h_dispatch = (fun _ jobs -> dispatch jobs);
+  h_dispatch = (fun _ run jobs -> dispatch run jobs);
   h_cancel = cancel;
 }
 
 let handler_name handler = handler.h_name
 
 let serial_handler = handler ~name:"serial" ~redundancy:1
-    ~dispatch:(fun jobs -> List.iter (fun j -> ignore (j.j_run ())) jobs)
+    ~dispatch:(fun run jobs -> List.iter run jobs)
     ~cancel:ignore
 let serial = serial_handler
 
@@ -156,31 +131,17 @@ let flush_before_fork () =
   (try flush stdout with _ -> ());
   (try flush stderr with _ -> ())
 
-(* Runs entirely inside the child. [j.j_run] IS [Node.rebuild]
-   partially applied by the caller — the exact function the serial miss arm
-   calls; [Node.rebuild] itself persists the result object and trace on success
-   or the failing trace before returning or raising, so there is
-   nothing left for the child to persist here. The child must flush its OWN
-   stdout/stderr (anything the node body printed via `perform log` or
-   otherwise) before terminating: we deliberately call [Unix._exit], which
-   — unlike [exit] — skips OCaml's [at_exit] hooks (including the stdlib's
-   own channel-flush hook), so a child that didn't flush explicitly would
-   silently drop its buffered output. *)
-let run_child (j : job) : unit =
-  let status = try ignore (j.j_run ()); 0 with _ -> 1 in
+let run_child (run : runner) (j : job) : unit =
+  let status = try run j; 0 with _ -> 1 in
   (try flush stdout with _ -> ());
   (try flush stderr with _ -> ());
   Unix._exit status
 
-(* Deterministic, load-independent observability of actual fan-out: what
-   matters is "nodes fork to workers," a fork COUNT, not a wall-clock
-   time (wall-clock masked a regression once: a shadowed `map` silently
-   defeated batching and a timing-only test read it as "no spare cores").
-   PP_FORK_LOG=<path> appends one line per fork; a test asserts the count. *)
-let fork_job (scheduler : t) (j : job) : int =
+(* The fork adapter records fan-out when PP_FORK_LOG is enabled. *)
+let fork_job (scheduler : t) (run : runner) (j : job) : int =
   flush_before_fork ();
   match Unix.fork () with
-  | 0 -> run_child j; Unix._exit 1 (* unreachable: run_child always _exit's *)
+  | 0 -> run_child run j; Unix._exit 1
   | pid ->
       scheduler.fork_count <- scheduler.fork_count + 1;
       (match scheduler.fork_log_path with
@@ -192,17 +153,10 @@ let fork_job (scheduler : t) (j : job) : int =
        | None -> ());
       Hashtbl.replace scheduler.live_children pid j.j_key; pid
 
-(* [Parallel n] / [Race n]: a wave loop. Each job is expanded into
-   [j_width] fork slots (>1 only for a singleton race — all such forks
-   share [j_key]). Concurrency is capped at [n]; a completed slot frees room
-   for the next queued fork. The FIRST successful (exit 0) child for a given
-   key marks that key won: any other STILL-LIVE child sharing the key is a
-   race loser and is killed (SIGTERM->SIGKILL) — safe by construction, since
-   `(fenced ...)` cannot appear inside a node body, so no
-   non-convergent action can ever be half-done inside a killed node. Once a
-   key has won, remaining QUEUED (not yet forked) duplicates of that key are
-   skipped rather than forked at all. *)
-let run_concurrent (scheduler : t) (limit : int) (jobs : job list) : unit =
+(* Run a bounded wave of local jobs. Race redundancy reuses the same key;
+   the first successful worker wins and remaining workers for that key stop. *)
+let run_concurrent (scheduler : t) (run : runner)
+    (limit : int) (jobs : job list) : unit =
   let limit = max 1 limit in
   let queue = Queue.create () in
   List.iter (fun j -> for _ = 1 to max 1 j.j_width do Queue.push j queue done) jobs;
@@ -245,7 +199,7 @@ let run_concurrent (scheduler : t) (limit : int) (jobs : job list) : unit =
       if Hashtbl.mem succeeded_keys j.j_key then ()
         (* a duplicate of an already-won race: never fork it *)
       else begin
-        ignore (fork_job scheduler j);
+        ignore (fork_job scheduler run j);
         incr live_count
       end
     done;
@@ -255,43 +209,43 @@ let run_concurrent (scheduler : t) (limit : int) (jobs : job list) : unit =
 let custom ~name ~redundancy
     ~(remote_dispatch : member:string -> job list -> unit)
     ~(plan : job list -> custom_plan) =
-  let run_batch scheduler mode jobs =
+  let run_batch scheduler run mode jobs =
     match mode with
-    | Serial_batch -> List.iter (fun job -> ignore (job.j_run ())) jobs
-    | Parallel_batch width -> run_concurrent scheduler width jobs
-    | Race_batch width -> run_concurrent scheduler width jobs
+    | Serial_batch -> List.iter run jobs
+    | Parallel_batch width -> run_concurrent scheduler run width jobs
+    | Race_batch width -> run_concurrent scheduler run width jobs
     | Remote_batch member -> remote_dispatch ~member jobs
   in
   { h_name = name;
     h_redundancy = max 1 redundancy;
-    h_dispatch = (fun scheduler jobs ->
-    let indexes = List.mapi (fun index _ -> index) jobs in
-    let plan = plan jobs in
-    let selected = List.concat plan.batches in
-    let valid_index index = index >= 0 && index < List.length jobs in
-    if List.exists (fun index -> not (valid_index index)) selected then
-      failwith "scheduler: custom plan contains an out-of-range job index";
-    let sorted = List.sort compare selected in
-    if sorted <> indexes then
-      failwith "scheduler: custom plan must schedule every job exactly once";
-    List.iter (fun batch ->
-      let batch_jobs = List.map (fun index -> List.nth jobs index) batch in
-      run_batch scheduler plan.mode batch_jobs)
-      plan.batches);
+    h_dispatch = (fun scheduler run jobs ->
+      let indexes = List.mapi (fun index _ -> index) jobs in
+      let plan = plan jobs in
+      let selected = List.concat plan.batches in
+      let valid_index index = index >= 0 && index < List.length jobs in
+      if List.exists (fun index -> not (valid_index index)) selected then
+        failwith "scheduler: custom plan contains an out-of-range job index";
+      let sorted = List.sort compare selected in
+      if sorted <> indexes then
+        failwith "scheduler: custom plan must schedule every job exactly once";
+      List.iter (fun batch ->
+        let batch_jobs = List.map (fun index -> List.nth jobs index) batch in
+        run_batch scheduler run plan.mode batch_jobs)
+        plan.batches);
     h_cancel = ignore }
 
 let builtin ~remote_dispatch = function
   | Serial -> serial_handler
   | Parallel n -> { serial_handler with
       h_name = Printf.sprintf "parallel:%d" n;
-      h_dispatch = (fun scheduler jobs -> run_concurrent scheduler n jobs) }
+      h_dispatch = (fun scheduler run jobs -> run_concurrent scheduler run n jobs) }
   | Race n -> { serial_handler with
       h_name = Printf.sprintf "race:%d" n;
       h_redundancy = max 1 n;
-      h_dispatch = (fun scheduler jobs -> run_concurrent scheduler n jobs) }
+      h_dispatch = (fun scheduler run jobs -> run_concurrent scheduler run n jobs) }
   | Remote member -> { serial_handler with
       h_name = Printf.sprintf "remote:%s" member;
-      h_dispatch = (fun _ jobs -> remote_dispatch ~member jobs) }
+      h_dispatch = (fun _ _ jobs -> remote_dispatch ~member jobs) }
 
 let create ~handler = {
   handler;
@@ -306,5 +260,5 @@ let install t handler = t.handler <- handler
 let schedules_batches t = t.handler != serial_handler
 let redundancy t = t.handler.h_redundancy
 
-let dispatch_batch (scheduler : t) (jobs : job list) : unit =
-  scheduler.handler.h_dispatch scheduler jobs
+let dispatch_batch (scheduler : t) ~(run : runner) (jobs : job list) : unit =
+  scheduler.handler.h_dispatch scheduler run jobs

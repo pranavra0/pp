@@ -636,16 +636,16 @@ let session_property () =
   in
   Scheduler.install scheduler_a (Scheduler.builtin (Scheduler.Remote "a")
     ~remote_dispatch:(fun ~member:_ _ -> incr calls_a));
-  Scheduler.dispatch_batch scheduler_a [];
+  Scheduler.dispatch_batch scheduler_a ~run:(fun _ -> ()) [];
   if Scheduler.handler_name (Scheduler.current_handler scheduler_b) <> "serial"
      || !calls_a <> 1 || !calls_b <> 0 then
     fail "scheduler-isolation" "scheduler handles shared policy or dispatch state";
   let dispatched = ref 0 and cancelled = ref 0 in
   let custom = Scheduler.handler ~name:"test-redundant" ~redundancy:3
-      ~dispatch:(fun jobs -> dispatched := !dispatched + List.length jobs)
+      ~dispatch:(fun _run jobs -> dispatched := !dispatched + List.length jobs)
       ~cancel:(fun () -> incr cancelled) in
   Scheduler.install scheduler_a custom;
-  Scheduler.dispatch_batch scheduler_a [];
+  Scheduler.dispatch_batch scheduler_a ~run:(fun _ -> ()) [];
   Scheduler.with_signal_handler scheduler_a ~f:(fun () -> ()) ();
   if Scheduler.handler_name (Scheduler.current_handler scheduler_a) <> "test-redundant"
      || Scheduler.redundancy scheduler_a <> 3
