@@ -11,6 +11,7 @@ type evaluation_state = {
   thunks : (string, Core_model.thunk) Hashtbl.t;
   macros : (string, string list * Core_model.expr) Hashtbl.t;
   mutable gensym : int;
+  global_env : Core_model.env ref;
   node_thunks : (Identity_types.Node_key.t, Core_model.thunk) Hashtbl.t;
   node_keys : (string, Identity_types.Node_key.t) Hashtbl.t;
   node_dependents : (string, Identity_types.Node_key.t list) Hashtbl.t;
@@ -51,17 +52,21 @@ type fenced_state = {
 type t = {
   operations : Evaluator_ops.t;
   node_runtime : node_runtime;
+  runtime_context : Runtime_context.t option;
   evaluation : evaluation_state;
   domains : domain_state;
   run : run_state;
   fenced : fenced_state;
 }
 
-let create ?executor ?remote_dispatch ?(schedule_locked = false) ~scheduler operations = {
+let create ?executor ?remote_dispatch ?(schedule_locked = false)
+    ?runtime_context ~scheduler (operations : Evaluator_ops.t) = {
+  runtime_context;
   operations;
   node_runtime = { scheduler; executor; remote_dispatch; schedule_locked };
   evaluation = {
     thunks = Hashtbl.create 1024; macros = Hashtbl.create 16; gensym = 0;
+    global_env = ref Environment.empty;
     node_thunks = Hashtbl.create 256; node_keys = Hashtbl.create 256;
     node_dependents = Hashtbl.create 256;
     force_path = [];
@@ -82,6 +87,7 @@ let create ?executor ?remote_dispatch ?(schedule_locked = false) ~scheduler oper
     fenced_epoch_recovered = false;
   };
 }
+let runtime_context t = t.runtime_context
 let force t = t.operations.core.force
 let core_operations t = t.operations.core
 let node_operations t = t.operations.node
@@ -125,6 +131,7 @@ let begin_evaluation ~retain_thunks t =
   t.run.reporters <- [];
   if t.fenced.fenced_epoch_recovered then t.fenced.fenced_epoch_recovered <- false
   else t.fenced.fenced_epoch <- ""
+let global_env t = t.evaluation.global_env
 let begin_watch t =
   Hashtbl.clear t.evaluation.node_thunks;
   Hashtbl.clear t.evaluation.node_keys;

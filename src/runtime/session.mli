@@ -11,8 +11,9 @@ type t
 
 val create : ?executor:Executor.t ->
   ?remote_dispatch:(member:string -> Scheduler.job list -> unit) ->
-  ?schedule_locked:bool ->
+  ?schedule_locked:bool -> ?runtime_context:Runtime_context.t ->
   scheduler:Scheduler.t -> Evaluator_ops.t -> t
+val runtime_context : t -> Runtime_context.t option
 val scheduler : t -> Scheduler.t
 val executor : t -> Executor.t option
 val force : t -> Core_model.value -> Core_model.value
@@ -22,6 +23,7 @@ val call : t -> env:Core_model.env -> Core_model.value -> Core_model.value list 
 val begin_evaluation : retain_thunks:bool -> t -> unit
 val begin_pass : t -> unit
 val begin_watch : t -> unit
+val global_env : t -> Core_model.env ref
 
 val find_thunk : t -> string -> Core_model.thunk option
 val add_thunk : t -> string -> Core_model.thunk -> unit

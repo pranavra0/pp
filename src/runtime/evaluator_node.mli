@@ -10,6 +10,7 @@ val apply :
   Core_model.value
 
 val force :
+  runtime:Runtime_context.t ->
   key:Identity_types.Node_key.t ->
   data_closed:bool ->
   run:(unit -> Core_model.value) ->

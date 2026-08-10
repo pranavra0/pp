@@ -81,7 +81,8 @@ let create host cli =
   in
   let runtime_context = Runtime_context.create ~layout ~cache () in
   let session =
-    Session.create ~executor:(Closed_action.linux_executor ())
+    Session.create ~runtime_context
+      ~executor:(Closed_action.linux_executor ())
       ~remote_dispatch:(Remote.dispatcher host invocation)
       ~schedule_locked:(Cli.schedule_explicit cli) ~scheduler
       Evaluator.operations

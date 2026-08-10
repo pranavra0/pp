@@ -18,14 +18,11 @@ open Core_model
 open Source_error
 open Evaluator
 
-(* Global environment for REPL *)
-let global_env : env ref = ref Environment.empty
 
 (* ---- Initialization ---- *)
 
 let init ?(retain_thunks = false) session =
-  Evaluator.init session ~retain_thunks;
-  global_env := Primitives.initial_env ()
+  Evaluator.init session ~retain_thunks
 
 let macro_services () =
   let core = Session.core_operations (Effect.perform Dynamic_scope.Get_session) in
@@ -44,18 +41,15 @@ let with_toplevel_location = Error_context.with_form_location
 
 (* Tree-walker: process a single expression *)
 let process_expr (e : expr) : value =
-  Dynamic_scope.with_top_level (Effect.perform Dynamic_scope.Get_session)
-    (Effect.perform Dynamic_scope.Get_invocation) ~f:(fun () ->
-    with_toplevel_location e (fun () ->
-      match eval_expressions [e] global_env with
-      | VEnvMap _ as v -> v
-      | v -> v)
-  ) ()
+  let session = Effect.perform Dynamic_scope.Get_session in
+  with_toplevel_location e (fun () ->
+    match eval_expressions [e] (Session.global_env session) with
+    | VEnvMap _ as v -> v
+    | v -> v)
 
 let process_exprs (exprs : expr list) : value list =
-  Dynamic_scope.with_top_level (Effect.perform Dynamic_scope.Get_session)
-    (Effect.perform Dynamic_scope.Get_invocation) ~f:(fun () ->
-    Evaluator.eval_expressions_list exprs global_env) ()
+  let session = Effect.perform Dynamic_scope.Get_session in
+  Evaluator.eval_expressions_list exprs (Session.global_env session)
 
 (* Tree-walker: execute a source string. The WHOLE file's forms
    are expanded together, in order, before any of them is evaluated — a
