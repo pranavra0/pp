@@ -104,12 +104,10 @@ let compute_plan ~(domain_name : string) ~(diff_closure : value)
         with effect Dynamic_scope.Get_capabilities, k -> Effect.Deep.continue k []
       in
       let result_hash = Identity_types.Object_hash.of_digest (Identity.hash_value plan) in
-      (try Object_repository.put (Runtime_context.objects ())
-             ~key:(Identity_types.Object_hash.to_string result_hash) ~value:plan
-       with Sys_error _ | Unix.Unix_error _ -> ());
-      (try Trace_repository.put (Runtime_context.traces ()) ~key
-             ~outcome:Trace_repository.Ok ~result_hash ~reads:[]
-       with Sys_error _ | Unix.Unix_error _ -> ());
+      Object_repository.put (Runtime_context.objects ())
+        ~key:(Identity_types.Object_hash.to_string result_hash) ~value:plan;
+      Trace_repository.put (Runtime_context.traces ()) ~key
+        ~outcome:Trace_repository.Ok ~result_hash ~reads:[];
       plan
 
 (* ---- Stratification ----
@@ -269,16 +267,13 @@ let prepare_pass invocation (all_desired : value) : pass =
 (* Record the converged desired object and the node keys forced to derive it.
    Together they root the durable trace graph. *)
 let record_epoch invocation (forced : value) : unit =
-  try
-    let hash = Identity.hash_value forced in
-    (try Object_repository.put (Runtime_context.objects ()) ~key:hash ~value:forced
-     with Sys_error _ | Unix.Unix_error _ -> ());
-    Journal.append (Journal.Epoch { hash });
-    Gcroots.record ~keep:(Invocation.gc_keep_epochs invocation)
-      { Gcroots.gr_hash = hash;
-        gr_nodes =
-          Session.wanted_nodes (Effect.perform Dynamic_scope.Get_session) }
-  with Sys_error _ | Unix.Unix_error _ -> ()
+  let hash = Identity.hash_value forced in
+  Object_repository.put (Runtime_context.objects ()) ~key:hash ~value:forced;
+  Journal.append (Journal.Epoch { hash });
+  Gcroots.record ~keep:(Invocation.gc_keep_epochs invocation)
+    { Gcroots.gr_hash = hash;
+      gr_nodes =
+        Session.wanted_nodes (Effect.perform Dynamic_scope.Get_session) }
 
 let run_pass (pass : pass) : unit =
   List.iter run_target pass.targets;

@@ -11,6 +11,7 @@ val apply :
 
 val force :
   key:Identity_types.Node_key.t ->
+  data_closed:bool ->
   run:(unit -> Core_model.value) ->
   Core_model.thunk ->
   Core_model.value

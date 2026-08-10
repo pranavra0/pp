@@ -367,9 +367,9 @@ Grounding: branch pruning is the smallest unit of demand-pruning. A build
 system that speculatively evaluates both arms of a conditional is Make, not
 Excel.
 
-**Status: holds** — condition forced, branches in tail position in the
-tree-walker; eval in the tree-walker; exercised by the fuzzer's `core`
-grammar.
+**Status: holds** — the explicit heap-continuation evaluator forces the
+condition before entering exactly one selected branch; exercised by the
+fuzzer's `core` grammar.
 
 Test: `if true { 1 } else { undefined-symbol }` evaluates to `1`; the untaken
 branch's `perform log(…)` produces no stderr.
@@ -383,8 +383,8 @@ Grounding: a language proposing to be the operating system cannot have "your
 service loop overflowed" as part of its semantics. Loops are recursion, and
 recursion must be safe.
 
-**Status: holds** — CPS `eval_tail`/`apply_tail` in the tree-walker and
-CPS-aware dynamic-scope frames keep recursive calls through `with-caps`,
+**Status: holds** — the heap-continuation evaluator and CPS-aware
+dynamic-scope frames keep recursive calls through `with-caps`,
 `with-handler`, and `with-config` bounded in native stack and linear in depth
 (`tests/007-phase0-laws.pp`, `tests/110-tail-scopes.sh`).
 
@@ -400,8 +400,7 @@ uses an explicit heap-allocated work stack.
 Grounding: the same operating-system argument applies. "Rewrite your fold" is
 not an acceptable answer from a substrate.
 
-**Status: holds** — shallow evaluation keeps the direct tree-walker path;
-deep evaluation transfers to the same evaluator's heap-allocated continuation
+**Status: holds** — the evaluator always uses its heap-allocated continuation
 machine. Builtin list traversal is iterative, so evaluator and primitive
 frames both remain bounded.
 

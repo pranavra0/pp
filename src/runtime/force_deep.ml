@@ -23,17 +23,16 @@ let find_kv ~force (kvs : (value * value) list) (key : string) : value option =
     | _ -> None)
     kvs
 
-let collect_unevaluated_nodes (v : value) : Scheduler.job list =
+let collect_unevaluated_nodes (v : value) :
+    Scheduler.job list * (Identity_types.Node_key.t, Scheduler.runner) Hashtbl.t =
   let seen_keys : (Identity_types.Node_key.t, unit) Hashtbl.t = Hashtbl.create 64 in
   let seen_pairs : value list ref = ref [] in
   let jobs = ref [] in
+  let runs = Hashtbl.create 64 in
   let session = Effect.perform Dynamic_scope.Get_session in
   let scheduler = Session.scheduler session in
   let node = Session.node_operations session in
   let core = Session.core_operations session in
-  let job_run (t : thunk) (key : Identity_types.Node_key.t) () : value =
-    node.run_body ~key ~run:(fun () -> core.eval t.thunk_expr t.thunk_env) t
-  in
   let rec walk = function
     | VThunk t ->
         (match t.thunk_status with
@@ -43,9 +42,16 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
              let key = node.key_of t in
              if not (Hashtbl.mem seen_keys key) then begin
                Hashtbl.add seen_keys key ();
-               if not (node.resolve_hit t key) then
-                 jobs := { Scheduler.j_key = key; j_run = job_run t key;
-                           j_width = Scheduler.redundancy scheduler; j_thunk = t } :: !jobs
+               if not (node.resolve_hit t key) then begin
+                 let run job =
+                   ignore (node.run_body ~key:job.Scheduler.j_key
+                     ~run:(fun () -> core.eval t.thunk_expr t.thunk_env) t)
+                 in
+                 Hashtbl.replace runs key run;
+                 jobs := { Scheduler.j_key = key;
+                           j_width = Scheduler.redundancy scheduler;
+                           j_data_closed = node.data_closed t } :: !jobs
+               end
              end
          | Unevaluated -> ())
     | VPair _ as pair ->
@@ -59,13 +65,19 @@ let collect_unevaluated_nodes (v : value) : Scheduler.job list =
     | _ -> ()
   in
   walk v;
-  List.rev !jobs
+  List.rev !jobs, runs
 
 let force_deep (v : value) : value =
   let session = Effect.perform Dynamic_scope.Get_session in
   let scheduler = Session.scheduler session in
-  if Scheduler.schedules_batches scheduler then
-    (match collect_unevaluated_nodes v with
-     | [] -> ()
-     | jobs -> Scheduler.dispatch_batch scheduler jobs);
+  if Scheduler.schedules_batches scheduler then begin
+    let jobs, runs = collect_unevaluated_nodes v in
+    if jobs <> [] then
+      Scheduler.dispatch_batch scheduler
+        ~run:(fun job ->
+          match Hashtbl.find_opt runs job.Scheduler.j_key with
+          | Some run -> run job
+          | None -> ())
+        jobs
+  end;
   force_deep_plain ~force:(Session.force session) v

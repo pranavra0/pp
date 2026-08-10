@@ -1,10 +1,5 @@
 open Pp_kernel
-(* pp evaluator — strict (call-by-value) tree-walking evaluator.
-
-   Public surface exposed to callers: init/reset, force/eval of thunks
-   and expressions, node caching (force_node), effect dispatch, trace
-   replay for persistent nodes, capability-gated cell-authority checks,
-   and the REPL's eval_expressions entry point. *)
+(* pp evaluator — strict call-by-value heap-continuation machine. *)
 
 (** Whether a set of capabilities permits reading a trace cell.
     Used to gate cache hits on the transitive read closure. *)
@@ -23,12 +18,6 @@ val eval_expressions_list :
 val force : Core_model.value -> Core_model.value
 (** Force a thunk to a value; passes through non-thunk values unchanged. *)
 
-val force_node :
-  key:Identity_types.Node_key.t ->
-  run:(unit -> Core_model.value) -> Core_model.thunk -> Core_model.value
-(** Force a persistent node through the store: serve a verified hit when the
-    caller may read its trace, re-serve a memoized failure, or run and store
-    on a miss. *)
 
 val init : Session.t -> retain_thunks:bool -> unit
 (** Reset the evaluator state, clear the thunk store (unless
@@ -38,10 +27,6 @@ val init : Session.t -> retain_thunks:bool -> unit
 val operations : Evaluator_ops.t
 (** The complete immutable operation graph for the sole evaluator. *)
 
-val is_data_closed : Core_model.thunk -> bool
-(** Check whether a thunk's free variables are data-closed (no capabilities
-    or sealed values leaked through). Used by remote dispatch to decide
-    whether a job can be shipped to a cluster member. *)
 
 val perform_effect : string -> Core_model.value list -> Core_model.value
 (** Dispatch a named effect with its (already-forced) argument list.

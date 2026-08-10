@@ -114,28 +114,28 @@ catalog boundary.
 
 ## Evaluation and dynamic scope
 
-`src/runtime/evaluator.ml` is the only evaluator. It dispatches every
-expression form and implements tail calls and deep thunk forcing. The
-`evaluator_*` modules receive narrow callbacks for force, evaluation, and
-application.
+`src/runtime/evaluator.ml` is the only evaluator. It runs one heap
+continuation machine for every expression form and one work-queue force
+operation for ephemeral and persistent thunks. There is no depth-triggered
+fallback evaluator or force trampoline.
 
-`evaluator_ops.ml` defines two immutable operation views:
+The `evaluator_*` modules receive narrow callbacks for force, evaluation, and
+application. `evaluator_ops.ml` defines two immutable operation views:
 
 - the core view provides `force`, `eval`, and `apply`;
-- the node view provides key construction, node rebuilding, and hit
-  resolution.
+- the node view provides key construction, data-closure checks, rebuilding,
+  and hit resolution.
 
-`session.ml` creates and owns the operation value. No caller installs a
-mutable evaluator callback.
+`session.ml` owns the operation value and groups state by lifetime: evaluator
+memoization and cycle frames, domain registrations, pass observations and
+pins, fenced recovery, and node runtime services. `begin_evaluation`,
+`begin_pass`, and `begin_watch` are the reset boundaries; callers do not
+mutate these records directly.
 
-`dynamic_scope.ml` brackets OCaml effects for capabilities, configuration,
+`dynamic_scope.ml` brackets language effects for capabilities, configuration,
 handlers, trace frames, nodes, domains, and observation collection. It owns
-no registry or mutable table. `effects.ml` declares the effect operations.
-
-`session.ml` coordinates four private state groups: evaluation, domains, run
-observations and pins, and fenced recovery. `begin_evaluation`, `begin_pass`,
-and `begin_watch` are the only reset boundaries; callers see one abstract
-session rather than its mutable records.
+only the corresponding dynamic stacks; it has no registry. `effects.ml`
+declares the effect operations.
 
 ## Effects and authority
 
@@ -237,6 +237,13 @@ The repository layer is:
 `codec.ml` defines the canonical durable encoding. The store does not use
 OCaml `Marshal`. Every durable write uses the atomic replacement boundary.
 
+The current storage contract is process-global: `Store_layout.default`,
+repository defaults, and `Cache_policy.default` all belong to the command
+process and its `HOME/.pp/store`. Sessions isolate evaluator, pass, and
+fenced state but do not isolate durable storage or cache flags. Independent
+store contexts require an explicit repository bundle before the session API
+can support them.
+
 ## Domains and scheduling
 
 `domains.ml` is the generic observe, diff, apply, verify, and epoch pipeline.
@@ -277,14 +284,13 @@ file. If no request policy is supplied, the runtime manifest's
 `:execution-policy` is used as the default. `tests/104` proves null and precise Dune actions, artifact restoration,
 and the absence of Dune concepts from `src/runtime`.
 
-`scheduler.ml` owns an installable result-transparent handler service. A
-handler names its policy, declares redundant width, dispatches node misses,
-and cancels outstanding work. The host or a pp runtime manifest installs
-`serial`, `parallel:N`,
-`race:N`, or `remote:MEMBER` from CLI configuration. Local work uses child
-processes. Remote placement uses the transport boundary and signed capability
-tokens. Every dispatch remains best-effort: the caller re-enters the same
-cache lookup and local node rebuild path when no worker produced a result.
+`scheduler.ml` owns an installable placement service. Its input is an
+immutable job descriptor containing a node key, placement width, and a
+data-closure bit; the caller supplies the local runner. Serial placement is
+the reference adapter. Parallel and race placement fork that same runner,
+while remote placement receives descriptors only. The node boundary
+rechecks the cache after placement and rebuilds locally when no worker
+produced a hit.
 
 ## Application and commands
 
