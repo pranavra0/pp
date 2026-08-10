@@ -8,8 +8,8 @@ let apply ~force ~fn_name ~params ~body ~closure_env args k =
   ) !closure_env params args in
   k (Evaluator_thunks.make_node ?name:fn_name body env ~arguments:args)
 
-let force ~key ~data_closed ~run thunk =
-  Node.force ~key
+let force ~runtime ~key ~data_closed ~run thunk =
+  Node.force_persistent ~context:runtime ~key
     ~authorized:(Observation.authorized_id
                    (Evaluator_thunks.captured_capabilities thunk))
     ~data_closed

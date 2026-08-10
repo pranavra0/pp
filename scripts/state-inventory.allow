@@ -37,7 +37,6 @@ top-ref|src/frontend/lint.ml|warnings|test-diagnostic
 mutable-field|src/runtime/primitive_catalog.ml|aliases|builtin-catalog
 mutable-field|src/runtime/primitive_catalog.ml|declarations|builtin-catalog
 mutable-field|src/runtime/primitive_catalog.ml|entries|builtin-catalog
-top-ref|src/runtime/repl.ml|global_env|command
 top-ref|src/runtime/repl.ml|history|command
 top-ref|src/runtime/runtime_context.ml|current_context|process-context
 top-ref|src/runtime/sandbox.ml|counter|node

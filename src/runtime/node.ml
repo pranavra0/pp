@@ -105,24 +105,26 @@ let validate_result (t : thunk) (result : value) : unit =
   end;
   enforce_type t result
 
-let persist ~(key : Key.t) ~(reads : (string * string) list)
+let persist ~(context : Runtime_context.t) ~(key : Key.t)
+    ~(reads : (string * string) list)
     ~(outcome : Trace_repository.outcome) (result : value) : Object_hash.t =
   let cache_key = Identity_types.Cache_key.of_node_key key in
   let result_hash = Object_hash.of_digest (Identity.hash_value result) in
-  Object_repository.put (Runtime_context.objects ())
+  Object_repository.put (Runtime_context.objects_of context)
     ~key:(Object_hash.to_string result_hash) ~value:result;
-  Trace_repository.put (Runtime_context.traces ()) ~key:cache_key ~outcome ~result_hash
+  Trace_repository.put (Runtime_context.traces_of context) ~key:cache_key ~outcome ~result_hash
     ~reads:(List.map (fun (cell, hash) ->
       (Identity_types.Cell_id.of_string cell,
        Identity_types.Observed_hash.of_digest hash)) reads);
   result_hash
 
-let persist_or_reset t ~key ~reads ~outcome result =
-  try persist ~key ~reads ~outcome result with e ->
+let persist_or_reset context t ~key ~reads ~outcome result =
+  try persist ~context ~key ~reads ~outcome result with e ->
     t.thunk_status <- Unevaluated;
     raise e
 
-let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
+let rebuild ~(context : Runtime_context.t) ~(key : Key.t)
+    ~(run : unit -> value) (t : thunk) : value =
   t.thunk_status <- Evaluating;
   let captured_caps = Evaluator_thunks.captured_capabilities t in
   let tail_depth = Dynamic_scope.tail_capability_depth () in
@@ -149,7 +151,7 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
         | Error error as e ->
             (match cache_decision error with
              | Cacheable ->
-                 ignore (persist_or_reset t ~key ~reads:(List.rev !frame)
+                 ignore (persist_or_reset context t ~key ~reads:(List.rev !frame)
                    ~outcome:Trace_repository.Failed
                    (VString (string_of_t error)));
                  t.thunk_status <- Unevaluated;
@@ -158,7 +160,7 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
                  t.thunk_status <- Unevaluated;
                  raise e)
         | Failure msg ->
-            ignore (persist_or_reset t ~key ~reads:(List.rev !frame)
+            ignore (persist_or_reset context t ~key ~reads:(List.rev !frame)
               ~outcome:Trace_repository.Failed (VString msg));
             t.thunk_status <- Unevaluated;
             raise (Error (Evaluator (diagnostic msg)))
@@ -168,14 +170,14 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
       in
       validate_result t result;
       let result_hash =
-        try persist ~key ~reads:(List.rev !frame)
+        try persist ~context ~key ~reads:(List.rev !frame)
           ~outcome:Trace_repository.Ok result
         with e ->
           t.thunk_status <- Unevaluated;
           raise e
       in
       t.thunk_status <- Evaluated result;
-      if Cache_policy.check_enabled (Runtime_context.cache ()) then begin
+      if Cache_policy.check_enabled (Runtime_context.cache_of context) then begin
         let frame2 = ref [] in
         let r2 =
           try run ()
@@ -195,7 +197,7 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
           | e -> raise e
         in
         if Object_hash.of_digest (Identity.hash_value r2) <> result_hash then begin
-          Cache_policy.note_volatile (Runtime_context.cache ());
+          Cache_policy.note_volatile (Runtime_context.cache_of context);
           Printf.eprintf
             "[check] volatile node %s: an identical run produced a different result hash\n%!"
             (Cache_policy.short_key (Key.to_string key))
@@ -203,20 +205,24 @@ let rebuild ~(key : Key.t) ~(run : unit -> value) (t : thunk) : value =
       end;
       result)
 
-let lookup_hit ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
+
+let lookup_hit ~(context : Runtime_context.t) ~(key : Key.t)
+    ~(authorized : Identity_types.Cell_id.t -> bool)
     (t : thunk) : value option =
   let cache_key = Identity_types.Cache_key.of_node_key key in
-  serve_hit ~t (Cache_policy.lookup ((Runtime_context.cache ()))
-    ~traces:(Runtime_context.traces ()) ~objects:(Runtime_context.objects ())
-    ~blobs:(Runtime_context.blobs ()) ~observe_id:Observation.observe_id
-    ~replay:Observation.replay
+  serve_hit ~t (Cache_policy.lookup (Runtime_context.cache_of context)
+    ~traces:(Runtime_context.traces_of context)
+    ~objects:(Runtime_context.objects_of context)
+    ~blobs:(Runtime_context.blobs_of context)
+    ~observe_id:Observation.observe_id ~replay:Observation.replay
     ~key:cache_key ~authorized)
-let force ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
+let force_persistent ~(context : Runtime_context.t) ~(key : Key.t)
+    ~(authorized : Identity_types.Cell_id.t -> bool)
     ~(data_closed : bool) ~(run : unit -> value) (t : thunk) : value =
   Stabilize.register_node_key ~key ~thunk:t;
   let nested = Effect.perform Dynamic_scope.In_node in
   let run_force () =
-    match lookup_hit ~key ~authorized t with
+    match lookup_hit ~context ~key ~authorized t with
     | Some value -> value
     | None ->
         let scheduler = Session.scheduler (Effect.perform Dynamic_scope.Get_session) in
@@ -228,11 +234,11 @@ let force ~(key : Key.t) ~(authorized : Identity_types.Cell_id.t -> bool)
             j_data_closed = data_closed;
           } in
           Scheduler.dispatch_batch scheduler
-            ~run:(fun _ -> ignore (rebuild ~key ~run t)) [job];
-          (match lookup_hit ~key ~authorized t with
+            ~run:(fun _ -> ignore (rebuild ~context ~key ~run t)) [job];
+          (match lookup_hit ~context ~key ~authorized t with
            | Some value -> value
-           | None -> rebuild ~key ~run t)
-        else rebuild ~key ~run t
+           | None -> rebuild ~context ~key ~run t)
+        else rebuild ~context ~key ~run t
   in
   let result =
     if not nested then run_force ()

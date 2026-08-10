@@ -12,12 +12,12 @@ val key_of :
 val check_type : Core_model.value -> Core_model.expr -> Source_range.t option -> unit
 val enforce_type : Core_model.thunk -> Core_model.value -> unit
 val serve_hit : t:Core_model.thunk -> Cache_policy.result -> Core_model.value option
-val rebuild : key:Identity_types.Node_key.t ->
+val rebuild : context:Runtime_context.t -> key:Identity_types.Node_key.t ->
   run:(unit -> Core_model.value) -> Core_model.thunk -> Core_model.value
-val lookup_hit : key:Identity_types.Node_key.t ->
+val lookup_hit : context:Runtime_context.t -> key:Identity_types.Node_key.t ->
   authorized:(Identity_types.Cell_id.t -> bool) -> Core_model.thunk ->
   Core_model.value option
-val force : key:Identity_types.Node_key.t ->
+val force_persistent : context:Runtime_context.t -> key:Identity_types.Node_key.t ->
   authorized:(Identity_types.Cell_id.t -> bool) ->
   data_closed:bool ->
   run:(unit -> Core_model.value) -> Core_model.thunk -> Core_model.value

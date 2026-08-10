@@ -89,7 +89,12 @@ and force_persistent (t : thunk) : value =
   with_force_frame t (fun () ->
     let key = node_key_of t in
     let run_body () = eval t.thunk_expr t.thunk_env in
-    Evaluator_node.force ~key ~data_closed:(is_data_closed t)
+    let runtime =
+      match Session.runtime_context (session ()) with
+      | Some runtime -> runtime
+      | None -> failwith "persistent node forcing requires an explicit runtime context"
+    in
+    Evaluator_node.force ~runtime ~key ~data_closed:(is_data_closed t)
       ~run:run_body t)
 
 and force_ephemeral (t : thunk) : value =
@@ -139,10 +144,8 @@ and is_data_closed (t : thunk) : bool =
          with _ -> false))
     (Free_vars.free_vars t.thunk_expr)
 
-(* The evaluator is one heap-continuation machine.  [eval_tail] is the
-   callback-shaped adapter required by helper modules; [Callback] lets it
-   attach the caller's continuation to the same machine rather than starting
-   a second evaluation. *)
+(* The evaluator is one heap-continuation machine. [eval_tail] lets helper
+   forms resume the same machine without starting another evaluator. *)
 and eval (e : expr) (env : env) : value =
   eval_machine e env Stop
 
@@ -275,24 +278,13 @@ let perform_effect name args =
   Evaluator_effects.perform ~application:apply name args
 
 
-(* Evaluate an expression in the initial environment *)
-let eval_program (e : expr) : value =
-  Dynamic_scope.with_top_level (Effect.perform Dynamic_scope.Get_session)
-    (Effect.perform Dynamic_scope.Get_invocation) ~f:(fun () ->
-    let env = Primitives.initial_env () in
-    eval e env
-  ) ()
+let runtime_context () =
+  match Session.runtime_context (session ()) with
+  | Some runtime -> runtime
+  | None -> failwith "node operations require an explicit runtime context"
 
-(* Evaluate and force (for top-level expressions) *)
-let eval_and_force (e : expr) : value =
-  Dynamic_scope.with_top_level (Effect.perform Dynamic_scope.Get_session)
-    (Effect.perform Dynamic_scope.Get_invocation) ~f:(fun () ->
-    force (eval_program e)
-  ) ()
-
-(* Initialize the evaluator state *)
 let resolve_if_hit t key =
-  match Node.lookup_hit ~key
+  match Node.lookup_hit ~context:(runtime_context ()) ~key
           ~authorized:(Observation.authorized_id
                          (Evaluator_thunks.captured_capabilities t)) t with
   | Some _ -> true
@@ -302,11 +294,13 @@ let operations = {
   Evaluator_ops.core = { force; eval; apply };
   node = {
     key_of = node_key_of;
-    run_body = (fun ~key ~run thunk -> Node.rebuild ~key ~run thunk);
+    run_body = (fun ~key ~run thunk ->
+      Node.rebuild ~context:(runtime_context ()) ~key ~run thunk);
     resolve_hit = resolve_if_hit;
     data_closed = is_data_closed;
   };
 }
 
 let init session ~retain_thunks =
-  Session.begin_evaluation ~retain_thunks session
+  Session.begin_evaluation ~retain_thunks session;
+  Session.global_env session := Primitives.initial_env ()
