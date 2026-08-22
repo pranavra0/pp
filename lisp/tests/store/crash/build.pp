@@ -1,0 +1,7 @@
+let input = slurp("lisp/tests/store/crash/input.txt")
+let a = force(node { 6 * 7 })
+let b = force(node { a + 100 })
+let c = force(node { input })
+print(a)
+print(b)
+print(c)
