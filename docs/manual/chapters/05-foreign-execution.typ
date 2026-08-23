@@ -6,9 +6,9 @@ pp separates computation semantics from execution policy. The language has no
 compiler, package, container, platform, or Nix form. Libraries build immutable
 requests as ordinary maps. A trusted host provider decides how to execute one.
 
-`run` is the ambient process effect. It receives command arguments, inherits
-host behavior, and is always scripting-tier. A node cannot cache it because the
-request does not account for everything that can affect the result.
+`run` is the ambient process effect: command arguments, inherited host
+behavior, always scripting-tier — the request does not account for everything
+that can affect the result.
 
 `run-closed!` takes immutable tool and input trees, explicit arguments,
 environment, platform constraints, and selected outputs:
@@ -41,12 +41,11 @@ silently cacheable.
 
 == Policy belongs to libraries and providers
 
-The classification is the whole core interface. pp does not interpret
-`:platform` or `:policy`. Policy is optional canonical pp data; its empty
-default is `{}`. A Nix-like provider can define its schema, verify that a
-request satisfies it, and return a cacheable classification. A project can use
-macros to construct those request values. Neither requires an AST form or
-evaluator change.
+The classification is the whole core interface; pp does not interpret
+`:platform` or `:policy`. Policy is optional canonical pp data, default `{}`
+. A Nix-like provider defines its schema, verifies requests against it, and
+classifies them cacheable; macros construct the request values. No AST form
+or evaluator change required.
 
 An application manifest may provide `:execution-policy` as the default for
 requests that omit `:policy`. An explicit request policy always wins. The

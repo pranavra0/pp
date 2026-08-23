@@ -131,12 +131,12 @@ authority. Effects are recorded in canonical cells and traces.
 | `probe` | session and observations | One pinned observation per pass |
 | `fenced` | lifecycle fenced/journal services | Intent/done journal with explicit recovery |
 
-Host substitution happens outside the evaluator. The application installs the
-local scheduler, process provider, and optional closed-action executor in the
-session. Observers and domain drivers are registered pp functions; the runtime
-retains authority checks, observation recording, journaling, and verification.
-With no registration, closed execution, observation, domain mutation, and
-transport are unavailable. None falls back to ambient access.
+Host substitution happens outside the evaluator: the application installs
+the local scheduler, process provider, and optional closed-action executor
+in the session; observers and domain drivers are registered pp functions;
+the runtime keeps authority checks, observation recording, journaling, and
+verification. With no registration, closed execution, observation, domain
+mutation, and transport are unavailable — none falls back to ambient access.
 
 An executor's cacheability classification is the complete trusted promise.
 Inside a node, scripting-only requests are rejected before the provider runs.

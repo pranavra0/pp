@@ -513,7 +513,7 @@ fixtures. The browser renderer is a projection of reducer state.
 
 Decision: TypeScript. Do not build competing frontend prototypes.
 
-Use the browser ecosystem directly for graph rendering, editing, streaming,
+Use standard browser tooling directly for graph rendering, editing, streaming,
 and browser tests while keeping pp's native OCaml dependencies isolated.
 Generate TypeScript event types and runtime decoders from the authoritative
 OCaml schema; do not maintain parallel handwritten models. The pure reducer

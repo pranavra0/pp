@@ -1,11 +1,11 @@
-// lib.typ — the manual's Typst helpers.
+// lib.typ: the manual's Typst helpers.
 //
 // a filename header, the example's source, the shell command, and the captured
 // output. Source comes straight from examples/<name>.{pp,sh}; shell heredocs
 // that contain pp source are rendered as separate pp blocks. The command and
 // output come from captured/<name>.{cmd,out}, checked by actually running the
 // example through pp. read() makes all three tracked dependencies, so a changed
-// example (or a changed result) re-renders — and a broken example fails the build
+// example (or a changed result) re-renders, and a broken example fails the build
 // before it can reach a reader.
 
 #let heredoc-start(line) = {
@@ -54,8 +54,8 @@
   parts
 }
 
-// #example("name")            — a pp example: examples/name.pp
-// #example("name", sh: true)  — a shell transcript: examples/name.sh
+// #example("name"):            a pp example: examples/name.pp
+// #example("name", sh: true):  a shell transcript: examples/name.sh
 #let example(name, sh: false) = {
   let ext = if sh { ".sh" } else { ".pp" }
   let lang = if sh { "bash" } else { "pp" }

@@ -39,12 +39,12 @@ than marking them done.
 
 | Task | Read |
 |---|---|
-| Writing or editing pp code (style, sigils, forms) | [docs/SYNTAX.md](docs/SYNTAX.md) — the sigil table and the writing style section are normative |
+| Writing or editing pp code (style, sigils, forms) | [docs/SYNTAX.md](docs/SYNTAX.md): the sigil table and the writing style section are normative |
 | Language semantics, the laws | [docs/SPEC.md](docs/SPEC.md) |
 | Learning the language by example | [docs/manual/](docs/manual/) |
 | Which source file owns what; data flow | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Vocabulary (cell, node, trace, island, …) | [docs/GLOSSARY.md](docs/GLOSSARY.md) |
-| What works today; discrepancy ledger | [docs/SPEC.md](docs/SPEC.md) — status table |
+| What works today; discrepancy ledger | [docs/SPEC.md](docs/SPEC.md): status table |
 | Why it's designed this way; rejected features (don't re-propose) | [docs/DESIGN.md](docs/DESIGN.md) |
 | Running/adding tests | [docs/TESTING.md](docs/TESTING.md) |
 | CLI flags | `bin/pp --help` |
