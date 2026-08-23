@@ -18,6 +18,10 @@ open Pp_runtime
    through the SAME single backend (`pp f`) and compared. Any divergence is
    a single-engine bug.
 
+   Pair mode is opt-in: --pp-ocaml PATH --pp-lisp PATH (or --pp PATH
+   --compare-pp PATH) compares each generated source's process output and
+   durable store bytes without replacing the single-engine gates.
+
    OCaml stdlib + unix only.  Build+run:  dune exec ./tools/fuzz.exe -- ARGS
    Fully deterministic given --seed: program i is generated from
    Random.full_init [| seed; i |], so any program can be regenerated with
@@ -47,13 +51,15 @@ open Pp_runtime
 
 let seed = ref 0
 let count = ref 1000
+let start_iter = ref 0
 let max_depth = ref 6
 let timeout_ms = ref 5000
 let out_dir = ref "fuzz-failures"
 let grammar = ref "core"
-let start_iter = ref 0
 let dump_iter = ref (-1)
 let pp_bin = ref "bin/pp"
+let pp_explicit = ref false
+let compare_pp_bin : string option ref = ref None
 let stdlib_path = ref ""   (* default computed from cwd *)
 let shrink_budget = ref 300
 let no_metamorphic = ref false
@@ -61,7 +67,9 @@ let no_metamorphic = ref false
 let usage () =
   prerr_endline "usage: fuzz [--seed N] [--count K] [--max-depth D] [--timeout-ms T]";
   prerr_endline "            [--out DIR] [--grammar core|full] [--start N] [--dump N]";
-  prerr_endline "            [--pp PATH] [--stdlib PATH] [--shrink-budget N] [--no-metamorphic]";
+  prerr_endline "            [--pp PATH] [--pp-ocaml PATH] [--pp-lisp PATH]";
+  prerr_endline "            [--compare-pp PATH] [--stdlib PATH] [--shrink-budget N]";
+  prerr_endline "            [--no-metamorphic]";
   exit 2
 
 let parse_cli () =
@@ -73,10 +81,14 @@ let parse_cli () =
     | "--timeout-ms" :: v :: r -> timeout_ms := int_of_string v; go r
     | "--out" :: v :: r -> out_dir := v; go r
     | "--grammar" :: v :: r ->
-        if v <> "core" && v <> "full" then usage (); grammar := v; go r
+        if v = "core" || v = "full" then begin grammar := v; go r end
+        else begin prerr_endline ("invalid grammar: " ^ v); usage () end
     | "--start" :: v :: r -> start_iter := int_of_string v; go r
     | "--dump" :: v :: r -> dump_iter := int_of_string v; go r
-    | "--pp" :: v :: r -> pp_bin := v; go r
+    | "--pp" :: v :: r -> pp_bin := v; pp_explicit := true; go r
+    | "--pp-ocaml" :: v :: r -> pp_bin := v; pp_explicit := true; go r
+    | "--pp-lisp" :: v :: r -> compare_pp_bin := Some v; go r
+    | "--compare-pp" :: v :: r -> compare_pp_bin := Some v; go r
     | "--stdlib" :: v :: r -> stdlib_path := v; go r
     | "--shrink-budget" :: v :: r -> shrink_budget := int_of_string v; go r
     | "--no-metamorphic" :: r -> no_metamorphic := true; go r
@@ -86,6 +98,7 @@ let parse_cli () =
   go (match Array.to_list Sys.argv with _program :: args -> args | [] -> []);
   if !stdlib_path = "" then
     stdlib_path := Filename.concat (Sys.getcwd ()) "stdlib/list.pp"
+
 
 (* ------------------------------------------------------------- S-exprs -- *)
 
@@ -821,16 +834,20 @@ let devnull = lazy (Unix.openfile "/dev/null" [Unix.O_RDONLY] 0)
 let tmp_out = lazy (Filename.temp_file "ppfuzz" ".out")
 let tmp_err = lazy (Filename.temp_file "ppfuzz" ".err")
 
-let run_pp (args : string list) (file : string) : outcome =
+(* Shared generated source path.  Pair mode reuses the same source for both
+   subprocesses, while each subprocess receives its own HOME/store. *)
+let prog_file = lazy (Filename.temp_file "ppfuzz" ".ppl")
+
+let run_pp_path (binary : string) (args : string list) (file : string) : outcome =
   let out_f = Lazy.force tmp_out and err_f = Lazy.force tmp_err in
   let fd_out = Unix.openfile out_f [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o600 in
   let fd_err = Unix.openfile err_f [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o600 in
-  let argv = Array.of_list (!pp_bin :: args @ [file]) in
+  let argv = Array.of_list (binary :: args @ [file]) in
   let pid =
-    try Unix.create_process !pp_bin argv (Lazy.force devnull) fd_out fd_err
+    try Unix.create_process binary argv (Lazy.force devnull) fd_out fd_err
     with Unix.Unix_error (e, _, _) ->
       Unix.close fd_out; Unix.close fd_err;
-      prerr_endline ("fatal: cannot execute " ^ !pp_bin ^ ": " ^ Unix.error_message e);
+      prerr_endline ("fatal: cannot execute " ^ binary ^ ": " ^ Unix.error_message e);
       exit 2
   in
   Unix.close fd_out; Unix.close fd_err;
@@ -853,6 +870,9 @@ let run_pp (args : string list) (file : string) : outcome =
   in
   let status = wait () in
   { status; out = read_file out_f; err = read_file err_f }
+
+let run_pp (args : string list) (file : string) : outcome =
+  run_pp_path !pp_bin args file
 
 (* ------------------------------------------------------------ Verdicts -- *)
 
@@ -906,6 +926,145 @@ let contains_substring text needle =
     && (String.sub text index needle_length = needle || loop (index + 1))
   in
   needle_length = 0 || loop 0
+
+let replace_all ~needle ~replacement text =
+  if needle = "" then text
+  else
+    let n = String.length text and k = String.length needle in
+    let b = Buffer.create n in
+    let rec loop pos =
+      if pos + k > n then Buffer.add_substring b text pos (n - pos)
+      else if String.sub text pos k = needle then begin
+        Buffer.add_string b replacement;
+        loop (pos + k)
+      end else begin
+        Buffer.add_char b text.[pos];
+        loop (pos + 1)
+      end
+    in
+    loop 0;
+    Buffer.contents b
+
+let normalize_diagnostic ~home text =
+  text
+  |> replace_all ~needle:home ~replacement:"<HOME>"
+  |> replace_all ~needle:(Sys.getcwd ()) ~replacement:"<ROOT>"
+  |> replace_all ~needle:(Filename.get_temp_dir_name ()) ~replacement:"<TMP>"
+
+let make_temp_dir prefix =
+  let path = Filename.temp_file prefix ".dir" in
+  Sys.remove path;
+  Unix.mkdir path 0o700;
+  path
+
+let rec remove_tree path =
+  if Sys.file_exists path then
+    if Sys.is_directory path then begin
+      Sys.readdir path
+      |> Array.iter (fun name -> remove_tree (Filename.concat path name));
+      Unix.rmdir path
+    end else
+      Sys.remove path
+
+let store_snapshot home =
+  let root = Filename.concat home ".pp/store" in
+  if not (Sys.file_exists root) then ""
+  else
+    let rec walk path rel =
+      try
+        if Sys.is_directory path then begin
+          let entries =
+            Sys.readdir path
+            |> Array.to_list
+            |> List.sort compare
+            |> List.concat_map (fun name ->
+                 let child = Filename.concat path name in
+                 let child_rel = if rel = "" then name else rel ^ "/" ^ name in
+                 walk child child_rel)
+          in
+          (if rel = "" then [] else [rel ^ "/	DIR	-"]) @ entries
+        end
+        else
+          let stat = Unix.stat path in
+          [Printf.sprintf "%s\t%d\t%s" rel stat.Unix.st_size
+             (Digest.to_hex (Digest.file path))]
+      with _ -> []
+    in
+    walk root ""
+    |> List.sort compare
+    |> String.concat "\n"
+
+let with_home home f =
+  let previous = Sys.getenv_opt "HOME" in
+  Unix.putenv "HOME" home;
+  try
+    let result = f () in
+    (match previous with Some value -> Unix.putenv "HOME" value
+                       | None -> Unix.putenv "HOME" "");
+    result
+  with exn ->
+    (match previous with Some value -> Unix.putenv "HOME" value
+                       | None -> Unix.putenv "HOME" "");
+    raise exn
+
+let run_pp_at binary args file home =
+  with_home home (fun () -> run_pp_path binary args file)
+
+let status_equal a b =
+  match a, b with
+  | `Exit x, `Exit y -> x = y
+  | `Signal x, `Signal y -> x = y
+  | `Timeout, `Timeout -> true
+  | _ -> false
+
+let status_name = function
+  | `Exit n -> Printf.sprintf "exit-%d" n
+  | `Signal n -> Printf.sprintf "signal-%d" n
+  | `Timeout -> "timeout"
+
+(* Run one generated source through the reference and candidate in isolated
+   homes.  This is deliberately independent of the existing metamorphic and
+   round-trip gates: pair mode adds an oracle, it does not replace any one. *)
+type differential_run = {
+  verdict : verdict;
+  reference : outcome;
+  candidate : outcome;
+  reference_store : string;
+  candidate_store : string;
+}
+
+let run_differential src candidate =
+  let ref_home = make_temp_dir "ppfuzz-ocaml-" in
+  let cand_home = make_temp_dir "ppfuzz-lisp-" in
+  let file = Lazy.force prog_file in
+  (* Keep the source write here, immediately before both process launches.
+     Other gates also use this shared path, so relying on a previous run makes
+     pair mode compare stale input rather than the generated program. *)
+  let ch = open_out file in
+  output_string ch src;
+  close_out ch;
+  let reference = run_pp_at !pp_bin [] file ref_home in
+  let candidate_out = run_pp_at candidate [] file cand_home in
+  let ref_store = store_snapshot ref_home
+  and cand_store = store_snapshot cand_home in
+  let verdict =
+    if not (status_equal reference.status candidate_out.status) then
+      Mismatch ("differential:status:" ^ status_name reference.status ^ "|" ^
+                status_name candidate_out.status)
+    else if reference.out <> candidate_out.out then
+      Mismatch "differential:stdout"
+    else if normalize_diagnostic ~home:ref_home reference.err <>
+            normalize_diagnostic ~home:cand_home candidate_out.err then
+      Mismatch "differential:stderr"
+    else if ref_store <> cand_store then
+      Mismatch "differential:store"
+    else Pass
+  in
+  (try Sys.remove file with _ -> ());
+  (try remove_tree ref_home with _ -> ());
+  (try remove_tree cand_home with _ -> ());
+  { verdict; reference; candidate = candidate_out;
+    reference_store = ref_store; candidate_store = cand_store }
 
 
 (* extract a stable error tag from stderr *)
@@ -1105,7 +1264,6 @@ let shrink_candidates (forms : sx list) : sx list list =
    sexpr surface is still fully supported, just no longer the default for
    `.pp`. `--roundtrip-braces` (below) also relies on this: it refuses a
    file whose extension already dispatches to the brace reader. *)
-let prog_file = lazy (Filename.temp_file "ppfuzz" ".ppl")
 
 (* The reader round-trip check (sexpr -> braces -> re-read; AST +
    LAW-20 hash equality), run in-process by the interpreter itself. *)
@@ -1360,8 +1518,12 @@ let run_metamorphic (src : string) (twin : string) : verdict =
 let is_meta_signature s =
   String.length s >= 12 && String.sub s 0 12 = "metamorphic:"
 
-let shrink (src : string) (signature : string) : string =
+let is_differential_signature s =
+  String.length s >= 13 && String.sub s 0 13 = "differential:"
+
+let shrink ?diff_candidate (src : string) (signature : string) : string =
   let is_meta = is_meta_signature signature in
+  let is_diff = is_differential_signature signature in
   let execs = ref 0 in
   let same_sig forms =
     if !execs >= !shrink_budget then false
@@ -1378,9 +1540,16 @@ let shrink (src : string) (signature : string) : string =
             let t_out = run_single twin in
             sig_of_verdict (judge_meta p_out t_out) = Some signature
         | None -> false
+      end else if is_diff then begin
+        match diff_candidate with
+        | Some candidate ->
+            let result = run_differential (render_program forms) candidate in
+            sig_of_verdict result.verdict = Some signature
+        | None -> false
       end else begin
-        let w = run_walker (render_program forms) in
-        let rt = run_roundtrip (render_program forms) in
+        let text = render_program forms in
+        let w = run_walker text in
+        let rt = run_roundtrip text in
         sig_of_verdict (judge_full rt w) = Some signature
       end
     end
@@ -1443,6 +1612,11 @@ type sig_info = {
 
 let () =
   parse_cli ();
+  (match !compare_pp_bin with
+   | Some _ when not !pp_explicit ->
+       prerr_endline "pp-fuzz: pair mode requires an explicit reference --pp-ocaml PATH (or --pp PATH)";
+       exit 2
+   | _ -> ());
   if !dump_iter >= 0 then begin
     print_string (gen_program !grammar !dump_iter);
     exit 0
@@ -1453,8 +1627,13 @@ let () =
   let n_rt_checked = ref 0 and n_rt_fail = ref 0 in
   let n_meta_checked = ref 0 and n_meta_fail = ref 0 in
   let n_cache_checked = ref 0 and n_cache_fail = ref 0 in
-  Printf.printf "pp-fuzz: grammar=%s seed=%d start=%d count=%d depth=%d timeout=%dms pp=%s\n%!"
+  let n_diff_checked = ref 0 and n_diff_fail = ref 0 in
+  Printf.printf "pp-fuzz: grammar=%s seed=%d start=%d count=%d depth=%d timeout=%dms pp=%s"
     !grammar !seed !start_iter !count !max_depth !timeout_ms !pp_bin;
+  (match !compare_pp_bin with
+   | Some candidate -> Printf.printf " compare-pp=%s" candidate
+   | None -> ());
+  Printf.printf "\n%!";
   (* Exercise the library directly as part of every fuzzer invocation.  The
      differential loop below remains process-isolated; this call keeps the
      kernel property ratchet in the same gate without duplicating a property
@@ -1467,6 +1646,15 @@ let () =
     let meta_twin_src = ref None in
     let src = gen_program !grammar i in
     let w = run_walker src in
+    let differential =
+      match !compare_pp_bin with
+      | None -> None
+      | Some candidate ->
+          incr n_diff_checked;
+          let result = run_differential src candidate in
+          if result.verdict <> Pass then incr n_diff_fail;
+          Some result
+    in
     let rt = run_roundtrip src in
     incr n_rt_checked;
     if rt.status <> `Exit 0 then incr n_rt_fail;
@@ -1482,7 +1670,7 @@ let () =
            | None -> Pass)
       | verdict -> verdict
     in
-    let v =
+    let single_v =
       match base with
       | (Pass | UnmatchedError _) when not !no_metamorphic ->
           incr n_meta_checked;
@@ -1495,6 +1683,11 @@ let () =
                verdict
            | None -> base)
       | _ -> base
+    in
+    let v =
+      match differential with
+      | Some result when result.verdict <> Pass -> result.verdict
+      | _ -> single_v
     in
     (match v with
      | Pass ->
@@ -1535,15 +1728,47 @@ let () =
           (match !meta_twin_src with
            | Some twin ->
                write_file (Filename.concat dir (Printf.sprintf "%d.twin.ppl" i)) twin
-           | None -> ())
+           | None -> ());
+          (match differential with
+           | Some result when result.verdict <> Pass ->
+               write_file (Filename.concat dir
+                 (Printf.sprintf "%d.reference.out" i))
+                 (outcome_to_string result.reference);
+               write_file (Filename.concat dir
+                 (Printf.sprintf "%d.candidate.out" i))
+                 (outcome_to_string result.candidate);
+               write_file (Filename.concat dir
+                 (Printf.sprintf "%d.reference.store" i))
+                 result.reference_store;
+               write_file (Filename.concat dir
+                 (Printf.sprintf "%d.candidate.store" i))
+                 result.candidate_store
+           | _ -> ())
         end;
         (* shrink only the first exemplar of a signature; unmatched errors
            are retained as gating reproducers just like other failures *)
         if info.n_hits = 1 then begin
-          let small = shrink src s in
+          let small =
+            match !compare_pp_bin, is_differential_signature s with
+            | Some candidate, true -> shrink ~diff_candidate:candidate src s
+            | _ -> shrink src s
+          in
           info.min_repro <- small;
           write_file (Filename.concat dir "min.ppl") small;
-          if is_meta_signature s then begin
+          if is_differential_signature s then begin
+            (match !compare_pp_bin with
+             | Some candidate ->
+                 let result = run_differential small candidate in
+                 write_file (Filename.concat dir "min.reference.out")
+                   (outcome_to_string result.reference);
+                 write_file (Filename.concat dir "min.candidate.out")
+                   (outcome_to_string result.candidate);
+                 write_file (Filename.concat dir "min.reference.store")
+                   result.reference_store;
+                 write_file (Filename.concat dir "min.candidate.store")
+                   result.candidate_store
+             | None -> ())
+          end else if is_meta_signature s then begin
             let h = Hashtbl.hash small in
             Random.full_init [| h |];
             name_counter := 0;
@@ -1562,8 +1787,8 @@ let () =
         end);
     let done_n = i - !start_iter + 1 in
     if done_n mod 200 = 0 then
-      Printf.printf "  ... %d/%d  pass=%d mismatch=%d unmatched-error=%d crash=%d meta-fail=%d distinct-sigs=%d\n%!"
-        done_n !count !n_pass !n_mismatch !n_unmatched !n_crash !n_meta_fail (Hashtbl.length sigs)
+      Printf.printf "  ... %d/%d  pass=%d mismatch=%d unmatched-error=%d crash=%d meta-fail=%d differential-fail=%d distinct-sigs=%d\n%!"
+        done_n !count !n_pass !n_mismatch !n_unmatched !n_crash !n_meta_fail !n_diff_fail (Hashtbl.length sigs)
   done;
   Printf.printf "\n==== pp-fuzz summary (grammar=%s, seed=%d, count=%d) ====\n"
     !grammar !seed !count;
@@ -1575,6 +1800,11 @@ let () =
     !n_meta_checked !n_meta_fail;
   Printf.printf "node-cache %d checked, %d failed (generated persistent nodes)\n"
     !n_cache_checked !n_cache_fail;
+  (match !compare_pp_bin with
+   | Some candidate ->
+       Printf.printf "differential %d checked, %d failed (candidate=%s)\n"
+         !n_diff_checked !n_diff_fail candidate
+   | None -> ());
   Printf.printf "distinct signatures: %d\n" (Hashtbl.length sigs);
   let sorted =
     Hashtbl.fold (fun s info acc -> (s, info) :: acc) sigs []

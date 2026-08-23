@@ -1,0 +1,2 @@
+# M3 boundary: effects are outside this pure parity corpus.
+perform log("m3-effect-boundary")

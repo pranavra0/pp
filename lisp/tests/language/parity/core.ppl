@@ -1,0 +1,11 @@
+;; M3 pure parity: arithmetic, control, closures, let/let*, collections, strings.
+(print (+ 1 (* 2 3)))
+(print (if (> 2 1) "yes" "no"))
+(print (let [a 2 b (+ a 3)] b))
+(print (let* [x 1 x (+ x 1)] x))
+(print ((fn [x] (+ x 1)) 4))
+(print (list 1 2 3))
+(print (vector-get (vector 4 5) 1))
+(print (hash-map "a" 1))
+(print (hash-set 2 1 2))
+(print (string-append "a" "b" (number->string 3)))

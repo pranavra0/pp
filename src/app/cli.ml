@@ -46,6 +46,7 @@ type t = {
   recv_hit : (string * string) option;
   remote_node : (string * string * string * string * string) option;
   check_kernel_props : (int * int) option;
+  kernel_fixture : string option;
   version : bool;
   help : bool;
   dump_surface_tables : bool;
@@ -102,6 +103,7 @@ type raw = {
   recv_hit : (string * string) option ref;
   remote_node : (string * string * string * string * string) option ref;
   check_kernel_props : (int * int) option ref;
+  kernel_fixture : string option ref;
   once : bool ref;
   version : bool ref;
   help : bool ref;
@@ -127,7 +129,7 @@ let new_raw command_argv = {
   island_pins = ref None; cluster_init = ref false; mint_token = ref None;
   transport_push = ref None; transport_pull = ref None; serve_hit = ref None;
   recv_hit = ref None; remote_node = ref None;
-  check_kernel_props = ref None; version = ref false;
+  check_kernel_props = ref None; kernel_fixture = ref None; version = ref false;
   help = ref false; once = ref false;
   dump_surface_tables = ref false; dump_builtins = ref false;
 }
@@ -262,6 +264,7 @@ let flags raw =
     { (flag "-v" (fun () -> raw.version := true)) with internal = true };
     flag "--dump-surface-tables" (fun () -> raw.dump_surface_tables := true);
     flag "--dump-builtins" (fun () -> raw.dump_builtins := true);
+    { (opt1 "--kernel-fixture" (fun path -> raw.kernel_fixture := Some path)) with internal = true };
     { name = "--check-kernel-props"; doc = ""; internal = true; handler = parse_kernel_props raw };
     doc_of "  pp --help                Print this help\n"
       (flag "--help" (fun () -> raw.help := true));
@@ -290,7 +293,7 @@ let validate_modes raw =
       (!(raw.dump_surface_tables), "--dump-surface-tables");
       (!(raw.dump_builtins), "--dump-builtins");
       (option_set raw.check_kernel_props, "--check-kernel-props");
-      (option_set raw.lint_file, "lint");
+      (option_set raw.kernel_fixture, "--kernel-fixture");
       (!(raw.graph), "graph");
       (option_set raw.island_pins, "island-pins");
       (!(raw.cluster_init), "cluster-init");
@@ -366,8 +369,9 @@ let validated raw =
     mint_token = !(raw.mint_token); transport_push = !(raw.transport_push);
     transport_pull = !(raw.transport_pull); serve_hit = !(raw.serve_hit);
     recv_hit = !(raw.recv_hit); remote_node = !(raw.remote_node);
-    check_kernel_props = !(raw.check_kernel_props); version = !(raw.version);
-    help = !(raw.help);
+    check_kernel_props = !(raw.check_kernel_props);
+    kernel_fixture = !(raw.kernel_fixture);
+    version = !(raw.version);
     dump_surface_tables = !(raw.dump_surface_tables); dump_builtins = !(raw.dump_builtins) }
 
 let parse args =
@@ -434,6 +438,7 @@ let transport_pull (t : t) = t.transport_pull
 let serve_hit (t : t) = t.serve_hit
 let recv_hit (t : t) = t.recv_hit
 let remote_node (t : t) = t.remote_node
+let kernel_fixture (t : t) = t.kernel_fixture
 let check_kernel_props (t : t) = t.check_kernel_props
 let version (t : t) = t.version
 let help (t : t) = t.help

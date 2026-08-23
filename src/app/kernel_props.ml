@@ -1077,3 +1077,248 @@ let run ~(seed : int) ~(count : int) : bool =
            Printf.printf "  [%s] %s\n" prop detail
          end) fs);
   fs = []
+
+(* ======================================================== SHARED FIXTURE ==== *)
+
+(* The parity fixture is intentionally a line protocol rather than a host
+   language.  Every row has exactly four tab-delimited fields:
+   CATEGORY, ROW-NAME, CONSTRUCTOR, SPEC.  SPEC is constructor data, not
+   source text, and is never passed to a reader. *)
+let fixture_exact operation fields =
+  if List.length fields <> 4 then
+    failwith (Printf.sprintf "%s requires exactly four tab-delimited fields"
+      operation)
+
+
+let fixture_canonical constructor spec =
+  constructor ^ ":" ^ spec
+
+let fixture_bool = function true -> "true" | false -> "false"
+
+let fixture_emit output category name canonical digest =
+  Printf.fprintf output "%s\t%s\t%s\t%s\n"
+    category name canonical digest
+
+let fixture_env () : env =
+  { env_id = 0; env_hash = ""; bindings = [] }
+
+let fixture_range () =
+  Source_range.make ~source:"parity"
+    ~start_pos:(Source_range.position ~offset:0 ~line:1 ~column:1)
+    ~end_pos:(Source_range.position ~offset:1 ~line:1 ~column:2)
+
+let fixture_expr constructor spec : expr =
+  let lit = ELiteral (VInt 1) in
+  let sym = ESymbol "x" in
+  match constructor with
+  | "literal-int" -> ELiteral (VInt (int_of_string spec))
+  | "symbol" -> ESymbol spec
+  | "if" -> EIf (lit, lit, lit)
+  | "let" -> ELet ([("x", lit)], lit)
+  | "fn" -> EFn (["x"], lit)
+  | "apply" -> EApply (sym, [lit])
+  | "quote" -> EQuote lit
+  | "force" -> EForce lit
+  | "with-caps" -> EWithCaps (ELiteral VNil, lit)
+  | "perform" -> EPerform ("effect", [lit])
+  | "with-handler" -> EWithHandler ([("effect", lit)], lit)
+  | "delay" -> EDelay lit
+  | "node" -> ENode lit
+  | "defnode" -> EDefNode ("n", ["x"], lit)
+  | "do" -> EDo [lit]
+  | "def" -> EDef ("f", ["x"], lit)
+  | "defvalue" -> EDefValue ("v", lit)
+  | "letstar" -> ELetStar ([("x", lit)], lit)
+  | "module" -> EModule [lit]
+  | "import" -> EImport lit
+  | "load" -> ELoad spec
+  | "loadmodule" -> ELoadModule spec
+  | "island" -> EIsland (spec, None)
+  | "with-config" -> EWithConfig (lit, lit)
+  | "config" -> EConfig (lit, None)
+  | "typed" -> ETyped (lit, sym)
+  | "located" -> ELocated (fixture_range (), lit)
+  | "match" ->
+      EMatch (sym, [(PVariable "x", None, lit)])
+  | _ -> failwith ("unknown expr constructor: " ^ constructor)
+
+let fixture_value constructor spec : value =
+  let one = VInt 1 in
+  let env = fixture_env () in
+  let closure =
+    VClosure {
+      fn_name = None; params = ["x"]; body = ESymbol "x";
+      env = ref env; closure_kind = Function
+    }
+  in
+  match constructor with
+  | "nil" -> VNil
+  | "bool" ->
+      (match spec with
+       | "true" -> VBool true
+       | "false" -> VBool false
+       | _ -> failwith "invalid bool fixture")
+  | "int" -> VInt (int_of_string spec)
+  | "float" -> VFloat (float_of_string spec)
+  | "string" -> VString spec
+  | "keyword" -> VKeyword spec
+  | "symbol" -> VSymbol spec
+  | "pair" -> VPair (one, VNil)
+  | "vector" -> VVector [| one |]
+  | "map" -> VMap [(VString "a", one)]
+  | "set" -> VSet [one]
+  | "closure" -> closure
+  | "builtin" -> VBuiltin ("print", (fun _ _ -> VNil))
+  | "capability" ->
+      VCapability (Capability.mint ~realpath:(fun path -> path) "process")
+  | "thunk" ->
+      VThunk {
+        thunk_status = Unevaluated; thunk_hash = None;
+        thunk_expr = ESymbol "x"; thunk_env = env;
+        thunk_name = None; type_ann = None; thunk_loc = None;
+        config_hash = ""; thunk_kind = Ephemeral
+      }
+  | "env-map" -> VEnvMap [("x", one)]
+  | "sealed" -> VSealed spec
+  | _ -> failwith ("unknown value constructor: " ^ constructor)
+
+let fixture_pattern constructor spec : pattern =
+  let lit = PLiteral (VInt 1) in
+  match constructor with
+  | "literal" -> lit
+  | "variable" -> PVariable spec
+  | "wildcard" -> PWildcard
+  | "list" -> PList ([lit], None)
+  | "tagged" -> PTagged (spec, [lit])
+  | _ -> failwith ("unknown pattern constructor: " ^ constructor)
+
+let fixture_capability constructor spec : Capability.t =
+  let realpath path = path in
+  match constructor with
+  | "none" -> Capability.none
+  | "filesystem" -> Capability.mint ~realpath spec
+  | "network" -> Capability.mint ~realpath spec
+  | "secret" -> Capability.mint ~realpath spec
+  | "process" -> Capability.mint ~realpath spec
+  | "compose" ->
+      Capability.compose [
+        Capability.none;
+        Capability.mint ~realpath "process"
+      ]
+  | "restrict" ->
+      Capability.restrict
+        (Capability.mint ~realpath "fs:/parity:ro")
+        (Paths.canonicalize ~realpath "/parity")
+  | _ -> failwith ("unknown capability constructor: " ^ constructor)
+
+let fixture_cell constructor spec : Cell.t =
+  match constructor with
+  | "file" -> Cell.File spec
+  | "runtime-file" -> Cell.RuntimeFile spec
+  | "tool" -> Cell.Tool spec
+  | "tree" -> Cell.Tree spec
+  | "stat" -> Cell.Stat spec
+  | "env" -> Cell.Env spec
+  | "argv" -> Cell.Argv
+  | "config" -> Cell.Config spec
+  | "handler" -> Cell.Handler spec
+  | "probe" -> Cell.Probe spec
+  | "sealed" -> Cell.Sealed spec
+  | "node" -> Cell.Node spec
+  | "domain" ->
+      (match String.split_on_char ':' spec with
+       | [name; sub] -> Cell.Domain { name; sub }
+       | _ -> failwith "domain cell requires NAME:SUB spec")
+  | "unknown" -> Cell.Unknown spec
+  | _ -> failwith ("unknown cell constructor: " ^ constructor)
+
+let fixture_identity constructor spec =
+  match constructor with
+  | "node-key" -> Identity_types.Node_key.to_string
+      (Identity_types.Node_key.of_string spec)
+  | "cache-key" -> Identity_types.Cache_key.to_string
+      (Identity_types.Cache_key.of_string spec)
+  | "object-hash" -> Identity_types.Object_hash.to_string
+      (Identity_types.Object_hash.of_digest spec)
+  | "observed-hash" -> Identity_types.Observed_hash.to_string
+      (Identity_types.Observed_hash.of_digest spec)
+  | "cell-id" -> Identity_types.Cell_id.to_string
+      (Identity_types.Cell_id.of_string spec)
+  | _ -> failwith ("unknown identity constructor: " ^ constructor)
+
+let fixture_dispatch output fields =
+  match fields with
+  | ["expr"; name; constructor; spec] ->
+      let expr = fixture_expr constructor spec in
+      fixture_emit output "expr" name (fixture_canonical constructor spec)
+        (Identity.hash_expr expr)
+  | ["value"; name; constructor; spec] ->
+      let value = fixture_value constructor spec in
+      fixture_emit output "value" name (fixture_canonical constructor spec)
+        (Identity.hash_value value)
+  | ["pattern"; name; constructor; spec] ->
+      let pattern = fixture_pattern constructor spec in
+      fixture_emit output "pattern" name (fixture_canonical constructor spec)
+        (Identity.hash_pattern pattern)
+  | ["capability"; name; constructor; spec] ->
+      let capability = fixture_capability constructor spec in
+      let scope = Paths.canonicalize ~realpath:(fun path -> path) "/parity" in
+      let composed = Capability.compose [capability; Capability.none] in
+      let restricted = Capability.restrict capability scope in
+      let canonical =
+        Capability.to_string capability
+        ^ "|subset="
+        ^ fixture_bool (Capability.subseteq capability [capability])
+        ^ "|compose="
+        ^ fixture_bool (Capability.subseteq composed [capability])
+        ^ "|restrict="
+        ^ fixture_bool (Capability.subseteq restricted [capability])
+      in
+      fixture_emit output "capability" name canonical
+        (Capability.hash capability)
+  | ["cell"; name; constructor; spec] ->
+      let cell = fixture_cell constructor spec in
+      let canonical = Cell.serialize cell in
+      fixture_emit output "cell" name canonical (Hasher.hash_string canonical)
+  | ["identity"; name; constructor; spec] ->
+      let canonical = fixture_identity constructor spec in
+      fixture_emit output "identity" name canonical (Hasher.hash_string canonical)
+  | ["codec"; name; _constructor; spec] ->
+      (match Codec.decode_value spec with
+       | None -> failwith ("invalid codec fixture: " ^ name)
+       | Some value ->
+           (match Codec.encode_value value with
+            | None -> failwith ("non-data codec fixture: " ^ name)
+            | Some canonical ->
+                fixture_emit output "codec" name canonical
+                  (Hasher.hash_string canonical)))
+  | fields ->
+      let operation = match fields with [] -> "" | operation :: _ -> operation in
+      fixture_exact operation fields;
+      failwith ("unknown fixture category: " ^ operation)
+
+let run_fixture path : bool =
+  let input = open_in path in
+  let output = stdout in
+  let ok =
+    try
+      let rec loop () =
+        match input_line input with
+        | exception End_of_file -> true
+        | line ->
+            if line = "" || line.[0] = '#' then loop ()
+            else begin
+              let fields = String.split_on_char '\t' line in
+              fixture_exact (match fields with [] -> "" | x :: _ ) fields;
+              fixture_dispatch output fields;
+              loop ()
+            end
+      in
+      loop ()
+    with error ->
+      close_in_noerr input;
+      raise error
+  in
+  close_in input;
+  flush output;
+  ok

@@ -4,8 +4,17 @@
 # and final exit-code line), and fails on any difference. For tests/*.sh oracles,
 # runs the script and checks its exit status. Invoked by `dune runtest`; can
 # also be run by hand from the repo root:
-#
 #     dune build && scripts/run-tests.sh ./pp
+#
+# Run a deterministic two-engine parity pass over the same cases without
+# changing the default single-engine invocation:
+#
+#     scripts/run-tests.sh --compare --ocaml ./pp-ocaml --lisp ./pp-lisp
+#
+# The comparison driver executes each existing .pp/.sh entry point once per
+# explicit binary and compares status, stdout, normalized diagnostics, and
+# durable store inventory/bytes.  `--compare` requires both paths; ordinary
+# `scripts/run-tests.sh [PP]` remains unchanged.
 #
 # Arg 1 is the pp binary (default: the dune-built one). The tests run with the
 # repo root as cwd so `(load "stdlib/list.pp")` resolves.
@@ -77,6 +86,23 @@ if [ "${1:-}" = "--worker" ]; then
       printf '%s\n' "$endline" ;;
   esac
   exit 0
+fi
+
+# Pair mode intentionally delegates case execution to the comparison helper;
+# the shared test scripts remain the sole definition of each case.  Both
+# `--ocaml PATH --lisp PATH` and positional `OCAML LISP` forms are accepted.
+if [ "${1:-}" = "--compare" ]; then
+  shift
+  compare_helper="$(cd "$(dirname "$0")" && pwd -P)/compare-binaries.sh"
+  if [ "$#" -eq 2 ] && [[ "$1" != --* ]] && [[ "$2" != --* ]]; then
+    exec "$compare_helper" --suite --ocaml "$1" --lisp "$2"
+  else
+    compare_prefix=(--suite)
+    for compare_arg in "$@"; do
+      [ "$compare_arg" = "--case" ] && compare_prefix=()
+    done
+    exec "$compare_helper" "${compare_prefix[@]}" "$@"
+  fi
 fi
 
 PP="${1:-_build/default/src/app/main.exe}"
