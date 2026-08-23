@@ -856,21 +856,73 @@
         (frontend-fail "expected name" :code "reader.syntax"
                        :range (frontend-token-range tok)))))
 (defun fe-bargs (p)
+  "Read a call's argument list, lowering spread segments to APPLY inputs.
+
+The first return value is the ordinary argument list when no spread occurs.
+When spread occurs it is the list of list segments and spread expressions
+expected by the APPLY primitive; the second return value records that case.
+Keeping the distinction here lets spread-free calls retain their exact AST
+shape (and therefore their hashes)."
   (fe-bskip-lines p)
-  (if (eq (fe-bkind p) :rparen) (progn (fe-bnext p) nil)
-      (let ((xs nil))
-        (loop
-          (push (fe-bexpr p t nil) xs)
-          ;; Newlines are transparent inside argument parentheses, including
-          ;; before the closing delimiter.
-          (fe-bskip-lines p)
-          (cond ((eq (fe-bkind p) :comma) (fe-bnext p) (fe-bskip-lines p))
-                ((eq (fe-bkind p) :rparen) (fe-bnext p) (return (nreverse xs)))
-                (t (frontend-fail "expected ',' or ')'"
-                                  :code (if (eq (fe-bkind p) :eof)
-                                            "reader.incomplete" "reader.syntax")
-                                  :range (frontend-token-range (fe-bcur p))
-                                  :incomplete-p (eq (fe-bkind p) :eof))))))))
+  (if (eq (fe-bkind p) :rparen)
+      (progn (fe-bnext p) (values nil nil))
+      (let ((plain nil) (segments nil) (spreadp nil))
+        (labels ((flush-plain ()
+                   (when plain
+                     (push (make-eapply (make-esymbol "list")
+                                        (nreverse plain))
+                           segments)
+                     (setf plain nil)))
+                 (read-spread ()
+                   (let* ((token (fe-bnext p))
+                          (name (frontend-token-value token))
+                          (tail (subseq name 3)))
+                     (if (plusp (length tail))
+                         (make-esymbol tail)
+                         (progn
+                           (when (member (fe-bkind p) '(:comma :rparen :eof)
+                                         :test #'eq)
+                             (frontend-fail
+                              "spread requires an expression"
+                              :code (if (eq (fe-bkind p) :eof)
+                                        "reader.incomplete" "reader.syntax")
+                              :range (frontend-token-range (fe-bcur p))
+                              :incomplete-p (eq (fe-bkind p) :eof)))
+                           (fe-bexpr p t nil))))))
+          (loop
+            (if (and (eq (fe-bkind p) :name)
+                     (fe-name-spread-p (frontend-token-value (fe-bcur p))))
+                (progn
+                  (flush-plain)
+                  (setf spreadp t)
+                  (push (read-spread) segments))
+                (push (fe-bexpr p t nil) plain))
+            ;; Newlines are transparent inside argument parentheses, including
+            ;; before the closing delimiter.
+            (fe-bskip-lines p)
+            (cond
+              ((eq (fe-bkind p) :comma)
+               (fe-bnext p) (fe-bskip-lines p))
+              ((eq (fe-bkind p) :rparen)
+               (fe-bnext p)
+               (if spreadp
+                   (progn
+                     (flush-plain)
+                     (return (values (nreverse segments) t)))
+                   (return (values (nreverse plain) nil))))
+              (t
+               (frontend-fail "expected ',' or ')'"
+                              :code (if (eq (fe-bkind p) :eof)
+                                        "reader.incomplete" "reader.syntax")
+                              :range (frontend-token-range (fe-bcur p))
+                              :incomplete-p (eq (fe-bkind p) :eof)))))))))
+
+(defun fe-bargs-no-spread (p)
+  (multiple-value-bind (args spreadp) (fe-bargs p)
+    (when spreadp
+      (frontend-fail "spread is only supported in function calls"
+                     :code "reader.syntax"))
+    args))
 
 (defun fe-bmap (p)
   (fe-bnext p) (fe-bskip-lines p)
@@ -1483,7 +1535,7 @@ from a user-written bare primitive, including nested lowered children."
                  (format nil "unknown observation head $~A (known: $file, $env, $glob, $probe, $secret, $config)" kind)
                  :code "reader.surface" :range (frontend-token-range tok)))
               (fe-bexpect p :lparen "expected '(' after observation head")
-              (let* ((args (fe-bargs p))
+              (let* ((args (fe-bargs-no-spread p))
                      (min (second desc)) (max (third desc)))
                 (unless (<= min (length args) max)
                   (frontend-fail
@@ -1522,7 +1574,7 @@ from a user-written bare primitive, including nested lowered children."
                 (make-esymbol n)))
            ((string= n "with-handler")
             (fe-bexpect p :lparen "with-handler requires '('")
-            (let ((pairs (fe-bargs p)) (handlers nil))
+            (let ((pairs (fe-bargs-no-spread p)) (handlers nil))
               (dolist (pair pairs)
                 (unless (and (typep pair 'expr-apply)
                              (typep (expr-apply-function pair) 'expr-symbol)
@@ -1664,7 +1716,7 @@ from a user-written bare primitive, including nested lowered children."
                                               (mapcar #'make-esymbol params))
                                  (if (typep body 'expr-do)
                                      (expr-do-expressions body) (list body))))))
-           ((string= n "needs") (make-eapply (make-esymbol "needs") (fe-bargs p)))
+           ((string= n "needs") (make-eapply (make-esymbol "needs") (fe-bargs-no-spread p)))
            ((string= n "fn")
             (let* ((location (frontend-token-range (fe-bcur p)))
                    (params (fe-bparams-annotated p))
@@ -1790,7 +1842,7 @@ from a user-written bare primitive, including nested lowered children."
            ((string= n "perform")
             (let ((effect (fe-bname p)))
               (fe-bexpect p :lparen "perform requires argument list")
-              (make-eperform effect (fe-bargs p))))
+              (make-eperform effect (fe-bargs-no-spread p))))
            ((string= n "quote")
             (if (eq (fe-bkind p) :lbrace)
                 (fe-bquote-block p)
@@ -1798,7 +1850,7 @@ from a user-written bare primitive, including nested lowered children."
            ((string= n "reconcile") (fe-bmap p))
            ((member n '("config" "assert" "load" "load-module" "island") :test #'string=)
             (fe-bexpect p :lparen "expected '('")
-            (let ((args (fe-bargs p)))
+            (let ((args (fe-bargs-no-spread p)))
               (cond ((string= n "config") (make-econfig (first args) (second args)))
                     ((string= n "assert") (fe-desugar-assert (first args) (second args)))
                     ((string= n "load") (unless (= (length args) 1) (frontend-fail "load expects one argument" :code "reader.arity")) (make-eload (fe-require-string-literal (first args) "load")))
@@ -1839,7 +1891,13 @@ from a user-written bare primitive, including nested lowered children."
              (when nl (fe-bskip-lines p))
              (cond
                ((eq (fe-bkind p) :lparen)
-                (fe-bnext p) (postfix (make-eapply left (fe-bargs p))))
+                (fe-bnext p)
+               (multiple-value-bind (args spreadp) (fe-bargs p)
+                 (postfix
+                  (if spreadp
+                      (make-eapply (make-esymbol "apply")
+                                   (cons left args))
+                      (make-eapply left args)))))
                ((eq (fe-bkind p) :lbracket)
                 (fe-bnext p)
                 (let ((idx (fe-bexpr p t nil)))
