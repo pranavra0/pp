@@ -16,7 +16,7 @@
 
 (print "")
 (print "=== gensym: a macro's own temp binding must not capture a ===")
-(print "=== caller variable of the same name (M3 hygiene discipline) ===")
+(print "=== caller-name hygiene ===")
 ;; The macro's gensym prefix is deliberately "tmp" — the SAME name the
 ;; caller binds below. Without gensym, `(let [tmp ,a] ...)` would capture
 ;; the caller's `tmp` inside the expansion; `(gensym "tmp")` produces a

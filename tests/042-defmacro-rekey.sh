@@ -105,5 +105,5 @@ EOF
 assert "macro-in-node-error" "$TMP/inn-out" "unbound symbol: defmacro" present
 
 rm -rf "$TMP"
-if [ "$fail" -eq 0 ]; then echo "=== DEFMACRO REKEY (LAW 20 / M3 exit 3) TEST PASSED ==="; fi
+if [ "$fail" -eq 0 ]; then echo "=== DEFMACRO REKEY TEST PASSED ==="; fi
 exit $fail

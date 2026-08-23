@@ -147,5 +147,5 @@ assert "both-grants-plain-fs"       "SECRETDATA" present
 assert "both-grants-not-redacted"   "#<sealed>"  absent
 
 rm -rf "$TMP"
-if [ "$fail" -eq 0 ]; then echo "=== SEALED CELLS (M4) TEST PASSED ==="; fi
+if [ "$fail" -eq 0 ]; then echo "=== SEALED CELLS TEST PASSED ==="; fi
 exit $fail
