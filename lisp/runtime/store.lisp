@@ -1016,10 +1016,7 @@
    layout
    (lambda ()
      (let* ((previous (gc-roots-read-all layout))
-            ;; Re-recording a live command root must not grow the manifest on
-            ;; every run or make crash recovery produce different bytes.
-            (roots (append (remove root previous :test #'store-gc-root-equal-p)
-                           (list root)))
+            (roots (append previous (list root)))
             (kept (if (and (> keep 0) (> (length roots) keep))
                       (subseq roots (- (length roots) keep)) roots)))
        (store-atomic-replace
