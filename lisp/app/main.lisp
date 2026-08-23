@@ -188,6 +188,82 @@
         (%suffix-p name ".ppb")
         (%suffix-p name ".ppl"))))
 
+(defun %validate-command-modes (arguments)
+  ;; Port of cli.ml validate_modes: at most one command mode may be active,
+  ;; and flag combinations with their own contracts are rejected up front so
+  ;; the diagnostics do not depend on which runtime services are installed.
+  (let ((modes nil)
+        (first-subcommand
+          (and arguments
+               (find-if (lambda (candidate)
+                          (string= (first arguments) candidate))
+                        '("fmt" "lint" "graph" "gc" "island-pins" "cluster-init")))))
+    (flet ((flag-mode (flag name)
+             (when (member flag arguments :test #'string=) (push name modes))))
+      (dolist (pair '(("--help" "--help") ("--version" "--version")
+                      ("--dump-surface-tables" "--dump-surface-tables")
+                      ("--dump-builtins" "--dump-builtins")
+                      ("--check-kernel-props" "--check-kernel-props")
+                      ("--mint-token" "--mint-token")
+                      ("--transport-push" "--transport-push")
+                      ("--transport-pull" "--transport-pull")
+                      ("--serve-hit" "--serve-hit")
+                      ("--recv-hit" "--recv-hit")
+                      ("cluster-init" "cluster-init")
+                      ("--emit-braces" "--emit-braces")
+                      ("--roundtrip-braces" "--roundtrip-braces")
+                      ("--compare-hash" "--compare-hash")
+                      ("--list-comments" "--list-comments")
+                      ("gc" "gc") ("graph" "graph") ("lint" "lint")))
+        (flag-mode (first pair) (second pair)))
+      (when first-subcommand (push first-subcommand modes))
+      ;; The evaluation mode: a program source, `run`, `-e`, or one of the
+      ;; runtime flags.  Source operands owned by a frontend subcommand do
+      ;; not count as program sources.
+      (unless (or first-subcommand
+                  (member "--emit-braces" arguments :test #'string=)
+                  (member "--roundtrip-braces" arguments :test #'string=)
+                  (member "--compare-hash" arguments :test #'string=)
+                  (member "--list-comments" arguments :test #'string=))
+        (when (or (and arguments (string= (first arguments) "run"))
+                  (member "-e" arguments :test #'string=)
+                  (member "--watch" arguments :test #'string=)
+                  (member "--supervise" arguments :test #'string=)
+                  (member "--desired-object" arguments :test #'string=)
+                  (member "--publish-object" arguments :test #'string=)
+                  (member "--remote-node" arguments :test #'string=)
+                  (some #'%language-source-path-p arguments))
+          (push "evaluation" modes)))
+      (let ((modes (remove-duplicates (nreverse modes) :test #'string=)))
+        (when (> (length modes) 1)
+          (error "conflicting command modes: ~{~A~^, ~}" modes))))
+    ;; Pairwise contracts, in cli.ml's order.
+    (flet ((has-flag (flag) (member flag arguments :test #'string=))
+           (has-source ()
+             (and (not first-subcommand)
+                  (some #'%language-source-path-p arguments))))
+      (when (and (has-flag "--desired-object")
+                 (or (has-flag "-e") (has-source)))
+        (error "--desired-object cannot be combined with a program"))
+      (when (and (has-flag "--desired-object")
+                 (not (or (has-flag "--reconcile") (has-flag "--supervise"))))
+        (error "--desired-object requires --reconcile or --supervise"))
+      (when (and (has-flag "--once") (has-flag "--watch"))
+        (error "--once cannot be combined with --watch"))
+      (when (and (has-flag "--once") (not (has-source)))
+        (error "--once requires a source file"))
+      (when (and (has-flag "--stabilize") (not (has-flag "--watch")))
+        (error "--stabilize requires --watch"))
+      (when (and (has-flag "--watch") (not (has-source)))
+        (error "--watch requires a source file"))
+      (when (and (has-flag "--supervise") (not (has-source))
+                 (not (has-flag "--desired-object")))
+        (error "--supervise requires a source file"))
+      (when (and (has-flag "--publish-object") (not (has-source)))
+        (error "--publish-object requires a source file"))
+      (when (and (has-flag "--remote-node") (not (has-source)))
+        (error "--remote-node requires a source file")))))
+
 (defun %source-surface (path)
   (let ((name (string-downcase path)))
     (cond ((or (%suffix-p name ".pp") (%suffix-p name ".ppb")) :brace)
@@ -845,6 +921,58 @@ Flatten only capability containers; no user value is accepted as authority."
          (pp.runtime:runtime-evaluator-state-initial-env state)
          name (make-vbuiltin name function))))
 
+(defun %command-map-field (value name)
+  (and (typep value 'pp.kernel:value-map)
+       (let ((entry (find-if
+                     (lambda (item)
+                       (let ((key (car item)))
+                         (and (or (typep key 'pp.kernel:value-string)
+                                  (typep key 'pp.kernel:value-keyword))
+                              (string= name
+                                       (if (typep key 'pp.kernel:value-string)
+                                           (pp.kernel:value-string-value key)
+                                           (pp.kernel:value-keyword-value key))))))
+                     (pp.kernel:value-map-entries value))))
+         (and entry (cdr entry)))))
+
+(defun %command-register-domain (session value force)
+  (let* ((value (funcall force value))
+         (name (%command-value-text (%command-map-field value "name")
+                                    "register-domain name"))
+         (namespace-value (funcall force
+                                   (%command-map-field value "namespace")))
+         (namespace
+           (cond
+             ((typep namespace-value 'pp.kernel:value-vector)
+              (map 'list (lambda (item)
+                           (%command-value-text (funcall force item)
+                                                "register-domain namespace"))
+                   (pp.kernel:value-vector-values namespace-value)))
+             ((typep namespace-value 'pp.kernel:value-pair)
+              (labels ((collect (item)
+                         (let ((item (funcall force item)))
+                           (cond
+                             ((typep item 'pp.kernel:value-nil) nil)
+                             ((typep item 'pp.kernel:value-pair)
+                              (cons (%command-value-text
+                                     (funcall force (pp.kernel:value-pair-car item))
+                                     "register-domain namespace")
+                                    (collect (pp.kernel:value-pair-cdr item))))
+                             (t (error "register-domain namespace must be a list"))))))
+                (collect namespace-value)))
+             (t (error "register-domain namespace must be a vector or list"))))
+         (observe (funcall force (%command-map-field value "observe")))
+         (diff (funcall force (%command-map-field value "diff")))
+         (apply-fn (funcall force (%command-map-field value "apply")))
+         (cap (let ((entry (%command-map-field value "write-cap")))
+                (and entry (funcall force entry)))))
+    (unless (and observe diff apply-fn)
+      (error "register-domain requires observe, diff, and apply"))
+    (runtime-session-register-domain
+     session name
+     (make-runtime-domain-entry
+      :namespace namespace :observe observe :diff diff :apply apply-fn :cap cap))
+    (pp.kernel:make-vnil)))
 (defun %command-install-observation-primitives (session error-output)
   "Install command-tier observations without changing the pure catalog."
   (let ((state (pp.runtime:runtime-session-evaluator session)))
@@ -923,58 +1051,6 @@ Flatten only capability containers; no user value is accepted as authority."
                  (if (= (length args) 2)
                      (%command-force-argument (second args) force)
                      (pp.kernel:make-vnil)))))))
-(defun %command-map-field (value name)
-  (and (typep value 'pp.kernel:value-map)
-       (let ((entry (find-if
-                     (lambda (item)
-                       (let ((key (car item)))
-                         (and (or (typep key 'pp.kernel:value-string)
-                                  (typep key 'pp.kernel:value-keyword))
-                              (string= name
-                                       (if (typep key 'pp.kernel:value-string)
-                                           (pp.kernel:value-string-value key)
-                                           (pp.kernel:value-keyword-value key))))))
-                     (pp.kernel:value-map-entries value))))
-         (and entry (cdr entry)))))
-
-(defun %command-register-domain (session value force)
-  (let* ((value (funcall force value))
-         (name (%command-value-text (%command-map-field value "name")
-                                    "register-domain name"))
-         (namespace-value (funcall force
-                                   (%command-map-field value "namespace")))
-         (namespace
-           (cond
-             ((typep namespace-value 'pp.kernel:value-vector)
-              (map 'list (lambda (item)
-                           (%command-value-text (funcall force item)
-                                                "register-domain namespace"))
-                   (pp.kernel:value-vector-values namespace-value)))
-             ((typep namespace-value 'pp.kernel:value-pair)
-              (labels ((collect (item)
-                         (let ((item (funcall force item)))
-                           (cond
-                             ((typep item 'pp.kernel:value-nil) nil)
-                             ((typep item 'pp.kernel:value-pair)
-                              (cons (%command-value-text
-                                     (funcall force (pp.kernel:value-pair-car item))
-                                     "register-domain namespace")
-                                    (collect (pp.kernel:value-pair-cdr item))))
-                             (t (error "register-domain namespace must be a list"))))))
-                (collect namespace-value)))
-             (t (error "register-domain namespace must be a vector or list")))))
-         (observe (funcall force (%command-map-field value "observe")))
-         (diff (funcall force (%command-map-field value "diff")))
-         (apply-fn (funcall force (%command-map-field value "apply")))
-         (cap (let ((entry (%command-map-field value "write-cap")))
-                (and entry (funcall force entry)))))
-    (unless (and observe diff apply-fn)
-      (error "register-domain requires observe, diff, and apply"))
-    (runtime-session-register-domain
-     session name
-     (make-runtime-domain-entry
-      :namespace namespace :observe observe :diff diff :apply apply-fn :cap cap))
-    (pp.kernel:make-vnil)))
 
     (%command-install-primitive
      state "fenced"
@@ -1083,7 +1159,7 @@ Flatten only capability containers; no user value is accepted as authority."
           (t (pp.runtime:language-fail
               (format nil "unhandled effect: ~A" name)
               "runtime.effect")))))
-      session))
+      session)))
 
 
 (defun %command-parse-policy (text)
@@ -2974,8 +3050,9 @@ environment, so leading loads must establish the initial environment first."
     (let ((source (%read-source-file path)))
       (case target
         (:brace
-         (when (%brace-source-path-p path)
-           (error "pp fmt --to-braces: ~A is already a brace file" path))
+         ;; fmt reads the file with the target surface's inverse reader
+         ;; directly; the file's extension carries no authority (OCaml
+         ;; command_frontend.ml never checked it either).
          (let* ((forms (read-source source :source path :surface :sexpr))
                 (comments (scan-comments source :surface :sexpr))
                 (base (handler-case
@@ -2992,8 +3069,6 @@ environment, so leading loads must establish the initial environment first."
                  (%emit-frontend-text text output)
                  0))))
         (:sexpr
-         (unless (%brace-source-path-p path)
-           (error "pp fmt --to-sexpr: ~A is not a brace file" path))
          (let* ((forms (read-source source :source path :surface :brace))
                 (comments (scan-comments source :surface :brace))
                 (base (print-source forms :surface :sexpr :source path))
@@ -3467,6 +3542,12 @@ environment, so leading loads must establish the initial environment first."
                  (pp.runtime:language-exit-status condition))
                (language-error (condition) (language-error condition))
                (error (condition) (host-error condition))))))
+    (or (when arguments
+          (let ((status (run-language
+                         (lambda ()
+                           (%validate-command-modes arguments)
+                           0))))
+            (and (/= status 0) status)))
     (cond
       ((null arguments)
        (run-language
@@ -3658,7 +3739,7 @@ environment, so leading loads must establish the initial environment first."
                (first arguments))
        (%usage error-output)
        (finish-output error-output)
-       2)))))
+       2))))))
 )
 
 (defun main ()

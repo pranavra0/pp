@@ -261,12 +261,68 @@
              (string= absolute (namestring (truename absolute)))))
     (error () nil)))
 
+
+;;; Random names come from the OS, never from the saved image's repeatable
+;;; PRNG: two pp processes start from identical random state, so PRNG-derived
+;;; temp names collide deterministically.  Creation stays O_EXCL so
+;;; uniqueness is an OS guarantee rather than a probability.
+#+sbcl
+(defun store-random-hex (octet-count)
+  (let ((bytes (make-array octet-count :element-type '(unsigned-byte 8))))
+    (with-open-file (stream "/dev/urandom" :direction :input
+                            :element-type '(unsigned-byte 8))
+      (unless (= (read-sequence bytes stream) octet-count)
+        (error "unable to read secure random bytes")))
+    (string-downcase
+     (with-output-to-string (output)
+       (loop for byte across bytes do (format output "~2,'0X" byte))))))
+
+#+sbcl
+(defun store-exclusive-temp-name (directory prefix suffix)
+  "Return a freshly created regular file in DIRECTORY; the caller owns it."
+  (loop
+    (let ((candidate (merge-pathnames
+                      (format nil "~A~A~A" prefix (store-random-hex 16) suffix)
+                      (pathname directory))))
+      (handler-case
+          (progn
+            (sb-posix:close
+             (sb-posix:open (namestring candidate)
+                            (logior sb-posix:o-wronly sb-posix:o-creat
+                                    sb-posix:o-excl sb-posix:o-nofollow)
+                            #o600))
+            (return (namestring candidate)))
+        (sb-posix:syscall-error () nil)))))
+
+#+sbcl
+(defun store-exclusive-directory (base prefix)
+  "Create a fresh directory under BASE via mkdir(2), which refuses existing
+names — mkdtemp semantics without a repeatable PRNG."
+  (let ((base (if (char= (char base (1- (length base))) #\/)
+                  base
+                  (concatenate 'string base "/"))))
+    (loop
+      (let ((candidate (format nil "~A~A-~A/" base prefix (store-random-hex 16))))
+        (handler-case
+            (progn (sb-posix:mkdir candidate #o700) (return candidate))
+          (sb-posix:syscall-error () nil))))))
+
+#-sbcl
+(defun store-exclusive-temp-name (directory prefix suffix)
+  (loop
+    (let ((candidate (merge-pathnames
+                      (format nil "~A~A~A" prefix (write-to-string (get-universal-time)) suffix)
+                      (pathname directory))))
+      (unless (probe-file candidate)
+        (with-open-file (stream candidate :direction :output :if-exists :error
+                                          :if-does-not-exist :create)
+          (return (namestring candidate)))))))
+
 (defun store-atomic-write-octets (path bytes)
   "Write BYTES through an exclusive private temporary file, then publish."
   (let* ((target (store-absolute-path path))
          (directory (directory-namestring (pathname target)))
-         (tmp (format nil "~A.~36R.~D.tmp" target
-                      (random (expt 36 10)) (get-universal-time)))
+         (tmp (store-exclusive-temp-name directory ".pp-store-" ".tmp"))
          (octets (store-content-octets bytes))
          (fd nil) (published nil))
     #+sbcl
@@ -275,10 +331,9 @@
            (unless (store-secure-directory-p directory)
              (error "Store parent is not a private directory: ~A" directory))
            (store-crash-boundary "before")
-           (setf fd (sb-posix:open tmp
-                                   (logior sb-posix:o-wronly sb-posix:o-creat
-                                           sb-posix:o-excl sb-posix:o-nofollow)
-                                   #o600))
+           ;; The temp already exists (created exclusively above); open it
+           ;; for writing without re-creating.
+           (setf fd (sb-posix:open tmp sb-posix:o-wronly #o600))
            (store-write-fd-all fd octets)
            (store-crash-boundary "mid")
            (sb-posix:fsync fd)
@@ -352,7 +407,12 @@
 
 (defun store-ensure-directory (directory)
   #+sbcl
-  (let* ((absolute (store-absolute-path directory))
+  ;; Resolve symlinked ancestors (macOS TMPDIR=/var/folders, where
+  ;; /var -> private/var) to their real path first: the per-component walk
+  ;; below then checks only components pp created or verified, while a
+  ;; symlink swapped in later still fails the namestring vs truename
+  ;; comparison and O_NOFOLLOW at open.
+  (let* ((absolute (store-absolute-path (store-canonical-path directory)))
          (pathname (store-directory-pathname absolute))
          (parts (cdr (pathname-directory pathname)))
          (seen nil))

@@ -143,12 +143,27 @@
       (when (< i n)
         (bad (format nil "invalid number literal: ~A" s)
              "reader.invalid-number"))
+      ;; Resource bounds before any exact (expt 10 N): a source token like
+      ;; 1e100000000 must not allocate an astronomically large integer just
+      ;; to fail the float coercion.  |exponent| > 4095 always overflows (or
+      ;; underflows to zero) in double-float, so those cases are decided
+      ;; without building the bignum; a zero mantissa is zero for any
+      ;; exponent.
+      (when (> n 4200)
+        (bad "too many digits in number literal" "reader.invalid-number"))
       (handler-case
           (if (or has-dot has-exponent)
-              (let* ((scale (expt 10 fraction-digits))
-                     (mantissa (/ (+ (* whole scale) fraction) scale))
-                     (value (* mantissa (expt 10 exponent))))
-                (coerce (if negative (- value) value) 'double-float))
+              (cond ((and has-exponent (zerop whole) (zerop fraction))
+                     (coerce 0 'double-float))
+                    ((> exponent 4095)
+                     (bad (format nil "floating-point literal is out of range: ~A" s)
+                          "reader.float-range"))
+                    ((< exponent -4095) (coerce 0 'double-float))
+                    (t
+                     (let* ((scale (expt 10 fraction-digits))
+                            (mantissa (/ (+ (* whole scale) fraction) scale))
+                            (value (* mantissa (expt 10 exponent))))
+                       (coerce (if negative (- value) value) 'double-float))))
               (let ((value (if negative (- whole) whole)))
                 (if (<= pp.kernel::+vint-min+ value pp.kernel::+vint-max+)
                     value

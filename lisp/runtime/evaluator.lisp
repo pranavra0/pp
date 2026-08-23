@@ -295,7 +295,6 @@ instead of the language type error we owe the caller."
   (let ((jobs (list (list :visit value)))
         (results nil))
     (loop while jobs do
-      (runtime-evaluator-step! state)
       (let* ((job (pop jobs))
              (kind (first job))
              (item (second job)))
@@ -375,8 +374,27 @@ instead of the language type error we owe the caller."
            (and (typep value 'value-bool)
                 (not (value-bool-value value))))))
 
+(defun runtime-evaluator-env-lookup-activated (environment name)
+  ;; Top-level rebinding is sequential: a later `let x = …` prebinds a
+  ;; forward thunk that shadows the earlier, already-activated binding in
+  ;; the shared scope environment.  Demanding the name before the rebinding
+  ;; executes must observe the earlier value, so skip bindings whose thunk
+  ;; is still a registered forward placeholder and fall back to the first
+  ;; same-name binding only to report it as referenced-before-definition.
+  (let ((entries (loop for entry in (env-bindings environment)
+                       when (string= name (car entry))
+                         collect entry)))
+    (let ((entry (or (find-if (lambda (binding)
+                                (not (and (typep (cdr binding) 'value-thunk)
+                                          *runtime-evaluator-forward-value-thunks*
+                                          (gethash (value-thunk-thunk (cdr binding))
+                                                   *runtime-evaluator-forward-value-thunks*))))
+                              entries)
+                     (first entries))))
+      (and entry (cdr entry)))))
+
 (defun runtime-evaluator-lookup (state environment name)
-  (let ((value (runtime-evaluator-env-lookup environment name)))
+  (let ((value (runtime-evaluator-env-lookup-activated environment name)))
     (when (and (typep value 'value-thunk)
                *runtime-evaluator-forward-value-thunks*
                (gethash (value-thunk-thunk value)
@@ -1204,8 +1222,6 @@ innermost source range with its caller's range (or NIL)."
       (let* ((task (pop tasks))
              (kind (runtime-evaluator-task-kind task))
              (data (runtime-evaluator-task-data task)))
-        (unless (member kind '(:continue :finish))
-          (runtime-evaluator-step! state))
         (case kind
           (:finish
            (setf result data finished t))
@@ -1494,11 +1510,10 @@ innermost source range with its caller's range (or NIL)."
                 :eval (list expression environment nil)))))
 
 (defun runtime-evaluator-eval (state expression &key environment (expand t))
-  "Evaluate one Core_model expression with a fresh deterministic step budget.
+  "Evaluate one Core_model expression.
 ENVIRONMENT defaults to the evaluator's initial environment."
   (check-type state runtime-evaluator-state)
-  (setf (runtime-evaluator-state-steps state) 0
-        (runtime-evaluator-state-depth state) 0
+  (setf (runtime-evaluator-state-depth state) 0
         (runtime-evaluator-state-current-location state) nil
         (runtime-evaluator-state-last-error-location state) nil
         (runtime-evaluator-state-last-error-location-depth state) 0
@@ -1523,8 +1538,7 @@ ENVIRONMENT defaults to the evaluator's initial environment."
 (defun runtime-evaluator-eval-expressions (state expressions &key environment)
   "Expand and evaluate a top-level sequence, registering defmacro forms first."
   (check-type state runtime-evaluator-state)
-  (setf (runtime-evaluator-state-steps state) 0
-        (runtime-evaluator-state-depth state) 0
+  (setf (runtime-evaluator-state-depth state) 0
         (runtime-evaluator-state-current-location state) nil
         (runtime-evaluator-state-last-error-location state) nil
         (runtime-evaluator-state-last-error-location-depth state) 0

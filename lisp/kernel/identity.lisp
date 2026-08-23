@@ -216,8 +216,16 @@
                                        (hash-concat (mapcar #'hash-pattern (pattern-tagged-patterns pattern))))))
     (t (error "Unknown pattern structure"))))
 
+;;; Content hashes are pure functions of immutable value structure, so they
+;;; memoize by identity.  Walks that hit the active-path cycle guard never
+;;; cache: their result embeds a position-relative "recursive-value" index.
+(defparameter *value-hash-cache* (make-hash-table :test #'eq :weakness :key))
+(defvar *value-hash-impure-walk* nil)
+
 (defun hash-value (value)
-  (labels ((lookup (name bindings)
+  (or (gethash value *value-hash-cache*)
+      (let ((*value-hash-impure-walk* nil)
+            (h (labels ((lookup (name bindings)
              (let ((entry (find name bindings :key #'car :test #'string=))) (and entry (cdr entry))))
            (capture-hash (active expression environment)
              (hash-concat
@@ -229,8 +237,11 @@
                             (free-variable-names expression)))))
            (hv (active v)
              (let ((index (cl:position v active :test #'eq)))
-               (if index (hash-concat (list "recursive-value" (canonical-integer-string index)))
-                   (hf (cons v active) v))))
+               (if index
+                   (let ((*value-hash-impure-walk* t))
+                     (hash-concat (list "recursive-value" (canonical-integer-string index))))
+                   (or (gethash v *value-hash-cache*)
+                       (hf (cons v active) v)))))
            (sorted-hashed-values (active values)
              (sort (copy-list values) #'string< :key (lambda (x) (hv active x))))
            (canonical-map-active (active entries)
@@ -240,7 +251,7 @@
                    (if old (setf (cdr old) entry) (push (cons kh entry) seen))))
                (sort seen #'string< :key #'car)))
            (hf (active v)
-             (typecase v
+             (let ((h (typecase v
                (value-nil (hash-string "nil"))
                (value-bool (hash-string (if (value-bool-value v) "bool:true" "bool:false")))
                (value-int (hash-concat (list "int" (canonical-integer-string (value-int-value v)))))
@@ -299,7 +310,13 @@
                                              (sort (copy-list (value-env-map-bindings v)) #'string< :key #'car)))))
                (value-sealed (hash-concat (list "sealed" (value-sealed-bytes v))))
                (t (error "Unknown value structure")))))
-    (hv nil value)))
+               (unless *value-hash-impure-walk*
+                 (setf (gethash v *value-hash-cache*) h))
+               h)))
+    (hv nil value))))
+        (unless *value-hash-impure-walk*
+          (setf (gethash value *value-hash-cache*) h))
+        h)))
 
 (defun canonical-map-entries (entries)
   (let ((seen nil))

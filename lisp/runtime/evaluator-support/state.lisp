@@ -6,9 +6,7 @@
   catalog
   initial-env
   macro-state
-  (max-steps 1000000 :type integer)
   (max-depth 10000 :type integer)
-  (steps 0 :type integer)
   (depth 0 :type integer)
   (force-stack nil)
   (force-count 0 :type integer)
@@ -57,8 +55,7 @@ giving session boundaries one stable hook."
 (defun runtime-evaluator-reset-boundary! (state)
   "Reset all expression-local evaluator state at a session boundary."
   (check-type state runtime-evaluator-state)
-  (setf (runtime-evaluator-state-steps state) 0
-        (runtime-evaluator-state-depth state) 0
+  (setf (runtime-evaluator-state-depth state) 0
         (runtime-evaluator-state-force-stack state) nil
         (runtime-evaluator-state-force-count state) 0
         (runtime-evaluator-state-config-stack state) nil
@@ -72,7 +69,6 @@ giving session boundaries one stable hook."
 
 (defun runtime-evaluator-default-state
   (&key catalog initial-env
-        (max-steps 1000000)
         (max-depth 10000)
         macro-state
         capabilities
@@ -86,14 +82,12 @@ giving session boundaries one stable hook."
         node-force-function)
   (let* ((catalog (or catalog (runtime-install-pure-primitives)))
          (initial-env (or initial-env (runtime-primitive-initial-env catalog))))
-    (unless (and (integerp max-steps) (plusp max-steps))
-      (language-fail "evaluator max-steps must be positive" "evaluator.config"))
     (unless (and (integerp max-depth) (plusp max-depth))
       (language-fail "evaluator max-depth must be positive" "evaluator.config"))
     (%make-runtime-evaluator-state
      :catalog catalog :initial-env initial-env
      :macro-state (or macro-state (make-runtime-macro-state))
-     :max-steps max-steps :max-depth max-depth
+     :max-depth max-depth
      :capabilities (copy-list capabilities)
      :perform-function perform-function
      :with-capabilities-function with-capabilities-function
@@ -105,12 +99,6 @@ giving session boundaries one stable hook."
      :node-force-function node-force-function)))
 
 
-(defun runtime-evaluator-step! (state)
-  (incf (runtime-evaluator-state-steps state))
-  (when (> (runtime-evaluator-state-steps state)
-           (runtime-evaluator-state-max-steps state))
-    (language-fail "evaluation exceeded the deterministic step limit"
-                   "evaluator.depth")))
 
 (defun runtime-evaluator-depth-enter! (state)
   (incf (runtime-evaluator-state-depth state))
