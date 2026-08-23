@@ -1,4 +1,4 @@
-// pp Reference Manual — the Typst source of truth.
+// pp Reference Manual: the Typst source of truth.
 //
 // Typst source for the pp reference manual.
 

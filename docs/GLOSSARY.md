@@ -15,8 +15,8 @@ brace-to-s-expression mapping.
 - `thunk`: a suspended computation, created by a `let` binding, `delay`, or
   `node`. pp forces it on demand and memoizes it after the first force.
 - `force`: the only execution primitive. It drives a thunk to a value, and
-  leaves any other value unchanged. Where a force runs — this process,
-  another process, or another machine — is a scheduler decision, never
+  leaves any other value unchanged. Where a force runs (this process,
+  another process, or another machine) is a scheduler decision, never
   part of the language surface.
 - `delay` and `force`: ephemeral, in-memory laziness for lazy sequences,
   never persisted, and distinct from `node`.
@@ -43,23 +43,21 @@ brace-to-s-expression mapping.
   configuration, and handlers stay out of node identity; observations of them
   belong in the validating trace.
 - node: the unit of persistence and caching: a strict, content-addressed,
-  cacheable graph node. `node { e }` is wired into `force` in both back
-  ends and caches across runs; see [ARCHITECTURE.md](ARCHITECTURE.md) for
-  the key construction. `node x { e }` binds the node thunk of `e` (`let
-  x = node { e }`); an applied `node f(x) { … }` is currently just a named
-  closure, distinct from a `let` or argument thunk.
+  cacheable graph node. `node { e }` caches across runs;
+  [ARCHITECTURE.md](ARCHITECTURE.md) has the key construction. `node x { e }`
+  binds the node thunk of `e`; an applied `node f(x) { … }` is currently just
+  a named closure.
 - trace: recorded during a node's evaluation: the `(cell, observed-hash)`
   pairs it read, its result hash, and an outcome. The store keys each node
   to a set of traces, and a cache hit succeeds if any stored trace still
   verifies against the world. File, tree, config, handler, probe, domain, and
   child-node cells are implemented. Successful and evaluative-failure
   outcomes share the same lifecycle.
-- cutoff: if a recomputed result's hash equals the prior
-  result's hash, pp does not dirty its dependents. This works today at
-  node granularity: a dependent node whose free variable is the
-  recomputed node's value re-keys identically and hits the cache
-  (`tests/016`). Inline child-result cells and push stabilization propagate
-  changes through the same durable graph (`tests/032`, `tests/101`).
+- cutoff: if a recomputed result's hash equals the prior result's hash, pp
+  does not dirty its dependents. Real today at node granularity: a dependent
+  keyed on the recomputed value re-keys identically and hits (`tests/016`);
+  child-result cells and push stabilization propagate through the same
+  durable graph (`tests/032`, `tests/101`).
 
 ### The outside world
 
@@ -72,13 +70,11 @@ brace-to-s-expression mapping.
   plus `node:<key>`, `probe:<name>`, `sealed:<path>`, and
   `domain:<name>:<sub>` for child computations and registered domains.
 - probe (real): the sanctioned way to depend on something nondeterministic
-  (SPEC laws 37 and 38). A script-tier call to
-  `register-probe(name, observe-fn, read-cap)` registers an observer;
-  `probe(name)` reads it from anywhere. The observe function runs at most
-  once per pass, under exactly `read-cap`, recording only a
-  capability-free `probe:<name>` cell. pp never persists this:
-  Probe values live only in the session and clear every pass, since a
-  probe is volatility, not something to cache.
+  (SPEC laws 37/38). `register-probe(name, observe-fn, read-cap)` registers
+  an observer; `probe(name)` reads it anywhere. The observe function runs at
+  most once per pass under exactly `read-cap`, recording only a
+  capability-free `probe:<name>` cell. Never persisted: probe values live in
+  the session and clear every pass — volatility, not cache material.
 - sealed cell (real): a confidential read (SPEC law 39). `--grant
   secret:<path>` mints a `CapSecret`; a read covered by it, not by a
   filesystem grant, returns `VSealed` instead of `VString`. pp redacts a
@@ -100,14 +96,12 @@ brace-to-s-expression mapping.
   lazily for each node force and deletes when it completes (`slurp` and
   `write-file` resolve there, capability-free and
   unrecorded); an absolute path in a node write is an error instead (SPEC
-  law 18) — hygiene, not soundness; traces make the system sound.
-- desired-state value: the pure, hashable value a pp
-  program's root returns: `{path → blob-hash}` for a build,
-  `{proc → spec}` for services. Real today for the filesystem domain as
-  a canonical tree whose file entries carry raw identities from `blob(S)`,
-  consumed by `pp --reconcile ROOT`
-  (`tests/018`, `tests/023`); and for the process domain as
-  `{service-name → spec}`, consumed by `pp --supervise` (`tests/033`).
+  law 18): hygiene, not soundness; traces make the system sound.
+- desired-state value: the pure, hashable value a program's root returns:
+  `{path → blob-hash}` for a build, `{proc → spec}` for services. Real today:
+  the filesystem domain as a canonical tree with raw blob identities
+  (`pp --reconcile ROOT`; `tests/018`, `tests/023`) and the process domain as
+  `{service-name → spec}` (`pp --supervise`; `tests/033`).
 - reconciler: an `observe`/`diff`/`apply` triple of pp functions running under
   runtime-enforced discipline. The filesystem domain (`stdlib/domain-fs.pp`,
   `pp --reconcile ROOT`) and process domain (`stdlib/domain-proc.pp`,
@@ -142,9 +136,9 @@ brace-to-s-expression mapping.
 
 - capability: an authority token, a ceiling on what a computation may
   touch, unforgeable and minted only at the root. User code can narrow it
-  but never construct one; it is not an ordering mechanism.
-- powerbox: the full authority set the CLI hands to `main` via `--grant`
-  — the sole minter of capabilities.
+  but never construct one; it is not an ordering mechanism. The CLI is
+  the sole minter of capabilities: the powerbox hands its full authority
+  set to `main` via `--grant`.
 - `cap-restrict` and `cap-compose`: the only capability operations user
   code can perform: narrowing a capability's scope, or combining two
   already held.
@@ -203,11 +197,11 @@ brace-to-s-expression mapping.
   [ARCHITECTURE.md](ARCHITECTURE.md) for resolution and `--update`.
 - fexpr (cut): an operative that receives unevaluated arguments. pp
   removed this; metaprogramming instead runs through total `quote`, a shared
-  expansion point, before the evaluator sees the form, so byte-identity is
-  preserved (SPEC law 36).
+  expansion point, before the evaluator sees the form, preserving
+  byte-identity (SPEC law 36).
+
 ### Process and testing
 
 - engine: the single tree-walking evaluator implemented by the saved Lisp image.
 - testing: expected-output programs, property sweeps, and shell scenarios that
   assert identical observable behavior across supported process boundaries.
-</content>

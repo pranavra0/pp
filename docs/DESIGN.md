@@ -21,11 +21,11 @@ ownership, and [SPEC.md](SPEC.md) for laws and current limits.
    data and traces, not evaluator policy.
 8. Closed runtime sets have one source of truth. Readers, printers, tests,
    and generated specifications use the same tables where possible.
-9. Extensibility is policy composition. pp libraries may define domains,
+9. Extensibility is policy composition. pp libraries define domains,
    schedules, build requests, execution policies, and reporters as ordinary
-   values and functions. The runtime supplies narrow interpreters for those
-   values; it never hands host closures, capabilities, or store authority to
-   a library callback.
+   values and functions; the runtime supplies narrow interpreters for them
+   and never hands host closures, capabilities, or store authority to a
+   library callback.
 
 ## Why the evaluator stays single
 
@@ -46,9 +46,9 @@ without the dependency appearing in its source code. The trace records the
 observed cell and its content hash. The next force re-observes the cell before
 it serves the result.
 
-This gives pp a dynamic dependency model. It avoids putting every possible
-world input into the node key. The key contains code and free-variable value
-hashes. The trace contains the world reads.
+This gives pp a dynamic dependency model without putting every possible
+world input into the node key: the key holds code and free-variable value
+hashes; the trace holds world reads.
 
 Reads also propagate to enclosing nodes. This prevents a parent hit from
 hiding an unauthorized child read. The hit check covers the full transitive
@@ -144,13 +144,12 @@ same trust boundaries for readers.
   object store.
 - `run` launches ambient POSIX processes and is scripting-tier
   only.
-- `run-closed!` closes the environment, filesystem, and network around
-  immutable blobs through a session-owned executor. Its first Linux provider
-  accepts only the exact Linux platform constraint and does not mediate time,
-  randomness, CPU instructions, kernel behavior, or resource limits. It fails
-  unavailable when Bubblewrap cannot create every requested namespace and
-  remains scripting-tier while reporting those ambient facts as ordinary
-  evidence.
+- `run-closed!` closes environment, filesystem, and network around immutable
+  blobs through a session-owned executor. Its Linux provider accepts only the
+  exact Linux platform constraint and does not mediate time, randomness, CPU
+  instructions, kernel behavior, or resource limits; it fails unavailable when
+  Bubblewrap cannot create every requested namespace, and reports those
+  ambient facts as ordinary evidence while remaining scripting-tier.
 
 Cache eligibility is a narrow provider guarantee, not a built-in sandbox
 policy. Before executing inside a node, the runtime asks the trusted executor

@@ -5,10 +5,8 @@ This document sets out what pp trusts when `pp --fetch-islands` or
 This is package-procurement trust, the same class of trust a build tool
 places in a fetcher such as Bazel's or Nix's.
 
-This threat model is deliberately narrower than
-`docs/THREAT-MODEL-cluster.md`, which covers a different surface: trust
-between machines in the same pp cluster, not trust in a remote source
-host.
+Narrower than [THREAT-MODEL-cluster.md](THREAT-MODEL-cluster.md), which
+covers trust between machines in one cluster — a different surface.
 
 ## Invariants
 
@@ -18,8 +16,8 @@ dependency, it never trusts the remote host again: a resolve serves only a
 cached tree that re-hashes to the pin, checked on every resolve, and a
 fetch that produces different content than the pin is a hard error, never
 a silent accept. A malicious or compromised host can therefore affect
-availability — it can refuse to serve, or serve garbage that fails the
-hash check — but it cannot affect the integrity of a dependency that is
+availability (it can refuse to serve, or serve garbage that fails the
+hash check) but it cannot affect the integrity of a dependency that is
 already pinned.
 
 The moment of trust-on-first-use is `pp --update`, or the first
@@ -69,8 +67,8 @@ Fetching is not:
 
 - a user capability. Fetch authority belongs to the loader (LAW 24),
   granted by the `--fetch-islands` command-line flag, not by
-  `--grant net`. User code cannot trigger a fetch — only resolving a form
-  the user wrote, under a flag the user passed, can
+  `--grant net`. Only resolving a form
+  the user wrote, under a flag the user passed, can trigger a fetch
 - ambient. With the flag off, which is the default, resolution never
   touches the network. A missing pin or cache entry is a hard error that
   names the fix. Hermetic builds stay hermetic because pp refuses to

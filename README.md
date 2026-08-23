@@ -65,9 +65,9 @@ let (m = module { def double(x) { x * 2 } }) {
 
 Read more:
 
-- [docs/manual/](docs/manual/) — reference manual, all examples run by pp
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the code fits together
-- [docs/SPEC.md](docs/SPEC.md) — semantic laws and current status table
-- [AGENTS.md](AGENTS.md) — contributor and coding-agent guide
+- [docs/manual/](docs/manual/): reference manual, all examples run by pp
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how the code fits together
+- [docs/SPEC.md](docs/SPEC.md): semantic laws and current status table
+- [AGENTS.md](AGENTS.md): contributor and coding-agent guide
 
 Run `scripts/run-tests.sh bin/pp` for the test suite.
