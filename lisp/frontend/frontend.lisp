@@ -843,9 +843,8 @@
             ((char= c #\")
              (multiple-value-bind (s r) (str)
                (declare (ignore r))
-               (when (and (fe-numeric-start-p s) (not (fe-number-token-p s)))
-                 (fe-parse-number
-                  s :range (frontend-range source so sl sc i line col)))
+               ;; String CONTENT is data: a digit-leading string such as a
+               ;; content hash is never a malformed number literal.
                (add :string s so sl sc glued)))
             (t
              (let ((s (name)))

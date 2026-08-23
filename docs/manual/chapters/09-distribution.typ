@@ -2,25 +2,21 @@
 
 = Distribution
 
-Here is the thesis this whole manual has been building toward: there is no
-local/remote distinction at the language surface. There is no `remote-eval`, no
-placement annotation, no node-pinning form, and there never will be. `force` is
-the only execution primitive. Where a force runs is a scheduler decision, chosen
-with a flag, never written into the program. A program is byte-identical whether
-it runs on one core, eight, or a cluster. Microservices exist because no
-mainstream language lets you say "evaluate this elsewhere and flow the result
-back". The moment location becomes syntax, every caller hard-codes topology, and
-you have rebuilt the deployment boundary inside the language.
+The thesis of this manual: no local/remote distinction at the language
+surface. No `remote-eval`, no placement annotation, no node-pinning form —
+ever. `force` is the only execution primitive; where it runs is a scheduler
+decision, chosen by flag, never written into the program. A program is
+byte-identical on one core, eight, or a cluster. The moment location becomes
+syntax, callers hard-code topology and the deployment boundary is back inside
+the language.
 
-`--schedule serial | parallel:N | race:N | remote:<member>` selects the policy.
-`parallel:N` forks workers across cores. `race:N` runs N redundant copies and
-takes the first. `remote:<member>` ships the work to another machine. These are
-the same feature at different fan-out. "Run on N machines and take the first" is
-a handler swap, not an infrastructure project. The scheduler is
-result-transparent: it changes only where and when work runs, never the answer.
-So it appears in no cache key and no trace. `pp --check` proves this. It re-runs
-any non-serial policy forced serial against the same store and fails on any hash
-mismatch.
+`--schedule serial | parallel:N | race:N | remote:<member>` selects the
+policy. `parallel:N` forks workers across cores; `race:N` runs N redundant
+copies and takes the first; `remote:<member>` ships work to another machine.
+Same feature, different fan-out. The scheduler is result-transparent — it
+changes where and when, never the answer — so it appears in no cache key and
+no trace. `pp --check` proves it: any non-serial policy forced serial against
+the same store must match hashes.
 
 Libraries can select the same handlers through `stdlib/runtime.pp`. They can
 also provide a pure custom scheduler policy over data-only job descriptors.
@@ -29,26 +25,24 @@ still owns execution, cancellation, and remote transport.
 
 == Identity is location-independent
 
-Location can be a scheduler's business, not the program's, because identity is a
-content hash. A node's key is a hash of its code and its inputs' values, never
-of where or when it ran. Two machines that evaluate the same node therefore
-compute the same key and a byte-identical result, with no coordination. A result
-is then moved by that hash. It is published into a shared store and pulled by
-name, then re-hashed on receipt so a corrupted or tampered artifact is refused.
-The content address is the integrity check.
+Location can be the scheduler's business because identity is a content hash: a
+node's key hashes its code and input values, never where or when it ran. Two
+machines evaluating the same node compute the same key and byte-identical
+result with no coordination. Results move by that hash: published into a shared
+store, pulled by name, re-hashed on receipt. The content address is the
+integrity check.
 
-The transcript below uses two throwaway `HOME`s as two machines, each with its
-own `~/.pp` store, and a shared directory as the transport. Machine A builds a
-node. Machine B, given the same program, computes the identical node key without
-ever talking to A. Then A publishes the result object by hash and B pulls it,
-byte-identical. Flipping one byte in transit makes B reject it.
+The transcript uses two throwaway `HOME`s as two machines with separate stores
+and a shared directory as transport. Machine A builds a node; machine B, given
+the same program, computes the identical key without talking to A. A publishes
+the result by hash, B pulls it byte-identical; one flipped byte in transit and
+B rejects it.
 
 #example("dist-by-hash", sh: true)
 
-The two machines never agreed on a key. They derived the same one, because the
-key is a function of the code and nothing else. That is what makes a build
-computed "here" usable "there". The result is addressed by what it is, not by
-where it was produced.
+The machines never agreed on a key; they derived the same one from the code.
+A build computed "here" is usable "there" because results are addressed by
+what they are, not where they were produced.
 
 == Transport boundary
 
@@ -61,16 +55,15 @@ checks rather than promises made by the connection.
 
 == Host-qualified identity
 
-A running process is not a pure value. Here the "same identity everywhere" story
-inverts in exactly the right way: a process on host B is a different cell than
-the same process on host A. Host-qualified identity names world state, "the
-greeter running on B", not a location you dispatch to. The desired-state map
-from the previous chapter generalizes one level for this, from
-`{domain → desired}` to `{host → {domain → desired}}`. `--member-name B` selects
-host B's slice and hands it to the unchanged reconciler. A member is then just
-`pp --watch --supervise --member-name B` on its own slice: the single-machine
-supervisor, verbatim, fed a slice of a cluster-wide value. Naming a host absent
-from the map is a hard error, not a silent no-op.
+Host-qualified identity names world state ("the greeter running on B"), not a
+dispatch location: a process on host B is a different cell than the same
+process on host A.
+The desired-state map generalizes one level, from `{domain → desired}` to
+`{host → {domain → desired}}`; `--member-name B` selects host B's slice and
+hands it to the unchanged reconciler. A member is just
+`pp --watch --supervise --member-name B`: the single-machine supervisor,
+verbatim, fed a slice of a cluster-wide value. Naming a host absent from the
+map is a hard error, not a silent no-op.
 
 Membership is ambient configuration: which machines exist, and where their
 stores are. It is read from `~/.pp/cluster/members` or `$PP_CLUSTER_MEMBERS`. It
@@ -81,20 +74,17 @@ from the same `--grant` grammar you use locally.
 
 == Trace merge, audit, and growth
 
-Because a result carries its verifying trace, syncing a result syncs its
-evidence. A machine that pulls a node's result also pulls the `(cell, hash)`
-observations that justify it. It re-verifies them against its own world before
-serving a hit. The authority checks survive the crossing. A hit served across
-the wire is gated on the requesting token's authority over the trace's read
-closure, exactly as a local hit is gated on the caller's. A narrow caller cannot
-launder a broad read through a cached aggregator just because the bytes arrived
-over a network. And `pp why`, run on a machine that pulled a trace, redacts any
-cell the local caller is not authorized to see, identically to a purely local
-run. Audit redacts. It never lies.
+A result carries its verifying trace, so syncing a result syncs its evidence:
+the pulled `(cell, hash)` observations are re-verified against the local world
+before a hit. Authority checks survive the crossing — a hit served over the
+wire is gated on the requesting token's authority over the trace's read
+closure, exactly as locally. A narrow caller cannot launder a broad read
+through a cached aggregator just because bytes arrived by network, and `pp why`
+on a pulling machine redacts identically to a purely local run. Audit redacts;
+it never lies.
 
-A shared store only grows, so growth is bounded explicitly. Each successful
-pass records its desired object and forced node keys as a wanted root. `pp gc`
-walks the same durable child, result, and tree-blob edges used by validation and
-stabilization, then sweeps only unreachable objects, traces, and blobs. It is
-never automatic. A grace period protects concurrent writes, and a changed root
-manifest stops deletion.
+A shared store grows, so growth is bounded explicitly. Each pass records its
+desired object and forced node keys as a wanted root; `pp gc` walks the same
+durable edges used by validation and stabilization and sweeps only unreachable
+objects, traces, blobs. Never automatic; a grace period protects concurrent
+writes, a changed root manifest stops deletion.

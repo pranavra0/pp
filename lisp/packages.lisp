@@ -614,6 +614,12 @@
    #:runtime-journal-island-fetch #:runtime-journal-island-fetch-p
    #:make-runtime-journal-island-fetch
    #:runtime-journal-island-fetch-uri #:runtime-journal-island-fetch-pin
+   ;; Islands: content-addressed modules with inline pins.
+   #:*island-fetch-enabled* #:*island-update-mode*
+   #:island-parse-uri #:island-pin-p #:island-short
+   #:island-root #:island-cached-tree #:island-tree-hash
+   #:island-verify #:island-materialize #:island-repin
+   #:island-resolve #:island-entry-file #:island-forms-in
    #:runtime-journal-epoch #:runtime-journal-epoch-p
    #:make-runtime-journal-epoch #:runtime-journal-epoch-hash
    #:runtime-journal-digest-p #:runtime-journal-token-p

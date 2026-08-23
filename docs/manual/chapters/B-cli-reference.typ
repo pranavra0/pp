@@ -2,15 +2,12 @@
 
 = Command-line reference
 
-This appendix lists the flags `pp` accepts, grouped by what you use them for.
-It comes from `bin/pp --help`; where the built-in help and this table disagree,
-the executable wins. A few flags marked internal are dispatch machinery that
-`pp` invokes on itself. They are here for completeness; you should not need
-to type them by hand.
+The flags `pp` accepts, grouped by use; from `bin/pp --help`, which wins on
+disagreement. Flags marked internal are dispatch machinery `pp` invokes on
+itself — listed for completeness.
 
-Flags compose the way you would expect: `--grant`, `--schedule`,
-and `--watch` all layer onto whichever run mode you pick. Anything after a bare
-`--` becomes the program's own argument vector, which you read with `argv()`.
+Flags compose: `--grant`, `--schedule`, and `--watch` layer onto any run mode.
+Anything after a bare `--` becomes the program's argv, read with `argv()`.
 
 == Running programs
 

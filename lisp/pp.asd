@@ -62,6 +62,7 @@
        (:file "executor")
        (:file "process")
        (:file "sandbox")
+       (:file "island")
        (:file "domains")
        (:file "fenced")
        (:file "watch")))
