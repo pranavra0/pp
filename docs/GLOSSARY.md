@@ -26,8 +26,8 @@ brace-to-s-expression mapping.
 - demand-pruning: the surviving sense of "laziness" in pp: it builds only
   the nodes reachable from the root desired-state formula, and skips
   cached ones. This is not per-expression lazy demand.
-- trampoline: the heap-allocated work queue that `force` switches to past
-  a depth threshold, so deep chains do not overflow the OCaml stack.
+- trampoline: the heap-allocated work queue used by `force` so deep chains do
+  not overflow the host stack.
 
 ### Identity and caching
 
@@ -108,14 +108,11 @@ brace-to-s-expression mapping.
   consumed by `pp --reconcile ROOT`
   (`tests/018`, `tests/023`); and for the process domain as
   `{service-name → spec}`, consumed by `pp --supervise` (`tests/033`).
-- reconciler: retired as a proper noun; there is no `reconciler.ml` any
-  more. A domain is now an `observe`/`diff`/`apply` triple of pp functions
-  running under core-enforced discipline (`src/runtime/domains.ml`), not a
-  privileged OCaml module. The filesystem domain (`stdlib/domain-fs.pp`,
-  `pp --reconcile ROOT`) and the process domain (`stdlib/domain-proc.pp`,
-  `pp --supervise`) are both live, converging by content hash and
-  journaling intent and done (`tests/033`); desired state may not read
-  itself (stratification, SPEC law 30). See
+- reconciler: an `observe`/`diff`/`apply` triple of pp functions running under
+  runtime-enforced discipline. The filesystem domain (`stdlib/domain-fs.pp`,
+  `pp --reconcile ROOT`) and process domain (`stdlib/domain-proc.pp`,
+  `pp --supervise`) converge by content hash and journal intent and done
+  (`tests/033`); desired state may not read itself (SPEC law 30). See
   [ARCHITECTURE.md](ARCHITECTURE.md) for the orchestration mechanics, and
   the fenced effect entry below for crash recovery.
 - domain (real): a slice of external state under single ownership, such
@@ -155,7 +152,7 @@ brace-to-s-expression mapping.
   `CapNetwork {host; port option}`, granted with
   `--grant net:<host>[:<port>]` and wildcarded with `host = "*"`,
   authorizes `perform http-get(url)` and `perform http-post(url, body)`.
-  These fork `curl` instead of adding OCaml networking code, and return
+  These fork `curl` through the runtime process provider and return
   `{"status" INT "body" STRING}`. pp bans them inside node bodies:
   a network call is not convergent; nondeterminism belongs to `probe`.
 
@@ -205,18 +202,12 @@ brace-to-s-expression mapping.
   authority, through `--fetch-islands`, never ambient (SPEC law 24). See
   [ARCHITECTURE.md](ARCHITECTURE.md) for resolution and `--update`.
 - fexpr (cut): an operative that receives unevaluated arguments. pp
-  removed this; metaprogramming instead runs through total `quote`,
-  the tree-walker at one shared expansion point, before the evaluator's own
-  machinery — `hash_expr` or the evaluator — sees the form, so byte-identity
-  is preserved (SPEC law 36).
+  removed this; metaprogramming instead runs through total `quote`, a shared
+  expansion point, before the evaluator sees the form, so byte-identity is
+  preserved (SPEC law 36).
 ### Process and testing
 
-- engine: the tree-walking evaluator (`evaluator.ml`), pp's single execution
-  engine.
-- oracle: the tree-walker, taken as ground truth in tests. It can still be
-  wrong — see the thunk key entry above and the status table in [SPEC.md](SPEC.md)
-  for its now-fixed key bugs.
-- metamorphic testing: generating semantics-preserving program twins and
-  asserting identical output — pp's core correctness check, enforced by
-  `dune runtest` and the fuzzer (see [TESTING.md](TESTING.md)).
+- engine: the single tree-walking evaluator implemented by the saved Lisp image.
+- testing: expected-output programs, property sweeps, and shell scenarios that
+  assert identical observable behavior across supported process boundaries.
 </content>

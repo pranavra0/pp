@@ -92,9 +92,8 @@
                        (fe-digit-p (char s (1+ i)))))))))
 
 (defun fe-number-token-p (s)
-  ;; Keep a leading + as an ordinary symbol (OCaml's lexer does too).
-  ;; The complete grammar is checked by FE-PARSE-NUMBER, not by a loose
-  ;; substring test.
+  ;; A leading + remains an ordinary symbol. Validate numeric syntax with the
+  ;; complete parser rather than a substring test.
   (and (fe-numeric-start-p s)
        (handler-case (progn (fe-parse-number s) t)
          (frontend-error () nil))))
@@ -679,10 +678,9 @@
         (handler-case
             (push (make-elocated (fe-loc tok) (fe-parse-sexpr p)) forms)
           (frontend-error (condition)
-            ;; OCaml has no EOF token with a post-newline location: an
-            ;; incomplete form is anchored at its last significant token.
-            ;; Keep the search inside this top-level form so a prior complete
-            ;; form cannot steal the diagnostic line.
+            ;; Incomplete input is anchored at its last significant token.
+            ;; Search only inside this top-level form so a prior complete form
+            ;; cannot steal the diagnostic line.
             (if (frontend-error-incomplete-p condition)
                 (frontend-fail
                  (frontend-error-message condition)
@@ -1835,14 +1833,9 @@ from a user-written bare primitive, including nested lowered children."
 (defun fe-bexpr (p &optional nl cond)
   (labels ((postfix (left)
              ;; In free expression contexts (arguments, grouping, and
-             ;; collection elements), a newline is only a separator when the
-             ;; caller made it significant.  The OCaml brace reader's postfix
-             ;; peek consumes newlines for its free context, allowing forms
-             ;; such as `f(
-             ;;   x
-             ;; )` and `f(
-             ;;   g
-             ;; )(x)`.  Statement contexts keep the newline token in place.
+             ;; collection elements), a newline is a separator only when the
+             ;; caller made it significant. Postfix parsing therefore accepts
+             ;; calls split across lines, while statement contexts retain it.
              (when nl (fe-bskip-lines p))
              (cond
                ((eq (fe-bkind p) :lparen)
@@ -1862,11 +1855,9 @@ from a user-written bare primitive, including nested lowered children."
            (climb (min-prec)
              (let ((left (postfix (fe-bprimary p cond))))
                (loop
-                 ;; Operators and their right operands may continue on the
-                 ;; next line only in the caller's free/newline-transparent
-                 ;; context.  Keep the frozen whitespace-on-both-sides rule
-                 ;; in FE-B-INFIX-P intact; it rejects `1
-                 ;; + 2` while accepting `1 + \n 2`, just like OCaml.
+                ;; Operators and their right operands may continue on the next
+                ;; line only in the caller's free context. Keep the whitespace
+                ;; rule in FE-B-INFIX-P intact.
                  (when nl (fe-bskip-lines p))
                  (unless (and (eq (fe-bkind p) :name)
                               (fe-b-infix-p p '("|>" "or" "and" "<" ">"
@@ -2094,11 +2085,9 @@ from a user-written bare primitive, including nested lowered children."
                                (expr-typed-expression typed)))))
       (values
        (mapcar (lambda (name)
-                 ;; Sexpr parameter names deliberately allow ':' as part of
-                 ;; the symbol (the OCaml lexer does too), but that fused
-                 ;; spelling has no brace equivalent.  Reject it at the
-                 ;; brace boundary instead of emitting source that the brace
-                 ;; reader will reinterpret as an annotation.
+                 ;; Sexpr parameter names may contain ':', but that fused
+                 ;; spelling has no brace equivalent. Reject it at the brace
+                 ;; boundary rather than emitting ambiguous source.
                  (when (and error-on-typed-parameter
                             (find #\: name :test #'char=))
                    (frontend-fail

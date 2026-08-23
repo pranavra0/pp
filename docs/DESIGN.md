@@ -71,11 +71,11 @@ current ceiling.
 ## Why sessions own state
 
 Evaluation state has a lifetime. Some state lasts for one expression. Some
-state lasts for a pass. Some state lasts for a watch loop. A `Session.t` names
-these lifetimes and provides reset operations.
+state lasts for a pass. Some state lasts for a watch loop. A runtime session
+names these lifetimes and provides reset operations.
 
-OCaml effects still carry values that must follow dynamic control flow, such as
-the current handler or node frame. Effects do not own registries. This split
+Effects carry values that must follow dynamic control flow, such as the
+current handler or node frame. Effects do not own registries. This split
 prevents a dynamic-scope value from becoming process-global state.
 
 ## Why domains own writes
@@ -84,10 +84,10 @@ A desired state is easy to compare and retry. An arbitrary write is not. The
 domain protocol puts observation, planning, writing, verification, and
 journaling in one lifecycle. A domain owns its namespace and write authority.
 
-The filesystem and process policies live in pp source. The OCaml runtime owns
-only the trusted primitives and the generic protocol. This keeps new policy
-out of the evaluator and gives domains the same cache and observation rules as
-other programs.
+The runtime owns trusted primitives and the generic protocol while filesystem
+and process policies live in pp source. This keeps new policy out of the
+evaluator and gives domains the same cache and observation rules as other
+programs.
 
 Fenced actions are different. They cannot always be repeated safely. The
 reconciler records intent before it runs one and records completion after it

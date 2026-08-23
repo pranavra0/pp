@@ -1,4 +1,4 @@
-;;;; M4 ambient configuration snapshots and reads.
+;;;; Ambient configuration snapshots and reads.
 (in-package #:pp.runtime)
 
 (defun runtime-configuration-error (message &optional (code "runtime.configuration"))

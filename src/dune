@@ -1,2 +1,0 @@
-; Library boundaries live in the physical source directories below.  The root
-; directory only names the source tree; each library owns its own Dune graph.

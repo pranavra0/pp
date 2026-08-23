@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # `--grant net:<host>[:<port>]` mints CapNetwork {host; port}. `(perform
-# http-get url)` / `(perform http-post url body)` fork curl (no new OCaml
-# networking/TLS surface) but are AUTHORIZED against CapNetwork
+# http-get url)` / `(perform http-post url body)` use the process provider
+# (no extra networking/TLS surface) and are authorized against CapNetwork
 # host[:port] — never CapProcess. Banned inside node bodies (trace_stack
 # guard, mirroring `fenced`/`write-file`'s node arm). Result shape:
 # `{"status" INT "body" STRING}`.

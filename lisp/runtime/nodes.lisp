@@ -1,4 +1,4 @@
-;;;; M4 persistent node execution, trace capture, and store callbacks.
+;;;; Persistent node execution, trace capture, and store callbacks.
 (in-package #:pp.runtime)
 
 (defun runtime-node-error (message &optional (code "runtime.node"))

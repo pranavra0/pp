@@ -1,8 +1,10 @@
 # pp architecture
 
-This document describes the current implementation. It uses source and Dune
-files as the source of truth. See [SPEC.md](SPEC.md) for language laws and
-verified limits, and [DESIGN.md](DESIGN.md) for design reasons.
+This document describes the Common Lisp implementation. The ASDF system in
+`lisp/pp.asd`, the package declarations in `lisp/packages.lisp`, and the
+source files are the implementation source of truth. See [SPEC.md](SPEC.md)
+for language laws and verified limits, and [DESIGN.md](DESIGN.md) for design
+reasons.
 
 ## Data flow
 
@@ -10,7 +12,7 @@ verified limits, and [DESIGN.md](DESIGN.md) for design reasons.
 source file or -e input
         |
         v
-reader -> expr AST -> macro expansion -> tree-walking evaluator
+pp reader -> expression AST -> macro expansion -> continuation evaluator
                                       |
                                       v
                          values, effects, and node forces
@@ -22,15 +24,11 @@ reader -> expr AST -> macro expansion -> tree-walking evaluator
        effects and caps       memo tables and domains   cache, traces, store
 ```
 
-The reader produces one `Core_model.expr` tree. Both readers produce the same
-tree. The evaluator has one expression dispatch and one tail-call mechanism.
-The helper modules called `evaluator_*` support this dispatch. They do not
-define another evaluator. The transport and cluster descriptions below are
-implementation surfaces; their tested scope is the local and remote paths
-covered by the integration suites, not a network simulator.
-The application creates the services for one command. It creates one session,
-one scheduler, and one evaluator operation value. The session owns mutable
-run state. Dynamic scope carries values that must follow the current call.
+The reader produces one `pp.kernel` expression tree. Brace and s-expression
+input lower to the same constructors. The evaluator has one expression
+dispatch and one tail-call mechanism. The application creates services for
+one command, one session, and one evaluator operation value; session state is
+never assembled from hidden registries.
 
 The semantic spine for a persistent computation is:
 
@@ -39,164 +37,116 @@ surface syntax
     -> reader AST
     -> macro-expanded expression
     -> evaluator dispatch
-    -> node closure application (force arguments)
+    -> node closure application
     -> persistent thunk
-    -> Identity.node_key (code + free-variable values + argument hashes)
-    -> Node.force
-       -> cache policy / verified trace hit
-       -> scheduler -> Node.rebuild -> store result + trace
+    -> node key (code + free-variable values + argument hashes)
+    -> cache lookup and trace verification
+    -> node rebuild -> store result and trace
 ```
 
-There is one evaluator and one node rebuild operation along this path. The
+There is one evaluator and one node rebuild operation along this path. A
 scheduler changes placement and timing, while the key separates computation
 identity from trace validity and hit authority.
 
 ## Library boundaries
 
-The four wrapped libraries and their Dune dependencies are:
+The ASDF systems and their responsibilities are:
 
-| Library | Directory | Dependencies | Owns |
+| System | Directory | Depends on | Owns |
 |---|---|---|---|
-| `pp.kernel` | `src/kernel/` | `cryptokit`, `dune-build-info` | Core types, identity, capabilities, codecs, cells, effects, and pure operations |
-| `pp.frontend` | `src/frontend/` | `pp.kernel` | Readers, printers, desugaring, surface tables, comments, and lint |
-| `pp.runtime` | `src/runtime/` | `pp.kernel`, `pp.frontend`, `unix` | Evaluator, sessions, dynamic scopes, stores, cache policy, observations, worlds, domains, and scheduling |
-| `pp.app` | `src/app/` | `pp.kernel`, `pp.frontend`, `pp.runtime`, `cryptokit`, `unix` | CLI validation, production service construction, command dispatch, and properties |
+| `pp/kernel` | `lisp/kernel/` | — | Core types, identity, capabilities, codecs, cells, and pure operations |
+| `pp/frontend` | `lisp/frontend/` | `pp/kernel` | Readers, printers, desugaring, surface tables, comments, and lint |
+| `pp/runtime` | `lisp/runtime/` | `pp/frontend` | Evaluator, sessions, dynamic scopes, store, effects, observations, cache, nodes, artifacts, distribution, and lifecycle |
+| `pp/app` | `lisp/app/` | `pp/runtime` | CLI validation, service construction, command dispatch, and diagnostics |
 
-The dependency checks are in `tools/check-dependencies.sh` and
-`tools/dependency-manifest`. `dune build @architecture` runs them with the
-compiler-warning, state-inventory, API-surface, and vertical-slice checks.
-The kernel and frontend do not depend on Unix.
+`pp` depends on `pp/app` and is saved as an executable image by
+`scripts/build-lisp.sh`. The kernel and frontend do not access host services.
+Host interaction is confined to explicit runtime providers and the application
+boundary.
 
 ## Core model and identity
 
-`src/kernel/core_model.ml` contains the recursive types:
+`lisp/kernel/core-model.lisp` contains the recursive pp structures:
 
-- `expr` is the language tree.
-- `value` is a runtime value. It includes closures, builtins, capabilities,
-  thunks, module maps, and sealed values.
-- `env` is an environment node with bindings, an id, and an incremental hash.
-- `thunk` is a suspended computation with a status, expression, environment,
-  persistence flag, configuration hash, and captured capabilities.
-- `pattern` is a match pattern.
+- expressions, values, environments, thunks, and match patterns;
+- closures and builtins as explicit records;
+- cells, capabilities, source ranges, and identity wrapper types.
 
-Other kernel modules own operations over these types. `identity.ml` hashes
-values, expressions, patterns, and capabilities. `environment.ml` creates
-and queries environments, closures, and thunks. `free_vars.ml` computes node
-inputs. `quotation.ml`, `pattern_match.ml`, `presentation.ml`, and
-`value_analysis.ml` own their pure tree walks.
+`identity.lisp` hashes expressions, values, patterns, environments, and
+capabilities. `identity-types.lisp` keeps node keys, result hashes, observed
+hashes, and cell ids separate. Store and transport code performs the only
+conversion to durable text. `hasher.lisp` provides SHA-256 and length-framed
+input hashing, while `codec.lisp` defines the canonical durable encoding.
 
-`hasher.ml` provides SHA-256 and length-framed input hashing.
-`identity_types.ml` keeps node keys, result hashes, observed hashes, and cell
-ids as separate abstract types. Store and transport code performs the only
-conversion to durable text.
+Durable data contains only canonical pp values and byte strings. Host
+closures, conditions, pathnames, hash tables, and printed representations are
+never persisted.
 
 ## Readers and surface forms
 
-`reader.ml` reads the s-expression surface. `reader_braces.ml` reads the
-brace surface. `desugar.ml` lowers shared reader forms. The printers emit
-either surface from the same AST; `printer_common.ml` owns shared literal
-formatting and inversion of desugared function bodies. `surface_tables.ml` defines closed surface
-sets and generates the matching SPEC table.
+`lisp/frontend/frontend.lisp` reads both supported surfaces, lowers them to
+shared expressions, preserves source ranges and comments, and provides the
+printers and lint operations. The default file surface is braces (`.pp`);
+s-expressions use `.ppl`. `pp fmt --to-braces` and `pp fmt --to-sexpr` convert
+between them without changing expression hashes.
 
-The default file surface is braces (`.pp`). The s-expression surface uses
-`.ppl`. `pp fmt --to-braces` and `pp fmt --to-sexpr` preserve the AST and
-carry comments through the conversion. `tests/054` through `tests/067` and
-the fuzzer check this boundary.
-
-`macro.ml` expands top-level `defmacro` forms before ordinary evaluation.
-Macros receive quoted syntax values and return syntax values. The evaluator
-does not need a macro-specific expression path.
-
-`primitive_catalog.ml` owns builtin descriptors, aliases, lookup, and catalog
-rendering. `primitives.ml` contains the builtin implementations grouped by
-semantic family; it cannot mutate the runtime table except through that
-catalog boundary.
+The frontend accepts source text as strings and never calls `CL:READ` or
+interns user identifiers into host packages. Surface tables are data returned
+by `pp --dump-surface-tables`; the application owns only the stream format.
 
 ## Evaluation and dynamic scope
 
-`src/runtime/evaluator.ml` is the only evaluator. It runs one heap
-continuation machine for every expression form and one work-queue force
-operation for ephemeral and persistent thunks. There is no depth-triggered
-fallback evaluator or force trampoline.
+`lisp/runtime/evaluator.lisp` is the only evaluator. It runs one explicit
+continuation machine for every expression form and one work-queue force path
+for ephemeral and persistent thunks. There is no host `EVAL`, host source
+reader, depth-triggered fallback, or second evaluator.
 
-The `evaluator_*` modules receive narrow callbacks for force, evaluation, and
-application. `evaluator_ops.ml` defines two immutable operation views:
+`evaluator-support/state.lisp` owns continuation state and scope construction.
+`language.lisp` owns pure quotation, pattern, presentation, macro, and builtin
+operations. `session.lisp` owns operation views and mutable state grouped by
+lifetime. `begin-evaluation`, `begin-pass`, and `begin-watch` are reset
+boundaries; callers do not mutate evaluator records directly.
 
-- the core view provides `force`, `eval`, and `apply`;
-- the node view provides key construction, data-closure checks, rebuilding,
-  and hit resolution.
-
-`session.ml` owns the operation value and groups state by lifetime: evaluator
-memoization and cycle frames, domain registrations, pass observations and
-pins, fenced recovery, and node runtime services. `begin_evaluation`,
-`begin_pass`, and `begin_watch` are the reset boundaries; callers do not
-mutate these records directly.
-
-`dynamic_scope.ml` brackets language effects for capabilities, configuration,
-handlers, trace frames, nodes, domains, and observation collection. It owns
-only the corresponding dynamic stacks; it has no registry. `effects.ml`
-declares the effect operations.
+`dynamic-scope.lisp` brackets effects for capabilities, configuration,
+handlers, trace frames, nodes, domains, and observations. It owns only the
+corresponding dynamic stacks. Missing services fail closed rather than falling
+back to ambient access.
 
 ## Effects and authority
 
 Capabilities enter at the application boundary through `--grant`. User code
-can inspect, restrict, and compose held capabilities. It cannot mint a new
-capability. `paths.ml` supplies the component-aware path check.
+can inspect, restrict, and compose held capabilities, but cannot mint a new
+capability. `paths.lisp` supplies component-aware path checks.
 
 The evaluator checks authority when it performs an effect. User-visible reads
-go through `observation.ml`. The loader has separate runtime authority for
-source roots and the store. The loader records authority-exempt runtime cells.
-
-The main effect paths are:
+go through observation cells; source and store loading use separate runtime
+authority. Effects are recorded in canonical cells and traces.
 
 | Effect | Owner | Result or rule |
 |---|---|---|
-| `read-file`, `write-file`, `slurp` | `observation.ml`, `process.ml`, and evaluator effects | Capability check and cell recording; node writes stay in node scratch space |
-| `run` | `process.ml` | Scripting-only ambient process |
-| `run-closed!` | `closed_action.ml`, `executor.ml` | Session-owned executor over immutable request/result values; provider classifies each request as cacheable or scripting-only before execution |
-| `http-get`, `http-post` | evaluator effect path | Network capability; not valid inside a persistent node |
-| `probe` | `session.ml` and `observation.ml` | One pinned observation per pass |
-| `fenced` | `fenced.ml`, `journal.ml`, and reconciliation | Intent/done journal with an explicit recovery policy |
+| `read-file`, `write-file`, `slurp` | application and observations | Capability check and cell recording; node writes use node scratch space |
+| `run` | lifecycle process service | Scripting-only ambient process |
+| `run-closed!` | lifecycle executor | Session-owned request/result values; providers classify requests |
+| `http-get`, `http-post` | runtime effect path | Network capability; not valid inside a persistent node |
+| `probe` | session and observations | One pinned observation per pass |
+| `fenced` | lifecycle fenced/journal services | Intent/done journal with explicit recovery |
 
 Host substitution happens outside the evaluator. The application installs the
-result-transparent scheduler and the optional closed-action executor in the
-session. A program may also call `configure-runtime` with an ordinary
-manifest map: its schedule selects the existing local scheduler handler, its
-reporter receives immutable runtime events after evaluation, and its build and
-execution policies remain canonical data for library adapters. CLI schedule
-options remain host-level overrides. Observers and domain drivers are ordinary
-registered pp functions;
-the runtime retains authority checks, observation recording, journaling, and
-verification around their calls. Artifact transport is an explicit
-application command whose receive side always rehashes before repository
-ingestion. With no registration, closed execution, observation, domain
-mutation, and transport are unavailable; none falls back to ambient access.
-
-The conformance evidence uses the same boundaries as production:
-`lifecycle_unit` supplies a fake executor and domain registration,
-`tests/046` supplies a third-party domain driver, `tests/047` exercises the
-production local transport including hostile bytes, `tests/074` exercises
-production observers against hostile worlds, and `tests/102` checks the
-production closed executor and fail-closed hosts. Providers return data; only
-the runtime records traces, checks authority, verifies immutable hashes, and
-brackets mutation.
+local scheduler, process provider, and optional closed-action executor in the
+session. Observers and domain drivers are registered pp functions; the runtime
+retains authority checks, observation recording, journaling, and verification.
+With no registration, closed execution, observation, domain mutation, and
+transport are unavailable. None falls back to ambient access.
 
 An executor's cacheability classification is the complete trusted promise.
-The runtime interprets no platform, toolchain, sandbox, or resource-policy
-vocabulary. Inside a node it executes only a request classified `Cacheable`;
-it rejects `Scripting_only` before the provider performs work. The bundled
-Linux provider is scripting-only because clocks, randomness, kernel behavior,
-and resource limits remain ambient. Another trusted provider may interpret
-the request's optional canonical `:policy` value—such as a Nix-like execution
-policy—and classify the request cacheable without changing the evaluator or
-language surface.
+Inside a node, scripting-only requests are rejected before the provider runs.
+The bundled Linux provider is scripting-only because clocks, randomness,
+kernel behavior, and resource limits remain ambient.
 
 ## Persistent nodes and cache
 
-`node { e }` creates a persistent thunk. `delay` creates an in-memory thunk.
-`node.ml` is the evaluator's persistent-node adapter.
-
-The node pipeline is:
+`node { e }` creates a persistent thunk and `delay` creates an in-memory thunk.
+`nodes.lisp` adapts persistent execution to the store:
 
 ```text
 create thunk
@@ -206,147 +156,75 @@ create thunk
        -> miss: run body, validate result, write result and trace
 ```
 
-The persistent node key contains the node code and the hashes of its resolved
-free-variable values. It does not contain the whole environment or the
-capability set. Config and handler reads are trace cells. A node key is not a
-result hash and is not a cell id.
+The persistent node key contains node code and hashes of resolved
+free-variable values. It does not contain the whole environment or capability
+set. Config and handler reads are trace cells. A node key is not a result hash
+and is not a cell id.
 
-`observation.ml` constructs and checks cells. A nested node records one
-`node:<identity>` cell carrying its result hash; its world reads remain in the
-child trace instead of being duplicated into every ancestor. `cache_policy.ml`
-verifies traces, checks transitive hit authority, selects traces, reports
-misses, and marks data for GC. `stabilize.ml` follows the reverse trace index
-from `store_index.ml` through node cells and dirties only affected in-memory
-thunks. Ordinary watch rebuilds its in-memory graph and uses the same durable
-verifier, so pull and push differ in selection cost rather than results.
+`observations.lisp` constructs and checks cells. A nested node records one
+`node:<identity>` cell carrying its result hash; child world reads remain in
+the child trace. `cache.lisp` verifies traces, checks transitive hit authority,
+selects traces, reports misses, and marks data for GC. `lifecycle/watch.lisp`
+uses the same durable verifier while rebuilding its in-memory graph.
 
 The repository layer is:
 
 | Module | Responsibility |
 |---|---|
-| `store_layout.ml` | Store paths, version stamp, and atomic replacement |
-| `object_repository.ml` | Immutable encoded values and fenced specifications |
-| `blob_repository.ml` | Immutable byte blobs |
-| `artifact_tree.ml`, `artifact_store.ml` | Canonical ordinary tree validation, blob reachability, materialization, and snapshotting |
-| `trace_repository.ml` | Locked trace sets and trace encoding |
-| `cell_repository.ml` | File and sealed pins and snapshot reads |
-| `repository_inventory.ml`, `store_gc.ml`, `gcroots.ml` | Wanted roots and direct trace-graph GC |
-| `remote_protocol.ml` | Typed pin and serve-hit messages plus their canonical codec |
-| `transport.ml`, `remote.ml` | Hash-checked local-directory artifact movement and remote placement |
+| `store.lisp` | Store paths, version stamp, raw bytes, atomic replacement, inventory, roots, and GC |
+| `cache.lisp` | Trace selection, validation, hit/miss decisions, and reachability |
+| `nodes.lisp` | Persistent node keys, rebuilds, and result callbacks |
+| `artifacts.lisp` | Canonical trees, blob reachability, materialization, and snapshots |
+| `effects.lisp`, `observations.lisp` | Effect cells, authority checks, and trace records |
 
-`codec.ml` defines the canonical durable encoding. The store does not use
-OCaml `Marshal`. Every durable write uses the atomic replacement boundary.
-
-The current storage contract is process-global: `Store_layout.default`,
-repository defaults, and `Cache_policy.default` all belong to the command
-process and its `HOME/.pp/store`. Sessions isolate evaluator, pass, and
-fenced state but do not isolate durable storage or cache flags. Independent
-store contexts require an explicit repository bundle before the session API
-can support them.
+Every durable write uses the atomic replacement boundary. Store contexts are
+explicit command state; sessions isolate evaluator, pass, and lifecycle
+state without exposing durable host objects.
 
 ## Domains and scheduling
 
-`domains.ml` is the generic observe, diff, apply, verify, and epoch pipeline.
-`domain_config.ml` is the typed decoder for registered domains and probes;
-`domain_prims.ml` provides trusted file and process operations. The policy for
-the filesystem and process domains is in `stdlib/domain-fs.pp` and
-`stdlib/domain-proc.pp`.
+`lifecycle/domains.lisp` owns the observe, diff, apply, verify, and epoch
+pipeline. `lifecycle/process.lisp` and `lifecycle/sandbox.lisp` provide
+confined process operations. `lifecycle/fenced.lisp` and `journal.lisp`
+handle non-repeatable actions. `lifecycle/watch.lisp` observes before a pass
+and verifies after apply.
 
-`stdlib/runtime.pp` contains constructors for runtime manifests, schedules,
-reporters, and policy data. The constructors do not grant authority or invoke
-host services. `configure-runtime` validates the manifest at script scope and
-installs only generic runtime services. A custom scheduler receives only
-data-closed job descriptors and returns validated batches; the runtime still
-owns execution, cancellation, and remote transport. A custom domain remains a
-pp `observe`/`diff`/`apply` registration; a custom executor remains a trusted
-host provider.
+`distribution.lisp` owns serial, parallel, race, and transport descriptors.
+Parallel placement uses separate worker processes and the node boundary
+rechecks the cache after placement. Transport receives descriptors or
+hash-checked artifacts, never host object graphs.
 
-`reconciliation.ml` binds a command to a session and runs domain passes.
-`fenced.ml` and `journal.ml` handle non-repeatable actions. A domain observes
-before a pass and verifies after apply.
-
-A successful pass records its canonical desired object and the node keys
-forced to derive it as one wanted root. Cache validation, stabilization, and
-GC use the same trace edges: node reads name children, trace outcomes name
-result objects, and canonical trees name blobs. Changing desired state records
-a new retained graph; reconciliation withdraws removed domain entries and GC
-can collect only data outside the retained graphs. A fresh process reconstructs
-the same keys from pinned source and island values and uses the same traces to
-validate hits or rebuild misses.
-
-`stdlib/dune.pp` is an ecosystem adapter, not a runtime module. Its
-working-tree implementation observes the project, lets Dune perform its own
-incremental policy, and returns a canonical artifact tree. Its closed-source
-implementation builds the equivalent immutable `run-closed!` request. Both
-use the same `dune-build(adapter, spec)` library interface. Dune targets,
-arguments, build-directory policy, and output selection occur only in that pp
-file. If no request policy is supplied, the runtime manifest's
-`:execution-policy` is used as the default. `tests/104` proves null and precise Dune actions, artifact restoration,
-and the absence of Dune concepts from `src/runtime`.
-
-`scheduler.ml` owns an installable placement service. Its input is an
-immutable job descriptor containing a node key, placement width, and a
-data-closure bit; the caller supplies the local runner. Serial placement is
-the reference adapter. Parallel and race placement fork that same runner,
-while remote placement receives descriptors only. The node boundary
-rechecks the cache after placement and rebuilds locally when no worker
-produced a hit.
+`stdlib/domain-fs.pp` and `stdlib/domain-proc.pp` define the filesystem and
+process domain policies. `stdlib/dune.pp` is an ordinary library adapter for
+external Dune builds; Dune-specific policy remains in that library and is not
+part of the evaluator.
 
 ## Application and commands
 
-`main.ml` starts the process, parses the CLI, builds production services, and
-converts uncaught errors to exit status. `cli.ml` owns option parsing and help
-rows; `cli_validation.ml` converts raw strings into scheduler, recovery, and
-numeric runtime policy. `app_context.ml` constructs one explicit runtime
-context containing host services, stores, cache policy, scheduler, session,
-evaluator, and reconciliation services. Runtime code resolves repository and
-policy access from that active context, so command-local state is not assembled
-from independent process-global repository singletons.
+`lisp/app/main.lisp` starts the process, parses options, builds production
+services, and converts uncaught conditions to pp diagnostics and exit status.
+It owns language execution, formatting, lint, store/node inspection,
+reconciliation, scheduling, transport, and lifecycle command boundaries.
 
-Command ownership is split as follows:
-
-| Module | Commands |
-|---|---|
-| `command_eval.ml` | Run, eval, pins, schedule, and determinism checks |
-| `command_frontend.ml` | Formatting and surface conversion |
-| `command_run.ml` | Source execution and domain setup |
-| `command_reconcile.ml` | Reconcile and supervise passes and recovery |
-| `command_watch.ml` | Watch polling and stabilization |
-| `command_island.ml` | Island updates and pin inspection |
-| `command_cluster.ml` | Cluster setup, sync, serve, and remote placement |
-| `command_gc.ml` | Explicit store GC |
-| `command_developer.ml` | Help, version, properties, lint, graph, and checks |
-| `command_dispatch.ml` | Command precedence and signal scope |
-
-Run `pp --help` for the full current CLI. Do not copy the flag list into this
-document.
+Run `bin/pp --help` for the current command list. Do not duplicate flag rows
+in this document.
 
 ## Verification map
 
-Use the smallest gate that matches the change, then run the full gate:
+Use the smallest gate that matches the change:
 
 ```sh
-dune build @unit
-dune build @architecture
-dune exec ./tools/fuzz.exe -- --grammar full --count 2000
-dune runtest
+scripts/build-lisp.sh --output lisp/pp
+scripts/check-architecture.sh
+scripts/run-tests.sh bin/pp
 ```
 
-The focused executables cover kernel, repositories, observations, lifecycle,
-and parsers. The shell tests cover process, filesystem, store, watch,
-reconciliation, cluster, and crash behavior. See [TESTING.md](TESTING.md) for
-the test machinery.
-
-Important test groups:
-
-| Area | Tests |
-|---|---|
-| Content identity and quotation | `009`, `011`, `041`, `042`, `070`, `071` |
-| Nodes, traces, and authority | `010` through `024`, `036`, `040`, `053` |
-| Readers and printers | `054` through `067` |
-| Domains and fenced actions | `033`, `034`, `046`, `049`, `052` |
-| Cluster and GC | `047` through `051` |
-| Crash and adversarial coverage | `073`, `074`, `075` |
+Focused shell suites cover identity and laws, readers and printers, effects,
+store, nodes, lifecycle, reconciliation, crash recovery, and adversarial
+worlds. `tests/089-state-inventory.sh`, `tests/092-dependency-boundaries.sh`,
+and `tests/094-architecture-gates.sh` ensure the saved-image build and source
+layout remain coherent.
 
 If a source change touches the evaluator, identity, or durable repository
-code, run the full fuzzer and suite. The architecture gate must remain green.
+code, run the relevant focused suites and a saved-image smoke command. The
+architecture gate must remain green.

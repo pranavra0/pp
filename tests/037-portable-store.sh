@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Versioned portable store format.
 #
-#   ~/.pp/store serializes with a canonical, byte-stable TEXT codec
-#   (src/kernel/codec.ml) instead of OCaml Marshal, stamped by store/VERSION
-#   ("pp-store 2"). The bytes must be identical on any OS/arch/compiler.
+#   ~/.pp/store serializes with a canonical, byte-stable TEXT codec stamped
+#   by store/VERSION ("pp-store 2"). The bytes must be identical on any
+#   supported OS and architecture.
 #
 #   Covers:
 #     (a) golden bytes — a fixed program's stored object file and trace file

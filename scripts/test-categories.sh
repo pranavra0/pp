@@ -1,12 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-root=$(cd "$(dirname "$0")/.." && pwd)
-unit=0
-for file in "$root/tests/unit"/*_unit.ml; do
-  [ -f "$file" ] && unit=$((unit + 1))
-done
-
+root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd -P)
 language=0
 for file in "$root/tests"/[0-9]*.pp; do
   [ -f "$file" ] && language=$((language + 1))
@@ -27,5 +22,5 @@ gates=0
 for file in "$root/tests"/09[0-4]*.sh; do
   [ -f "$file" ] && gates=$((gates + 1))
 done
-printf 'test categories: unit=%s language=%s integration=%s architecture-gates=%s sensitive=%s\n' \
-  "$unit" "$language" "$integration" "$gates" "$sensitive"
+printf 'test categories: language=%s integration=%s architecture-gates=%s sensitive=%s\n' \
+  "$language" "$integration" "$gates" "$sensitive"

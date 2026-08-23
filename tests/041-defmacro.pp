@@ -1,16 +1,10 @@
 # defmacro: an expected-output test proving macro expansion is total, giving
 # metaprogramming without needing fexprs.
 #
-# Expansion happens at ONE shared point before evaluation ever sees a form
-# (macro.ml), so this file exercises it purely through observable
-# VALUES (never node-body `log` side effects — a cache hit replays no log,
-# per SPEC law 17, which would make repeated `dune runtest` runs against a
-# developer's real ~/.pp/store flaky if this were a fresh-vs-cached-run
-# distinction; a node's printed RESULT is deterministic regardless of
-# hit/miss, so that's all this file checks). Editing a macro's own
-# definition re-keying a node built from its expansion (SPEC law 20) is
-# tests/042-defmacro-rekey.sh's job, under an isolated $HOME where hit vs.
-# miss can be observed directly.
+# Expansion happens at one shared point before evaluation sees a form.
+# This test checks observable values only; a cache hit replays no node-body
+# log (SPEC law 17). Editing a macro definition re-keys a node built from its
+# expansion (SPEC law 20), covered by tests/042-defmacro-rekey.sh.
 #
 # Authored here in the brace surface, via quote{}/quasiquote{}/
 # unquote()/splice() — homoiconicity still lives at the AST layer (`quote`

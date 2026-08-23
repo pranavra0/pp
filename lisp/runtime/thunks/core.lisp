@@ -1,4 +1,4 @@
-;;;; M4 thunk adapters and content identities.
+;;;; Thunk adapters and content identities.
 (in-package #:pp.runtime)
 
 (defun runtime-thunk-error (message &optional (code "runtime.thunk"))

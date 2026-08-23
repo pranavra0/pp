@@ -1,23 +1,11 @@
 #!/usr/bin/env bash
-# Single-engine test suite. For tests/NNN-*.pp cases, runs the tree-walker once
+# Single-engine test suite. For tests/NNN-*.pp cases, runs the Lisp image once
 # under an isolated HOME, diffs against a committed .expected file (stdout+stderr
 # and final exit-code line), and fails on any difference. For tests/*.sh oracles,
-# runs the script and checks its exit status. Invoked by `dune runtest`; can
-# also be run by hand from the repo root:
-#     dune build && scripts/run-tests.sh ./pp
+# runs the script and checks its exit status.
 #
-# Run a deterministic two-engine parity pass over the same cases without
-# changing the default single-engine invocation:
-#
-#     scripts/run-tests.sh --compare --ocaml ./pp-ocaml --lisp ./pp-lisp
-#
-# The comparison driver executes each existing .pp/.sh entry point once per
-# explicit binary and compares status, stdout, normalized diagnostics, and
-# durable store inventory/bytes.  `--compare` requires both paths; ordinary
-# `scripts/run-tests.sh [PP]` remains unchanged.
-#
-# Arg 1 is the pp binary (default: the dune-built one). The tests run with the
-# repo root as cwd so `(load "stdlib/list.pp")` resolves.
+# Arg 1 is the pp binary (default: bin/pp). The tests run with the repo root as
+# cwd so `(load "stdlib/list.pp")` resolves.
 #
 # Cases run CONCURRENTLY: each is an independent job (own store under a
 # throwaway HOME, own scratch files) so a bounded fan-out is safe, and wall
@@ -34,8 +22,8 @@ set -uo pipefail
 
 # ---- Worker: run ONE job, printing its verdict on the first line (PASS or
 # FAIL) followed by the human-readable block the aggregator replays. This is
-# the same script re-invoked (see the xargs fan-out below); PP and FUZZ arrive
-# through the environment the parent exported.
+# the same script re-invoked (see the xargs fan-out below); PP arrives through
+# the environment the parent exported.
 if [ "${1:-}" = "--worker" ]; then
   IFS='|' read -r kind file <<<"$2"
   scratch=$(mktemp -d)
@@ -64,7 +52,7 @@ if [ "${1:-}" = "--worker" ]; then
       export HOME="$scratch_home"
       run_bounded "${TEST_CASE_TIMEOUT:-120}" "$PP" "$file" >"$scratch/actual" 2>&1
       ec=$?
-      printf '# exit: %d\n' $ec >> "$scratch/actual"
+      printf '# exit: %d\n' "$ec" >> "$scratch/actual"
       expected="${file}.expected"
       if [ ! -f "$expected" ]; then
         printf 'FAIL\nFAIL %s  (no .expected file — bless with:\n' "$file"
@@ -88,27 +76,9 @@ if [ "${1:-}" = "--worker" ]; then
   exit 0
 fi
 
-# Pair mode intentionally delegates case execution to the comparison helper;
-# the shared test scripts remain the sole definition of each case.  Both
-# `--ocaml PATH --lisp PATH` and positional `OCAML LISP` forms are accepted.
-if [ "${1:-}" = "--compare" ]; then
-  shift
-  compare_helper="$(cd "$(dirname "$0")" && pwd -P)/compare-binaries.sh"
-  if [ "$#" -eq 2 ] && [[ "$1" != --* ]] && [[ "$2" != --* ]]; then
-    exec "$compare_helper" --suite --ocaml "$1" --lisp "$2"
-  else
-    compare_prefix=(--suite)
-    for compare_arg in "$@"; do
-      [ "$compare_arg" = "--case" ] && compare_prefix=()
-    done
-    exec "$compare_helper" "${compare_prefix[@]}" "$@"
-  fi
-fi
-
-PP="${1:-_build/default/src/app/main.exe}"
+PP="${1:-bin/pp}"
 case "$PP" in /*) : ;; *) PP="$PWD/$PP" ;; esac
 export PP
-export FUZZ="${FUZZ:-tools/fuzz.exe}"
 SELF="$0"
 
 # ---- Enumerate jobs: .pp expected-output cases first, then shell oracles, so the

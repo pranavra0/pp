@@ -46,30 +46,25 @@ protocol evidence on demand.
 
 The performance laboratory remains required, but it does not gate v1.
 Deterministic-lab measurements describe simulated behavior; trustworthy OS,
-socket, disk, scheduler, and resource claims wait for the live stress
-milestone.
+socket, disk, scheduler, and resource claims wait for the live stress suite.
 
 ## 2. What exists at the branch point
 
-The branch starts from `origin/master` commit `03f688a`.
+The branch starts from the current saved-image implementation.
 
-- pp has one tree-walking evaluator and one persistent-node path.
-- `Cache_policy.lookup` already classifies first-build, stale,
-  unauthorized, successful, and failed-trace outcomes, but exposes them as
-  human `pp why` text.
-- `Store_index.print_graph` exposes a text cell-to-node graph from durable
-  traces.
+- pp has one Common Lisp tree-walking evaluator and one persistent-node path.
+- the runtime classifies first-build, stale, unauthorized, successful, and
+  failed-trace outcomes, and exposes them through `pp why`;
+- durable traces expose the cell-to-node graph used by inspection;
 - the scheduler supports serial, local process parallelism, racing, and
-  remote placement.
-- remote placement uses the real typed cache/token/artifact boundaries, but
+  remote placement;
+- remote placement uses typed cache, token, and artifact boundaries, but
   today's member transport is a local-directory/command seam rather than a
-  general network fabric.
-- domains already implement observe, diff, apply, and verify; watch mode adds
-  stabilization and repeated passes.
+  general network fabric;
+- domains implement observe, diff, apply, and verify; watch mode adds
+  stabilization and repeated passes;
 - the website is the generated static Typst reference manual. There is no
   interactive application stack to extend.
-- the native dependency surface is intentionally small: OCaml 5.1+, Dune,
-  Cryptokit, and Unix in the runtime/app layers.
 
 These facts rule out deriving animation from log scraping and rule out a
 browser-only mock as the primary simulator.

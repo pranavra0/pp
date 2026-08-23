@@ -269,7 +269,7 @@
   (verify-capability-token token :secret secret :cluster-id cluster-id
                            :now now :realpath realpath))
 
-;;; Descriptive aliases for callers that prefer the OCaml boundary names.
+;;; Short aliases for token operations.
 (defun mint-token (&rest arguments) (apply #'mint-capability-token arguments))
 (defun verify-token (&rest arguments) (apply #'verify-capability-token arguments))
 (defun token-to-capabilities (&rest arguments) (apply #'token-to-caps arguments))

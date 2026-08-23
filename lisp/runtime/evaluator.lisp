@@ -1,5 +1,5 @@
-;;;; M3 explicit continuation/work-queue evaluator.
-;;;; No host EVAL, READ, or INTERN is used here.  All user syntax is already a
+;;;; Explicit continuation/work-queue evaluator.
+;;;; No host EVAL, READ, or INTERN is used here. All user syntax is already a
 ;;;; pp.kernel expression and all execution proceeds through the machine below.
 (in-package #:pp.runtime)
 

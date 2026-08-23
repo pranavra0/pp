@@ -4,19 +4,16 @@
 > laws. It does not describe the current implementation — this project's docs
 > have described aspirations as facts before, and this document exists partly
 > to stop that. Every law carries an explicit status marker:
-> - holds: the tree-walker satisfies the law within the tested scope cited
->   for that law, using pinned tests, targeted/property tests, or the
->   strengthened metamorphic fuzzer.
-> - partial: the mechanism exists but is buggy or incomplete. The prose
->   cites the matching test, fuzzer signature, or status-table entry.
-> - unimplemented: a target only. Nothing in `src/` does this yet.
+> - holds: the evaluator satisfies the law within the tested scope cited for
+>   that law, using pinned tests, property tests, or focused shell scenarios.
+> - partial: the mechanism exists but is buggy or incomplete. The prose cites
+>   the matching test or status-table entry.
+> - unimplemented: a target only. Nothing in the current implementation does
+>   this yet.
 >
-> The enforcement mechanism is the metamorphic fuzzer (`tools/fuzz.ml`; see
-> [TESTING.md](TESTING.md)) plus the expected-output, property, and integration
-> test suites. Fuzzer failures are holds only when successful twins agree or
-> both semantics-preserving twins produce the same normalized error tag;
-> unmatched errors, mismatches, and crashes fail the gate. Claims below are
-> limited to the evidence cited for each law.
+> The enforcement mechanism is the expected-output, property, and integration
+> test suites described in [TESTING.md](TESTING.md). Claims below are limited
+> to the evidence cited for each law.
 > Law-linkage gate (`tests/072`). A holds claim is not self-certifying:
 > `tests/072-law-pins.sh` cross-references every LAW id here against the
 > `# pins: LAW-<n>` markers declared by the suite, and fails the build if a
@@ -101,7 +98,7 @@ this spec are the terms of a bargain the programmer opts into, not a
 language-wide prohibition.
 
 Status of the tier split itself: holds for the core boundary. The
-`node`/`defnode` reader forms are real persistence boundaries: the tree-walker
+`node`/`defnode` reader forms are real persistence boundaries: the evaluator
 routes them through `~/.pp/store` with verifying traces, so a node caches
 across runs while a scripting-tier expression does not. They share the same
 store. Node-visible runtime inputs are closed: a dependency is a keyed value,
@@ -148,8 +145,7 @@ top-level nodes.
 
 **Status: holds** — the engine builds a mutual environment for `ELet`
 bindings; sibling references evaluate correctly and reordering independent
-bindings does not change the result (`tests/007-phase0-laws.pp`, fuzzer `full`
-grammar).
+bindings does not change the result (`tests/007-phase0-laws.pp`).
 
 Test: `let (y = x + 1, x = 1) { y }` gives `2` ; reordering
 the bindings must not change the result.
@@ -274,9 +270,8 @@ Grounding: sequence is sometimes the true structure — a REPL session is a
 sequence. The law keeps that expressible while refusing to make it the
 default meaning of binding.
 
-**Status: holds** — the reader emits `ELetStar`; the engine evaluates it
-sequentially and agree on shadowing (`tests/007-phase0-laws.pp`, fuzzer
-`core` and `full` grammars).
+**Status: holds** — the reader emits `ELetStar`; the evaluator handles it
+sequentially and tests pin shadowing (`tests/007-phase0-laws.pp`).
 
 Test: `let* (x = 1, x = x + 1) { x }` evaluates to `2` 
 (shadowing, strictly sequential visibility).
@@ -368,8 +363,8 @@ system that speculatively evaluates both arms of a conditional is Make, not
 Excel.
 
 **Status: holds** — the explicit heap-continuation evaluator forces the
-condition before entering exactly one selected branch; exercised by the
-fuzzer's `core` grammar.
+condition before entering exactly one selected branch; focused language tests
+cover this boundary.
 
 Test: `if true { 1 } else { undefined-symbol }` evaluates to `1`; the untaken
 branch's `perform log(…)` produces no stderr.
@@ -420,19 +415,12 @@ total, not best-effort.
 
 **Status: holds** — `quote_to_value` handles all expr forms; the reader
 parses quasiquote/unquote/unquote-splicing and a runtime walker expands them,
-including splicing, nested quasiquote, vectors, and maps. `defmacro`
-(`macro.ml`) redeems the grounding: a macro receives its argument forms
-already converted by `quote_to_value`, computes over them as data (via
-`quote`/`quasiquote`/`list`/`cons`/`gensym`), and the result is converted
-back to syntax by `Quotation.value_to_expr` — the total, exhaustive counterpart
-of `quote_to_value`, so every case the reader can produce round-trips. This
-is possible only because quotation was already total in both directions the
-moment `value_to_expr` existed to complete it. `defmacro` is not itself a
-reader special form. Its shape — `(defmacro (name params...) body...)` in
-the AST, `defmacro name(params…) { body… }` in braces — is recognised
-structurally, at the one expansion point the engine uses, never in
-`reader.ml`; a macro call is expanded, and gone, before the evaluator's own
-machinery (including LAW 20's `hash_expr`) ever sees it.
+including splicing, nested quasiquote, vectors, and maps. `defmacro` receives
+argument forms as quoted data, computes over them with `quote`/`quasiquote`/
+`list`/`cons`/`gensym`, and converts the result back to syntax. Its shape is
+recognised structurally at the single expansion point before the evaluator
+and expression hasher consume it; every reader surface therefore shares the
+same macro semantics.
 
 Test (in the sexpr/AST notation, the natural one for a raw quoted-list
 literal — braces have no bare list literal outside `list(…)`, only calls and
@@ -458,9 +446,8 @@ whenever; `IO` actions happen in the order written. Effects are the boundary
 where the world's arrow of time enters, so they get an explicit, small,
 sequential sublanguage instead of leaking ordering into everything.
 
-**Status: holds** — the evaluator forces every `do` step; the fuzzer's
-metamorphic oracle compares stderr (the `log` effect stream) for each
-program and its semantics-preserving twin.
+**Status: holds** — the evaluator forces every `do` step; focused process tests
+verify the deterministic effect stream for each program.
 
 Test: `do { perform log("a"); perform log("b"); 1 }` writes `a` then `b`
 to stderr, identically .
@@ -499,9 +486,10 @@ authority and security; the DAG plus the reconciler are determinism and
 ordering.
 
 **Status: holds** as a constraint on current code — capabilities play no
-ordering role anywhere in `src/`, and the single-writer reconciler enforces
-ordering through data flow rather than capability consumption (`tests/018`,
-`tests/023`, `tests/033`). Capabilities remain authority and security only.
+ordering role anywhere in the implementation, and the single-writer
+reconciler enforces ordering through data flow rather than capability
+consumption (`tests/018`, `tests/023`, `tests/033`). Capabilities remain
+authority and security only.
 
 Test: structural — no spec test may require capability consumption for
 its ordering claim, and the capability rewrite that removed the project's
@@ -561,10 +549,10 @@ seriously. React does not re-run your logging when it skips a re-render;
 pretending otherwise would make hits observable and caching unsound in the
 other direction.
 
-**Status: holds** (for the node tier) — a `node { e }` hit
-serves the stored result and does not re-emit the `log`/stdout produced on
-the miss. This is verified in the tree-walker (`tests/010`) and the tree-walker
-(`tests/014`), where a node's in-body `COMPUTE` log fires only on the miss.
+**Status: holds** (for the node tier) — a `node { e }` hit serves the stored
+result and does not re-emit the `log`/stdout produced on the miss. This is
+verified by the persistent-node tests (`tests/010` and `tests/014`), where a
+node's in-body `COMPUTE` log fires only on the miss.
 
 Test: force a logging `node { e }` twice, the second run in a fresh
 process: the result is identical, and the log is emitted exactly once, on
@@ -642,24 +630,21 @@ Authority may gate access to a result; it must never rename the result.
 `H(code-structure ‖ free-var value-hashes ‖ argument-value-hashes)`. The free
 variables the node references are resolved, forced, call-by-value, to their
 value hashes and folded in, excluding the whole-environment hash and the
-capability set. The tree-walker resolves them from its environment
-(`Identity.node_key`); the evaluator resolves them from the captured frames and globals
-producing a stable key for data-valued free variables so store entries are
-shared across runs. The
-two catastrophic leaks this law names are closed: rebinding an unreferenced
+free variables are resolved from captured frames and globals, producing a
+stable key for data-valued free variables so store entries are shared across
+runs.
+The two catastrophic leaks this law names are closed: rebinding an unreferenced
 global is a cache hit, and widening the grant does not invalidate anything
 (`tests/011`, `tests/014`, `tests/097`). Config and the handler stack are now fully out of
 the key: a config read or a perform inside a node records a `config:`/
 `handler:` trace cell instead (LAW 33/26, `tests/015`).
 
-`defmacro` needed no change to this law, by construction. `hash_expr`
-(`node_key_of`) consumes an expression tree that has
-already been macro-expanded — expansion (`macro.ml`) is the one shared step
-every top-level-form-shaped list passes through before the evaluator's own
-machinery ever sees it (the REPL drivers, the REPL drivers and `ELoad`/`eval_module_file`). So "the
-code hash must hash the expanded form" is not a special case this law had to
-grow: a node built from a macro call is keyed on exactly the code the macro
-expanded into, and editing only the macro's own definition, with the call
+`defmacro` needs no change to this law. The expression hasher consumes an
+already expanded tree; expansion is the one shared step every
+top-level-form-shaped list passes through before the evaluator's machinery
+ever sees it (the REPL and source-loader paths). The code hash includes the
+expanded form: a node built from a macro call is keyed on exactly the code the
+macro expanded into, and editing only the macro's own definition, with the call
 site unchanged, changes that expanded code, hence the key, hence forces a
 recompute (`tests/042-defmacro-rekey.sh`).
 
@@ -846,21 +831,19 @@ rest lexically, so a write-target's cell id is stable before and after the
 file is created (`tests/036`). Path components otherwise retain the byte
 identity supplied by the host filesystem. The transitive-closure requirement
 holds: a hit is served only if the caller's capabilities cover every
-cell in the stored trace's read closure (`Cache_policy.lookup ~authorized`), and
-because reads propagate to enclosing nodes the closure is transitive — a
-narrow caller cannot launder a broad read through a cached aggregator
-(`tests/013` tree-walker, `tests/014`). A capability denial raises the
-distinct `Capability_error` and is deliberately not memoized, since authority
-is not identity or validity (LAW 15), so granting the capability later still
-yields a hit. `pp why` exists and is capability-filtered: it explains each
-node's hit or miss (first build, stale cell, unauthorized, verified trace) to
-stderr, and redacts rather than names a cell the caller has no authority over
-(`tests/019`).
+cell in the stored trace's read closure, and because reads propagate to
+enclosing nodes the closure is transitive — a narrow caller cannot launder a
+broad read through a cached aggregator (`tests/013`, `tests/014`).
+A capability denial raises the distinct `Capability_error` and is deliberately
+not memoized, since authority is not identity or validity (LAW 15), so granting
+the capability later still yields a hit. `pp why` is capability-filtered.
+`pp why` explains each node's hit or miss (first build, stale cell,
+unauthorized, verified trace) to stderr and redacts cells outside the caller's
+authority (`tests/019`).
 
-Test: grant `fs:/tmp:ro`: reading `/tmpevil/x` errors . A
-caller scoped to `src/` gets no hit on a node whose transitive closure
-touched `/etc/passwd` (one of the acceptance checks for the capability-hit
-milestone).
+Test: grant `fs:/tmp:ro`: reading `/tmpevil/x` errors. A caller scoped to
+`src/` gets no hit on a node whose transitive closure touched `/etc/passwd`;
+`tests/013` and `tests/014` verify this capability-hit boundary.
 
 ### [LAW 24] Loader reads are runtime authority, not user effects
 
@@ -912,7 +895,7 @@ to trust a fiction.
 capability type and surface language.
 
 Test: evaluating the time/memory constructors is an unbound-symbol error
- until a later scheduler milestone enforces budgets.
+when a scheduler enforces budgets.
 
 ---
 
@@ -990,7 +973,7 @@ inside `effect` leaves the capability set exactly as it was before entry.
 A node that reaches an evaluative failure stores a failing trace: the result
 is the error's hash, and the outcome is marked failed. A later force with
 unchanged inputs re-serves the failure without re-running; changing its
-validating trace permits re-execution. Authority denials and internal OCaml
+validating trace permits re-execution. Authority denials and internal host
 exceptions are not computation results and are never cached.
 
 Grounding: this applies Nix's realisations and the verifying traces from
@@ -1025,16 +1008,11 @@ errors carry stable codes and can be converted to LSP-compatible diagnostics.
 The CLI continues to render one clean `pp: error: …` line with exit code 1.
 
 A loaded file's forms are ranged against that file, not the loading form:
-`Reader.read_string` reads a loaded file with its own path (it used to fall
-back silently to the reader's `"<?>"` placeholder), and each of its
-top-level forms is evaluated (the tree-walker's `eval_expressions`) or
-evaluated one at a time, under the same
-never-doubled range decoration as the outer top-level driver
-(`Error_context.with_form_location` — one implementation shared across runs
-and both nesting levels). An error inside the loaded file is decorated with
-its own range before it can unwind past the
-`load`, so the `load(…)` call site's own decorator, seeing a message that
-already carries a location, leaves it alone.
+`read-source` reads a loaded file with its own path, and each top-level form
+is evaluated one at a time under the same never-doubled range decoration as
+the outer top-level driver. An error inside the loaded file is decorated with
+its own range before it can unwind past `load`, so the call site's decorator
+leaves an existing location alone.
 
 Test: `car(5)` at line 3 of `f.pp` reports a primary range in `f.pp` in
 with byte-identical stderr (`tests/027`); case (g) loads a file whose second
@@ -1075,16 +1053,14 @@ with reality re-observed rather than trusted from a state file.
 write-discipline law is now enforced generically, for any registered domain,
 not hardwired to the filesystem. A domain is an `observe`/`diff`/`apply`
 triple of ordinary pp functions (`register-domain`, scripting tier), and
-core (`src/runtime/domains.ml`) wraps every domain's `apply` in the same journal
-bracket, `observed_all` suspension, plan cache, and verify-after-write,
-regardless of what the domain converges. The trusted mechanics —
-atomic materialize/remove, fork/exec/reap, and
-per-domain state persistence — live in primitives
-(`tree-observe`, `materialize-file`, `remove-file`, `proc-spawn`,
-`proc-alive?`, `proc-stop`, `proc-reap`, `domain-state-get`/`put` in
-`src/runtime/domain_prims.ml`), and all the policy — the tree-walk diff, the
-start/stop/restart decision — moved into `stdlib/domain-fs.pp` and
-`stdlib/domain-proc.pp` as ordinary pp source.
+the runtime domain service wraps every domain's `apply` in the same journal
+bracket, observed-state suspension, plan cache, and verify-after-write,
+regardless of what the domain converges. The trusted mechanics — atomic
+materialize/remove, process launch/reap, and per-domain state persistence —
+live in runtime providers (`tree-observe`, `materialize-file`, `remove-file`,
+`proc-spawn`, `proc-alive?`, `proc-stop`, `proc-reap`, and domain-state
+operations), while all policy — the tree-walk diff and start/stop/restart
+decision — lives in `stdlib/domain-fs.pp` and `stdlib/domain-proc.pp`.
 
 `pp --reconcile ROOT prog.pp` auto-loads `stdlib/domain-fs.pp` and registers
 it with a write capability restricted to ROOT, taking the program's final
@@ -1190,13 +1166,12 @@ double-execution occurs (the crash-recovery requirement for fenced effects).
 
 ## 10. Types
 
-### [LAW 32] Types are optional, gradual, and checked at force time — and the oracle is the strictest implementation
+### [LAW 32] Types are optional, gradual, and checked at force time
 
 pp is dynamically typed. A type annotation is a checked claim: when an
 annotated value is forced, a mismatch is a runtime error reporting the
-annotation's definition site. No annotation, no check. The tree-walker, the
-project's correctness oracle, must enforce at least everything the engine
-enforces — an oracle weaker than the fast path is not an oracle.
+annotation's definition site. No annotation, no check. The evaluator enforces
+the same claim on every supported execution path.
 
 Grounding: this project holds that static typing is a perspective, not a
 foundation. The top level of a real system is dynamic; static subsets live
@@ -1204,16 +1179,13 @@ inside it as checked claims. This is the differentiator from Unison.
 Force-time checking makes annotations meaningful without a phase that must
 see the whole, dynamic, graph.
 
-**Status: holds** — the engine enforces type annotations at force time;
-the tree-walker's `check_type` mirrors the tree-walker (`tests/004-type-test.pp`).
+**Status: holds** — the evaluator enforces type annotations at force time.
 `def`/`fn`/`defnode` bodies carry their definition-site location, so type
 errors cite the annotation site. Per-parameter annotations are checked too,
 however a surface spells them (s-expressions: `(def (f x : int) …)`,
-`(fn [x : int] …)`; braces: `def f(x: int) { … }`, `fn(x: int) { … }`) —
-they used to parse and then be discarded. A reader-level desugar, downstream
-of any surface's parser, rewrites each into a located type check
-(`ELocated`-wrapped `ETyped`) that runs ahead of the body, so the engine enforces the shared AST identically (`tests/026-param-types.sh`, fuzzer
-`stmt_param_typed_def`).
+`(fn [x : int] …)`; braces: `def f(x: int) { … }`, `fn(x: int) { … }`).
+Reader desugaring rewrites each into a located type check that runs ahead of
+the body (`tests/026-param-types.sh`).
 
 Test: `def f(x): int { "s" }` forced gives the same type error, citing
 the annotation site, ; `f("oops")` against
@@ -1274,7 +1246,7 @@ rebuilt the deployment-boundary blunt instrument inside the language.
 **Status: holds** for the negative half: no location surface exists in any
 reader, and this absence is verified. The positive half now lands for local
 process-pool parallelism: `--schedule serial|parallel:N|race:N` selects a
-result-transparent handler (`src/runtime/scheduler.ml`) that forks worker processes
+result-transparent handler (`distribution.lisp`) that forks worker processes
 at the dispatch point. A worker runs the exact `run_node_body` the serial
 miss arm calls, with no second force path, and communicates only through the
 store; a dead worker degrades to an ordinary in-process recompute, never a
@@ -1283,18 +1255,16 @@ scheduler, never by `node_key_of`, and it never enters a
 trace, so "a program is byte-identical whether it runs on one core or eight"
 holds by construction, not merely by intent.
 
-This extends to a cluster: `--schedule remote:<member>` is the same
-`Scheduler.policy`/`dispatch_batch` seam, gated to data-closed batches, since
-every free variable re-encodes under `Codec.encode_value`. Membership comes
-from `~/.pp/cluster/members`/`$PP_CLUSTER_MEMBERS`, ambient config, never
-`--grant` — an address is not an authority ceiling, the same distinction
-this law already draws between location and syntax. A member is an ordinary
-second `pp` invocation of the byte-identical program; a non-data-closed
+This extends to a cluster: `--schedule remote:<member>` uses the same
+result-transparent distribution service, gated to data-closed batches, since
+every free variable re-encodes under the canonical value codec.
+Membership comes from `~/.pp/cluster/members`/`$PP_CLUSTER_MEMBERS`, ambient
+config, never `--grant` — an address is not an authority ceiling.
+A member is an ordinary second `pp` invocation of the byte-identical program;
 node, an unreachable member, or a crashed member all degrade to local
-compute, never a wrong answer (`src/runtime/remote.ml`).
+compute, never a wrong answer (`distribution.lisp`).
 
-A later stage of this same cluster work adds cluster membership's
-write-domain half: host-qualified domain distribution generalises the
+A future extension adds cluster membership's write-domain half:
 desired map one level, to `{host -> {domain -> desired}}`, indexed by the
 same kind of ambient identifier this law already uses for
 `remote:<member>` — an explicit `--member-name <n>` command-line flag, never
@@ -1336,55 +1306,41 @@ redundancy only — LAW 37 nodes are deterministic, so racing identical
 `(key, run)` jobs is sound, while heterogeneous racing of different
 computations stays out of scope until the declared-nondeterminism cells of
 LAW 37/38 exist. The first success wins, losers are killed
-(`SIGTERM` then `SIGKILL`), and the parent re-enters `Cache_policy.lookup` exactly as
-the batch path does. Cluster and distributed racing is a later milestone,
-gated on a threat model.
+and the parent re-enters cache lookup exactly as the batch path does. Cluster
+and distributed racing remains bounded by its declared threat model.
 
-Test: `tests/038`'s race:3 case, one of the acceptance checks for this
-milestone: swap `serial` for `--schedule race:3`, with byte-identical
-program text — only the command-line flag differs — and check for an
-identical result hash, exactly one surviving trace line
-(the store's own content dedup, not merely fork timing), wall-clock roughly
-one run rather than N.
+Test: `tests/038`'s race:3 case exercises `--schedule race:3` with
+byte-identical program text — only the command-line flag differs — and check
+for an identical result hash, exactly one surviving trace line (the store's
+own content dedup, not merely fork timing), wall-clock roughly one run rather
+than N.
 
 ---
 
 ## 13. Evaluator correctness
 
-### [LAW 36] The tree-walker is the single reference engine
+### [LAW 36] The evaluator is the single reference engine
 
-The tree-walker is the executable specification. The metamorphic fuzzer is
-the ratchet that enforces this: semantics-preserving twins must produce
-identical output, and the reader round-trip gate catches serialization
-divergence. No shipped feature may exist outside the evaluator's verified
-surface.
+The evaluator is the executable specification. Its shared frontend and
+continuation machine own every expression form, and its printers preserve
+round-trip structure and hashes. No shipped feature may exist outside this
+verified surface.
 
-Grounding: one engine with a metamorphic oracle is a strong correctness asset.
-The fuzzer turns "should agree" into "does agree, now and forever", by
-running tens of thousands of random programs every CI run.
+Grounding: one explicit evaluator keeps semantics inspectable. A second
+execution path would allow syntax, identity, or error behavior to drift.
 
-**Status: holds** — the fuzzer exists and runs the engine
-(`tools/fuzz.ml`; `dune exec ./tools/fuzz.exe`). Previously catalogued
-divergences are now closed; both `--grammar core` and `--grammar full` runs
-exit zero. The persistent node cache is verified across runs (`tests/014`).
-Signed integer and float literals are parsed consistently by both readers,
-survive formatting, and remain distinct from subtraction and hyphenated names
-(`tests/105`). The `full` grammar stays green in the release gate. `defmacro`
-would be an
-evaluator-only feature the moment it exists to violate this law — expansion
-happening outside the shared `macro.ml` path would be exactly the kind of
-divergence this law forbids. It does not, by construction: expansion
-(`macro.ml`) runs once, ahead of the evaluator, producing the expanded AST
-before the evaluator consumes it — `stmt_defmacro` (fuzzer, full grammar) and
-`tests/041-defmacro.pp` exercise this the same way every other shared-AST
-feature is verified.
-VInt persistence uses the OCaml [int] representation: the supported runtime
-contract is the signed 63-bit range on 64-bit runtimes, not arbitrary
-cross-architecture portability.
+**Status: holds** — the saved-image evaluator handles both readers, signed
+integer and float literals, macros, persistent nodes, and source locations
+under the focused language, frontend, node, and store suites. Signed literals
+survive formatting and remain distinct from subtraction and hyphenated names
+(`tests/105`). Macro expansion runs once before evaluation, producing the
+expanded AST; `tests/041-defmacro.pp` exercises that boundary.
 
-Test: `dune exec ./tools/fuzz.exe -- --grammar core` exits zero (the CI
-gate); the build-engine milestone's exit criterion extends this to the
-`full` grammar with zero twin divergence within the time budget.
+VInt persistence uses the signed 63-bit range supported by the current
+Common Lisp image.
+
+Test: `scripts/run-tests.sh bin/pp` runs the evaluator and all focused shell
+scenarios; `tests/014` verifies persistent cache hits.
 ---
 
 ## 14. Reproducibility and volatility
@@ -1502,7 +1458,7 @@ between the language's stated semantics and the implementation.
 
 | Law | Area | Status | Evidence |
 |---|---|---|---|
-| LAW 1 | mutual `let` scope | holds | `tests/007-phase0-laws.pp`; fuzzer `full` grammar |
+| LAW 1 | mutual `let` scope | holds | `tests/007-phase0-laws.pp` |
 | LAW 2 | dependency-derived order, cycle errors | holds | force paths report named cycles; `tests/095-scope-identity.sh` |
 | LAW 3 | binding-order-free identity | holds | mutual `let` bindings are sorted before hashing; `tests/095-scope-identity.sh` |
 | LAW 4 | one scope model | holds | top level, blocks, and modules prebind the same definitions while preserving value statement timing; `tests/025-def-value.sh`, `tests/039-global-scope.pp`, `tests/095-scope-identity.sh` |
@@ -1528,27 +1484,26 @@ between the language's stated semantics and the implementation.
 | LAW 27 | exception/tail-safe dynamic extent | holds | save-stack restore on every exit |
 | LAW 28 | failure traces, error memoization | holds | evaluative failures use the same durable trace lifecycle as successes and are re-served until a recorded read changes; authority denials and internal exceptions remain uncached (`tests/012`, `tests/014`, `tests/103`) |
 | LAW 29 | source locations in errors | holds | every top-level form's location is appended to unlocated runtime errors ; arity/capability errors name the callee/operation; `pp: error:` single-line reporting; a loaded file's own forms are individually located and decorated with that file's location before the error can unwind past the `load` (`tests/027`, including case (g)) |
-| LAW 30 | desired-state plus single writer | holds | `register-domain` and `src/runtime/domains.ml` enforce plan, journal, atomic apply, verify, and stratification for any registered domain; `stdlib/domain-fs.pp` and `stdlib/domain-proc.pp` hold filesystem and process policy (`tests/018`, `tests/023`, `tests/033`, `tests/046`) |
+| LAW 30 | desired-state plus single writer | holds | registered domains enforce plan, journal, atomic apply, verify, and stratification; `stdlib/domain-fs.pp` and `stdlib/domain-proc.pp` hold filesystem and process policy (`tests/018`, `tests/023`, `tests/033`, `tests/046`) |
 | LAW 31 | fenced effects, intent journal | holds | scripting-tier `fenced(KIND, SPEC)`, `--fenced-policy retry|abort|ask`, intent/done journal, recovery without silent retry; `tests/034` |
-| LAW 32 | gradual types, strictest oracle | holds | the engine enforces; tests 004/005 restored; `tests/007-phase0-laws.pp` |
+| LAW 32 | gradual types, strict evaluator | holds | the evaluator enforces; tests 004/005 restored; `tests/007-phase0-laws.pp` |
 | LAW 33 | config: computed keys, tail-safe scoping | holds | computed keys and tail-safe scoping ; config reads inside nodes are `config:<key>` trace cells, ambient config out of the node key (`tests/015`) |
 | LAW 34 | no location surface / scheduler exists | holds | the language has no location form; local process-pool scheduling, host-qualified domains, and explicit GC are implemented (`tests/038`, `tests/049`, `tests/050`) |
 | LAW 35 | run-on-N-take-first as handler | holds | `race:N` process-pool fan-out lands (`tests/038`) |
-| LAW 36 | evaluator correctness | holds | catalogued divergences are closed; signed literals agree across readers and formatting (`tests/105`); `core` and `full` fuzzing are green; macro expansion is shared ahead of evaluation |
+| LAW 36 | evaluator correctness | holds | signed literals agree across readers and formatting (`tests/105`); macro expansion is shared ahead of evaluation |
 | LAW 37 | declared nondeterminism | holds | `register-probe`/`probe` are the one sanctioned nondeterministic dependency, evaluated at most once per pass outside the reading node's trace stack, exposed only as a `probe:<name>` cell (`tests/043-probes.sh`) |
 | LAW 38 | volatile-node containment | holds | `--check` double-run detection unchanged (`tests/019`); containment is the same probe mechanism as LAW 37 — a volatile read wrapped as a probe is observed and pinned once per pass as its own cell, in-memory only, never written to `~/.pp/store` (`tests/043-probes.sh`) |
 | LAW 39 | sealed cells | holds | `CapSecret`/`VSealed`: confidential reads redact on print, exclude from the content-addressed store, ban at the node boundary both directions, gate hits on a covering grant; `unseal(v)` is the explicit boundary (`tests/044-sealed.sh`) |
 
 All 40 laws in the table are marked `holds` and have a pinned behavioral
 test. The law-linkage gate (`tests/072-law-pins.sh`) keeps the table and
-the test suite synchronized; the full grammar fuzzer and `dune runtest`
-must remain green.
+the test suite synchronized.
 
 ---
 
 ## Appendix B — The brace surface: token spec and lowering table (non-normative)
 
-> This annex is non-normative. It freezes the first-stage deliverable of the
+> This annex is non-normative. It records the current surface contract.
 > brace-syntax project (see [SYNTAX.md](SYNTAX.md)): the grammar of the
 > brace/infix surface and the exact s-expression form every brace construct
 > reads to. It defines no new semantics — every row lowers to a form the laws
@@ -1567,14 +1522,10 @@ must remain green.
 >
 > 1. The brace reader must attach `ELocated` at exactly the sites the
 >    s-expression reader does (see B.4).
-> 2. A later migration transpile must preserve the source path and the line
->    number of every location-carrying form nested inside hashed code — any
->    `fn`/`def` inside a node body carries its definition line into the node
->    key — or node keys change and reuse fails. The
->    formatter that performs that later transpile, not this grammar, owns
->    that constraint; it is recorded here because the grammar was shaped to
->    make it satisfiable, since every brace form fits on the same line(s) as
->    its sexpr spelling.
+> 2. Formatting must preserve the source path and line number of every
+>    location-carrying form nested inside hashed code. Any `fn`/`def` inside a
+>    node body carries its definition line into the node key, or node keys
+>    change and reuse fails. The formatter owns this constraint.
 
 ### B.1 Tokens
 
@@ -1887,7 +1838,7 @@ consume s-expression data, in both surfaces.
 | L57 | `quasiquote { F }` | `` `F′ `` — quasiquote-mode read of the lowered form |
 | L58 | `unquote(E)` — legal only inside `quasiquote{}` | `,E` |
 | L59 | `splice(E)` — legal only inside `quasiquote{}` | `,@E` |
-| L60 | `defmacro name(p…) { s1; s2; … }` | `(defmacro (name p…) s1 s2 …)` — each body statement a separate form, producing exactly the application shape `macro.ml match_defmacro` recognises, never an `EDo`-wrapped body |
+| L60 | `defmacro name(p…) { s1; s2; … }` | `(defmacro (name p…) s1 s2 …)` — each body statement is a separate form, producing the application shape recognized by the shared macro expansion pass |
 
 L56 and L57 are distinct on purpose: `'x` and `` `x `` read to different
 ASTs — an `EQuote` versus the quasiquote application that builds cons
@@ -1922,9 +1873,8 @@ brace reader attaches `ELocated` at exactly the sexpr reader's sites.
 - `assert`: a message-less `assert` renders its condition via
   `quote_to_value`/`string_of_value` — that is, in AST, s-expression notation
   in both surfaces. The runtime diagnostic carries the source range; the
-  brace reader must reuse the same renderer verbatim, and no later stage may
-  re-render assert messages in brace notation without re-keying every node
-  containing one.
+  brace reader must reuse the same renderer verbatim; assert messages are not
+  re-rendered in brace notation without re-keying every node containing one.
 
 ### B.5 Law audit
 
@@ -1961,53 +1911,12 @@ dependence. LAW 24's island clause was checked specifically: it constrains
 spelling. LAW 22's "`(filesystem "/" :rw)` is an unbound symbol" is the
 application of an unbound name, the same error in either surface.
 
-### B.6 Fuzzer-coverage checklist
-
-Every construct the fuzzer's `full` grammar (`tools/fuzz.ml`) can emit, with
-its covering row(s):
-
-| Generator | Emits | Row(s) |
-|---|---|---|
-| `gen_int_lit` / `gen_float_lit` / `gen_str_lit` | int (incl. negative), float (incl. `20.`), string literals | L1–L3 |
-| `gen_int` | `+ - *` (2-ary and 3-ary), `mod`, `/`, `if`, `let`, user-fn calls, `string-length`, `string->number`∘`number->string`, `string-index` under `nil?`+`if`, `length`, `foldl` with `+` as a value, `car`, `vector-get` on `[…]`, `hash-map-get` on `{:k …}`, immediate `fn` application, `do` | L13–L14 (binary), L7 (n-ary `+`/`*` and operator-as-value in call form), L37–L38, L23, L19, L9–L10, L5, L20, L36 |
-| `gen_bool` | `true`/`false`, `< > <= >= =`, string `=`, `not`, `and`/`or`, `nil?`, `if` | L4, L15, L19, L16–L17, L37–L38 |
-| `gen_string` | `string-append`/`string-trim`/`number->string`/`string-sub`, `if` | L19, L37–L38 |
-| `gen_float` | float arithmetic, `if` | L13, L37–L38 |
-| `gen_list`/`gen_list_ne` | `nil`, `list`, `cons`, `range`, `map`/`filter` with `fn`, `take`, `cdr` | L4, L19, L26 |
-| `stmt_print` / `stmt_do_print` | `print`, `do` | L19, L36 |
-| `stmt_let_print` | multi-binding `let` | L23 |
-| `stmt_letstar_print` | `let*` | L25 |
-| `stmt_seq_let` | sibling-referencing `let` (divergence probe) | L23 |
-| `stmt_def_value` / `stmt_do_scoped_def` | `(def x e)` at top level and inside `do` | L21, L36 |
-| `stmt_def` / `stmt_def_rec` / `stmt_deep_rec` | function defs, arity 1–3, recursion | L29 |
-| `stmt_typed_let` | `(let [x : ty e] …)` | L24 |
-| `stmt_typed_def` | `(def (f p) : ty body)` | L31 |
-| `stmt_param_typed_def` | `(def (f p : ty) body)` | L30 |
-| `stmt_with_config` / `stmt_config_computed` | `with-config` with map literal + keyword keys, `config` with computed key and default | L44, L45, L10, L5 |
-| `stmt_module` / `stmt_module_sibling` | `(import (module …))` incl. non-def children and sibling refs | L51, L52 |
-| `stmt_load_module` / `stmt_big_map` / `load_stdlib_form` | `load-module`, `load` | L54, L53 |
-| `stmt_island` | `(import (island file:DIR "PIN"))` | L55 (string-URI spelling), L52 |
-| `stmt_perform` | `perform log` bare and in value position | L41 |
-| `stmt_with_handler` / `stmt_handler_leak` | `with-handler` with `fn` handler, tail-position bodies | L42, L26 |
-| `stmt_eq_list` | `(= E E)` on lists | L15 |
-| `stmt_quote_special` | `'(if 1 2 3)`, `'(let [x 1] x)` | L56 (+ L37, L23 inside the quote) |
-| `stmt_defmacro` | `defmacro` + macro call with `list`/`quote` body | L60, L19, L56 |
-
-Every generator maps to at least one row; no row was needed that this table
-could not name. Constructs in the tree but outside the fuzzer's grammar —
-`node`/`defnode`, `with-caps`, cells, `assert`, `island` bare-URI lexes,
-`fenced`/domains/probes, sealed reads — are covered by rows L32 to L35,
-L43, L46 to L50, L55, and the L19 call rule, so a later sexpr-to-brace
-printer has a defined spelling for every form both grammars and the real
-tree can produce.
 
 ### B.7 Judgment calls frozen by this annex
 
-Decisions an earlier design sketch left open, or sketched un-implementably,
-recorded here because later stages implement exactly what this annex froze.
+These decisions are frozen semantics, not implementation details.
 
-1. `;` separates, `#` comments. This was mandated by the plan, and flagged
-   as the top migration hazard: sexpr `;` comments become `#`, and sexpr
+1. `;` separates, `#` comments. Sexpr `;` comments become `#`, and sexpr
    `#{…}` sets have no brace literal (L12).
 2. Expression-position `{…}` is always a map; sequencing is `do { … }`.
 3. `quasiquote { … }` exists alongside `quote { … }` (L56/L57): the two
@@ -2040,7 +1949,7 @@ recorded here because later stages implement exactly what this annex froze.
     line)` of nested `fn`/`def` forms, so a later formatting stage must
     transpile line-stably and in place for the null-rebuild exit to be
     achievable.
-12. Quasiquote-template name slots take `unquote(…)`, a later addition to
+12. Quasiquote-template name slots take `unquote(…)`, an explicit part of
     this annex. Inside `quasiquote { … }`, a `let`/`let*` binding name and a
     `def`'s function name may each be `unquote(E)` as well as a bare
     identifier — the two computed-name shapes real macro templates need: a
@@ -2065,17 +1974,14 @@ recorded here because later stages implement exactly what this annex froze.
     as outside quasiquote (judgment call 2 above): expression-position
     `{…}` is map data, and sequencing must be spelled `do { … }`.
 
-### B.8 Surface tables (generated from `src/frontend/surface_tables.ml`)
+### B.8 Surface tables (generated from `lisp/frontend/frontend.lisp`)
 
 The closed surface sets — the `$KIND` observation heads, the `with { }`
 clause keywords, and the `needs` grant-descriptor sugar — are one typed
-value each in `src/frontend/surface_tables.ml`. Every consumer (both readers, the
-`needs` desugar, `lint`, error messages) derives from those tables; nothing
-hand-copies the list. This block is generated, not authored:
-`tests/067-surface-tables-drift.sh` regenerates it (`pp --dump-surface-tables`)
-and diffs, so a table edit that is not mirrored here is a red build, and no
-closed set is ever hand-listed in SPEC again. Do not edit between the
-markers by hand.
+value each in `lisp/frontend/frontend.lisp`. Every consumer (both readers, the
+`needs` desugar, `lint`, and error messages) derives from those tables; nothing
+hand-copies the list. This block is generated, not authored. Do not edit
+between the markers by hand.
 
 <!-- BEGIN GENERATED surface-tables -->
 #### Observation heads — `$KIND(args…)`

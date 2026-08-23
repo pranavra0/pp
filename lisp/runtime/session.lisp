@@ -1,4 +1,4 @@
-;;;; M3 session state and immutable evaluator operation views.
+;;;; Session state and immutable evaluator operation views.
 ;;;;
 ;;;; A session is the owner of mutable runtime state.  Nothing in this file
 ;;;; uses a process-global registry: callbacks, services, memo tables, and
@@ -99,8 +99,7 @@
 
 (defun runtime-session-key (key)
   "Use the canonical textual identity when available, without retaining host
-objects as durable keys.  Ordinary string keys are accepted for focused
-runtime tests and for the M3 in-memory boundary."
+objects as durable keys. Ordinary string keys remain valid for local callers."
   (cond
     ((stringp key) key)
     ((and (fboundp 'node-key-to-string) (typep key 'node-key))
@@ -131,7 +130,8 @@ runtime tests and for the M3 in-memory boundary."
                  (declare (ignore thunk))
                  (runtime-session-error "node key service is unavailable"
                                         "runtime.node")))
-           ;; A node operation must not pretend to be store-backed in M3.
+           ;; The default node operation fails closed until a service is
+           ;; installed in the session.
            (lambda (key run thunk)
              (declare (ignore key thunk))
              (runtime-session-error

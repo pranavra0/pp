@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
 # A reconciler "domain" is an observe/diff/apply triple of pp functions
-# running under core-enforced discipline, not privileged OCaml code. This
-# suite proves that with a THIRD-PARTY toy domain ("kv": a directory of
-# one-file-per-key values) that pp's OWN stdlib never defines — proving
-# register-domain/domains.ml are genuinely generic, not fs/proc
-# special-cased. The kv domain is defined entirely
-# inside each test program below via `register-domain`; it reuses the
-# same trusted primitives (tree-observe/materialize-file/remove-file)
+# running under core-enforced discipline, not privileged implementation code.
+# This suite proves a third-party toy domain is generic rather than
+# fs/proc-special-cased. The kv domain is defined inside each test program
+# inside each test program via `register-domain`; it reuses the same trusted
+# primitives (tree-observe/materialize-file/remove-file)
 # domain-fs.pp uses, because those are generic fs-write-gated mechanics,
 # not "belongs to the fs domain".
 #

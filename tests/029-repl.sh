@@ -51,8 +51,7 @@ if printf '%s\n' "$out" | grep -q '^10$' \
   ok "genuine-error-not-incomplete"
 else bad "genuine-error-not-incomplete" "out: $(printf '%q' "$out")"; fi
 # An unclosed form submitted at end of input surfaces as a normal located
-# reader error (not the raw OCaml exception), so the message decouples from the
-# exception mechanism.
+# reader error, not a raw host exception; the message stays language-level.
 got=$(printf 'def foo\n' | repl 2>&1)
 if printf '%s\n' "$got" | grep -q 'def requires a parameter list' \
    && ! printf '%s\n' "$got" | grep -q 'Reader_incomplete'; then

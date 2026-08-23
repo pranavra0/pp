@@ -1,7 +1,0 @@
-(
-  1 + 2
-)
-def plus-one(x) {
-  x + 1
-}
-plus-one(4)

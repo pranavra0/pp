@@ -1,4 +1,4 @@
-;;;; M4 observation cells, trace validation, and authority checks.
+;;;; Observation cells, trace validation, and authority checks.
 (in-package #:pp.runtime)
 
 (defun runtime-observation-error (message &optional (code "runtime.observation"))

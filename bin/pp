@@ -1,1 +1,11 @@
-../_build/default/src/app/main.exe
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+IMAGE="$ROOT/lisp/pp"
+if [ ! -x "$IMAGE" ]; then
+  printf 'pp: Lisp image is missing: %s\n' "$IMAGE" >&2
+  printf 'pp: build it with scripts/build-lisp.sh --output %s\n' "$IMAGE" >&2
+  exit 127
+fi
+exec "$IMAGE" "$@"

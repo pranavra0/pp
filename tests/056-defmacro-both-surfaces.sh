@@ -61,6 +61,6 @@ if [ "$got_brace" = "$expected" ]; then ok "056-brace-value-pin"
 else bad "056-brace-value-pin" "expected: $expected" "got:      $got_brace"; fi
 
 if [ "$fail" -eq 0 ]; then
-  echo "=== DEFMACRO BOTH-SURFACES (M7 S5) TEST PASSED ==="
+  echo "=== DEFMACRO BOTH-SURFACES TEST PASSED ==="
 fi
 exit $fail

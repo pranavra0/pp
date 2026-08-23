@@ -3,8 +3,8 @@
 = Builtins and the standard library
 
 This appendix indexes the two layers of pp's vocabulary that are not special
-forms: the builtins compiled into the binary (`src/runtime/primitives.ml`) and the
-standard library written in pp itself (`stdlib/*.pp`). Special forms — `if`,
+forms: the builtins provided by the saved image (`lisp/runtime/language.lisp`)
+and the standard library written in pp itself (`stdlib/*.pp`). Special forms —
 `let`, `def`, `fn`, `delay`, `force`, `node`, `perform`, `with-handler`, `quote`, and
 the rest — belong to the language reference, not here.
 
@@ -273,9 +273,9 @@ The domain policies are pp libraries that `pp` auto-loads for you:
 `stdlib/domain-fs.pp` under `--reconcile`, `stdlib/domain-proc.pp` under
 `--supervise` (each after `list.pp`, `map.pp`, and `string.pp`). The trusted
 mechanics they call — `tree-observe`, `materialize-file`, `proc-spawn`, and so
-on — are OCaml primitives reached only through `perform`. You normally interact
-with a domain through the registration entry point; the rest are its internal
-policy, listed here for readers of the source.
+on — are runtime providers reached only through `perform`.
+You normally interact with a domain through the registration entry point; the
+rest is its internal policy, listed here for readers of the source.
 
 The one entry point you call directly:
 

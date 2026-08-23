@@ -94,12 +94,12 @@ IMAGE_OUTPUT="${OUTPUT_ABS}.sbcl-image"
 # pp.app:main as its toplevel and contains all loaded source/compiled code.
 if ! (
   cd "$ROOT"
-  PP_LISP_TEMP_IMAGE="$TEMP_IMAGE" "$SBCL_EXEC" \
+  PP_TEMP_IMAGE="$TEMP_IMAGE" "$SBCL_EXEC" \
     --no-userinit --no-sysinit --non-interactive \
     --eval '(require :asdf)' \
     --eval '(asdf:load-asd (truename "lisp/pp.asd"))' \
     --eval '(asdf:load-system "pp")' \
-    --eval "(sb-ext:save-lisp-and-die (sb-ext:posix-getenv \"PP_LISP_TEMP_IMAGE\") :toplevel #'pp.app:main :executable t :save-runtime-options t :purify t :compression 9)"
+    --eval "(sb-ext:save-lisp-and-die (sb-ext:posix-getenv \"PP_TEMP_IMAGE\") :toplevel #'pp.app:main :executable t :save-runtime-options t :purify t :compression 9)"
 ) >"$TEMP_DIR/sbcl.stdout" 2>"$TEMP_DIR/sbcl.stderr"; then
   cat "$TEMP_DIR/sbcl.stdout" "$TEMP_DIR/sbcl.stderr" >&2
   exit 1

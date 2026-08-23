@@ -1,6 +1,0 @@
-(library
- (name pp_frontend)
- (public_name pp.frontend)
- (wrapped true)
- (modules comments desugar reader reader_braces printer_common printer_braces printer_sexpr surface_tables lint)
- (libraries pp.kernel))
