@@ -31,8 +31,11 @@
     ("probe" 1 1 t "probe")
     ("secret" 1 1 t "slurp")
     ("config" 1 2 t "config")))
-(defparameter *frontend-sigil-expressions* (make-hash-table :test #'eq))
-(defparameter *frontend-list-literal-expressions* (make-hash-table :test #'eq))
+ (defparameter *frontend-sigil-expressions* (make-hash-table :test #'eq))
+ (defparameter *frontend-list-literal-expressions* (make-hash-table :test #'eq))
+ (defparameter *frontend-map-spread-expressions* (make-hash-table :test #'eq))
+ (defparameter *frontend-qq-name-expressions* (make-hash-table :test #'equal))
+ (defparameter *frontend-qq-parse-depth* 0)
 
 (defun fe-observation-descriptor (name)
   (find name *surface-observation-descriptors* :key #'first :test #'string=))
@@ -535,8 +538,36 @@
          (push (fe-parse-qq p) items))
        (fe-next p)
        (make-eapply (make-esymbol "vector") (nreverse items))))
-    ;; In qq mode atoms are data, not executable symbols.
     (t (make-equote (fe-parse-sexpr p)))))
+
+(defun fe-bbinding-name (p)
+  (if (and (plusp *frontend-qq-parse-depth*)
+           (eq (fe-bkind p) :name)
+           (string= (frontend-token-value (fe-bcur p)) "unquote"))
+      (let ((saved (fe-bparser-pos p)))
+        (fe-bnext p)
+        (if (eq (fe-bkind p) :lparen)
+            (progn
+              (fe-bnext p)
+              (let* ((argument (fe-bexpr p t nil))
+                     (expression
+                       (progn
+                         (fe-bskip-lines p)
+                         (fe-bexpect p :rparen
+                                     "expected ')' after unquote name")
+                         (make-eapply (make-esymbol "unquote")
+                                      (list argument))))
+                     (name (format nil "~Cqq-name-~D"
+                                   (code-char 0)
+                                   (hash-table-count
+                                    *frontend-qq-name-expressions*))))
+                (setf (gethash name *frontend-qq-name-expressions*)
+                      expression)
+                name))
+            (progn
+              (setf (fe-bparser-pos p) saved)
+              (fe-bname p))))
+      (fe-bname p)))
 
 (defun fe-parse-list (p)
   (fe-next p)
@@ -943,11 +974,32 @@ shape (and therefore their hashes)."
           (cond ((eq (fe-bkind p) :comma) (fe-bnext p) (fe-bskip-lines p))
                 ((eq (fe-bkind p) :rbrace)
                  (fe-bnext p)
-                 (let ((es (nreverse entries)))
-                   (if (not spread) (return (make-eapply (make-esymbol "hash-map") (mapcan (lambda (x) (if (listp x) x (list x))) es)))
-                       (let ((acc (if (listp (first es)) (make-eapply (make-esymbol "hash-map") nil) (first es))))
-                         (dolist (x (if (listp (first es)) es (rest es))) (setf acc (if (listp x) (make-eapply (make-esymbol "map-insert") (list acc (first x) (second x))) (make-eapply (make-esymbol "map-merge") (list acc x)))))
-                         (return acc)))))
+                 (let* ((es (nreverse entries))
+                        (result
+                          (if (not spread)
+                              (make-eapply
+                               (make-esymbol "hash-map")
+                               (mapcan (lambda (x)
+                                         (if (listp x) x (list x)))
+                                       es))
+                              (let ((acc (if (listp (first es))
+                                             (make-eapply (make-esymbol "hash-map") nil)
+                                             (first es))))
+                                (dolist (x (if (listp (first es))
+                                               es
+                                               (rest es)))
+                                  (setf acc
+                                        (if (listp x)
+                                            (make-eapply
+                                             (make-esymbol "map-insert")
+                                             (list acc (first x) (second x)))
+                                            (make-eapply
+                                             (make-esymbol "map-merge")
+                                             (list acc x)))))
+                                acc))))
+                   (when spread
+                     (setf (gethash result *frontend-map-spread-expressions*) t))
+                   (return result)))
                 (t (frontend-fail "expected ',' or '}'"
                                   :code (if (eq (fe-bkind p) :eof)
                                             "reader.incomplete" "reader.syntax")
@@ -1277,10 +1329,20 @@ The brace parser has already built ordinary AST nodes.  Keep the distinction
 between a generic call (a cons chain) and collection constructors: sexpr
 quasiquote uses direct VECTOR/HASH-MAP/HASH-SET applications for the latter."
   (setf e (fe-unloc e))
-  (labels ((q (x) (fe-brace-qq-form x))
-           (sym (name) (make-equote (make-esymbol name)))
-           (args (xs) (mapcar #'q xs))
-           (call (name xs) (fe-qq-chain (cons (sym name) (args xs)))))
+  (let ((spread-p (gethash e *frontend-map-spread-expressions*)))
+    (when spread-p
+      (frontend-fail "map spread is not supported inside quasiquote"
+                     :code "reader.syntax"))
+    (labels ((q (x) (fe-brace-qq-form x))
+             (sym (name) (make-equote (make-esymbol name)))
+             (name-data (name)
+               (if (stringp name)
+                   (let ((expression
+                           (gethash name *frontend-qq-name-expressions*)))
+                     (if expression (q expression) (sym name)))
+                   (q name)))
+             (args (xs) (mapcar #'q xs))
+             (call (name xs) (fe-qq-chain (cons (sym name) (args xs)))))
     (typecase e
       ((or expr-symbol expr-literal) (make-equote e))
       (expr-quote (make-equote (fe-unloc (expr-quote-expression e))))
@@ -1311,7 +1373,7 @@ quasiquote uses direct VECTOR/HASH-MAP/HASH-SET applications for the latter."
            ((string= name "quasiquote")
             (unless (= (length xs) 1)
               (frontend-fail "quasiquote expects one form" :code "reader.arity"))
-           (fe-qq-chain (list (sym "quasiquote") (first xs))))
+            (fe-qq-chain (list (sym "quasiquote") (first xs))))
            ((member name '("vector" "hash-map" "hash-set") :test #'string=)
             (make-eapply (make-esymbol name) (args xs)))
            (t (fe-qq-chain (cons (q fn) (args xs)))))))
@@ -1325,18 +1387,21 @@ quasiquote uses direct VECTOR/HASH-MAP/HASH-SET applications for the latter."
        (fe-qq-chain
         (list (sym "def")
               (fe-qq-chain
-               (cons (sym (expr-def-name e))
+               (cons (name-data (expr-def-name e))
                      (mapcar (lambda (x) (sym x)) (expr-def-params e))))
               (q (expr-def-body e)))))
       (expr-defvalue
-       (call "def" (list (make-esymbol (expr-defvalue-name e))
+       (call "def" (list (if (stringp (expr-defvalue-name e))
+                              (make-esymbol (expr-defvalue-name e))
+                              (expr-defvalue-name e))
                          (expr-defvalue-expression e))))
       (expr-let
        (fe-qq-chain
         (list (sym "let")
               (make-eapply
                (make-esymbol "vector")
-               (mapcan (lambda (b) (list (sym (car b)) (q (cdr b))))
+               (mapcan (lambda (b)
+                         (list (name-data (car b)) (q (cdr b))))
                        (expr-let-bindings e)))
               (q (expr-let-body e)))))
       (expr-letstar
@@ -1344,9 +1409,12 @@ quasiquote uses direct VECTOR/HASH-MAP/HASH-SET applications for the latter."
         (list (sym "let*")
               (make-eapply
                (make-esymbol "vector")
-               (mapcan (lambda (b) (list (sym (car b)) (q (cdr b))))
+               (mapcan (lambda (b)
+                         (list (name-data (car b)) (q (cdr b))))
                        (expr-letstar-bindings e)))
               (q (expr-letstar-body e)))))
+      (expr-do
+       (call "do" (expr-do-expressions e)))
       (expr-with-caps (call "with-caps"
                             (list (expr-with-caps-caps e)
                                   (expr-with-caps-body e))))
@@ -1404,7 +1472,7 @@ quasiquote uses direct VECTOR/HASH-MAP/HASH-SET applications for the latter."
                         (make-eliteral (make-vstring (expr-island-pin e)))))))
       (t (frontend-fail (format nil "expression type ~A is not representable in quasiquote"
                                 (type-of e))
-                        :code "reader.surface")))))
+                        :code "reader.surface"))))))
 
  (defun fe-bvec (p)
   (fe-bnext p) (fe-bskip-lines p)
@@ -1485,6 +1553,11 @@ from a user-written bare primitive, including nested lowered children."
      (fe-mark-sigil-tree (expr-apply-function e) kind)
      (mapc (lambda (x) (fe-mark-sigil-tree x kind))
            (expr-apply-arguments e)))
+    (expr-perform
+     (when (string= (expr-perform-name e) "tree-observe")
+       (setf (gethash e *frontend-sigil-expressions*) kind))
+     (mapc (lambda (x) (fe-mark-sigil-tree x kind))
+           (expr-perform-arguments e)))
     (expr-if
      (fe-mark-sigil-tree (expr-if-condition e) kind)
      (fe-mark-sigil-tree (expr-if-then e) kind)
@@ -1626,7 +1699,9 @@ from a user-written bare primitive, including nested lowered children."
               (make-eif c th el)))
            ((string= n "try") (fe-btry p))
            ((string= n "quasiquote")
-            (let ((forms (fe-bblock p :return-forms t)))
+            (let ((forms (let ((*frontend-qq-parse-depth*
+                                 (1+ *frontend-qq-parse-depth*)))
+                            (fe-bblock p :return-forms t))))
               (unless (= (length forms) 1)
                 (frontend-fail "quasiquote { ... } must contain exactly one form"
                                :code "reader.syntax"))
@@ -1726,7 +1801,7 @@ from a user-written bare primitive, including nested lowered children."
                 (make-efn names assembled))))
            ((string= n "def")
             (let* ((location (frontend-token-range (fe-bcur p)))
-                   (name (fe-bname p))
+                   (name (fe-bbinding-name p))
                    (params (fe-bparams-annotated p))
                    (ret (fe-bret-annotation p))
                    (body (fe-bblock p)))
@@ -1738,7 +1813,7 @@ from a user-written bare primitive, including nested lowered children."
             (let ((bs nil))
               (unless (eq (fe-bkind p) :rparen)
                 (loop
-                  (let ((name (fe-bname p)))
+                  (let ((name (fe-bbinding-name p)))
                     (when (and (eq (fe-bkind p) :name)
                                (string= (frontend-token-value (fe-bcur p)) "="))
                       (fe-bnext p))
@@ -1751,7 +1826,7 @@ from a user-written bare primitive, including nested lowered children."
               (make-eletstar (nreverse bs) (fe-bblock p))))
            ((string= n "let")
             (if (eq (fe-bkind p) :name)
-                (let ((name (fe-bname p)))
+                (let ((name (fe-bbinding-name p)))
                   (unless (and (eq (fe-bkind p) :name)
                                (string= (frontend-token-value (fe-bcur p)) "="))
                     (frontend-fail "expected '=' after let binding" :code "reader.syntax"))
@@ -1765,7 +1840,7 @@ from a user-written bare primitive, including nested lowered children."
                   (let ((bs nil))
                     (unless (eq (fe-bkind p) :rparen)
                       (loop
-                        (let ((name (fe-bname p))
+                        (let ((name (fe-bbinding-name p))
                               (ty nil))
                           ;; Brace let bindings use the same annotation
                           ;; shape as sexpr bindings: name : type = value.
@@ -1800,7 +1875,7 @@ from a user-written bare primitive, including nested lowered children."
            ((string= n "node")
             (if (eq (fe-bkind p) :lbrace)
                 (make-enode (fe-bblock p))
-                (let ((name (fe-bname p)))
+                (let ((name (fe-bbinding-name p)))
                   (if (eq (fe-bkind p) :lparen)
                       (let ((params (fe-bparams-annotated p))
                             (ret (fe-bret-annotation p))
@@ -1892,12 +1967,12 @@ from a user-written bare primitive, including nested lowered children."
              (cond
                ((eq (fe-bkind p) :lparen)
                 (fe-bnext p)
-               (multiple-value-bind (args spreadp) (fe-bargs p)
-                 (postfix
-                  (if spreadp
-                      (make-eapply (make-esymbol "apply")
-                                   (cons left args))
-                      (make-eapply left args)))))
+                (multiple-value-bind (args spreadp) (fe-bargs p)
+                  (postfix
+                   (if spreadp
+                       (make-eapply (make-esymbol "apply")
+                                    (cons left args))
+                       (make-eapply left args)))))
                ((eq (fe-bkind p) :lbracket)
                 (fe-bnext p)
                 (let ((idx (fe-bexpr p t nil)))
@@ -1910,33 +1985,30 @@ from a user-written bare primitive, including nested lowered children."
                          "vector-get" "hash-map-get"))
                     (list left idx)))))
                (t left)))
-           (climb (min-prec)
-             (let ((left (postfix (fe-bprimary p cond))))
-               (loop
-                ;; Operators and their right operands may continue on the next
-                ;; line only in the caller's free context. Keep the whitespace
-                ;; rule in FE-B-INFIX-P intact.
+         (climb (min-prec)
+           (let ((left (postfix (fe-bprimary p cond))))
+             (loop
+               (when nl (fe-bskip-lines p))
+               (unless (and (eq (fe-bkind p) :name)
+                            (fe-b-infix-p p '("|>" "or" "and" "<" ">"
+                                              "<=" ">=" "=" "+" "-"
+                                              "*" "/" "mod")))
+                 (return left))
+               (let* ((op (frontend-token-value (fe-bcur p)))
+                      (prec (fe-b-infix-precedence op)))
+                 (when (< prec min-prec) (return left))
+                 (fe-bnext p)
                  (when nl (fe-bskip-lines p))
-                 (unless (and (eq (fe-bkind p) :name)
-                              (fe-b-infix-p p '("|>" "or" "and" "<" ">"
-                                                "<=" ">=" "=" "+" "-"
-                                                "*" "/" "mod")))
-                   (return left))
-                 (let* ((op (frontend-token-value (fe-bcur p)))
-                        (prec (fe-b-infix-precedence op)))
-                   (when (< prec min-prec) (return left))
-                   (fe-bnext p)
-                   (when nl (fe-bskip-lines p))
-                   (let ((right (climb (1+ prec))))
-                     (setf left (fe-combine-infix op left right))))))))
+                 (let ((right (climb (1+ prec))))
+                   (setf left (fe-combine-infix op left right))))))))
     (climb 1)))
 
-(defun fe-parse-fstring-hole (raw source)
+ (defun fe-parse-fstring-hole (raw source)
   (let ((forms (fe-read-brace raw :source source)))
     (unless (= (length forms) 1)
       (frontend-fail "f-string interpolation must contain one expression"
                      :code "reader.syntax"))
-    (first forms)))
+    (fe-unloc (first forms))))
 
 (defun fe-build-fstring (segments source)
   (let ((parts
@@ -2552,6 +2624,13 @@ from a user-written bare primitive, including nested lowered children."
                 (typep (first (expr-apply-arguments e)) 'expr-literal)
                 (typep (expr-literal-value (first (expr-apply-arguments e)))
                        'value-keyword)))
+         (observation-exempt-p ()
+           (search "stdlib/" file :test #'char-equal))
+         (observation-warning (name)
+           (let ((surface (cdr (assoc name *surface-observation-primitives*
+                                      :test #'string=))))
+             (format nil "bare `~A` reads the world; use the ~A observation surface"
+                     name surface)))
          (walk (e)
            (let* ((raw e) (x (strip e)) (line (line-of raw)))
              (typecase x
@@ -2567,9 +2646,10 @@ from a user-written bare primitive, including nested lowered children."
                              (member (expr-symbol-name fn)
                                      '("slurp" "env-get" "tree-observe" "probe" "config")
                                      :test #'string=)
+                             (not (observation-exempt-p))
                              (not (gethash x *frontend-sigil-expressions*)))
                     (emit-warning "lint.bare-observation"
-                          "use the $ observation surface" line))
+                          (observation-warning (expr-symbol-name fn)) line))
                   (when (and (typep fn 'expr-symbol)
                              (member (expr-symbol-name fn)
                                      '("vector-get" "vector-length")
@@ -2587,10 +2667,16 @@ from a user-written bare primitive, including nested lowered children."
                                      :test #'string=)
                              (tagged (first args)))
                     (emit-warning "lint.car-cdr-result"
-                          "destructure tagged results instead of car/cdr" line))
+                          "destructure a result instead of car/cdr" line))
                   (walk (expr-apply-function x))
                   (mapc #'walk args)))
                (expr-if
+                (let ((then-tagged (tagged (expr-if-then x)))
+                      (else-tagged (tagged (expr-if-else x))))
+                  (when (not (eql then-tagged else-tagged))
+                    (emit-warning "lint.mixed-result-shape"
+                                  "inconsistent result shape: branches mix tagged results and plain values"
+                                  line)))
                 (when (and (typep (strip (expr-if-condition x)) 'expr-apply)
                            (typep (strip (expr-apply-function
                                           (strip (expr-if-condition x)))) 'expr-symbol)
@@ -2634,7 +2720,13 @@ from a user-written bare primitive, including nested lowered children."
                (expr-with-handler
                 (mapc (lambda (b) (walk (cdr b))) (expr-with-handler-handlers x))
                 (walk (expr-with-handler-body x)))
-               (expr-perform (mapc #'walk (expr-perform-arguments x)))
+               (expr-perform
+                (when (and (string= (expr-perform-name x) "tree-observe")
+                           (not (observation-exempt-p))
+                           (not (gethash x *frontend-sigil-expressions*)))
+                  (emit-warning "lint.bare-observation"
+                                (observation-warning "tree-observe") line))
+                (mapc #'walk (expr-perform-arguments x)))
                (expr-config (walk (expr-config-key-expression x))
                             (when (expr-config-default x)
                               (walk (expr-config-default x))))

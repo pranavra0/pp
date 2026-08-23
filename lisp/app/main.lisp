@@ -84,13 +84,29 @@
             do (write-char character output)))))
 
 (defun %write-source-file (path text)
-  "Write TEXT to PATH explicitly.  This is used only for fmt -i."
-  (with-open-file (stream path :direction :output
-                          :if-exists :supersede
-                          :if-does-not-exist :create)
-    (write-string text stream)
-    (finish-output stream))
-  path)
+  "Write TEXT to PATH through a same-directory temporary and rename."
+  (let* ((target (pathname path))
+         (nonce (format nil "~D-~D" (get-universal-time)
+                        (random 1000000000)))
+         (temp (make-pathname
+                :name (format nil ".~A.pp-fmt-~A"
+                              (or (pathname-name target) "source") nonce)
+                :type "tmp"
+                :defaults target))
+         (committed nil))
+    (unwind-protect
+         (progn
+           (with-open-file (stream temp :direction :output
+                                   :if-exists :error
+                                   :if-does-not-exist :create)
+             (write-string text stream)
+             (finish-output stream))
+           (rename-file temp target)
+           (setf committed t)
+           path)
+      (unless committed
+        (when (probe-file temp)
+          (ignore-errors (delete-file temp)))))))
 
 (defun %suffix-p (path suffix)
   (let ((name path)
@@ -3054,18 +3070,18 @@ environment, so leading loads must establish the initial environment first."
 (defun %run-compare-hash (path1 path2)
   (let* ((source1 (%read-source-file path1))
          (source2 (%read-source-file path2))
-         ;; command_frontend intentionally gives both ASTs the first source
-         ;; identity, so the comparison tests syntax/hash rather than paths.
-         (forms1 (read-source source1 :source path1 :surface :brace))
-         (forms2 (read-source source2 :source path1 :surface :brace)))
+         (forms1 (read-source source1 :source path1
+                              :surface (%source-surface path1)))
+         (forms2 (read-source source2 :source path1
+                              :surface (%source-surface path2))))
     (unless (= (length forms1) (length forms2))
       (error "--compare-hash: form count diverged: ~D (~A) vs ~D (~A)"
              (length forms1) path1 (length forms2) path2))
     (loop for left in forms1
           for right in forms2
           for index from 0
-          unless (string= (pp.kernel:hash-expr left)
-                          (pp.kernel:hash-expr right))
+          unless (string= (%canonical-form-hash left path1)
+                          (%canonical-form-hash right path1))
             do (error "--compare-hash: form ~D hash diverged" index))
     0))
 

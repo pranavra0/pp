@@ -126,7 +126,6 @@
                (expr-config (name-union (fv bound (expr-config-key-expression e))
                                         (if (expr-config-default e)
                                             (fv bound (expr-config-default e)) nil)))
-               (expr-typed (fv bound (expr-typed-expression e)))
                (expr-located (fv bound (expr-located-expression e)))
                (expr-match
                 (name-union (fv bound (expr-match-scrutinee e))

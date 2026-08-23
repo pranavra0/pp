@@ -1843,6 +1843,54 @@ fallback."
     (register "list" (lambda (args env &key &allow-other-keys)
                         (declare (ignore env)) (value-list args))
               :shape (runtime-shape-range 0) :category :collections)
+    (register "collect"
+              (lambda (args env &key force &allow-other-keys)
+                (declare (ignore env))
+                (unless (= (length args) 1)
+                  (runtime-primitive-arity-error "collect" 1 (length args)))
+                (let ((input (force* (first args) force))
+                      (successes nil)
+                      (errors nil))
+                  (labels ((walk (value)
+                             (let ((value (force* value force)))
+                               (typecase value
+                                 (value-nil nil)
+                                 (value-pair
+                                  (let* ((entry (force* (value-pair-car value) force))
+                                         (parts (pair-values entry)))
+                                    (unless (= (length parts) 2)
+                                      (language-fail
+                                       "collect expects tagged result pairs"
+                                       "primitive.type"))
+                                    (let ((tag (force* (first parts) force))
+                                          (payload (force* (second parts) force)))
+                                      (unless (typep tag 'value-keyword)
+                                        (language-fail
+                                         "collect expects :ok or :err tags"
+                                         "primitive.type"))
+                                      (cond
+                                        ((string= (value-keyword-value tag) "ok")
+                                         (push payload successes))
+                                        ((string= (value-keyword-value tag) "err")
+                                         (push payload errors))
+                                        (t
+                                         (language-fail
+                                          "collect expects :ok or :err tags"
+                                          "primitive.type"))))
+                                    (walk (value-pair-cdr value))))
+                                 (t
+                                  (language-fail
+                                   "collect expects a proper list"
+                                   "primitive.type"))))))
+                    (walk input))
+                  (if errors
+                      (value-list
+                       (list (make-vkeyword "err")
+                             (value-list (nreverse errors))))
+                      (value-list
+                       (list (make-vkeyword "ok")
+                             (value-list (nreverse successes)))))))
+              :shape (runtime-shape-exact 1) :category :collections)
     (register "apply" (lambda (args env &key force apply &allow-other-keys)
                         (unless (>= (length args) 2)
                           (language-fail
