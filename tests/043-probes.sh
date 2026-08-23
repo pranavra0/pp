@@ -178,5 +178,5 @@ assert "watch-detects-cell-change" "cell\\(s\\) changed"         present "$TMP/w
 assert "watch-recomputes-value-2"  "\\[info\\] 2$"               present "$TMP/watch.out"
 
 rm -rf "$TMP"
-if [ "$fail" -eq 0 ]; then echo "=== PROBES (M4) TEST PASSED ==="; fi
+if [ "$fail" -eq 0 ]; then echo "=== PROBES TEST PASSED ==="; fi
 exit $fail

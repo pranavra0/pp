@@ -23,7 +23,7 @@ print(unless(true, 42))  # expect nil
 
 print("")
 print("=== gensym: a macro's own temp binding must not capture a ===")
-print("=== caller variable of the same name (M3 hygiene discipline) ===")
+print("=== caller-name hygiene ===")
 # The macro's gensym prefix is deliberately "tmp" — the SAME name the
 # caller binds below. Without gensym, the expansion's own
 # `let (tmp = unquote(a)) { ... }` would capture the caller's `tmp`;

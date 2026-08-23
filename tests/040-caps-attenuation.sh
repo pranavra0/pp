@@ -107,5 +107,5 @@ if grep -q "hi" "$TMP/o"; then echo "ok   plain-wc-run-unrestricted-allowed"
 else echo "FAIL plain-wc-run-unrestricted-allowed: expected hi"; cat "$TMP/o"; fail=1; fi
 
 rm -rf "$TMP"
-if [ "$fail" -eq 0 ]; then echo "=== CAPS ATTENUATION (M3) TEST PASSED ==="; fi
+if [ "$fail" -eq 0 ]; then echo "=== CAPS ATTENUATION TEST PASSED ==="; fi
 exit $fail

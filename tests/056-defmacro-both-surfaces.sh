@@ -34,7 +34,7 @@ expected='"=== control-flow macro (unless), via quasiquote ==="
 nil
 ""
 "=== gensym: a macro'"'"'s own temp binding must not capture a ==="
-"=== caller variable of the same name (M3 hygiene discipline) ==="
+"=== caller-name hygiene ==="
 7
 9
 ""

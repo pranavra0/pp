@@ -254,5 +254,5 @@ grep -q "pre-migration-audit-line" "$STORE/journal/log" \
   || { echo "FAIL legacy-keeps-journal"; fail=1; }
 
 rm -rf "$TMP"
-if [ "$fail" -eq 0 ]; then echo "=== PORTABLE STORE (M2.2) TEST PASSED ==="; fi
+if [ "$fail" -eq 0 ]; then echo "=== PORTABLE STORE TEST PASSED ==="; fi
 exit $fail

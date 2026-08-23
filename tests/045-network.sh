@@ -130,5 +130,5 @@ assert "in-node-body-denied" "may not appear inside node bodies" present
 env -i HOME="$TMP" PATH="$TMP/empty-path" "$PP" --grant "net:127.0.0.1:$PORT" "$TMP/get.pp" > "$TMP/out" 2>&1
 assert "curl-absent-clean-error" "curl not found" present
 
-if [ "$fail" -eq 0 ]; then echo "=== NETWORK (M4) TEST PASSED ==="; fi
+if [ "$fail" -eq 0 ]; then echo "=== NETWORK TEST PASSED ==="; fi
 exit $fail
