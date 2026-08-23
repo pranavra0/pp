@@ -235,8 +235,8 @@
    #:make-runtime-evaluator
    #:runtime-evaluator-state-catalog #:runtime-evaluator-state-initial-env
    #:runtime-evaluator-state-macro-state
-   #:runtime-evaluator-state-max-steps #:runtime-evaluator-state-max-depth
-   #:runtime-evaluator-state-steps #:runtime-evaluator-state-depth
+   #:runtime-evaluator-state-max-depth
+   #:runtime-evaluator-state-depth
    #:runtime-evaluator-state-force-stack #:runtime-evaluator-state-force-count
    #:runtime-evaluator-state-persistent-cache
    #:runtime-evaluator-state-capabilities
@@ -256,7 +256,6 @@
    #:runtime-evaluator-apply-value #:runtime-evaluator-node-key
    #:runtime-evaluator-expand-expression #:runtime-evaluator-expand-toplevel
    #:runtime-evaluator-services
-   #:runtime-evaluator-step! #:runtime-evaluator-depth-enter!
    #:runtime-evaluator-depth-leave!
    ;; Immutable operation views and explicit session lifecycle/state.
    #:runtime-core-operations #:make-runtime-core-operations

@@ -435,7 +435,6 @@ remain usable, while current images reset the actual catalog counter."
 (defun runtime-session-reset-evaluator-state (state)
   ;; Keep the evaluator's persistent cache and initial capabilities; all
   ;; expression-local machine state and dynamic frames are fresh.
-  (runtime-session--set-evaluator-slot state 'runtime-evaluator-state-steps 0)
   (runtime-session--set-evaluator-slot state 'runtime-evaluator-state-depth 0)
   (runtime-session--set-evaluator-slot state 'runtime-evaluator-state-force-stack nil)
   (runtime-session--set-evaluator-slot state 'runtime-evaluator-state-force-count 0)

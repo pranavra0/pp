@@ -65,9 +65,9 @@
       (runtime-journal-append session
                               (make-runtime-journal-exec (cons program (rest argv)))))
     #+sbcl
-    (let* ((nonce (random most-positive-fixnum))
-           (out (format nil "/tmp/pp-run-~D.out" nonce))
-           (err (format nil "/tmp/pp-run-~D.err" nonce))
+    (let* ((tmpdir (or (sb-ext:posix-getenv "TMPDIR") "/tmp"))
+           (out (store-exclusive-temp-name tmpdir "pp-run-" ".out"))
+           (err (store-exclusive-temp-name tmpdir "pp-run-" ".err"))
            (process nil))
       (unwind-protect
            (progn
@@ -344,11 +344,16 @@
   (runtime-process-require-capability)
   (let* ((hash (runtime-process-spec-hash spec))
          (argv (runtime-process-argv spec))
+         ;; Reject an unresolvable command BEFORE the journal records a
+         ;; start intent: an intent without a matching done record must mean
+         ;; crash-during-start, never bad input.
          (command (runtime-process-resolve-command (first argv)))
          (cwd (runtime-process-cwd spec))
-         (environment (runtime-process-environment spec))
          (output (runtime-process-io-path session name "out"))
-         (error-output (runtime-process-io-path session name "err")))
+         (error-output (runtime-process-io-path session name "err"))
+         (environment (runtime-process-environment spec)))
+    (unless command
+      (error "process command not found: ~A" (first argv)))
     (ignore-errors (delete-file output))
     (ignore-errors (delete-file error-output))
     (runtime-journal-append

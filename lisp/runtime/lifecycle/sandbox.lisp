@@ -7,12 +7,18 @@
 
 
 (defun runtime-sandbox-create (&key (prefix "pp-node"))
-  (let* ((base (or #+sbcl (sb-ext:posix-getenv "TMPDIR") #-sbcl nil "/tmp"))
-         (root (merge-pathnames
-                (format nil "~A-~D/" prefix (random most-positive-fixnum))
-                (pathname (if (char= (char base (1- (length base))) #\/) base
-                              (concatenate 'string base "/"))))))
-    (store-ensure-directory root)
+  ;; mkdir(2) refuses existing names, so the random suffix is a uniqueness
+  ;; guarantee rather than a probability — and two pp processes cannot share
+  ;; scratch space even though their saved PRNG state starts out identical.
+  #+sbcl
+  (let ((root (store-exclusive-directory
+               (or (sb-ext:posix-getenv "TMPDIR") "/tmp") prefix)))
+    (make-runtime-sandbox (namestring (truename root))))
+  #-sbcl
+  (let* ((base (or (sb-ext:posix-getenv "TMPDIR") "/tmp"))
+         (root (merge-pathnames (format nil "~A-~D/" prefix (get-universal-time))
+                                (pathname base))))
+    (ensure-directories-exist root)
     (make-runtime-sandbox (namestring (truename root)))))
 
 (defun runtime-sandbox-relative-p (path)
