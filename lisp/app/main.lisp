@@ -3759,12 +3759,6 @@ hash: ~A" old-pin)
               (%run-language-files
                operands output :grant-specs grants :why why
                :no-cache no-cache :check check :error-output error-output))))))
-      ((%runtime-flag-p (first arguments))
-       (format error-output
-               "pp: error: ~A is unavailable: effect/distribution runtime services are not installed~%"
-               (first arguments))
-       (finish-output error-output)
-       2)
       ((string= (first arguments) "cluster-init")
        (handler-case
            (%run-cluster-init-command arguments output)
