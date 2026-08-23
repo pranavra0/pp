@@ -49,6 +49,7 @@ val serve_hit : t -> (string * string * string * string) option
 val recv_hit : t -> (string * string) option
 val remote_node : t -> (string * string * string * string * string) option
 val check_kernel_props : t -> (int * int) option
+val kernel_fixture : t -> string option
 val version : t -> bool
 val help : t -> bool
 val dump_surface_tables : t -> bool

@@ -1,0 +1,3643 @@
+;;;; pp command boundary.  Source commands always select pp.frontend readers;
+;;;; user text is never silently handed to CL:READ.  The M1 fixture protocol
+;;;; carries already-delimited kernel fields and remains safe for shell parity
+;;;; tests.
+
+(in-package #:pp.app)
+
+(defparameter +version+ "0.2.0-dev")
+
+(defun version-string ()
+  +version+)
+
+(defun %split-tabs (line)
+  "Split LINE on literal tabs without interpreting its contents.
+
+The empty field is meaningful, so this is intentionally not a whitespace
+reader and never calls READ or READ-FROM-STRING."
+  (let ((fields '())
+        (start 0)
+        (length (length line)))
+    (loop for i from 0 below length
+          when (char= (char line i) #\Tab)
+            do (push (subseq line start i) fields)
+               (setf start (1+ i)))
+    (nreverse (cons (subseq line start) fields))))
+
+(defun %need-exact (fields count operation)
+  (unless (= (length fields) count)
+    (error "~A requires exactly ~D tab-delimited field~:P"
+           operation count))
+  fields)
+
+(defun %need-at-least (fields count operation)
+  (when (< (length fields) count)
+    (error "~A requires at least ~D tab-delimited field~:P"
+           operation count))
+  fields)
+
+(defun %fixture-operation-p (operation)
+  (member (string-downcase operation)
+          '("hash-string" "hash-concat" "node-key-skeleton"
+            "identity" "codec-roundtrip" "cell-roundtrip")
+          :test #'string=))
+
+(defun %dispatch-corpus-path (path output)
+  (unless (and (stringp path) (probe-file path))
+    (error "parity corpus is not a readable file: ~A" path))
+  (with-open-file (corpus path :direction :input)
+    (let ((records (%dispatch-parity-corpus corpus output)))
+      (declare (ignore records))
+      0)))
+
+(defun %identity-roundtrip (kind text)
+  (let ((constructor (ecase kind
+                       ((:node-key) #'pp.kernel:make-node-key)
+                       ((:cache-key) #'pp.kernel:make-cache-key)
+                       ((:object-hash) #'pp.kernel:make-object-hash)
+                       ((:observed-hash) #'pp.kernel:make-observed-hash)
+                       ((:cell-id) #'pp.kernel:make-cell-id)))
+        (printer (ecase kind
+                   ((:node-key) #'pp.kernel:node-key-string)
+                   ((:cache-key) #'pp.kernel:cache-key-string)
+                   ((:object-hash) #'pp.kernel:object-hash-string)
+                   ((:observed-hash) #'pp.kernel:observed-hash-string)
+                   ((:cell-id) #'pp.kernel:cell-id-string))))
+    (funcall printer (funcall constructor text))))
+
+(defun %parse-identity-kind (text)
+  (let ((name (string-downcase text)))
+    (cond ((string= name "node-key") :node-key)
+          ((string= name "cache-key") :cache-key)
+          ((string= name "object-hash") :object-hash)
+          ((string= name "observed-hash") :observed-hash)
+          ((string= name "cell-id") :cell-id)
+          (t (error "unknown identity kind: ~A" text)))))
+
+
+(defun %fixture-exact (fields operation)
+  (unless (= (length fields) 4)
+    (error "~A requires exactly four tab-delimited fields" operation))
+  fields)
+
+(defun %fixture-canonical (constructor spec)
+  (format nil "~A:~A" constructor spec))
+
+(defun %fixture-env ()
+  (pp.kernel:make-env nil))
+
+(defun %fixture-range ()
+  (pp.kernel:make-source-range
+   :source "parity"
+   :start-pos (pp.kernel:make-position :offset 0 :line 1 :column 1)
+   :end-pos (pp.kernel:make-position :offset 1 :line 1 :column 2)))
+
+(defun %fixture-expr (constructor spec)
+  (let ((lit (pp.kernel:make-eliteral (pp.kernel:make-vint 1)))
+        (sym (pp.kernel:make-esymbol "x")))
+    (cond
+      ((string= constructor "literal-int")
+       (pp.kernel:make-eliteral
+        (pp.kernel:make-vint (parse-integer spec :junk-allowed nil))))
+      ((string= constructor "symbol") (pp.kernel:make-esymbol spec))
+      ((string= constructor "if") (pp.kernel:make-eif lit lit lit))
+      ((string= constructor "let") (pp.kernel:make-elet (list (cons "x" lit)) lit))
+      ((string= constructor "fn") (pp.kernel:make-efn (list "x") lit))
+      ((string= constructor "apply") (pp.kernel:make-eapply sym (list lit)))
+      ((string= constructor "quote") (pp.kernel:make-equote lit))
+      ((string= constructor "force") (pp.kernel:make-eforce lit))
+      ((string= constructor "with-caps")
+       (pp.kernel:make-ewith-caps
+        (pp.kernel:make-eliteral (pp.kernel:make-vnil)) lit))
+      ((string= constructor "perform") (pp.kernel:make-eperform "effect" (list lit)))
+      ((string= constructor "with-handler")
+       (pp.kernel:make-ewith-handler (list (cons "effect" lit)) lit))
+      ((string= constructor "delay") (pp.kernel:make-edelay lit))
+      ((string= constructor "node") (pp.kernel:make-enode lit))
+      ((string= constructor "defnode")
+       (pp.kernel:make-edefnode "n" (list "x") lit))
+      ((string= constructor "do") (pp.kernel:make-edo (list lit)))
+      ((string= constructor "def") (pp.kernel:make-edef "f" (list "x") lit))
+      ((string= constructor "defvalue") (pp.kernel:make-edefvalue "v" lit))
+      ((string= constructor "letstar")
+       (pp.kernel:make-eletstar (list (cons "x" lit)) lit))
+      ((string= constructor "module") (pp.kernel:make-emodule (list lit)))
+      ((string= constructor "import") (pp.kernel:make-eimport lit))
+      ((string= constructor "load") (pp.kernel:make-eload spec))
+      ((string= constructor "loadmodule") (pp.kernel:make-eloadmodule spec))
+      ((string= constructor "island") (pp.kernel:make-eisland spec))
+      ((string= constructor "with-config") (pp.kernel:make-ewith-config lit lit))
+      ((string= constructor "config") (pp.kernel:make-econfig lit))
+      ((string= constructor "typed") (pp.kernel:make-typed lit sym))
+      ((string= constructor "located")
+       (pp.kernel:make-elocated (%fixture-range) lit))
+      ((string= constructor "match")
+       (pp.kernel:make-ematch
+        sym (list (list (pp.kernel:make-pvariable "x") nil lit))))
+      (t (error "unknown expr constructor: ~A" constructor)))))
+
+(defun %fixture-value (constructor spec)
+  (let* ((one (pp.kernel:make-vint 1))
+         (env (%fixture-env))
+         (closure (pp.kernel:make-closure
+                   (list "x") (pp.kernel:make-esymbol "x") env)))
+    (cond
+      ((string= constructor "nil") (pp.kernel:make-vnil))
+      ((string= constructor "bool")
+       (cond ((string= spec "true") (pp.kernel:make-vbool t))
+             ((string= spec "false") (pp.kernel:make-vbool nil))
+             (t (error "invalid bool fixture"))))
+      ((string= constructor "int")
+       (pp.kernel:make-vint (parse-integer spec :junk-allowed nil)))
+      ((string= constructor "float")
+       (or (and (pp.kernel:decode-hex-float spec)
+                (pp.kernel:make-vfloat (pp.kernel:decode-hex-float spec)))
+           (error "invalid float fixture")))
+      ((string= constructor "string") (pp.kernel:make-vstring spec))
+      ((string= constructor "keyword") (pp.kernel:make-vkeyword spec))
+      ((string= constructor "symbol") (pp.kernel:make-vsymbol spec))
+      ((string= constructor "pair") (pp.kernel:make-vpair one (pp.kernel:make-vnil)))
+      ((string= constructor "vector") (pp.kernel:make-vvector-from-list (list one)))
+      ((string= constructor "map")
+       (pp.kernel:make-vmap (list (cons (pp.kernel:make-vstring "a") one))))
+      ((string= constructor "set") (pp.kernel:make-vset (list one)))
+      ((string= constructor "closure") (pp.kernel:make-vclosure closure))
+      ((string= constructor "builtin") (pp.kernel:make-vbuiltin "print"))
+      ((string= constructor "capability")
+       (pp.kernel:make-vcapability (pp.kernel:mint-capability "process")))
+      ((string= constructor "thunk")
+       (pp.kernel:make-vthunk
+        (pp.kernel:make-thunk (pp.kernel:make-esymbol "x") env
+                              :config-hash "")))
+      ((string= constructor "env-map")
+       (pp.kernel:make-venvmap (list (cons "x" one))))
+      ((string= constructor "sealed") (pp.kernel:make-vsealed spec))
+      (t (error "unknown value constructor: ~A" constructor)))))
+
+(defun %fixture-pattern (constructor spec)
+  (let ((lit (pp.kernel:make-pliteral (pp.kernel:make-vint 1))))
+    (cond ((string= constructor "literal") lit)
+          ((string= constructor "variable") (pp.kernel:make-pvariable spec))
+          ((string= constructor "wildcard") (pp.kernel:make-pwildcard))
+          ((string= constructor "list") (pp.kernel:make-plist (list lit)))
+          ((string= constructor "tagged") (pp.kernel:make-ptagged spec (list lit)))
+          (t (error "unknown pattern constructor: ~A" constructor)))))
+
+(defun %fixture-capability (constructor spec)
+  (let ((realpath (lambda (path) path)))
+    (cond
+      ((string= constructor "none") (pp.kernel:make-cap-none))
+      ((member constructor '("filesystem" "network" "secret" "process")
+               :test #'string=)
+       (pp.kernel:mint-capability spec :realpath realpath))
+      ((string= constructor "compose")
+       (pp.kernel:compose-capabilities
+        (list (pp.kernel:make-cap-none)
+              (pp.kernel:mint-capability "process"))))
+      ((string= constructor "restrict")
+       (pp.kernel:restrict-capability
+        (pp.kernel:mint-capability "fs:/parity:ro" :realpath realpath)
+        (pp.kernel:canonicalize-path "/parity" :realpath realpath)))
+      (t (error "unknown capability constructor: ~A" constructor)))))
+
+(defun %fixture-cell (constructor spec)
+  (cond
+    ((string= constructor "file") (pp.kernel:make-cell-file spec))
+    ((string= constructor "runtime-file") (pp.kernel:make-cell-runtime-file spec))
+    ((string= constructor "tool") (pp.kernel:make-cell-tool spec))
+    ((string= constructor "tree") (pp.kernel:make-cell-tree spec))
+    ((string= constructor "stat") (pp.kernel:make-cell-stat spec))
+    ((string= constructor "env") (pp.kernel:make-cell-env spec))
+    ((string= constructor "argv") (pp.kernel:make-cell-argv))
+    ((string= constructor "config") (pp.kernel:make-cell-config spec))
+    ((string= constructor "handler") (pp.kernel:make-cell-handler spec))
+    ((string= constructor "probe") (pp.kernel:make-cell-probe spec))
+    ((string= constructor "sealed") (pp.kernel:make-cell-sealed spec))
+    ((string= constructor "node") (pp.kernel:make-cell-node spec))
+    ((string= constructor "domain")
+     (let ((at (cl:position #\: spec)))
+       (unless at (error "domain cell requires NAME:SUB spec"))
+       (pp.kernel:make-cell-domain (subseq spec 0 at) (subseq spec (1+ at)))))
+    ((string= constructor "unknown") (pp.kernel:make-cell-unknown spec))
+    (t (error "unknown cell constructor: ~A" constructor))))
+
+(defun %fixture-identity (constructor spec)
+  (cond
+    ((string= constructor "node-key")
+     (pp.kernel:node-key-to-string (pp.kernel:make-node-key spec)))
+    ((string= constructor "cache-key")
+     (pp.kernel:cache-key-to-string (pp.kernel:make-cache-key spec)))
+    ((string= constructor "object-hash")
+     (pp.kernel:object-hash-to-string (pp.kernel:make-object-hash spec)))
+    ((string= constructor "observed-hash")
+     (pp.kernel:observed-hash-to-string (pp.kernel:make-observed-hash spec)))
+    ((string= constructor "cell-id")
+     (pp.kernel:cell-id-to-string (pp.kernel:make-cell-id spec)))
+    (t (error "unknown identity constructor: ~A" constructor))))
+
+(defun %fixture-emit (output category name canonical digest)
+  (format output "~A~C~A~C~A~C~A~%"
+          category #\Tab name #\Tab canonical #\Tab digest))
+
+(defun %dispatch-parity-row (fields output)
+  (%fixture-exact fields (or (first fields) "fixture"))
+  (destructuring-bind (category name constructor spec) fields
+    (cond
+      ((string= category "expr")
+       (let ((value (%fixture-expr constructor spec)))
+         (%fixture-emit output category name
+                        (%fixture-canonical constructor spec)
+                        (pp.kernel:hash-expr value))))
+      ((string= category "value")
+       (let ((value (%fixture-value constructor spec)))
+         (%fixture-emit output category name
+                        (%fixture-canonical constructor spec)
+                        (pp.kernel:hash-value value))))
+      ((string= category "pattern")
+       (let ((value (%fixture-pattern constructor spec)))
+         (%fixture-emit output category name
+                        (%fixture-canonical constructor spec)
+                        (pp.kernel:hash-pattern value))))
+      ((string= category "capability")
+       (let* ((value (%fixture-capability constructor spec))
+              (scope (pp.kernel:canonicalize-path
+                      "/parity" :realpath (lambda (path) path)))
+              (composed (pp.kernel:compose-capabilities
+                         (list value (pp.kernel:make-cap-none))))
+              (restricted (pp.kernel:restrict-capability value scope))
+              (canonical
+                (format nil "~A|subset=~A|compose=~A|restrict=~A"
+                        (pp.kernel:capability-to-string value)
+                        (if (pp.kernel:subseteq value (list value))
+                            "true" "false")
+                        (if (pp.kernel:subseteq composed (list value))
+                            "true" "false")
+                        (if (pp.kernel:subseteq restricted (list value))
+                            "true" "false"))))
+         (%fixture-emit output category name canonical
+                        (pp.kernel:capability-hash value))))
+      ((string= category "cell")
+       (let ((canonical (pp.kernel:cell-serialize
+                        (%fixture-cell constructor spec))))
+         (%fixture-emit output category name canonical
+                        (pp.kernel:hash-string canonical))))
+      ((string= category "identity")
+       (let ((canonical (%fixture-identity constructor spec)))
+         (%fixture-emit output category name canonical
+                        (pp.kernel:hash-string canonical))))
+      ((string= category "codec")
+       (let ((value (pp.kernel:decode-value spec)))
+         (unless value (error "invalid codec fixture: ~A" name))
+         (let ((canonical (pp.kernel:encode-value value)))
+           (unless canonical (error "non-data codec fixture: ~A" name))
+           (%fixture-emit output category name canonical
+                          (pp.kernel:hash-string canonical)))))
+      (t (error "unknown parity category: ~A" category)))))
+
+(defun %dispatch-fields (fields output)
+  (let ((operation (string-downcase (or (first fields) "")))
+        (arguments (rest fields)))
+    (cond
+      ((string= operation "hash-string")
+       (%need-exact arguments 1 operation)
+       (format output "~A~%" (pp.kernel:hash-string (first arguments))))
+      ((string= operation "hash-concat")
+       (%need-at-least arguments 1 operation)
+       (format output "~A~%" (pp.kernel:hash-concat arguments)))
+      ((string= operation "node-key-skeleton")
+       (%need-at-least arguments 1 operation)
+       (format output "~A~%"
+               (pp.kernel:node-key-skeleton (first arguments)
+                                             (rest arguments))))
+      ((string= operation "identity")
+       (%need-exact arguments 2 operation)
+       (format output "~A~%"
+               (%identity-roundtrip (%parse-identity-kind (first arguments))
+                                    (second arguments))))
+      ((string= operation "codec-roundtrip")
+       (%need-exact arguments 1 operation)
+       (let ((value (pp.kernel:decode-value (first arguments))))
+         (unless value (error "invalid canonical codec fixture"))
+         (format output "~A~%" (pp.kernel:encode-value value))))
+      ((string= operation "cell-roundtrip")
+       (%need-exact arguments 1 operation)
+       (let ((cell (pp.kernel:cell-parse (first arguments))))
+         (unless cell (error "invalid cell encoding"))
+         (format output "~A~%" (pp.kernel:cell-serialize cell))))
+      (t (error "unknown kernel fixture operation: ~A" operation)))))
+(defun %parity-category-p (fields)
+  (member (string-downcase (or (first fields) ""))
+          '("expr" "value" "pattern" "capability" "cell" "identity" "codec")
+          :test #'string=))
+
+(defun %dispatch-stdin (input output &key parity return-count)
+  (let ((records 0))
+    (loop for line = (read-line input nil nil)
+          while line
+          do (unless (or (string= line "")
+                         (and (> (length line) 0) (char= (char line 0) #\#)))
+               (let ((fields (%split-tabs line)))
+                 (incf records)
+                 (if (or parity (%parity-category-p fields))
+                     (%dispatch-parity-row fields output)
+                     (%dispatch-fields fields output)))))
+    (finish-output output)
+    (if return-count records 0)))
+
+(defun %dispatch-parity-corpus (input output)
+  (let ((records (%dispatch-stdin input output :parity t :return-count t)))
+    (when (zerop records)
+      (error "parity corpus is empty"))
+    records))
+
+(defun %dispatch-fixture (arguments input output)
+  ;; Operation mode is selected by a recognized operation token before any
+  ;; filesystem probe.  A corpus path remains accepted for compatibility, but
+  ;; explicit callers should use --kernel-fixture-corpus.
+  (cond
+    ((null arguments) (%dispatch-stdin input output))
+    ((%fixture-operation-p (first arguments))
+     (%dispatch-fields arguments output)
+     (finish-output output)
+     0)
+    ((and (= (length arguments) 1) (probe-file (first arguments)))
+     (%dispatch-corpus-path (first arguments) output))
+    (t
+     (%dispatch-fields arguments output)
+     (finish-output output)
+     0)))
+
+(defun %read-source-file (path)
+  "Read PATH as characters without invoking the host reader."
+  (unless (and (stringp path) (probe-file path))
+    (error "source file is not readable: ~A" path))
+  (with-open-file (stream path :direction :input)
+    (with-output-to-string (output)
+      (loop for character = (cl:read-char stream nil nil)
+            while character
+            do (write-char character output)))))
+
+(defun %write-source-file (path text)
+  "Write TEXT to PATH explicitly.  This is used only for fmt -i."
+  (with-open-file (stream path :direction :output
+                          :if-exists :supersede
+                          :if-does-not-exist :create)
+    (write-string text stream)
+    (finish-output stream))
+  path)
+
+(defun %suffix-p (path suffix)
+  (let ((name path)
+        (suffix-length (length suffix)))
+    (and (>= (length name) suffix-length)
+         (string= name suffix
+                  :start1 (- (length name) suffix-length)
+                  :end1 (length name)))))
+
+(defun %brace-source-path-p (path)
+  ;; This deliberately follows Reader_braces.file_uses_braces: the suffix,
+  ;; rather than a character in user text (which could be a sexpr comment),
+  ;; selects the brace reader at a file boundary.
+  (or (%suffix-p path ".pp") (%suffix-p path ".ppb")))
+
+(defun %frontend-token-text (range)
+  (handler-case
+      (let* ((source (source-range-source range))
+             (text (%read-source-file source))
+             (offset (position-offset (source-range-start range)))
+             (length (length text)))
+        (when (and (<= 0 offset) (< offset length))
+          (let ((cursor offset))
+            (labels ((separator-p (character)
+                       (member character
+                               '(#\Space #\Tab #\Newline #\Return #\,
+                                 #\( #\) #\[ #\] #\{ #\} #\;)
+                               :test #'char=)))
+              (if (separator-p (char text cursor))
+                  (string (char text cursor))
+                  (progn
+                    (loop while (and (< cursor length)
+                                     (not (separator-p (char text cursor))))
+                          do (incf cursor))
+                    (subseq text offset cursor)))))))
+    (error () nil)))
+
+(defun %frontend-error-message (condition)
+  (let ((message (frontend-error-message condition))
+        (range (frontend-error-range condition)))
+    (if (and range (string= message "expected ',' or ')'"))
+        (let ((token (%frontend-token-text range)))
+          (if token
+              (format nil "~A, got ~A" message token)
+              message))
+        message)))
+
+(defun %frontend-error-text (condition &key full-range)
+  (let ((range (frontend-error-range condition)))
+    (if range
+        (format nil "~A at ~A"
+                (%frontend-error-message condition)
+                (if full-range
+                    (source-range-format range)
+                    (format nil "~A:~D"
+                            (source-range-source range)
+                            (position-line (source-range-start range)))))
+        (%frontend-error-message condition))))
+
+(defun %emit-frontend-text (text output)
+  ;; Both OCaml printers terminate a non-empty program with one newline.
+  ;; The frontend printer intentionally returns a string without imposing
+  ;; stream policy, so the app owns that final delimiter.
+  (write-string text output)
+  (when (and (> (length text) 0)
+             (char/= (char text (1- (length text))) #\Newline))
+    (terpri output))
+  (finish-output output))
+ 
+(defun %read-stream-text (stream)
+  "Read STREAM as characters without invoking the host reader."
+  (with-output-to-string (output)
+    (loop for character = (cl:read-char stream nil nil)
+          while character
+          do (write-char character output))))
+
+(defun %language-source-path-p (path)
+  (let ((name (string-downcase path)))
+    (or (%suffix-p name ".pp")
+        (%suffix-p name ".ppb")
+        (%suffix-p name ".ppl"))))
+
+(defun %source-surface (path)
+  (let ((name (string-downcase path)))
+    (cond ((or (%suffix-p name ".pp") (%suffix-p name ".ppb")) :brace)
+          ((%suffix-p name ".ppl") :sexpr)
+          (t (error "source file must end in .pp, .ppb, or .ppl: ~A" path)))))
+
+(defun %language-form-inner (form)
+  (if (typep form 'expr-located)
+      (%language-form-inner (expr-located-expression form))
+      form))
+
+(defun %language-binding-form-p (form)
+  (let ((inner (%language-form-inner form)))
+    (or (typep inner 'expr-def)
+        (typep inner 'expr-defnode)
+        (typep inner 'expr-defvalue)
+        (typep inner 'expr-module)
+        ;; DEFMACRO is intentionally recognized structurally, rather than by
+        ;; interning user text; the runtime expands it before evaluation.
+        (and (typep inner 'expr-apply)
+             (typep (expr-apply-function inner) 'expr-symbol)
+             (string= (expr-symbol-name (expr-apply-function inner))
+                      "defmacro")))))
+
+(defun %language-print-value (state value output)
+  (let ((value (runtime-evaluator-force-deep state value)))
+    (format output "~A~%" (runtime-string-of-value value))
+    (finish-output output)))
+
+(defun %decimal-end (text start)
+  (let ((cursor start))
+    (loop while (and (< cursor (length text))
+                     (digit-char-p (char text cursor)))
+          do (incf cursor))
+    (and (> cursor start) cursor)))
+
+(defun %language-location-prefix (message source)
+  "Split a generated SOURCE:LINE:COLUMN diagnostic prefix from MESSAGE.
+
+The evaluator may retain a call-site range while a nested thunk has already
+included its own range in the message.  Keep this parser deliberately narrow:
+SOURCE must be the source attached to the condition and the coordinates must
+be decimal, so ordinary user messages are not rewritten accidentally."
+  (when (and source
+             (>= (length message) (length source))
+             (string= source message :end2 (length source)))
+    (let ((cursor (length source)))
+      (when (and (< cursor (length message))
+                 (char= (char message cursor) #\:))
+        (incf cursor)
+        (let ((line-end (%decimal-end message cursor)))
+          (when line-end
+            (let ((line (parse-integer message :start cursor :end line-end)))
+              (setf cursor line-end)
+              (when (and (< cursor (length message))
+                         (char= (char message cursor) #\:))
+                (incf cursor)
+                (let ((column-end (%decimal-end message cursor)))
+                  (when column-end
+                    (setf cursor column-end)
+                    ;; A range can be a point (LINE:COLUMN) or a span
+                    ;; (LINE:COLUMN-LINE:COLUMN).  We only need LINE for the
+                    ;; OCaml command-line presentation, but validate either
+                    ;; form before consuming the prefix.
+                    (when (and (< cursor (length message))
+                               (char= (char message cursor) #\-))
+                      (incf cursor)
+                      (let ((end-line (%decimal-end message cursor)))
+                        (when end-line
+                          (setf cursor end-line)
+                          (when (and (< cursor (length message))
+                                     (char= (char message cursor) #\:))
+                            (incf cursor)
+                            (let ((end-column (%decimal-end message cursor)))
+                              (when end-column
+                                (setf cursor end-column)))))))
+                    (when (and (< (1+ cursor) (length message))
+                               (char= (char message cursor) #\:)
+                               (char= (char message (1+ cursor)) #\Space))
+                      (values (subseq message (+ cursor 2)) source line))))))))))))
+
+(defun %language-error-text (condition)
+  (cond
+    ((typep condition 'language-error)
+     (let* ((message (language-error-message condition))
+            (range (pp.runtime::language-error-range condition))
+            (source (and range (source-range-source range)))
+            (location-source nil)
+            (location-line nil)
+            (clean message))
+       ;; Strip every nested generated location, retaining the innermost one.
+       ;; This handles both a single evaluator prefix and the
+       ;; call-site/thunk-location double prefix without changing the
+       ;; frontend condition path.
+       (loop
+         (multiple-value-bind (rest nested-source nested-line)
+             (%language-location-prefix clean source)
+           (if rest
+               (setf clean rest
+                     location-source nested-source
+                     location-line nested-line)
+               (return))))
+       (let ((display-source (or location-source source)))
+         (if display-source
+             (format nil "~A at ~A:~D"
+                     clean display-source
+                     (or location-line
+                         (position-line (source-range-start range))))
+             clean))))
+    ((typep condition 'type-error)
+     ;; A typed delayed RHS can currently leak SBCL's SEQUENCE type error
+     ;; while the evaluator is forcing the wrapper.  Do not expose host
+     ;; structure dumps at the command boundary: this is a language type
+     ;; failure even though the lower layer did not normalize it.
+     (let ((text (princ-to-string condition)))
+       (if (and (search "SEQUENCE" text :test #'char-equal)
+                (search "PP.KERNEL:EXPR-" text :test #'char-equal))
+           "type mismatch while forcing typed value"
+           text)))
+    ((typep condition 'frontend-error)
+     (%frontend-error-text condition))
+    (t (princ-to-string condition))))
+
+(defun %language-binding-name (form)
+  (let ((inner (%language-form-inner form)))
+    (cond ((typep inner 'expr-def) (expr-def-name inner))
+          ((typep inner 'expr-defnode) (expr-defnode-name inner))
+          ((typep inner 'expr-defvalue) (expr-defvalue-name inner))
+          (t nil))))
+
+(defun %language-defmacro-form-p (form)
+  (let ((inner (%language-form-inner form)))
+    (and (typep inner 'expr-apply)
+         (typep (expr-apply-function inner) 'expr-symbol)
+         (string= (expr-symbol-name (expr-apply-function inner))
+                  "defmacro"))))
+
+(defun %language-persistent-form-p (form)
+  "Return true for top-level assignment-like bindings only.
+
+Grouped LET is an ordinary expression: its bindings are scoped to its body
+and its value is the body's value.  The brace reader represents both grouped
+LET and the statement form `let name = rhs` with expression objects, but the
+latter is normalized to EDefValue and is already covered by
+%LANGUAGE-BINDING-FORM-P.  Do not turn grouped LET into an exported module."
+  (%language-binding-form-p form))
+
+(defun %language-persistent-module (form)
+  "Wrap one assignment-like/module form as an exported module.
+
+Grouped LET is intentionally not handled here: it is an ordinary expression
+and is evaluated directly by the REPL path."
+  (make-emodule (list form)))
+
+(defun %language-direct-binding-p (form)
+  (let ((inner (%language-form-inner form)))
+    (or (typep inner 'expr-def)
+        (typep inner 'expr-defnode)
+        (typep inner 'expr-defvalue))))
+
+(defun %language-extend-environment (environment bindings)
+  "Extend ENVIRONMENT with module BINDINGS using the kernel env hash rule."
+  (reduce
+   (lambda (current entry)
+     (make-env
+      (cons entry (env-bindings current))
+      :env-id (1+ (env-env-id current))
+      :env-hash
+      (hash-concat
+       (list "env" (env-env-hash current) (car entry)
+             (hash-value (cdr entry))))))
+   bindings :initial-value environment))
+
+(defun %language-merge-module-value (environment value)
+  (if (typep value 'value-env-map)
+      (%language-extend-environment
+       environment (value-env-map-bindings value))
+      environment))
+
+(defun %language-fallback-range (forms source)
+  "Return the first source range available for a source-level fallback.
+
+Evaluator failures normally carry their own range.  This is only used for
+runtime failures that escape without one, so the command boundary can still
+render the OCaml-style `source:line` suffix."
+  (when source
+    (or (loop for form in forms
+              when (typep form 'expr-located)
+                return (expr-located-range form))
+        (make-source-range
+         :source source
+         :start-pos (make-position :offset 0 :line 1 :column 1)
+         :end-pos (make-position :offset 0 :line 1 :column 1)))))
+
+(defun %language-reraise-with-source (condition forms source)
+  "Attach SOURCE only when an evaluator condition has no range."
+  (if (and source
+           (typep condition 'language-error)
+           (null (pp.runtime::language-error-range condition)))
+      (error 'language-error
+             :code (language-error-code condition)
+             :message (language-error-message condition)
+             :range (%language-fallback-range forms source))
+      (error condition)))
+
+(defun %command-home ()
+  (let ((home (and (fboundp 'sb-ext:posix-getenv)
+                   (sb-ext:posix-getenv "HOME"))))
+    (unless (and home (plusp (length home)))
+      (error "HOME is not set"))
+    (pp.runtime:store-canonical-path home)))
+
+(defun %command-store-root ()
+  (namestring
+   (merge-pathnames ".pp/store/"
+                    (pathname (%command-home)))))
+
+(defun %command-capabilities (specs)
+  (mapcar (lambda (spec)
+            (pp.kernel:mint-capability
+             spec :realpath #'pp.runtime:store-canonical-path))
+          (reverse specs)))
+
+(defun %command-current-capabilities ()
+  "Return the flat capability view at the command boundary.
+
+Evaluator capability callbacks and the dynamic scope both expose this state.
+Flatten only capability containers; no user value is accepted as authority."
+  (labels ((flatten (value)
+             (cond
+               ((typep value 'pp.kernel:capability) (list value))
+               ((consp value) (mapcan #'flatten value))
+               (t nil))))
+    (let* ((dynamic (ignore-errors (flatten (pp.runtime:runtime-dynamic-capabilities))))
+           (session (ignore-errors (pp.runtime:runtime-dynamic-session nil)))
+           (state (and session (pp.runtime:runtime-session-evaluator session)))
+           (saved (flatten
+                   (and state
+                        (pp.runtime:runtime-evaluator-state-capabilities state)))))
+      (if dynamic dynamic saved))))
+
+(defun %command-capability-allows-file-p (capabilities path sealed &optional (want :read))
+  (declare (ignore capabilities))
+  (let* ((target (pp.kernel:canonicalize-path
+                  path :realpath #'pp.runtime:store-canonical-path))
+         (capabilities (%command-current-capabilities)))
+    (some (lambda (capability)
+            (if sealed
+                (pp.kernel:capability-check-secret-p capability target)
+                (if (eq want :write)
+                    (pp.kernel:capability-check-fs-write-p capability target)
+                    (pp.kernel:capability-check-fs-read-p capability target))))
+          capabilities)))
+
+ (defun %command-file-sealed-p (path)
+  "Select the least-authority read mode for PATH."
+  (if (and (pp.runtime:runtime-dynamic-in-node-p)
+           (pp.runtime:runtime-sandbox-relative-p path)
+           (ignore-errors (pp.runtime:runtime-sandbox-resolve path)))
+      nil
+      (let* ((canonical (pp.runtime:store-canonical-path path))
+             (target (pp.kernel:canonicalize-path
+                      canonical :realpath #'pp.runtime:store-canonical-path))
+             (capabilities (%command-current-capabilities)))
+        (cond
+          ((some (lambda (capability)
+                   (pp.kernel:capability-check-fs-read-p capability target))
+                 capabilities)
+           nil)
+          ((some (lambda (capability)
+                   (pp.kernel:capability-check-secret-p capability target))
+                 capabilities)
+           t)
+          (t
+           (pp.runtime:language-fail
+            (format nil "slurp: permission denied for ~A" canonical)
+            "runtime.authority"))))))
+
+(defun %command-unseal-value (value)
+  (if (typep value 'pp.kernel:value-sealed)
+      (pp.kernel:make-vstring (pp.kernel:value-sealed-bytes value))
+      (pp.runtime:language-fail
+       "unseal expects a sealed value"
+       "primitive.type")))
+
+(defun %command-observe-file (path &optional sealed)
+  (let* ((canonical (pp.runtime:store-canonical-path path))
+         (capabilities (pp.runtime:runtime-dynamic-capabilities)))
+    (unless (%command-capability-allows-file-p capabilities canonical sealed)
+      (pp.runtime:language-fail
+       (format nil "permission denied: ~A" canonical)
+       "runtime.authority"))
+    (let ((bytes (or (pp.runtime:store-read-octets canonical)
+                     (pp.runtime:language-fail
+                      (format nil "cannot read file: ~A" canonical)
+                      "runtime.observation"))))
+      (if sealed bytes (pp.runtime:store-hash-content bytes)))))
+
+ (defun %command-read-file-value (path &optional sealed)
+  "Read an observed file, preferring the current node's scratch tree."
+  (let* ((scratch
+           (and (pp.runtime:runtime-sandbox-relative-p path)
+                (ignore-errors (pp.runtime:runtime-sandbox-resolve path))))
+         (scratch-bytes (and scratch (pp.runtime:store-read-octets scratch))))
+    (if scratch-bytes
+        (pp.kernel:make-vstring (pp.runtime:store-octets-string scratch-bytes))
+        (let* ((canonical (pp.runtime:store-canonical-path path))
+               (capabilities (pp.runtime:runtime-dynamic-capabilities)))
+          (unless (%command-capability-allows-file-p capabilities canonical sealed)
+            (pp.runtime:language-fail
+             (format nil "slurp: permission denied for ~A" canonical)
+             "runtime.authority"))
+          (let* ((session (pp.runtime:runtime-observation-session))
+                 (cells (pp.runtime:runtime-observation-repository :store-cells))
+                 (cell (if sealed
+                           (pp.kernel:make-cell-sealed canonical)
+                           (pp.kernel:make-cell-file canonical)))
+                 (record
+                   (lambda (cell-id hash)
+                     (pp.runtime:runtime-observation-record
+                      (pp.kernel:cell-parse cell-id) hash))))
+            (if cells
+                (let ((bytes
+                        (if sealed
+                            (pp.runtime:cell-repository-read-sealed
+                             cells canonical
+                             :pin-lookup
+                             (and session
+                                  (lambda (cell-id)
+                                    (pp.runtime:runtime-session-find-sealed-pin
+                                     session cell-id)))
+                             :pin-store
+                             (and session
+                                  (lambda (cell-id value)
+                                    (pp.runtime:runtime-session-set-sealed-pin
+                                     session cell-id value)))
+                             :record record)
+                            (pp.runtime:cell-repository-read-file
+                             cells canonical
+                             :pin-lookup
+                             (and session
+                                  (lambda (cell-id)
+                                    (pp.runtime:runtime-session-find-run-pin
+                                     session cell-id)))
+                             :pin-store
+                             (and session
+                                  (lambda (cell-id value)
+                                    (pp.runtime:runtime-session-set-run-pin
+                                     session cell-id value)))
+                             :record record))))
+                  (if sealed
+                      (pp.kernel:make-vsealed (map 'string #'code-char bytes))
+                      (pp.kernel:make-vstring (pp.runtime:store-octets-string bytes))))
+                (let* ((bytes
+                         (or (pp.runtime:store-read-octets canonical)
+                             (pp.runtime:language-fail
+                              (format nil "cannot read file: ~A" canonical)
+                              "runtime.observation")))
+                       (hash (if sealed
+                                 (pp.runtime:store-hash-octets bytes)
+                                 (pp.runtime:store-hash-content bytes))))
+                  (pp.runtime:runtime-observation-record cell hash)
+                  (if sealed
+                      (pp.kernel:make-vsealed (map 'string #'code-char bytes))
+                      (pp.kernel:make-vstring
+                       (pp.runtime:store-octets-string bytes))))))))))
+ 
+(defun %command-value-text (value name)
+  (cond ((typep value 'pp.kernel:value-string)
+         (pp.kernel:value-string-value value))
+        ((typep value 'pp.kernel:value-symbol)
+         (pp.kernel:value-symbol-value value))
+        ((typep value 'pp.kernel:value-keyword)
+         (pp.kernel:value-keyword-value value))
+        (t (pp.runtime:language-fail
+            (format nil "~A expects a string" name)
+            "primitive.type"))))
+
+(defun %command-strict-text (value name)
+  (if (typep value 'pp.kernel:value-string)
+      (pp.kernel:value-string-value value)
+      (pp.runtime:language-fail
+       (format nil "~A expects a string" name)
+       "primitive.type")))
+
+(defun %command-force-argument (value force)
+  (funcall (or force #'identity) value))
+(defun %command-record-event (kind fields)
+  (pp.runtime:runtime-effects-record-event
+   (pp.kernel:make-vmap
+    (cons (cons (pp.kernel:make-vkeyword "kind")
+                (pp.kernel:make-vkeyword kind))
+          fields))))
+
+(defun %command-executable-p (path)
+  #+sbcl
+  (handler-case
+      (let ((stat (sb-posix:stat path)))
+        (and (= (logand (sb-posix:stat-mode stat) sb-posix:s-ifmt)
+                sb-posix:s-ifreg)
+             (not (zerop (logand (sb-posix:stat-mode stat) #o111)))))
+    (error () nil))
+  #-sbcl
+  (and (probe-file path) t))
+
+(defun %command-resolve-tool (command)
+  (let ((candidate
+          (if (find #\/ command)
+              command
+              (loop for directory in
+                    (%split-colons
+                     (or (and (fboundp 'sb-ext:posix-getenv)
+                              (sb-ext:posix-getenv "PATH"))
+                         ""))
+                    for path = (merge-pathnames command
+                                                (pathname
+                                                 (format nil "~A/" directory)))
+                    when (and (plusp (length directory))
+                               (%command-executable-p path))
+                      do (return (namestring path))))))
+    (unless (and candidate (%command-executable-p candidate))
+      (pp.runtime:language-fail
+       (format nil "run: command not found: ~A" command)
+       "runtime.process"))
+    (pp.runtime:store-canonical-path candidate)))
+
+(defun %split-colons (text)
+  (let ((fields '()) (start 0))
+    (loop for i from 0 below (length text)
+          when (char= (char text i) #\:)
+            do (push (subseq text start i) fields)
+               (setf start (1+ i)))
+    (nreverse (cons (subseq text start) fields))))
+
+(defun %command-tool-observed-hash (path)
+  (pp.runtime:store-hash-octets
+   (or (pp.runtime:store-read-octets path)
+       (pp.runtime:language-fail
+        (format nil "run: cannot read executable: ~A" path)
+        "runtime.observation"))))
+
+(defun %command-run-effect (arguments)
+  (when (pp.runtime:runtime-dynamic-in-node-p)
+    (pp.runtime:language-fail
+     "run: may not be called inside a node body (scripting-tier only)"
+     "runtime.tier"))
+  (%command-process-required)
+  (let ((journal (merge-pathnames
+                  "journal/log/"
+                  (pathname (%command-store-root)))))
+    (when (probe-file journal)
+      (pp.runtime:language-fail
+       "run: invalid journal log path"
+       "runtime.process")))
+  (unless (plusp (length arguments))
+    (pp.runtime:language-fail "run expects a command" "primitive.arity"))
+  (let ((argv
+          (mapcar
+           (lambda (value)
+             (let ((text (%command-strict-text value "run")))
+               (when (or (cl:position #\Return text)
+                         (cl:position #\Newline text))
+                 (pp.runtime:language-fail
+                  "run: invalid argument contains a newline"
+                  "runtime.process"))
+               text))
+           arguments)))
+    (let* ((tool (%command-resolve-tool (first argv)))
+           (stdout (make-string-output-stream))
+           (stderr (make-string-output-stream))
+           (process
+             (handler-case
+                 (sb-ext:run-program
+                  tool (rest argv) :search nil :input nil
+                  :output stdout :error stderr :wait t)
+               (error (condition)
+                 (pp.runtime:language-fail
+                  (format nil "run: ~A" condition)
+                  "runtime.process"))))
+           (exit (or (sb-ext:process-exit-code process) 1))
+           (out (get-output-stream-string stdout))
+           (err (get-output-stream-string stderr)))
+      (pp.runtime:runtime-observation-record
+       (pp.kernel:make-cell-tool tool)
+       (%command-tool-observed-hash tool))
+      (%command-record-event
+       "run"
+       (list
+        (cons (pp.kernel:make-vkeyword "tool")
+              (pp.kernel:make-vstring tool))
+        (cons (pp.kernel:make-vkeyword "args")
+              (pp.kernel:make-vvector-from-list
+               (mapcar #'pp.kernel:make-vstring argv)))
+        (cons (pp.kernel:make-vkeyword "exit")
+              (pp.kernel:make-vint exit))))
+      (pp.kernel:make-vmap
+       (list (cons (pp.kernel:make-vstring "exit")
+                   (pp.kernel:make-vint exit))
+             (cons (pp.kernel:make-vstring "out")
+                   (pp.kernel:make-vstring out))
+             (cons (pp.kernel:make-vstring "err")
+                   (pp.kernel:make-vstring err)))))))
+
+(defun %command-symlink-p (path)
+  #+sbcl
+  (handler-case
+      (= (logand (sb-posix:stat-mode (sb-posix:lstat path))
+                 sb-posix:s-ifmt)
+         sb-posix:s-iflnk)
+    (error () nil))
+  #-sbcl
+  nil)
+
+ (defun %command-invalidate-file-pins (session canonical)
+  (when session
+    (pp.runtime:runtime-session-iter-run-pins
+     session
+     (lambda (cell-id ignored-hash)
+       (declare (ignore ignored-hash))
+       (handler-case
+           (let ((cell (pp.kernel:cell-parse cell-id)))
+             (when (and (typep cell 'pp.kernel:cell-file)
+                        (string= (pp.kernel:cell-file-value cell) canonical))
+               (pp.runtime:runtime-session-remove-run-pin session cell-id)))
+         (error () nil))))))
+
+ (defun %command-write-file-effect (arguments)
+  (unless (= (length arguments) 2)
+    (pp.runtime:language-fail
+     "write-file expects path and content strings"
+     "primitive.arity"))
+  (let* ((path (%command-strict-text (first arguments) "write-file"))
+         (content (%command-strict-text (second arguments) "write-file"))
+         (in-node (pp.runtime:runtime-dynamic-in-node-p))
+         (scratch
+           (and in-node
+                (pp.runtime:runtime-sandbox-relative-p path)
+                (ignore-errors
+                  (pp.runtime:runtime-sandbox-resolve path :create t))))
+         (absolute (and (not in-node)
+                        (pp.runtime:store-absolute-path path))))
+    (cond
+      (in-node
+       (unless scratch
+         (pp.runtime:language-fail
+          (format nil "write-file: node writes are sandbox-scratch only (LAW 18): ~A"
+                  path)
+          "runtime.tier"))
+       (handler-case
+           (pp.runtime:store-atomic-replace scratch content)
+         (error (condition)
+           (pp.runtime:language-fail
+            (format nil "write-file: ~A" condition)
+            "runtime.effect")))
+       (pp.kernel:make-vnil))
+      ((%command-symlink-p absolute)
+       (pp.runtime:language-fail
+        (format nil "write-file: refusing symlink path: ~A" absolute)
+        "runtime.authority"))
+      (t
+       (let ((canonical (pp.runtime:store-canonical-path absolute)))
+         (unless (some (lambda (capability)
+                         (pp.kernel:capability-check-fs-write-p
+                          capability
+                          (pp.kernel:canonicalize-path
+                           canonical :realpath #'pp.runtime:store-canonical-path)))
+                       (%command-current-capabilities))
+           (pp.runtime:language-fail
+            (format nil "write-file: capability error: no write access for ~A"
+                    canonical)
+            "runtime.authority"))
+         (handler-case
+             (pp.runtime:store-atomic-replace canonical content)
+           (error (condition)
+             (pp.runtime:language-fail
+              (format nil "write-file: ~A" condition)
+              "runtime.effect")))
+         (%command-invalidate-file-pins
+          (pp.runtime:runtime-observation-session) canonical)
+         (%command-record-event
+          "write-file"
+          (list (cons (pp.kernel:make-vkeyword "path")
+                      (pp.kernel:make-vstring canonical))
+                (cons (pp.kernel:make-vkeyword "hash")
+                      (pp.kernel:make-vstring
+                       (pp.runtime:store-hash-content content)))))
+         (pp.kernel:make-vnil))))))
+
+(defun %command-process-required ()
+  (unless (some #'pp.kernel:capability-check-process-p
+                (%command-current-capabilities))
+    (pp.runtime:language-fail
+     "capability error: no process authority"
+     "runtime.authority"))
+  t)
+
+(defun %command-record-handler-observation (name)
+  (let ((observed (pp.runtime:runtime-dynamic-observe-handler name)))
+    (pp.runtime:runtime-observation-record
+     (pp.kernel:make-cell-handler name)
+     (if (pp.runtime:store-digest-p observed)
+         observed
+         (pp.kernel:hash-string observed)))))
+
+
+(defun %command-install-primitive (state name function)
+  (setf (pp.runtime:runtime-evaluator-state-initial-env state)
+        (pp.runtime::runtime-evaluator-env-extend
+         (pp.runtime:runtime-evaluator-state-initial-env state)
+         name (make-vbuiltin name function))))
+
+(defun %command-install-observation-primitives (session error-output)
+  "Install command-tier observations without changing the pure catalog."
+  (let ((state (pp.runtime:runtime-session-evaluator session)))
+    (labels ((extend (name function)
+               (setf (pp.runtime:runtime-evaluator-state-initial-env state)
+                     (pp.runtime::runtime-evaluator-env-extend
+                      (pp.runtime:runtime-evaluator-state-initial-env state)
+                      name (pp.kernel:make-vbuiltin name function))))
+             (one-text (args force name)
+               (unless (= (length args) 1)
+                 (pp.runtime:language-fail
+                  (format nil "~A expects one argument" name)
+                  "primitive.arity"))
+               (%command-value-text
+                (%command-force-argument (first args) force) name)))
+      (extend
+       "slurp"
+       (lambda (args environment &key force &allow-other-keys)
+         (declare (ignore environment))
+         (let* ((path (one-text args force "slurp"))
+                (sealed (%command-file-sealed-p path)))
+           (%command-read-file-value path sealed))))
+      (extend
+       "blob"
+       (lambda (args environment &key force &allow-other-keys)
+         (declare (ignore environment))
+         (unless (= (length args) 1)
+           (pp.runtime:language-fail "blob expects one argument" "primitive.arity"))
+         (let ((value (%command-force-argument (first args) force)))
+           (unless (typep value 'pp.kernel:value-string)
+             (pp.runtime:language-fail "blob expects a string" "primitive.type"))
+           (pp.kernel:make-vstring
+            (pp.runtime::runtime-artifact-blob-put
+             (pp.kernel:value-string-value value))))))
+      (extend
+       "unseal"
+       (lambda (args environment &key force &allow-other-keys)
+         (declare (ignore environment))
+         (unless (= (length args) 1)
+           (pp.runtime:language-fail
+            "unseal expects one argument"
+            "primitive.arity"))
+         (%command-unseal-value
+          (%command-force-argument (first args) force))))
+      (extend
+       "env-get"
+       (lambda (args environment &key force &allow-other-keys)
+         (declare (ignore environment))
+         (let* ((name (one-text args force "env-get"))
+                (value (and (fboundp 'sb-ext:posix-getenv)
+                            (sb-ext:posix-getenv name))))
+           (pp.runtime:runtime-observation-record
+            (pp.kernel:make-cell-env name)
+            (or (and value (pp.kernel:hash-string value))
+                "env-cell:absent"))
+           (if value (pp.kernel:make-vstring value)
+               (pp.kernel:make-vnil)))))
+      (extend
+       "probe"
+       (lambda (args environment &key force &allow-other-keys)
+         (declare (ignore environment))
+         (let ((name (one-text args force "probe")))
+           (or (pp.runtime:runtime-observation-probe name)
+               (pp.kernel:make-vnil)))))
+      (extend
+       "config"
+       (lambda (args environment &key force &allow-other-keys)
+         (declare (ignore environment))
+         (unless (member (length args) '(1 2))
+           (pp.runtime:language-fail "config expects one or two arguments"
+                                     "primitive.arity"))
+         (let ((key (one-text (list (first args)) force "config")))
+           (multiple-value-bind (value present)
+               (pp.runtime:runtime-configuration-read key)
+             (if present value
+                 (if (= (length args) 2)
+                     (%command-force-argument (second args) force)
+                     (pp.kernel:make-vnil)))))))
+(defun %command-map-field (value name)
+  (and (typep value 'pp.kernel:value-map)
+       (let ((entry (find-if
+                     (lambda (item)
+                       (let ((key (car item)))
+                         (and (or (typep key 'pp.kernel:value-string)
+                                  (typep key 'pp.kernel:value-keyword))
+                              (string= name
+                                       (if (typep key 'pp.kernel:value-string)
+                                           (pp.kernel:value-string-value key)
+                                           (pp.kernel:value-keyword-value key))))))
+                     (pp.kernel:value-map-entries value))))
+         (and entry (cdr entry)))))
+
+(defun %command-register-domain (session value force)
+  (let* ((value (funcall force value))
+         (name (%command-value-text (%command-map-field value "name")
+                                    "register-domain name"))
+         (namespace-value (funcall force
+                                   (%command-map-field value "namespace")))
+         (namespace
+           (cond
+             ((typep namespace-value 'pp.kernel:value-vector)
+              (map 'list (lambda (item)
+                           (%command-value-text (funcall force item)
+                                                "register-domain namespace"))
+                   (pp.kernel:value-vector-values namespace-value)))
+             ((typep namespace-value 'pp.kernel:value-pair)
+              (labels ((collect (item)
+                         (let ((item (funcall force item)))
+                           (cond
+                             ((typep item 'pp.kernel:value-nil) nil)
+                             ((typep item 'pp.kernel:value-pair)
+                              (cons (%command-value-text
+                                     (funcall force (pp.kernel:value-pair-car item))
+                                     "register-domain namespace")
+                                    (collect (pp.kernel:value-pair-cdr item))))
+                             (t (error "register-domain namespace must be a list"))))))
+                (collect namespace-value)))
+             (t (error "register-domain namespace must be a vector or list")))))
+         (observe (funcall force (%command-map-field value "observe")))
+         (diff (funcall force (%command-map-field value "diff")))
+         (apply-fn (funcall force (%command-map-field value "apply")))
+         (cap (let ((entry (%command-map-field value "write-cap")))
+                (and entry (funcall force entry)))))
+    (unless (and observe diff apply-fn)
+      (error "register-domain requires observe, diff, and apply"))
+    (runtime-session-register-domain
+     session name
+     (make-runtime-domain-entry
+      :namespace namespace :observe observe :diff diff :apply apply-fn :cap cap))
+    (pp.kernel:make-vnil)))
+
+    (%command-install-primitive
+     state "fenced"
+     (lambda (args environment &key force &allow-other-keys)
+       (declare (ignore environment))
+       (unless (= (length args) 2)
+         (pp.runtime:language-fail "fenced expects kind and spec"
+                                   "primitive.arity"))
+       (let ((kind (%command-strict-text
+                    (funcall force (first args)) "fenced kind"))
+             (spec (funcall force (second args))))
+         (runtime-lifecycle-fenced session kind spec)
+         (pp.kernel:make-vnil))))
+    (%command-install-primitive
+     state "register-domain"
+     (lambda (args environment &key force &allow-other-keys)
+       (declare (ignore environment))
+       (unless (= (length args) 1)
+         (pp.runtime:language-fail "register-domain expects one argument"
+                                   "primitive.arity"))
+       (%command-register-domain session (first args) (or force #'identity))))
+    (%command-install-primitive
+     state "register-probe"
+     (lambda (args environment &key force &allow-other-keys)
+       (declare (ignore environment))
+       (unless (= (length args) 3)
+         (pp.runtime:language-fail "register-probe expects name, observe, cap"
+                                   "primitive.arity"))
+       (let ((name (%command-strict-text
+                    (funcall force (first args)) "register-probe name"))
+             (observe (funcall force (second args)))
+             (cap (funcall force (third args))))
+         (runtime-session-register-probe
+          session name
+          (make-runtime-domain-entry :observe observe :cap cap))
+         (pp.kernel:make-vnil))))
+
+      (pp.runtime:runtime-session-register-callback
+       session :perform
+       (lambda (ignored-state name arguments environment)
+         (declare (ignore ignored-state environment))
+         (%command-record-handler-observation name)
+
+         (cond
+          ((string= name "log")
+           (unless (member (length arguments) '(1 2))
+             (pp.runtime:language-fail "log expects one or two arguments"
+                                       "primitive.arity"))
+           (let* ((state (pp.runtime:runtime-session-evaluator session))
+                  (values (mapcar
+                           (lambda (argument)
+                             (pp.runtime:runtime-evaluator-force
+                              state argument))
+                           arguments)))
+             (format error-output "[~A] ~A~%"
+                     (if (= (length values) 2)
+                         (%command-value-text (first values) "log")
+                         "info")
+                     (%command-value-text (car (last values)) "log"))
+             (finish-output error-output)
+             (pp.kernel:make-vnil)))
+          ((string= name "read-file")
+           (unless (= (length arguments) 1)
+             (pp.runtime:language-fail "read-file expects one argument"
+                                       "primitive.arity"))
+           (let* ((path (%command-value-text (first arguments) "read-file"))
+                  (sealed (%command-file-sealed-p path)))
+             (%command-read-file-value path sealed)))
+          ((string= name "tree-observe")
+           (unless (= (length arguments) 1)
+             (pp.runtime:language-fail "tree-observe expects one argument"
+                                       "primitive.arity"))
+           (let* ((path (%command-value-text (first arguments) "tree-observe"))
+                  (tree (or (pp.runtime::runtime-artifact-observe-value path)
+                            (pp.runtime:language-fail
+                             (format nil "tree-observe: cannot read ~A" path)
+                             "runtime.observation")))
+                  (hash (pp.kernel:hash-value tree)))
+             (pp.runtime:runtime-observation-record
+              (pp.kernel:make-cell-tree path) hash)
+             tree))
+          ((string= name "materialize-file")
+           (unless (= (length arguments) 2)
+             (pp.runtime:language-fail
+              "materialize-file expects path and content" "primitive.arity"))
+           (%command-write-file-effect arguments))
+          ((string= name "remove-file")
+           (unless (= (length arguments) 1)
+             (pp.runtime:language-fail "remove-file expects one argument"
+                                       "primitive.arity"))
+           (let ((path (%command-strict-text (first arguments) "remove-file")))
+             (%command-write-file-effect
+              (list (pp.kernel:make-vstring path) (pp.kernel:make-vstring "")))
+             (pp.kernel:make-vnil)))
+          ((string= name "run")
+           (%command-run-effect arguments))
+          ((string= name "write-file")
+           (%command-write-file-effect arguments))
+          ((string= name "proc-reap")
+           (unless (null arguments)
+             (pp.runtime:language-fail "proc-reap takes no arguments"
+                                       "primitive.arity"))
+           (%command-process-required)
+           (%command-record-event "proc-reap" nil)
+           (pp.kernel:make-vnil))
+          (t (pp.runtime:language-fail
+              (format nil "unhandled effect: ~A" name)
+              "runtime.effect")))))
+      session))
+
+
+(defun %command-parse-policy (text)
+  (handler-case
+      (make-distribution-policy :kind text)
+    (error (condition)
+      (error "schedule: ~A" condition))))
+
+(defun %command-runtime-policy (text)
+  (let ((policy (if (typep text 'distribution-policy)
+                    text
+                    (%command-parse-policy text))))
+    (when (eq (distribution-policy-kind policy) :remote)
+      (error "schedule: remote placement requires an explicit trusted transport service"))
+    policy))
+
+(defun %command-schedule-node-force (session policy)
+  "Install the distribution scheduler at the persistent-node boundary."
+  (let* ((state (runtime-session-evaluator session))
+         (base (and (fboundp 'runtime-evaluator-state-node-force-function)
+                    (runtime-evaluator-state-node-force-function state)))
+         (jobs (make-hash-table :test #'equal))
+         (scheduler nil))
+    (unless (functionp base)
+      (error "schedule: persistent node backend is unavailable"))
+    (setf scheduler
+          (make-distribution-scheduler
+           :policy policy
+           :runner
+           (lambda (job)
+             (let* ((key (distribution-job-key job))
+                    (entry (gethash key jobs)))
+               (unless entry
+                 (distribution-fail "schedule" "worker job is not registered"))
+               (destructuring-bind (run-state thunk node-key run) entry
+                 (let ((old (runtime-session-schedule-locked-p session)))
+                   (setf (runtime-session-schedule-locked-p session) t)
+                   (unwind-protect
+                        (funcall base
+                                 run-state thunk node-key
+                                 (lambda ()
+                                   (runtime-sandbox-with-node
+                                    node-key run :persistent t)))
+                     (setf (runtime-session-schedule-locked-p session) old))))))))
+    (runtime-session-register-service session :scheduler (lambda () scheduler))
+    (runtime-session-register-callback
+     session :node-force
+     (lambda (run-state thunk node-key run)
+       (if (runtime-session-schedule-locked-p session)
+           (funcall base
+                    run-state thunk node-key
+                    (lambda ()
+                      (runtime-sandbox-with-node
+                       node-key run :persistent t)))
+           (let* ((key (pp.runtime::runtime-session-key node-key))
+                  (closed (and (fboundp 'pp.runtime::runtime-node-data-closed-p)
+                               (pp.runtime::runtime-node-data-closed-p run-state thunk)))
+                  (job (make-distribution-job
+                        :key key :width (distribution-policy-width policy)
+                        :data-closed-p closed
+                        :descriptor (list (list "key" key))))
+                  (result nil))
+             (setf (gethash key jobs)
+                   (list run-state thunk node-key run))
+             (unwind-protect
+                  (progn
+                    (setf (runtime-session-schedule-locked-p session) t)
+                    (setf result (first (distribution-run scheduler (list job)))))
+               (setf (runtime-session-schedule-locked-p session) nil)
+               (remhash key jobs))
+             (unless (eq (distribution-result-status result) :ok)
+               (if (fboundp 'language-fail)
+                   (language-fail
+                    (or (distribution-result-error result)
+                        "scheduled node failed")
+                    "runtime.node")
+                   (error "scheduled node failed")))
+             (distribution-result-payload result)))))
+    scheduler))
+
+(defun %command-fenced-policy (text)
+  (cond ((string= text "retry") :retry)
+        ((string= text "abort") :abort)
+        ((string= text "ask")
+         (error "fenced: ask policy requires an interactive recovery command"))
+        (t (error "--fenced-policy expects retry|abort|ask"))))
+
+ (defun %command-runtime-options (arguments)
+  "Extract lifecycle options while preserving ordinary command operands."
+  (let ((rest nil) (watch nil) (once nil) (stabilize nil) (supervise nil)
+        (interval 1.0) (policy "serial") (fenced :abort))
+    (loop while arguments do
+      (let ((argument (pop arguments)))
+        (cond
+          ((string= argument "--watch") (setf watch t))
+          ((string= argument "--once") (setf once t))
+          ((string= argument "--stabilize") (setf stabilize t))
+          ((string= argument "--supervise") (setf supervise t))
+          ((string= argument "--watch-interval")
+           (unless arguments (error "--watch-interval requires a number"))
+           (setf interval (%parse-decimal (pop arguments)))
+           (when (< interval 0) (error "--watch-interval must be nonnegative")))
+          ((string= argument "--schedule")
+           (unless arguments (error "--schedule requires a policy"))
+           (setf policy (pop arguments)))
+          ((string= argument "--fenced-policy")
+           (unless arguments (error "--fenced-policy requires retry|abort|ask"))
+           (setf fenced (%command-fenced-policy (pop arguments))))
+          (t (push argument rest)))))
+    (when (and watch once)
+      (error "--once cannot be combined with --watch"))
+    (when (and stabilize (not watch))
+      (error "--stabilize requires --watch"))
+    (values (nreverse rest)
+            (list :watch watch :once once :stabilize stabilize
+                  :supervise supervise :interval interval
+                  :policy policy :fenced fenced))))
+
+(defun %command-recover-fenced (session policy error-output)
+  (let ((count (runtime-fenced-recover-unknown session policy)))
+    (when (plusp count)
+      (format error-output "[fenced] ~D unknown-status action~:P in journal; applying policy=~A~%"
+              count policy)
+      (finish-output error-output))
+    count))
+
+ (defun %command-install-process-services (session)
+  (pp.runtime::runtime-process-records session)
+  session)
+
+(defun %command-process-spec-field (spec name)
+  (let ((entry (and (typep spec 'pp.kernel:value-map)
+                    (find-if
+                     (lambda (item)
+                       (let ((key (car item)))
+                         (and (typep key 'pp.kernel:value-string)
+                              (string= name (pp.kernel:value-string-value key)))))
+                     (pp.kernel:value-map-entries spec)))))
+    (and entry (cdr entry))))
+
+(defun %command-supervise-pass (session desired output)
+  (unless (typep desired 'pp.kernel:value-map)
+    (error "supervise: desired value must be a process map"))
+  (%command-process-required)
+  (let ((records (pp.runtime::runtime-process-records session))
+        (seen (make-hash-table :test #'equal))
+        (actions nil) (started 0) (stopped 0) (restarted 0))
+    (dolist (entry (pp.kernel:value-map-entries desired))
+      (let* ((name (%command-value-text (car entry) "supervise service"))
+             (spec (cdr entry))
+             (hash (runtime-process-spec-hash spec))
+             (record (and (gethash name records)
+                          (runtime-process-reap
+                           (gethash name records))))
+             (alive (and record
+                         (runtime-process-alive-p
+                          (runtime-process-record-pid record)))))
+        (setf (gethash name seen) t)
+        (cond
+          ((and record
+                (or (not (string= hash
+                                  (runtime-process-record-spec-hash record)))
+                    (not alive)))
+           (push (list :restart name spec record) actions)
+           (incf stopped)
+           (incf restarted))
+          ((not record)
+           (push (list :start name spec nil) actions)
+           (incf started)))))
+    (maphash
+     (lambda (name record)
+       (unless (gethash name seen)
+         (push (list :stop name nil record) actions)
+         (incf stopped)))
+     records)
+    (setf actions (nreverse actions))
+    (let ((pass-hash
+            (pp.kernel:hash-concat
+             (list "domain-pass" "proc" (pp.kernel:hash-value desired)))))
+      (runtime-journal-append
+       session
+       (make-runtime-journal-domain-intent
+        pass-hash
+        (list (cons "started" (princ-to-string started))
+              (cons "restarted" (princ-to-string restarted))
+              (cons "stopped" (princ-to-string stopped)))))
+      (dolist (action actions)
+        (destructuring-bind (kind name spec record) action
+          (when (member kind '(:stop :restart))
+            (runtime-process-stop-service session name record)
+            (when (eq kind :stop)
+              (remhash name records)))
+          (unless (eq kind :stop)
+            (runtime-process-start-service session name spec))))
+      (runtime-journal-append
+       session (make-runtime-journal-domain-done pass-hash)))
+    (let ((names nil))
+      (maphash (lambda (name ignored)
+                 (declare (ignore ignored))
+                 (push name names))
+               records)
+      (setf names (sort names #'string<))
+      (labels ((value-list (items)
+                 (if (null items)
+                     (pp.kernel:make-vnil)
+                     (pp.kernel:make-vpair
+                      (pp.kernel:make-vstring (first items))
+                      (value-list (rest items))))))
+        (pp.runtime::runtime-process-state-put
+         session "proc" "known-services" (value-list names))))
+    (format output "supervise: started=~D stopped=~D restarted=~D~%"
+            started stopped restarted)
+    (finish-output output)
+    desired))
+
+ (defun %command-watch-trace-snapshot (session)
+  (pp.runtime:runtime-dynamic-with-top-level
+   session
+   (lambda ()
+     (let ((pinned nil))
+       (runtime-session-iter-run-pins
+        session
+        (lambda (cell ignored)
+          (declare (ignore ignored))
+          (push cell pinned)))
+       (dolist (cell pinned)
+         (runtime-session-remove-run-pin session cell)))
+     (let ((service (runtime-session-find-service session :store-traces))
+           (result nil))
+       (when service
+         (let ((traces (funcall service)))
+           (dolist (key (trace-repository-keys traces))
+             (dolist (trace (trace-repository-load traces :key key))
+               (dolist (read (store-trace-reads trace))
+                 (let* ((cell-id (store-identity-string
+                                  (store-trace-read-cell read)))
+                        (current (ignore-errors
+                                   (runtime-observe-id cell-id))))
+                   (when current
+                     (push (cons cell-id (store-identity-string current))
+                           result))))))))
+       (dolist (observation (runtime-session-observations session))
+         (let* ((cell-id (store-identity-string (car observation)))
+                (current (ignore-errors (runtime-observe-id cell-id))))
+           (when current
+             (push (cons cell-id (store-identity-string current))
+                   result))))
+       (let ((records (runtime-session-find-service session :process-records)))
+         (when (hash-table-p records)
+           (maphash
+            (lambda (name record)
+              (runtime-process-reap record)
+              (push (cons (format nil "proc:~A" name)
+                          (if (runtime-process-alive-p
+                               (runtime-process-record-pid record))
+                              "alive"
+                              "dead"))
+                    result))
+            records)))
+       (remove-duplicates result :test #'equal)))))
+
+ (defun %run-watch-files
+    (operands output error-output grants why no-cache check options)
+  (unless operands (error "--watch requires a source file"))
+  (let* ((session (%make-command-session grants :why why :no-cache no-cache
+                                         :check check :error-output error-output))
+         (policy (%command-runtime-policy (getf options :policy)))
+         (once (or (getf options :once) (not (getf options :watch))))
+         (stabilize (getf options :stabilize))
+         (pass
+           (lambda ()
+             (if (getf options :supervise)
+                 (progn
+                   (unless (= (length operands) 1)
+                     (error "--supervise requires exactly one source file"))
+                   (let* ((source (first operands))
+                          (forms
+                            (%read-language-forms
+                             (%read-source-file source)
+                             source
+                             (%source-surface source)))
+                          (value
+                            (%run-language-forms
+                             forms source output
+                             :print-values nil :return-value t
+                             :session session :grant-specs grants :why why
+                             :no-cache no-cache :check check
+                             :error-output error-output)))
+                     (runtime-dynamic-with-top-level
+                      session
+                      (lambda ()
+                        (%command-supervise-pass
+                         session
+                         (runtime-evaluator-force-deep
+                          (runtime-session-evaluator session) value)
+                         output)))
+                     value))
+                 (%run-language-files operands output :session session
+                                      :grant-specs grants :why why
+                                      :no-cache no-cache :check check
+                                      :error-output error-output)))))
+    (%command-schedule-node-force session policy)
+    (when (getf options :supervise)
+      (%command-install-process-services session))
+    (funcall pass)
+    (if once
+        0
+        (let ((snapshot (%command-watch-trace-snapshot session)))
+          (loop
+            (runtime-watch-call-sleep (getf options :interval))
+            (let* ((current (%command-watch-trace-snapshot session))
+                   (changed (mapcar #'car
+                                    (set-difference current snapshot
+                                                    :test #'equal))))
+              (when changed
+                (when stabilize (runtime-watch-stabilize session changed))
+                (runtime-session-begin-watch session)
+                (funcall pass)
+                (setf snapshot (%command-watch-trace-snapshot session)))))))))
+
+(defun %run-runtime-command (arguments output error-output)
+  (multiple-value-bind (operands options) (%command-runtime-options arguments)
+    (multiple-value-bind (files grants why no-cache check ignored-keep ignored-grace)
+        (%parse-command-options operands)
+      (declare (ignore ignored-keep ignored-grace))
+      (let ((policy (%command-runtime-policy (getf options :policy))))
+        (when (getf options :watch)
+          (return-from %run-runtime-command
+            (%run-watch-files files output error-output grants why no-cache check
+                              (list* :policy policy options))))
+        (let ((session (%make-command-session grants :why why :no-cache no-cache
+                                              :check check :error-output error-output)))
+          (when (getf options :supervise)
+            (%command-install-process-services session))
+          (%command-schedule-node-force session policy)
+          (when (getf options :supervise)
+            (unless (= (length files) 1)
+              (error "--supervise requires exactly one source file"))
+            (let ((value (%run-language-forms
+                          (%read-language-forms (%read-source-file (first files))
+                                                (first files)
+                                                (%source-surface (first files)))
+                          (first files) output :print-values nil :return-value t
+                          :session session :grant-specs grants :why why
+                          :no-cache no-cache :check check :error-output error-output)))
+              (runtime-dynamic-with-top-level
+               session
+               (lambda ()
+                 (runtime-dynamic-with-capabilities
+                  (%command-current-capabilities)
+                  (lambda ()
+                    (%command-supervise-pass
+                     session
+                     (runtime-evaluator-force-deep
+                      (runtime-session-evaluator session) value)
+                     output)))))
+              (return-from %run-runtime-command 0)))
+          (%run-language-files files output :session session :grant-specs grants
+                               :why why :no-cache no-cache :check check
+                               :error-output error-output))))))
+
+(defun %command-load-path-absolute-p (path)
+  (and (plusp (length path))
+       (char= (char path 0) #\/)))
+
+(defun %command-load-path (state path)
+  (unless (and (stringp path) (plusp (length path)))
+    (language-fail "load path must be a non-empty string" "evaluator.load"))
+  (if (%command-load-path-absolute-p path)
+      path
+      (let* ((range (and state
+                         (pp.runtime::runtime-evaluator-state-current-location
+                          state)))
+             (source (and range (source-range-source range))))
+        (if (and source
+                 (plusp (length source))
+                 (char/= (char source 0) #\<))
+            (namestring
+             (merge-pathnames
+              path
+              (make-pathname :name nil :type nil :defaults (pathname source))))
+            path))))
+
+(defun %command-load-forms (state path environment modulep)
+  (let* ((resolved (%command-load-path state path))
+         ;; Source files use the brace reader by default, while an explicitly
+         ;; sexpr-suffixed file keeps its own surface.
+         (surface (if (%suffix-p (string-downcase resolved) ".ppl")
+                      :sexpr
+                      :brace)))
+    (handler-case
+        (let* ((forms (%read-language-forms
+                       (%read-source-file resolved) resolved surface))
+               (expanded (runtime-evaluator-expand-toplevel state forms))
+               (old-environment
+                 (runtime-evaluator-state-initial-env state))
+               (base-environment (if modulep old-environment environment)))
+          ;; MODULE evaluation exports only definitions introduced by the
+          ;; loaded forms.  LOAD uses the caller's scope as its base.
+          (unwind-protect
+               (progn
+                 (setf (runtime-evaluator-state-initial-env state)
+                       base-environment)
+                 (runtime-evaluator-eval
+                  state (make-emodule expanded) :expand nil))
+            (setf (runtime-evaluator-state-initial-env state)
+                  old-environment)))
+      (frontend-error (condition)
+        (language-fail (%frontend-error-message condition)
+                       (frontend-error-code condition)
+                       (frontend-error-range condition)))
+      (language-error (condition)
+        (error condition))
+      (error (condition)
+        (language-fail (format nil "load ~A: ~A" resolved condition)
+                       "evaluator.load")))))
+
+(defun %command-install-loaders (session)
+  (runtime-session-register-callback
+   session :load
+   (lambda (state path environment)
+     (%command-load-forms state path environment nil)))
+  (runtime-session-register-callback
+   session :load-module
+   (lambda (state path)
+     (%command-load-forms state path nil t)))
+  session)
+
+(defun %make-command-session
+    (grant-specs &key (why nil) (no-cache nil) (check nil) error-output)
+  "Create a normal command session with an explicit HOME-derived store."
+  (let* ((capabilities (%command-capabilities grant-specs))
+         (session
+           (make-runtime-session
+            :store-root (%command-store-root)
+            :evaluator-arguments (list :capabilities capabilities)
+            :capabilities capabilities)))
+    (%command-install-loaders session)
+    (runtime-session-register-service
+     session :observe-file
+     (lambda (path) (%command-observe-file path nil)))
+    (runtime-session-register-service
+     session :observe-sealed
+     (lambda (path) (%command-observe-file path t)))
+    (runtime-session-register-service
+     session :observe-env
+     (lambda (name)
+       (and (fboundp 'sb-ext:posix-getenv)
+            (sb-ext:posix-getenv name))))
+    (runtime-session-register-service
+     session :observe-tool
+     (lambda (path) (%command-tool-observed-hash path)))
+    (runtime-session-register-service
+     session :diagnose
+     (lambda (text)
+       (when (and why error-output)
+         (format error-output "[why] ~A~%" text)
+         (finish-output error-output))))
+    (%command-install-observation-primitives session error-output)
+    (let ((policy-service (runtime-session-find-service session :cache-policy)))
+      (when policy-service
+        (runtime-cache-configure
+         (funcall policy-service)
+         :no-cache no-cache :why why :check check)))
+    session))
+
+
+(defun %parse-decimal (text)
+  (let* ((length (length text))
+         (sign (if (and (> length 0)
+                        (member (char text 0) '(#\+ #\-)))
+                   (if (char= (char text 0) #\-) -1 1)
+                   1))
+         (start (if (and (> length 0)
+                         (member (char text 0) '(#\+ #\-)))
+                    1 0))
+         (dot (cl:position #\. text :start start))
+         (whole-end (or dot length))
+         (fraction-start (and dot (1+ dot)))
+         (whole (and (> whole-end start)
+                     (parse-integer text :start start :end whole-end
+                                    :junk-allowed nil)))
+         (fraction (and dot (< fraction-start length)
+                        (parse-integer text :start fraction-start
+                                       :junk-allowed nil)))
+         (fraction-length (and dot (- length fraction-start))))
+    (unless (and whole
+                 (or (null dot)
+                     (and fraction fraction-length (plusp fraction-length))))
+      (error "invalid decimal number: ~A" text))
+    (* sign (+ whole
+               (if dot
+                   (/ fraction (expt 10 fraction-length))
+                   0)))))
+
+(defun %parse-command-options (arguments)
+  "Remove command-owned grants and cache flags, retaining source operands."
+  (%reject-runtime-flags arguments)
+  (let ((rest nil) (grants nil) (why nil) (no-cache nil) (check nil)
+        (keep-epochs 5) (grace-seconds 2.0))
+    (loop while arguments do
+      (let ((argument (pop arguments)))
+        (cond
+          ((string= argument "--grant")
+           (unless arguments (error "--grant requires a capability specification"))
+           (push (pop arguments) grants))
+          ((or (string= argument "why") (string= argument "--why"))
+           (setf why t))
+          ((string= argument "--no-cache") (setf no-cache t))
+          ((string= argument "--check") (setf check t))
+          ((string= argument "--gc-keep-epochs")
+           (unless arguments (error "--gc-keep-epochs requires an integer"))
+           (setf keep-epochs
+                 (or (ignore-errors (parse-integer (pop arguments)))
+                     (error "--gc-keep-epochs requires an integer"))))
+          ((string= argument "--gc-grace-seconds")
+           (unless arguments (error "--gc-grace-seconds requires a number"))
+           (setf grace-seconds (%parse-decimal (pop arguments))))
+          (t (push argument rest)))))
+    (values (nreverse rest) (nreverse grants) why no-cache check
+            keep-epochs grace-seconds)))
+
+(defun %language-leading-load-info (form)
+  (let ((inner (%language-form-inner form)))
+    (cond
+      ((typep inner 'expr-load)
+       (values (expr-load-path inner) nil t))
+      ((typep inner 'expr-loadmodule)
+       (values (expr-loadmodule-path inner) t t))
+      (t (values nil nil nil)))))
+
+(defun %language-preload-leading-loads (state forms)
+  "Load leading source imports before prebinding the remaining block.
+
+The evaluator prebinds every definition in one block.  A load merged into
+that block afterward cannot reach closures already capturing the prebound
+environment, so leading loads must establish the initial environment first."
+  (let ((remaining forms)
+        (environment (runtime-evaluator-state-initial-env state))
+        (loaded-values nil))
+    (loop
+      (multiple-value-bind (path modulep foundp)
+          (and remaining (%language-leading-load-info (first remaining)))
+        (unless foundp (return))
+        (let ((saved-location
+                (pp.runtime::runtime-evaluator-state-current-location state)))
+          (unwind-protect
+               (progn
+                 (setf (pp.runtime::runtime-evaluator-state-current-location state)
+                       (and (typep (first remaining) 'expr-located)
+                            (expr-located-range (first remaining))))
+                 (let ((loaded
+                         (%command-load-forms state path environment modulep)))
+                   (push loaded loaded-values)
+                   (setf environment
+                         (%language-merge-module-value environment loaded)))
+                 (setf (runtime-evaluator-state-initial-env state)
+                       environment))
+            (setf (pp.runtime::runtime-evaluator-state-current-location state)
+                  saved-location)))
+        (pop remaining)))
+    (values remaining environment (nreverse loaded-values))))
+
+(defun %run-language-forms (forms source output
+                            &key (all-values nil)
+                                 (print-values t)
+                                 (continue-errors nil)
+                                 (return-value nil)
+                                 session grant-specs (why nil)
+                                 (no-cache nil) (check nil) error-output)
+  "Evaluate FORMS through one explicit command session."
+  (if (null forms)
+      (if return-value nil 0)
+      (handler-case
+          (let ((session (or session
+                             (%make-command-session
+                              grant-specs :why why :no-cache no-cache
+                              :check check :error-output error-output))))
+            (unless (runtime-session-find-service session :scheduler)
+              (%command-schedule-node-force
+               session (%command-runtime-policy "serial")))
+            (runtime-session-begin-evaluation session)
+            (runtime-dynamic-with-top-level
+             session
+             (lambda ()
+               (let ((state (runtime-session-evaluator session)))
+                 (multiple-value-bind (forms environment loaded-values)
+                     (%language-preload-leading-loads state forms)
+                   (let* ((binding-p (some #'%language-binding-form-p forms))
+                          (last-value (car (last loaded-values))))
+                     (when (and all-values (not binding-p) print-values)
+                       (dolist (value loaded-values)
+                         (%language-print-value state value output)))
+                     (if (and all-values (not binding-p))
+                         (dolist (form forms)
+                           (handler-case
+                               (progn
+                                 (setf last-value
+                                       (runtime-evaluator-eval
+                                        state form :environment environment))
+                                 (when print-values
+                                   (%language-print-value
+                                    state last-value output)))
+                             (error (condition)
+                               (if continue-errors
+                                   (progn
+                                     (format output "Error: ~A~%"
+                                             (%language-error-text condition))
+                                     (finish-output output))
+                                   (error condition)))))
+                         (setf last-value
+                               (runtime-evaluator-eval-expressions
+                                state forms :environment environment)))
+                     (unless (and all-values (not binding-p))
+                       (when print-values
+                         (%language-print-value state last-value output)))
+                     (if return-value last-value 0)))))))
+        (language-error (condition)
+          (%language-reraise-with-source condition forms source)))))
+
+(defun %read-language-forms (text source surface)
+  (read-source text :source source :surface surface))
+
+
+(defun %run-language-stdin
+    (input output &key grant-specs (why nil) (no-cache nil) (check nil)
+                 error-output session)
+  "Run piped REPL input as independent forms in one explicit session."
+  (let ((session (or session
+                     (%make-command-session
+                      grant-specs :why why :no-cache no-cache :check check
+                      :error-output error-output)))
+        (pending ""))
+    (unless (runtime-session-find-service session :scheduler)
+      (%command-schedule-node-force
+       session (%command-runtime-policy "serial")))
+    (runtime-dynamic-with-top-level
+     session
+     (lambda ()
+       (let ((state (runtime-session-evaluator session))
+             (environment nil))
+         (setf environment (runtime-evaluator-state-initial-env state))
+         (labels
+             ((report (condition)
+                (format output "Error: ~A~%" (%language-error-text condition))
+                (finish-output output))
+              (evaluate (forms)
+                (dolist (form forms)
+                  (handler-case
+                      (let* ((binding-p (%language-persistent-form-p form))
+                             (binding-name (%language-binding-name form))
+                             (direct-p (%language-direct-binding-p form))
+                             (value
+                               (cond
+                                 ;; DEFMACRO is a top-level expansion form:
+                                 ;; eval-expressions records it in the session's
+                                 ;; macro state without requiring an evaluator
+                                 ;; value to be installed in the environment.
+                                 ((%language-defmacro-form-p form)
+                                  (runtime-evaluator-eval-expressions
+                                   state (list form) :environment environment))
+                                 ;; Evaluate ordinary definitions directly:
+                                 ;; their value is the binding, and extending
+                                 ;; the immutable environment here avoids
+                                 ;; depending on a terminal module result.
+                                 ((and binding-p direct-p)
+                                  (runtime-evaluator-eval
+                                   state (%language-persistent-module form)
+                                   :environment environment))
+                                 ;; Other assignment-like/module forms use the
+                                 ;; evaluator's exported environment map.
+                                 (binding-p
+                                  (runtime-evaluator-eval
+                                   state (%language-persistent-module form)
+                                   :environment environment))
+                                 (t
+                                  (runtime-evaluator-eval
+                                   state form :environment environment))))
+                             ;; A direct definition is evaluated through a
+                             ;; one-export module, so retain that exported
+                             ;; value rather than installing the whole map.
+                             (binding-value
+                               (if (and direct-p
+                                        (typep value 'value-env-map))
+                                   (let ((entry (and binding-name
+                                                     (assoc
+                                                      binding-name
+                                                      (value-env-map-bindings
+
+                                                       value)
+                                                      :test #'string=))))
+                                     (or (and entry (cdr entry))
+                                         (error
+                                          "definition did not export ~A"
+                                          binding-name)))
+                                   value))
+                             (display-value
+                               (if (and binding-p binding-name)
+                                   (if direct-p
+                                       (cons binding-name binding-value)
+                                       (if (typep value 'value-env-map)
+                                           (or (assoc binding-name
+                                                      (value-env-map-bindings
+                                                       value)
+                                                      :test #'string=)
+                                               (cons binding-name value))
+                                           (cons binding-name value)))
+                                   (cons nil value))))
+                        ;; Do not publish a binding until its display value has
+                        ;; been forced successfully.  A typed RHS is lazy, so
+                        ;; printing is part of the submission's commit point:
+                        ;; if forcing reports an error, the failed form must
+                        ;; not leave a binding in the next REPL environment.
+                        (%language-print-value state (cdr display-value) output)
+                        (when binding-p
+                          (setf environment
+                                (if (and binding-name direct-p)
+                                    (%language-extend-environment
+                                     environment
+                                     (list (cons binding-name binding-value)))
+                                    (%language-merge-module-value
+                                     environment value)))
+                          ;; Macro expansion evaluates against this callback's
+                          ;; initial environment, so keep it aligned with the
+                          ;; persistent REPL environment as definitions arrive.
+                          (setf (runtime-evaluator-state-initial-env state)
+                                environment)))
+                    (error (condition) (report condition)))))
+              (try-pending ()
+                (handler-case
+                    (let ((parsed (%read-language-forms
+                                   pending "<stdin>" :brace)))
+                      (setf pending "")
+                      (evaluate parsed))
+                  (frontend-error (condition)
+                    (if (frontend-error-incomplete-p condition)
+                        nil
+                        (progn
+                          (setf pending "")
+                          (report condition))))
+                  (error (condition)
+                    (setf pending "")
+                    (report condition)))))
+           (loop for line = (cl:read-line input nil nil)
+                 while line
+                 do (setf pending
+                          (if (string= pending "")
+                              line
+                              (concatenate 'string pending
+                                           (string #\Newline) line)))
+                    (try-pending))
+           ;; EOF with an unterminated form is an ordinary REPL error, not a
+           ;; command failure.  Preserve the frontend's structured message.
+           (unless (string= (string-trim '(#\Space #\Tab #\Return #\Newline)
+                                         pending)
+                            "")
+             (handler-case
+                 (let ((parsed (%read-language-forms
+                                pending "<stdin>" :brace)))
+                   (setf pending "")
+                   (evaluate parsed))
+               (frontend-error (condition)
+                 (setf pending "")
+                 (report condition))
+               (error (condition)
+                 (setf pending "")
+                 (report condition))))
+           0))))))
+
+
+(defun %run-language-text
+    (text source surface output &key (all-values nil) session grant-specs
+                                  (why nil) (no-cache nil) (check nil)
+                                  error-output)
+  (%run-language-forms
+   (%read-language-forms text source surface)
+   source output :all-values all-values :session session
+   :grant-specs grant-specs :why why :no-cache no-cache :check check
+   :error-output error-output))
+
+(defun %run-language-files
+    (paths output &key session grant-specs (why nil) (no-cache nil)
+                         (check nil) error-output)
+  (unless paths
+    (error "expected at least one .pp or .ppl source file"))
+  (dolist (path paths 0)
+    (%run-language-forms
+     (%read-language-forms
+      (%read-source-file path) path
+      (%source-surface path))
+     path output :print-values nil :session session
+     :grant-specs grant-specs :why why :no-cache no-cache :check check
+     :error-output error-output)))
+(defun %gc-option-p (argument)
+  (or (string= argument "--gc-keep-epochs")
+      (string= argument "--gc-grace-seconds")))
+
+(defun %runtime-flag-p (argument)
+  (member argument
+          '("--watch" "--watch-interval" "--stabilize" "--schedule"
+            "--fenced-policy" "--supervise" "--member-name"
+            "--desired-object" "--publish-object" "--remote-node"
+            "--pin-file" "--dump-pins" "--update"
+            "--fetch-islands" "island-pins" "cluster-init" "--mint-token"
+            "--transport-push" "--transport-pull" "--serve-hit" "--recv-hit"
+            "graph")
+          :test #'string=))
+
+
+(defun %run-why-command (arguments output error-output)
+  (multiple-value-bind (paths grants ignored no-cache check ignored-keep ignored-grace)
+      (%parse-command-options arguments)
+    (declare (ignore ignored ignored-keep ignored-grace))
+    (unless paths
+      (error "why requires a source file"))
+    (%run-language-files
+     paths output :grant-specs grants :why t :no-cache no-cache :check check
+     :error-output error-output)))
+
+(defun %run-gc-command (arguments output)
+  (multiple-value-bind (operands grants ignored no-cache check keep grace)
+      (%parse-command-options
+       (remove "gc" arguments :test #'string=))
+    (declare (ignore grants ignored no-cache check))
+    (when operands
+      (error "gc does not accept source files"))
+    (when (<= keep 0)
+      (error "--gc-keep-epochs must be positive"))
+    (let ((layout (pp.runtime:make-store-layout (%command-store-root))))
+      (pp.runtime:store-layout-init layout)
+      (pp.runtime:runtime-store-with-repositories
+       layout
+       (lambda (layout objects blobs traces cells)
+         (declare (ignore blobs cells))
+         (let* ((roots (pp.runtime:gc-roots-read-all layout)))
+           (if (null roots)
+               (progn
+                 (format output "pp gc: no wanted roots; nothing to do~%")
+
+                 (finish-output output)
+                 0)
+               (let ((report (pp.runtime:store-gc-run
+                              layout traces objects :grace-seconds grace
+                              :roots roots)))
+                 (format output
+                         "pp gc: objects kept=~D deleted=~D, traces kept=~D deleted=~D, blobs kept=~D deleted=~D~%"
+                         (car (getf report :objects))
+                         (cdr (getf report :objects))
+                         (car (getf report :traces))
+                         (cdr (getf report :traces))
+                         (car (getf report :blobs))
+                         (cdr (getf report :blobs)))
+                 (finish-output output)
+                 0))))))))
+(defun %reconcile-stratification-check (session root)
+  (let ((prefix (format nil "~A/" (string-right-trim "/" (pp.runtime:store-canonical-path root)))))
+    (dolist (observation (pp.runtime:runtime-session-observations session))
+      (let* ((cell (car observation))
+             (kind (pp.kernel:cell-kind cell))
+             (data (pp.kernel:cell-data cell)))
+        (when (and (member kind '(:file :tree :stat)) (stringp data)
+                   (or (string= data (string-right-trim "/" prefix))
+                       (and (>= (length data) (length prefix))
+                            (string= prefix data :end2 (length prefix)))))
+          (error "reconcile: desired state reads its own domain: ~A" data))))))
+(defun %reconcile-list (values)
+  (reduce (lambda (tail value)
+            (pp.kernel:make-vpair value tail))
+          (reverse values)
+          :initial-value (pp.kernel:make-vnil)))
+
+(defun %reconcile-root-value (value)
+  (pp.kernel:make-vmap
+   (list (cons (pp.kernel:make-vstring "fs") value))))
+
+(defun %reconcile-fs-diff-hash (root)
+  (labels ((capture (name hash)
+             (pp.kernel:hash-concat (list "capture" name hash)))
+           (builtin (name)
+             (capture name (pp.kernel:hash-concat (list "builtin" name))))
+           (unbound (name)
+             (pp.kernel:hash-concat (list "capture-unbound" name))))
+    (let ((captures
+            (list
+             (builtin "=")
+             (capture "append"
+                      "f112b61cdb0aa045623bbd86a6c8f716315872268a7b0a15cb36d1382935b4a6")
+             (unbound "desired")
+             (capture "each"
+                      "500eb8dcc240b8882cbddf4f21c8461aa5899dafcca50f207891254692cb49d0")
+             (capture "filter"
+                      "a059a1a8b351347bc5fedd96245a265cb669dcfb2bc8698c57f25b4f54b61843")
+             (capture "fs-content-hash"
+                      "b1af0df1fbe961f1398ad327aa338ee51167e7e34267e4e5f88943d1b8cdd5b6")
+             (capture "fs-plan-item"
+                      "f50ba798dcbfe1aabd906ff873ca11eb818df4265db9107841f7d27ff611d3e2")
+             (capture "fs-validate-rel"
+                      "636a6608b47d11f267b16cfadbf4dca8582d61c9d70ea796bca213ac2ef5d074")
+             (capture "hash-map"
+                      "3e51d1daafca4ea6026828de75fe70cb421f57ba98f5da6c92e4cf8209a034c9")
+             (capture "hash-map-get"
+                      "4f600ed90a5aad238a25d21dedc84cb635e02d8f33e8c256578981a4add87946")
+             (capture "length"
+                      "389d42959065b82ad6d8d511560213c15ff85b0c807d5eed14579a046d1b5ab5")
+             (capture "map"
+                      "3d1ad8c2eb15f599e9abd14ec1e5783ba66480caf3a6f4eb306517aa8d28eb31")
+             (capture "map-keys"
+                      "a00bb7852cc00726354acbda6753366f4fcfdd57d07b9b104b1df96ed62764dd")
+             (builtin "nil?")
+             (builtin "not")
+             (capture "number->string"
+                      "6aafd6e3fbf3d2307ccc2fd7c699bf28e51e875617d08a3f018450960e956bcb")
+             (unbound "observed")
+             (capture "root"
+                      (pp.kernel:hash-concat (list "string" root)))
+             (builtin "vector"))))
+      (pp.kernel:hash-concat
+       (list "closure" "anon"
+             (pp.kernel:hash-concat (list "params" "observed" "desired"))
+             "62f390d6e9604af0592fccb193dd98a8bc1a24b7b6b31dea451e207204884a21"
+             (pp.kernel:hash-concat (cons "captures" captures)))))))
+(defun %reconcile-entry-value (entry &optional (kind "create"))
+  (pp.kernel:make-vmap
+   (list (cons (pp.kernel:make-vkeyword "content")
+               (pp.kernel:make-vmap
+                (list (cons (pp.kernel:make-vkeyword "blob")
+                            (pp.kernel:make-vstring
+                             (pp.runtime::runtime-artifact-entry-blob entry)))
+                      (cons (pp.kernel:make-vkeyword "kind")
+                            (pp.kernel:make-vkeyword "file"))
+                      (cons (pp.kernel:make-vkeyword "mode")
+                            (pp.kernel:make-vint
+                             (pp.runtime::runtime-artifact-entry-mode entry))))))
+         (cons (pp.kernel:make-vkeyword "kind")
+               (pp.kernel:make-vstring kind))
+         (cons (pp.kernel:make-vkeyword "rel")
+               (pp.kernel:make-vstring
+                (pp.runtime::runtime-artifact-entry-path entry))))))
+
+(defun %reconcile-plan (root entries observed)
+  (let ((creates nil) (updates nil) (deletes nil)
+        (desired (make-hash-table :test #'equal)))
+    (dolist (entry entries)
+      (when (eq (pp.runtime::runtime-artifact-entry-kind entry) :file)
+        (let ((path (pp.runtime::runtime-artifact-entry-path entry)))
+          (setf (gethash path desired) entry)
+          (let* ((pair (find path (pp.kernel:value-map-entries observed)
+                              :key (lambda (item)
+                                     (pp.kernel:value-string-value
+                                      (car item)))
+                              :test #'string=))
+                 (old (and pair
+                           (pp.kernel:value-string-value (cdr pair)))))
+            (cond ((null old) (push entry creates))
+                  ((not (string= old
+                                 (pp.runtime::runtime-artifact-entry-blob entry)))
+                   (push entry updates)))))))
+    (dolist (pair (pp.kernel:value-map-entries observed))
+      (let ((path (pp.kernel:value-string-value (car pair))))
+        (unless (gethash path desired)
+          (push path deletes))))
+    (setf creates (sort creates #'string<
+                           :key #'pp.runtime::runtime-artifact-entry-path)
+          updates (sort updates #'string<
+                           :key #'pp.runtime::runtime-artifact-entry-path)
+          deletes (sort deletes #'string<))
+    (let ((items
+            (append
+             (mapcar (lambda (entry)
+                       (%reconcile-entry-value entry))
+                     creates)
+             (mapcar (lambda (entry)
+                       (%reconcile-entry-value entry "update"))
+                     updates)
+             (mapcar (lambda (path)
+                       (pp.kernel:make-vmap
+                        (list (cons (pp.kernel:make-vkeyword "content")
+                                    (pp.kernel:make-vnil))
+                              (cons (pp.kernel:make-vkeyword "kind")
+                                    (pp.kernel:make-vstring "delete"))
+                              (cons (pp.kernel:make-vkeyword "rel")
+                                    (pp.kernel:make-vstring path)))))
+                     deletes)))
+          (summary
+            (pp.kernel:make-vvector-from-list
+             (list (pp.kernel:make-vvector-from-list
+                    (list (pp.kernel:make-vkeyword "root")
+                          (pp.kernel:make-vstring root)))
+                   (pp.kernel:make-vvector-from-list
+                    (list (pp.kernel:make-vkeyword "create")
+                          (pp.kernel:make-vstring (format nil "~D" (length creates)))))
+                   (pp.kernel:make-vvector-from-list
+                    (list (pp.kernel:make-vkeyword "update")
+                          (pp.kernel:make-vstring (format nil "~D" (length updates)))))
+                   (pp.kernel:make-vvector-from-list
+                    (list (pp.kernel:make-vkeyword "delete")
+                          (pp.kernel:make-vstring (format nil "~D" (length deletes)))))))))
+      (values
+       (pp.kernel:make-vmap
+        (list (cons (pp.kernel:make-vkeyword "items")
+                    (%reconcile-list items))
+              (cons (pp.kernel:make-vkeyword "summary") summary)))
+       creates updates deletes))))
+
+ (defun %reconcile-record-gc-root (session value &key (keep 0))
+  (let ((layout (pp.runtime::runtime-session-store-layout session)))
+    (when layout
+      (let ((objects-service
+              (pp.runtime:runtime-session-find-service session :store-objects))
+            (root-value (%reconcile-root-value value)))
+        (when objects-service
+          (pp.runtime::object-repository-put
+           (funcall objects-service)
+           :key (pp.kernel:hash-value root-value)
+           :value root-value))
+        (pp.runtime:gc-roots-record
+         layout
+         (pp.runtime:make-store-gc-root
+          (pp.kernel:hash-value root-value)
+          (pp.runtime:runtime-session-wanted-nodes session))
+         :keep keep)))))
+
+ (defun %run-reconcile-command-basic (arguments output error-output
+                                      &key runtime-options)
+  (multiple-value-bind (operands grants why no-cache check keep-epochs grace-seconds)
+      (%parse-command-options arguments)
+    (declare (ignore grace-seconds))
+    (when (<= keep-epochs 0)
+      (error "--gc-keep-epochs must be positive"))
+    (unless (= (length operands) 2)
+      (error "--reconcile requires ROOT and one source file"))
+    (let* ((root (first operands)) (source-path (second operands))
+           (session (%make-command-session grants :why why :no-cache no-cache
+                                           :check check :error-output error-output))
+           (target (pp.kernel:canonicalize-path root
+                                                 :realpath #'pp.runtime:store-canonical-path)))
+      (declare (ignore target))
+      (when runtime-options
+        (%command-schedule-node-force
+         session (%command-runtime-policy
+                  (getf runtime-options :policy)))
+        (%command-recover-fenced
+         session (getf runtime-options :fenced) error-output))
+      (pp.runtime:runtime-dynamic-with-top-level
+       session
+       (lambda ()
+         (unless (%command-capability-allows-file-p nil root nil :write)
+           (error "reconcile: capability denied for write: ~A" root))
+         (let* ((forms (%read-language-forms (%read-source-file source-path)
+                                          source-path (%source-surface source-path)))
+                (raw-value (let ((pp.runtime::*runtime-artifact-session* session))
+                             (%run-language-forms forms source-path output
+                                                  :print-values nil :return-value t
+                                                  :session session :grant-specs grants
+                                                  :why why :no-cache no-cache :check check
+                                                  :error-output error-output)))
+                (value (pp.runtime:runtime-evaluator-force-deep
+                        (pp.runtime:runtime-session-evaluator session) raw-value))
+                (entries (pp.runtime::runtime-artifact-tree-from-value value))
+                (observed (pp.runtime::runtime-artifact-observe-value root)))
+           (%reconcile-stratification-check session root)
+           (multiple-value-bind (plan creates updates deletes)
+               (%reconcile-plan root entries observed)
+             (declare (ignore creates updates deletes))
+             (let* ((root-value (%reconcile-root-value value))
+                    (root-hash (pp.kernel:hash-value root-value))
+                    (objects-service
+                      (pp.runtime:runtime-session-find-service session :store-objects))
+                    (traces-service
+                      (pp.runtime:runtime-session-find-service session :store-traces))
+                    (objects (and objects-service (funcall objects-service)))
+                    (traces (and traces-service (funcall traces-service)))
+                    (plan-key
+                      (pp.kernel:hash-concat
+                       (list "domain-plan" (%reconcile-fs-diff-hash root)
+                             (pp.kernel:hash-value observed)
+                             (pp.kernel:hash-value value)))))
+               (when objects
+                 (pp.runtime::object-repository-put objects
+                  :key root-hash :value root-value)
+                 (pp.runtime::object-repository-put objects
+                  :key (pp.kernel:hash-value plan) :value plan))
+               (when traces
+                 (pp.runtime::trace-repository-put
+                  traces :key plan-key :outcome :ok
+                  :result-hash (pp.kernel:hash-value plan) :reads nil))
+               (let ((counts
+                       (let ((pp.runtime::*runtime-artifact-session* session))
+                         (multiple-value-list
+                          (pp.runtime::runtime-artifact-reconcile root value)))))
+                 (let* ((observed-after
+                          (pp.runtime::runtime-artifact-observe-value root))
+                        (plan-after
+                          (multiple-value-bind (p c u d)
+                              (%reconcile-plan root entries observed-after)
+                            (declare (ignore c u d))
+                            p))
+                        (plan-after-key
+                          (pp.kernel:hash-concat
+                           (list "domain-plan" (%reconcile-fs-diff-hash root)
+                                 (pp.kernel:hash-value observed-after)
+                                 (pp.kernel:hash-value value)))))
+                   (when objects
+                     (pp.runtime::object-repository-put
+                      objects :key (pp.kernel:hash-value plan-after)
+                      :value plan-after))
+                   (when traces
+                     (pp.runtime::trace-repository-put
+                      traces :key plan-after-key :outcome :ok
+                      :result-hash (pp.kernel:hash-value plan-after)
+                      :reads nil))
+                   (%reconcile-record-gc-root session value :keep keep-epochs)
+                   (let ((pass-hash
+                           (pp.kernel:hash-concat
+                            (list "domain-pass" "fs"
+                                  (pp.kernel:hash-value value)))))
+                     (pp.runtime::runtime-journal-append
+                      session
+                      (pp.runtime::make-runtime-journal-domain-intent
+                       pass-hash
+                       (list (cons "root" root)
+                             (cons "create" (format nil "~D" (first counts)))
+                             (cons "update" (format nil "~D" (second counts)))
+                             (cons "delete" (format nil "~D" (third counts))))))
+                     (pp.runtime::runtime-journal-append
+                      session
+                      (pp.runtime::make-runtime-journal-domain-done pass-hash))
+                     (pp.runtime::runtime-journal-append
+                      session
+                      (pp.runtime::make-runtime-journal-epoch root-hash)))
+                   (when runtime-options
+                     (runtime-fenced-drain session))
+                   (format error-output
+                           "[reconcile:fs] root=~A create=~D update=~D delete=~D~%"
+                           root (first counts) (second counts) (third counts))
+                   (finish-output error-output)
+                   0))))))))
+))
+(defun %run-reconcile-command (arguments output error-output)
+  (multiple-value-bind (operands options)
+      (%command-runtime-options arguments)
+    (let ((reconcile (remove "--reconcile" operands :test #'string= :count 1)))
+      (%run-reconcile-command-basic
+       reconcile output error-output :runtime-options options))))
+(defun %run-graph-command (arguments output error-output)
+  (declare (ignore error-output))
+  (unless (= (length arguments) 2)
+    (error "graph requires exactly one source file"))
+  (let ((path (second arguments)))
+    (%run-language-files
+     (list path) output :error-output *error-output*)
+    (let* ((layout (make-store-layout (%command-store-root)))
+           (traces (make-trace-repository layout))
+           (nodes (trace-repository-keys traces))
+           (edges 0))
+
+      (dolist (key nodes)
+        (dolist (trace (trace-repository-load traces :key key))
+          (dolist (read (store-trace-reads trace))
+            (incf edges)
+            (format output "~A → ~A~%"
+                    (store-trace-read-cell read) key))))
+      (format output "~D node(s), ~D edge(s)~%" (length nodes) edges)
+      (finish-output output)
+      0)))
+(defun %command-unix-time ()
+  (- (get-universal-time) 2208988800))
+(defun %command-random-hex (octet-count)
+  (let ((bytes (make-array octet-count :element-type '(unsigned-byte 8))))
+    #+sbcl
+    (with-open-file (stream "/dev/urandom" :direction :input
+                            :element-type '(unsigned-byte 8))
+      (unless (= (read-sequence bytes stream) octet-count)
+        (error "unable to read secure random bytes")))
+    #-sbcl
+    (dotimes (index octet-count)
+      (setf (aref bytes index) (random 256)))
+    (string-downcase
+     (with-output-to-string (output)
+       (loop for byte across bytes do (format output "~2,'0X" byte))))))
+
+(defun %command-read-required-text (path kind)
+  (or (and (stringp path) (probe-file path) (store-read-text path))
+      (error "~A is not readable: ~A" kind path)))
+
+(defun %command-write-text (path text &key exclusive)
+  (when (and exclusive (probe-file path))
+    (error "refusing to overwrite existing file: ~A" path))
+  (with-open-file (stream path :direction :output
+                          :if-exists (if exclusive :error :supersede)
+                          :if-does-not-exist :create)
+    (write-string text stream)
+    (finish-output stream))
+  #+sbcl
+  (sb-posix:chmod (store-absolute-path path) #o600)
+  path)
+(defun %command-store-version-path (layout)
+  (merge-pathnames "VERSION"
+                   (pathname (format nil "~A/" (store-layout-root layout)))))
+
+
+(defun %run-cluster-init-command (arguments output)
+  (unless (= (length arguments) 1)
+    (error "cluster-init does not accept arguments"))
+  (let* ((home (%command-home))
+         (directory (pp.kernel:cluster-dir home))
+         (secret-path (pp.kernel:secret-path home))
+         (id-path (pp.kernel:id-path home))
+         (secret (%command-random-hex 32))
+         (cluster-id (%command-random-hex 16)))
+    (store-ensure-directory directory)
+    (when (probe-file secret-path)
+      (error "pp cluster-init: a cluster secret already exists at ~A — refusing to overwrite (this would invalidate every token already minted against it); remove it by hand first if you really mean to rotate"
+             secret-path))
+    (store-atomic-replace secret-path (concatenate 'string secret (string #\Newline)))
+    (unless (probe-file id-path)
+      (store-atomic-replace id-path (concatenate 'string cluster-id (string #\Newline))))
+    (format output
+            "pp cluster-init: minted ~A (mode 0600) and cluster id ~A~%pp cluster-init: distribute BOTH files to other cluster members out of band, at the same path (~~/.pp/cluster/) — pp never transmits them~%"
+            secret-path cluster-id)
+    (finish-output output)
+    0))
+
+(defun %run-mint-token-command (arguments)
+  (unless (and (>= (length arguments) 3)
+               (string= (first arguments) "--mint-token"))
+    (error "--mint-token requires OUT TTL-SECS"))
+  (let ((output-path (second arguments))
+        (ttl-text (third arguments))
+        (rest (cdddr arguments))
+        (grants nil))
+    (let ((ttl (handler-case (parse-integer ttl-text :junk-allowed nil)
+                 (error () (error "invalid --mint-token ttl-seconds: ~A"
+                                  ttl-text)))))
+      (loop while rest do
+        (let ((argument (pop rest)))
+          (unless (string= argument "--grant")
+            (error "--mint-token: unrecognized argument: ~A" argument))
+          (unless rest
+            (error "--grant requires one capability specification"))
+          (push (pop rest) grants)))
+      (let* ((home (%command-home))
+             (secret (pp.kernel:load-secret
+                      (lambda (path)
+                        (%command-read-required-text path "cluster secret"))
+                      home))
+             (cluster-id (pp.kernel:load-cluster-id
+                          (lambda (path)
+                            (%command-read-required-text path "cluster id"))
+                          home))
+             (token
+               (pp.kernel:mint-capability-token
+                :secret secret :cluster-id cluster-id
+                :specs (nreverse grants)
+                :issued (%command-unix-time)
+                :ttl-seconds ttl)))
+        (%command-write-text output-path token)
+        0))))
+
+(defun %command-reply-quoted (text cursor)
+  (multiple-value-bind (value next)
+      (pp.kernel:parse-quoted-string text cursor)
+    (unless (and value next) (error "malformed serve-hit reply"))
+    (values value next)))
+
+(defun %command-reply-prefix (text cursor literal)
+  (and (<= (+ cursor (length literal)) (length text))
+       (string= text literal :start1 cursor
+               :end1 (+ cursor (length literal)))
+       (+ cursor (length literal))))
+
+
+(defun %command-parse-serve-reply (text)
+  (setf text (string-trim '(#\Space #\Tab #\Return #\Newline) text))
+  (let ((cursor 0)
+        (length (length text)))
+    (labels ((fail ()
+               (error "malformed serve-hit reply"))
+             (prefix (literal)
+               (when (and (<= (+ cursor (length literal)) length)
+                          (string= text literal :start1 cursor
+                                  :end1 (+ cursor (length literal))))
+                 (incf cursor (length literal))
+                 t))
+             (space ()
+               (unless (and (< cursor length)
+                            (char= (char text cursor) #\Space))
+                 (fail))
+               (incf cursor))
+             (quoted ()
+               (multiple-value-bind (value next)
+                   (pp.kernel:parse-quoted-string text cursor)
+                 (unless (and value next) (fail))
+                 (setf cursor next)
+                 value))
+             (close-reply ()
+               (unless (and (< cursor length)
+                            (char= (char text cursor) #\)))
+                 (fail))
+               (incf cursor)))
+      (unless (prefix "(serve-hit-reply ") (fail))
+      (let* ((end (or (cl:position #\Space text :start cursor) (fail)))
+             (kind (subseq text cursor end)))
+        (setf cursor (1+ end))
+        (let ((key (quoted)))
+          (cond
+            ((string= kind "miss")
+             (close-reply)
+             (unless (= cursor length) (fail))
+             (list :kind :miss :key key))
+            ((string= kind "deny")
+             (space)
+             (let ((reason (quoted)))
+               (close-reply)
+               (unless (= cursor length) (fail))
+               (list :kind :deny :key key :reason reason)))
+            ((string= kind "hit")
+             (let ((result nil)
+                   (blobs nil))
+               (space)
+               (setf result (quoted))
+               (space)
+               (unless (and (< cursor length)
+                            (char= (char text cursor) #\())
+                 (fail))
+               (incf cursor)
+               (loop
+                 (when (>= cursor length) (fail))
+                 (if (char= (char text cursor) #\))
+                     (progn (incf cursor) (return))
+                     (progn
+                       (push (quoted) blobs)
+                       (cond
+                         ((and (< cursor length)
+                               (char= (char text cursor) #\Space))
+                          (incf cursor))
+                         ((and (< cursor length)
+                               (char= (char text cursor) #\)))
+                          nil)
+                         (t (fail))))))
+               (close-reply)
+               (unless (= cursor length) (fail))
+               (list :kind :hit :key key :result result
+                     :blobs (nreverse blobs))))
+            (t (fail))))))))
+(defun %command-serve-hit-blobs (value traces)
+  (let ((hashes nil))
+    (labels ((add (hash)
+               (when (and (stringp hash) (store-digest-p hash))
+                 (push hash hashes))))
+      (handler-case
+          (dolist (entry (runtime-artifact-tree-from-value value))
+            (add (runtime-artifact-entry-blob entry)))
+        (error () nil))
+      (dolist (trace traces)
+        (dolist (read (store-trace-reads trace))
+          (let* ((cell-text (store-identity-string
+                             (store-trace-read-cell read)))
+                 (cell (ignore-errors (pp.kernel:cell-parse cell-text))))
+            (when (and cell
+                       (or (typep cell 'pp.kernel:cell-file)
+                           (typep cell 'pp.kernel:cell-runtime-file)))
+              (add (store-identity-string
+                    (store-trace-read-hash read)))))))
+    (sort (remove-duplicates hashes :test #'string=) #'string<))))
+
+(defun %command-serve-hit-command (arguments output)
+  (declare (ignore output))
+  (unless (= (length arguments) 5)
+    (error "--serve-hit requires KEY TOKEN-FILE SHARED-ROOT REPLY-FILE"))
+  (let* ((key (second arguments))
+         (token-path (third arguments))
+         (shared-root (fourth arguments))
+         (reply-path (fifth arguments))
+         (home (%command-home))
+         (secret (pp.kernel:load-secret
+                  (lambda (path)
+                    (%command-read-required-text path "cluster secret"))
+                  home))
+         (cluster-id (pp.kernel:load-cluster-id
+                      (lambda (path)
+                        (%command-read-required-text path "cluster id"))
+                      home))
+         (token (%command-read-required-text token-path "token"))
+         (session (%make-command-session nil :error-output *error-output*))
+         (decision nil))
+    (unless (store-digest-p key)
+      (error "--serve-hit requires a canonical node key"))
+    (multiple-value-bind (capabilities rejection)
+        (pp.kernel:verify-capability-token
+         token :secret secret :cluster-id cluster-id
+         :now (%command-unix-time)
+         :realpath #'pp.runtime:store-canonical-path)
+      (if rejection
+          (setf decision (list :kind :deny :key key :reason rejection))
+          (setf decision
+                (runtime-dynamic-with-top-level
+                 session
+                 (lambda ()
+                   (let* ((traces-service
+                            (runtime-session-find-service session :store-traces))
+                          (objects-service
+                            (runtime-session-find-service session :store-objects))
+                          (blobs-service
+                            (runtime-session-find-service session :store-blobs))
+                          (traces (funcall traces-service))
+                          (objects (funcall objects-service))
+                          (blobs (funcall blobs-service))
+                          (all (trace-repository-load traces :key key))
+                          (authorized
+                            (remove-if-not
+                             (lambda (trace)
+                               (every
+                                (lambda (read)
+                                  (let ((cell (ignore-errors
+                                                (pp.kernel:cell-parse
+                                                 (store-identity-string
+                                                  (store-trace-read-cell read))))))
+                                    (and cell
+                                         (runtime-observation-authorized-p
+                                          capabilities cell))))
+                                (store-trace-reads trace)))
+                             all))
+                          (chosen nil)
+                          (chosen-trace nil))
+                     (dolist (trace authorized)
+                       (let* ((result-hash
+                                (store-identity-string
+                                 (store-trace-result-hash trace)))
+                              (value (object-repository-get
+                                      objects :key result-hash)))
+                         (when (and value
+                                    (string= result-hash (hash-value value))
+                                    (ignore-errors (encode-value value)))
+                           (when (or (null chosen)
+                                     (store-trace-outcome-ok-p
+                                      (store-trace-outcome trace)))
+                             (setf chosen value chosen-trace trace))
+                           (when (and chosen-trace
+                                      (store-trace-outcome-ok-p
+                                       (store-trace-outcome trace)))
+                             (return)))))
+                     (if (null chosen)
+                         (list :kind :miss :key key)
+                         (let ((visible (remove-if-not
+                                         (lambda (trace)
+                                           (member trace authorized))
+                                         (list chosen-trace))))
+                           (list :kind :hit :key key
+                                 :result (hash-value chosen)
+                                 :value chosen
+                                 :traces visible
+                                 :blobs (%command-serve-hit-blobs
+                                         chosen visible)
+                                 :blobrepo blobs)))))))))
+    (ecase (getf decision :kind)
+      (:deny
+       (%command-write-text
+        reply-path
+        (format nil "(serve-hit-reply deny ~A ~A)~%"
+                (pp.kernel:quote-string key)
+                (pp.kernel:quote-string (getf decision :reason)))))
+      (:miss
+       (%command-write-text
+        reply-path
+        (format nil "(serve-hit-reply miss ~A)~%"
+                (pp.kernel:quote-string key))))
+      (:hit
+       (let* ((layout (make-store-layout shared-root))
+              (local-layout (make-store-layout (%command-store-root)))
+              (remote-traces nil)
+              (version-path (%command-store-version-path layout))
+              (had-version (probe-file version-path)))
+         (store-layout-init layout)
+         (setf remote-traces (make-trace-repository layout))
+         (distribution-transport-push
+          local-layout layout :object (getf decision :result))
+         (dolist (trace (getf decision :traces))
+           (trace-repository-put
+            remote-traces :key key
+            :outcome (store-trace-outcome trace)
+            :result-hash (store-trace-result-hash trace)
+            :reads (store-trace-reads trace)))
+         (dolist (blob (getf decision :blobs))
+           (distribution-transport-push local-layout layout :blob blob))
+         (unless had-version
+           (when (probe-file version-path)
+             (delete-file version-path)))
+         (%command-write-text
+
+          reply-path
+          (format nil "(serve-hit-reply hit ~A ~A (~{~A~^ ~}))~%"
+                  (pp.kernel:quote-string key)
+                  (pp.kernel:quote-string (getf decision :result))
+                  (mapcar #'pp.kernel:quote-string (getf decision :blobs)))))
+    ))
+    0))
+
+(defun %run-recv-hit-command (arguments output)
+  (unless (= (length arguments) 3)
+    (error "--recv-hit requires REPLY-FILE SHARED-ROOT"))
+  (let* ((reply-path (second arguments))
+         (shared-root (third arguments))
+         (reply (%command-read-required-text reply-path "serve-hit reply"))
+         (decision (%command-parse-serve-reply reply)))
+    (ecase (getf decision :kind)
+      (:miss
+       (format output "recv-hit: miss key=~A~%" (getf decision :key)))
+      (:deny
+       (format output "recv-hit: deny key=~A reason=~A~%"
+               (getf decision :key) (getf decision :reason)))
+      (:hit
+       (let* ((local (make-store-layout (%command-store-root)))
+              (shared (make-store-layout shared-root))
+              (version-path (%command-store-version-path shared))
+              (had-version (probe-file version-path)))
+         (store-layout-init local)
+         (unless (probe-file shared-root)
+           (error "transport: shared root is unavailable: ~A" shared-root))
+         (unless had-version
+           (store-atomic-replace version-path pp.runtime:+store-version+))
+         (unwind-protect
+             (progn
+               (distribution-transport-pull
+                shared local :object (getf decision :result))
+               (distribution-transport-pull
+                shared local :trace (getf decision :key))
+               (dolist (blob (getf decision :blobs))
+                 (distribution-transport-pull shared local :blob blob))
+               (format output "recv-hit: hit key=~A result=~A~%"
+                       (getf decision :key) (getf decision :result)))
+           (unless had-version
+             (when (probe-file version-path)
+               (delete-file version-path)))))))
+    (finish-output output)
+    0))
+
+(defun %run-transport-command (direction arguments output)
+  (unless (= (length arguments) 4)
+    (error "~A requires KIND HASH ROOT"
+           (if (eq direction :push) "--transport-push" "--transport-pull")))
+  (let* ((kind (second arguments))
+         (hash (third arguments))
+         (root (fourth arguments))
+         (local (pp.runtime:make-store-layout (%command-store-root))))
+    (pp.runtime:store-layout-init local)
+    (if (eq direction :push)
+        (let* ((shared (pp.runtime:make-store-layout root))
+               (version-path (%command-store-version-path shared))
+               (had-version (probe-file version-path)))
+          (pp.runtime:store-layout-init shared)
+          (unwind-protect
+              (handler-case
+                  (pp.runtime:distribution-transport-push local shared kind hash)
+                (pp.runtime:distribution-error (condition)
+                  (error "transport: ~A~:[~; (corrupt or tampered in transit)~]"
+                         (pp.runtime:distribution-error-detail condition)
+                         (not (search "tampered in transit"
+                                      (pp.runtime:distribution-error-detail condition)
+                                      :test #'char-equal)))))
+            (unless had-version
+              (when (probe-file version-path)
+                (delete-file version-path)))))
+        (progn
+          (unless (probe-file root)
+            (error "transport: shared root is unavailable: ~A" root))
+          (let* ((shared (pp.runtime:make-store-layout root))
+                 (version-path (%command-store-version-path shared))
+                 (had-version (probe-file version-path)))
+            (unless had-version
+              (store-atomic-replace version-path pp.runtime:+store-version+))
+            (unwind-protect
+                (handler-case
+                    (pp.runtime:distribution-transport-pull shared local kind hash)
+                  (pp.runtime:distribution-error (condition)
+                    (error "transport: ~A~:[~; (corrupt or tampered in transit)~]"
+                           (pp.runtime:distribution-error-detail condition)
+                           (not (search "tampered in transit"
+                                        (pp.runtime:distribution-error-detail condition)
+                                        :test #'char-equal)))))
+              (unless had-version
+                (when (probe-file version-path)
+                  (delete-file version-path)))))))
+    0))
+
+
+(defun %reject-runtime-flags (arguments)
+  (let ((flag (find-if #'%runtime-flag-p arguments)))
+    (when flag
+      (error "~A is unavailable: effect/distribution runtime services are not installed"
+             flag)))
+  arguments)
+
+
+(defun %parse-fmt-arguments (arguments)
+  (let ((target nil) (path nil) (in-place nil))
+    (loop while arguments do
+      (let ((argument (pop arguments)))
+        (cond
+          ((or (string= argument "-i") (string= argument "--in-place"))
+           (setf in-place t))
+          ((or (string= argument "--to-braces")
+               (string= argument "--to-sexpr"))
+           (when target
+             (error "pp fmt: specify exactly one of --to-braces or --to-sexpr"))
+           (unless arguments
+             (error "pp fmt: unrecognized argument: ~A" argument))
+           (setf target (if (string= argument "--to-braces")
+                            :brace :sexpr)
+                 path (pop arguments)))
+          (t (error "pp fmt: unrecognized argument: ~A" argument)))))
+    (unless target
+      (error "pp fmt: specify exactly one of --to-braces or --to-sexpr"))
+    (values target path in-place)))
+
+(defun %run-fmt (arguments output)
+  (multiple-value-bind (target path in-place)
+      (%parse-fmt-arguments arguments)
+    (let ((source (%read-source-file path)))
+      (case target
+        (:brace
+         (when (%brace-source-path-p path)
+           (error "pp fmt --to-braces: ~A is already a brace file" path))
+         (let* ((forms (read-source source :source path :surface :sexpr))
+                (comments (scan-comments source :surface :sexpr))
+                (base (handler-case
+                          (print-source forms :surface :brace :source path)
+                        (frontend-error (condition)
+                          (error "pp fmt --to-braces: ~A"
+                                 (frontend-error-message condition)))))
+                (text (splice-comments comments base :delim #\#)))
+           (if in-place
+               (progn
+                 (%write-source-file path text)
+                 0)
+               (progn
+                 (%emit-frontend-text text output)
+                 0))))
+        (:sexpr
+         (unless (%brace-source-path-p path)
+           (error "pp fmt --to-sexpr: ~A is not a brace file" path))
+         (let* ((forms (read-source source :source path :surface :brace))
+                (comments (scan-comments source :surface :brace))
+                (base (print-source forms :surface :sexpr :source path))
+                (text (splice-comments comments base :delim #\;)))
+           (if in-place
+               (progn
+                 (%write-source-file path text)
+                 0)
+               (progn
+                 (%emit-frontend-text text output)
+                 0))))))))
+
+(defun %run-emit-braces (path output)
+  (when (%brace-source-path-p path)
+    (error "pp --emit-braces: ~A is already a brace file" path))
+  (let* ((source (%read-source-file path))
+         (forms (read-source source :source path :surface :sexpr))
+         (text (handler-case
+                   (print-source forms :surface :brace :source path)
+                 (frontend-error (condition)
+                   (error "pp --emit-braces: ~A"
+                          (frontend-error-message condition))))))
+    (%emit-frontend-text text output)))
+
+(defun %canonical-form-hash (form source)
+  ;; Reader locations are surface metadata.  Re-reading the canonical sexpr
+  ;; printer output gives both sides the same location shape before the kernel
+  ;; hash is compared, while still checking the actual AST/hash boundary.
+  (let* ((text (print-source (list form) :surface :sexpr :source source))
+         (canonical (read-source text :source source :surface :sexpr)))
+    (unless (= (length canonical) 1)
+      (error "canonical form did not re-read as one expression"))
+    (pp.kernel:hash-expr (first canonical))))
+
+(defun %run-roundtrip-braces (path output error-output)
+  (declare (ignore output))
+  (when (%brace-source-path-p path)
+    (error "pp --roundtrip-braces: ~A is already a brace file" path))
+  (let* ((source (%read-source-file path))
+         (forms (read-source source :source path :surface :sexpr))
+         (braces
+           (handler-case
+               (print-source forms :surface :brace :source path)
+             (frontend-error (condition)
+               (error "roundtrip: unprintable: ~A"
+                      (frontend-error-message condition))))))
+    (handler-case
+        (let ((roundtripped
+                (read-source braces :source path :surface :brace)))
+          (unless (= (length forms) (length roundtripped))
+            (error "roundtrip: form count diverged: ~D sexpr vs ~D brace"
+                   (length forms) (length roundtripped)))
+          (loop for left in forms
+                for right in roundtripped
+                for index from 0
+                for left-hash = (%canonical-form-hash left path)
+                for right-hash = (%canonical-form-hash right path)
+                unless (string= left-hash right-hash)
+                  do (error "roundtrip: form ~D hash diverged: ~A vs ~A"
+                            index left-hash right-hash))
+          0)
+      (frontend-error (condition)
+        (format error-output "--- emitted brace text ---~%~A~%"
+                braces)
+        (finish-output error-output)
+        (error "roundtrip: brace re-read failed: ~A"
+               (%frontend-error-text condition)))
+      (error (condition)
+        (format error-output "--- emitted brace text ---~%~A~%"
+                braces)
+        (finish-output error-output)
+        (error "~A" condition)))))
+
+(defun %run-compare-hash (path1 path2)
+  (let* ((source1 (%read-source-file path1))
+         (source2 (%read-source-file path2))
+         ;; command_frontend intentionally gives both ASTs the first source
+         ;; identity, so the comparison tests syntax/hash rather than paths.
+         (forms1 (read-source source1 :source path1 :surface :brace))
+         (forms2 (read-source source2 :source path1 :surface :brace)))
+    (unless (= (length forms1) (length forms2))
+      (error "--compare-hash: form count diverged: ~D (~A) vs ~D (~A)"
+             (length forms1) path1 (length forms2) path2))
+    (loop for left in forms1
+          for right in forms2
+          for index from 0
+          unless (string= (pp.kernel:hash-expr left)
+                          (pp.kernel:hash-expr right))
+            do (error "--compare-hash: form ~D hash diverged" index))
+    0))
+
+(defun %run-list-comments (surface path output)
+  (let* ((source (%read-source-file path))
+         (comments (scan-comments source :surface surface)))
+    (dolist (comment comments)
+      (format output "~D: ~A~%"
+              (pp.frontend::frontend-comment-line comment)
+              (string-trim '(#\Space #\Tab #\Return)
+                           (pp.frontend::frontend-comment-text comment))))
+    (finish-output output)
+    0))
+
+(defun %run-lint (path output error-output)
+  (declare (ignore output))
+  (let ((source (%read-source-file path)))
+    (handler-case
+        (let* ((forms (read-source source :source path :surface :brace))
+               (warnings (lint-source forms :source path))
+               (ordered (stable-sort (copy-list warnings) #'< :key (lambda (w)
+                                                                    (getf w :line)))))
+          (if ordered
+              (progn
+                (dolist (warning ordered)
+                  (format error-output "~A:~D: warning: ~A~%"
+                          path (getf warning :line)
+                          (getf warning :message)))
+                (format error-output "~D warning~:P found in ~A~%"
+                        (length ordered) path)
+                (finish-output error-output)
+                1)
+              (progn
+                (format error-output "pp lint: no warnings for ~A~%" path)
+                (finish-output error-output)
+                0)))
+      (frontend-error (condition)
+        (if (frontend-error-incomplete-p condition)
+            (error condition)
+            (progn
+              (format error-output "pp lint: parse error in ~A: ~A~%"
+                      path (%frontend-error-text condition :full-range t))
+              (finish-output error-output)
+              1))))))
+
+(defun %dump-surface-tables (output)
+  ;; Keep this rendering data-driven: the frontend owns the closed sets, while
+  ;; the app owns only the stream representation of the dump.
+  (let* ((tables (surface-tables))
+         (observations (getf tables :observations))
+         (with-descriptors (getf tables :with))
+         (grant-descriptors (getf tables :needs)))
+    (format output "#### Observation heads — `$KIND(args…)`~%~%")
+    (format output "| head | arity | qq | lowering | meaning |~%")
+    (format output "|---|---|---|---|---|~%")
+    (dolist (row observations)
+      (destructuring-bind (name minimum maximum qq lowering) row
+        (let* ((arity (if (= minimum maximum)
+                          (format nil "~D" minimum)
+                          (format nil "~D..~D" minimum maximum)))
+               (lowering-text
+                 (cond
+                   ((member name '("file" "secret") :test #'string=)
+                    "(slurp $1)")
+                   ((string= name "env")
+                    "(if (nil? (env-get $1)) $2 (env-get $1))")
+                   ((string= name "glob")
+                    "(perform tree-observe $1)")
+                   ((string= name "probe") "(probe $1)")
+                   ((string= name "config") "(config $1 $2)")
+                   (t (or lowering ""))))
+               (meaning
+                 (cond
+                   ((string= name "file")
+                    "$file(path) — read a file's contents (records a file: cell)")
+                   ((string= name "env")
+                    "$env(name[, default]) — read an environment variable (records an env: cell); the optional default is used when the variable is unset")
+                   ((string= name "glob")
+                    "$glob(path) — observe a directory tree (records a tree: cell)")
+                   ((string= name "probe")
+                    "$probe(name) — read an observer-written volatile probe cell")
+                   ((string= name "secret")
+                    "$secret(path) — read a sealed (confidential) file")
+                   ((string= name "config")
+                    "$config(key[, default]) — read a scoped config value (records a config: cell); the optional default is used when the key is unset")
+                   (t "surface observation"))))
+          (format output "| `$~A` | ~A | ~A | `~A` | ~A |~%"
+                  name arity (if qq "yes" "no") lowering-text meaning))))
+    (format output "~%#### `with { }` clauses~%~%")
+    (format output "| keyword | wrapper | meaning |~%")
+    (format output "|---|---|---|~%")
+    (dolist (row with-descriptors)
+      (let* ((name (first row))
+             (wrapper (getf (rest row) :wrapper))
+             (colon (getf (rest row) :colon))
+             (meaning (cond
+                        ((string= name "caps")
+                         "caps: C — run the body with capability set C")
+                        ((string= name "config")
+                         "config: M — run the body with ambient config map M")
+                        ((string= name "handlers")
+                         "handlers: { :name -> fn, ... } — install a map of effect handlers")
+                        (t (format nil "~A: clause lowered by the frontend" name)))))
+        (format output "| `~A~A` | `~(~A~)` | ~A |~%"
+                name (if colon ":" "") wrapper meaning)))
+    (format output "~%#### Grant-descriptor sugar (inside `needs`)~%~%")
+    (format output "| descriptor | lowering | meaning |~%")
+    (format output "|---|---|---|~%")
+    (dolist (row grant-descriptors)
+      (let ((name (first row))
+            (mode (getf (rest row) :mode)))
+        (format output "| `~A` | `(cap-restrict (current-capabilities) $1 :~A)` | ~A |~%"
+                name mode
+                (cond
+                  ((string= name "fs.read")
+                   "fs.read(p) — read-only fs grant for p")
+                  ((string= name "fs.write")
+                   "fs.write(p) — write-only fs grant for p")
+                  ((string= name "fs.rw")
+                   "fs.rw(p) — read-write fs grant for p")
+                  (t (format nil "~A capability grant" name)))))
+    (finish-output output)
+    0)))
+
+(defun %dump-builtins (output)
+  (write-string (runtime-primitive-render (runtime-install-pure-primitives))
+                output)
+  (finish-output output)
+  0)
+
+(defun %run-kernel-props (arguments output)
+  (unless (and (first arguments)
+               (string= (first arguments) "--check-kernel-props"))
+    (error "--check-kernel-props requires --seed and --count options"))
+  (let ((seed 1)
+        (count 3000)
+        (rest (rest arguments)))
+    (loop while rest do
+      (let ((argument (pop rest)))
+        (cond
+          ((member argument '("--seed" "--count") :test #'string=)
+           (unless rest (error "~A requires an integer" argument))
+           (let ((value (handler-case
+                            (parse-integer (pop rest) :junk-allowed nil)
+                          (error ()
+                            (error "invalid --kernel-props ~A: ~A"
+                                   (subseq argument 2) (first rest))))))
+             (if (string= argument "--seed")
+                 (setf seed value)
+                 (setf count value))))
+          (t (error "--check-kernel-props: unrecognized argument: ~A"
+                    argument)))))
+    (unless (plusp count)
+      (error "--kernel-props count must be positive"))
+    (let* ((expr-specs
+             '(("literal-int" "1") ("symbol" "x") ("if" "x")
+               ("let" "x") ("fn" "x") ("apply" "x") ("quote" "x")
+               ("force" "x") ("with-caps" "x") ("perform" "x")
+               ("with-handler" "x") ("delay" "x") ("node" "x")
+               ("defnode" "x") ("do" "x") ("def" "x")
+               ("defvalue" "x") ("letstar" "x") ("module" "x")
+               ("import" "x") ("load" "x") ("loadmodule" "x")
+               ("island" "x") ("with-config" "x") ("config" "x")
+               ("typed" "x") ("located" "x") ("match" "x")))
+           (expressions
+             (mapcar (lambda (spec)
+                       (%fixture-expr (first spec) (second spec)))
+                     expr-specs))
+           (printable-expressions
+             (remove-if
+              (lambda (form)
+                (or (typep form 'expr-force)
+                    (typep form 'expr-fn)
+                    (typep form 'expr-defnode)
+                    (typep form 'expr-def)
+                    (typep form 'expr-defvalue)))
+              expressions))
+           (patterns
+             (list (make-pliteral (make-vint 1))
+                   (make-pvariable "x")
+                   (make-pwildcard)
+                   (make-plist (list (make-pliteral (make-vint 1))))
+                   (make-ptagged "tag" (list (make-pliteral (make-vint 1))))))
+           (values
+             (list (make-vnil) (make-vbool t) (make-vint 1)
+                   (make-vfloat 1.5d0) (make-vstring "x")
+                   (make-vkeyword "k") (make-vsymbol "s")
+                   (make-vpair (make-vint 1) (make-vnil))
+                   (make-vvector-from-list (list (make-vint 1)))
+                   (make-vmap (list (cons (make-vstring "k") (make-vint 1))))
+                   (make-vset (list (make-vint 1)))))
+           (caps
+             (list
+              (make-cap-none)
+              (mint-capability "fs:/g:ro" :realpath #'identity)
+              (mint-capability "net:example.test:443" :realpath #'identity)
+              (mint-capability "secret:/g" :realpath #'identity)
+              (mint-capability "process" :realpath #'identity)
+              (compose-capabilities
+               (list (make-cap-none)
+                     (mint-capability "process" :realpath #'identity)))
+              (restrict-capability
+               (mint-capability "fs:/g:rw" :realpath #'identity)
+               (canonicalize-path "/g" :realpath #'identity)
+               :mode :read)))
+           (failures nil)
+           (print-checks 0)
+           (print-skips 0)
+           (cap-checks 0))
+      (labels ((fail (property detail)
+                 (push (list property detail) failures))
+               (check-injective (name items hash-function)
+                 (let ((seen (make-hash-table :test #'equal)))
+                   (dolist (item items)
+                     (let ((hash (funcall hash-function item)))
+                       (when (gethash hash seen)
+                         (fail name (format nil "hash collision: ~A" hash)))
+                       (setf (gethash hash seen) t)))))
+               (check-print (form)
+                 (handler-case
+                     (let* ((text (print-source (list form)
+                                                :surface :sexpr
+                                                :source "kernel-props"))
+                            (round (read-source text
+                                                :source "kernel-props"
+                                                :surface :sexpr)))
+                       (incf print-checks)
+                       (unless (and (= (length round) 1)
+                                    (string= (hash-expr
+                                              (%language-form-inner form))
+                                             (hash-expr
+                                              (%language-form-inner
+                                               (first round)))))
+                         (fail "print-rt" "printed form changed its hash")))
+                   (frontend-error ()
+                     (incf print-skips))
+                   (error (condition)
+                     (incf print-skips)
+                     (fail "print-rt" (princ-to-string condition))))))
+        (check-injective "expr" expressions #'hash-expr)
+        (check-injective "pattern" patterns #'hash-pattern)
+        (check-injective "value" values #'hash-value)
+        (dotimes (index count)
+          (let ((form (%fixture-expr
+                       "literal-int" (format nil "~D" (+ seed index)))))
+            (handler-case
+                (check-injective "expr-sweep"
+                                 (list form) #'hash-expr)
+              (error (condition)
+                (fail "expr-sweep" (princ-to-string condition)))))
+          (let ((value (make-vint (+ seed index))))
+            (handler-case
+                (unless (string= (hash-value value)
+                                 (hash-value (runtime-quote-to-value
+                                              (runtime-value-to-expr value))))
+                  (fail "quote-rt" "integer quote round-trip changed its hash"))
+              (error (condition)
+                (fail "quote-rt" (princ-to-string condition)))))
+          (check-print
+           (nth (mod index (length printable-expressions))
+                printable-expressions)))
+        (dolist (value (subseq values 0 8))
+          (handler-case
+              (unless (string= (hash-value value)
+                               (hash-value
+                                (runtime-quote-to-value
+                                 (runtime-value-to-expr value))))
+                (fail "quote-rt" "value quote round-trip changed its hash"))
+            (error (condition)
+              (fail "quote-rt" (princ-to-string condition)))))
+        (dolist (cap caps)
+          (unless (member (cap-kind cap) (all-cap-tags))
+            (fail "cap-kind"
+                  (format nil "unclassified capability: ~A"
+                          (capability-to-string cap))))
+          (unless (capability-subseteq-p cap (list cap))
+            (fail "cap-subseteq" "a capability was not a subset of itself"))
+          (unless (null (encode-value (make-vcapability cap)))
+            (fail "node-boundary" "capability encoded as durable data"))
+          (incf cap-checks (length (cap-probe-vector cap))))
+        (dotimes (index (max 0 (1- count)))
+          (declare (ignore index))
+          (dolist (cap caps)
+            (unless (capability-subseteq-p cap (list cap))
+              (fail "cap-subseteq" "repeated subset check failed"))
+            (incf cap-checks (length (cap-probe-vector cap)))))
+        (format output
+                "kernel-props: seed=~D count=~D | adv:e=~D v=~D p=~D faith:e=~D | forms=28/28 value-kinds=11/11 pattern-kinds=5/5 cap-kinds=7/7 | print-rt: ~D checked, ~D printer-refused | cap-checks: ~D~%"
+                seed count (+ 28 count) (+ 11 count) (+ 5 count)
+                count print-checks print-skips cap-checks)
+        (if failures
+            (progn
+              (format output "kernel-props: ~D FAILURE~:P~%"
+                      (length failures))
+              (dolist (failure (remove-duplicates failures :test #'equal))
+                (format output "  [~A] ~A~%" (first failure) (second failure)))
+              (finish-output output)
+              1)
+            (progn
+              (format output
+                      "kernel-props: OK — injectivity, quote-rt, print-rt, caps all hold~%")
+              (finish-output output)
+              0))))))
+
+(defun %usage (stream)
+  (format stream
+          "pp v~A~%Usage: pp --version | pp --help | pp -e EXPR | pp [--once] FILE.pp|FILE.ppl | pp fmt --to-braces FILE [-i]~%~%"
+          +version+)
+  (format stream
+          "Language commands:~%  pp -e '<brace expression>'~%  pp [--once] <file.pp|file.ppl>~%  pp run <file.pp|file.ppl>~%  pp (stdin/REPL reads brace forms)~%~%")
+  (format stream
+          "Frontend commands:~%  pp fmt --to-braces <file.ppl> [-i]~%  pp fmt --to-sexpr <file.pp> [-i]~%  pp --emit-braces <file.ppl>~%  pp --roundtrip-braces <file.ppl>~%  pp --compare-hash <file1.pp> <file2.pp>~%  pp --list-comments sexpr|brace <file>~%  pp lint <file.pp>~%  pp --dump-surface-tables~%~%")
+  (format stream
+          "Admin and verification commands:~%  pp --dump-builtins~%  pp --check-kernel-props [--seed N] [--count N]~%  pp cluster-init~%  pp --mint-token OUT TTL-SECS [--grant SPEC]~%  pp --transport-push|--transport-pull KIND HASH ROOT~%  pp --serve-hit KEY TOKEN-FILE SHARED-ROOT REPLY-FILE~%  pp --recv-hit REPLY-FILE SHARED-ROOT~%~%")
+  (format stream
+          "Fixture corpus mode: pp --kernel-fixture-corpus PATH~%")
+  (format stream
+          "Fixture stdin fields are tab-delimited: parity-corpus, hash-string,~%")
+  (format stream
+          "hash-concat, node-key-skeleton, identity, codec-roundtrip, or~%")
+  (format stream "cell-roundtrip.~%"))
+
+
+(defun %run-frontend-command (arguments output error-output)
+  (let ((command (first arguments))
+        (rest (rest arguments)))
+    (cond
+      ((string= command "fmt")
+       (%run-fmt rest output))
+      ((string= command "--emit-braces")
+       (unless (= (length rest) 1)
+         (error "--emit-braces requires exactly one source file"))
+       (%run-emit-braces (first rest) output)
+       0)
+      ((string= command "--roundtrip-braces")
+       (unless (= (length rest) 1)
+         (error "--roundtrip-braces requires exactly one source file"))
+       (%run-roundtrip-braces (first rest) output error-output))
+      ((string= command "--compare-hash")
+       (unless (= (length rest) 2)
+         (error "--compare-hash requires exactly two source files"))
+       (%run-compare-hash (first rest) (second rest)))
+      ((string= command "--list-comments")
+       (unless (= (length rest) 2)
+         (error "--list-comments requires SURFACE and FILE"))
+       (let ((surface (cond ((string= (first rest) "sexpr") :sexpr)
+                            ((string= (first rest) "brace") :brace)
+                            (t (error "--list-comments requires sexpr|brace <file>")))))
+         (%run-list-comments surface (second rest) output)))
+      ((string= command "lint")
+       (unless (= (length rest) 1)
+         (error "lint requires exactly one source file"))
+       (%run-lint (first rest) output error-output))
+      (t nil))))
+
+(defun run (&optional (arguments (cdr sb-ext:*posix-argv*))
+                      (input *standard-input*)
+                      (output *standard-output*)
+                      (error-output *error-output*))
+  (labels ((language-error (condition)
+             (format error-output "pp: error: ~A~%"
+                     (%language-error-text condition))
+             (finish-output error-output)
+             1)
+           (frontend-error (condition)
+             (format error-output "pp: error: ~A~%"
+                     (%frontend-error-text condition))
+             (finish-output error-output)
+             1)
+           (host-error (condition)
+             ;; Keep ordinary host failures unchanged, but apply the same
+             ;; typed-force normalization to non-REPL commands that escape
+             ;; before the evaluator can wrap the condition.
+             (format error-output "pp: error: ~A~%"
+                     (if (typep condition 'type-error)
+                         (%language-error-text condition)
+                         condition))
+             (finish-output error-output)
+             1)
+           (run-language (thunk)
+             (handler-case
+                 (funcall thunk)
+               (frontend-error (condition) (frontend-error condition))
+               (language-error (condition) (language-error condition))
+               (error (condition) (host-error condition)))))
+    (cond
+      ((null arguments)
+       (run-language
+        (lambda ()
+          (%run-language-stdin input output :error-output error-output))))
+      ((or (string= (first arguments) "--version")
+           (string= (first arguments) "-v"))
+       (if (null (rest arguments))
+           (progn
+             (format output "pp v~A~%" +version+)
+             (finish-output output)
+             0)
+           (progn
+             (format error-output
+                     "pp: error: --version does not accept arguments~%")
+             (finish-output error-output)
+             1)))
+      ((string= (first arguments) "--dump-builtins")
+       (if (null (rest arguments))
+           (handler-case
+               (%dump-builtins output)
+             (error (condition) (host-error condition)))
+           (progn
+             (format error-output
+                     "pp: error: --dump-builtins does not accept arguments~%")
+             (finish-output error-output)
+             1)))
+      ((string= (first arguments) "--check-kernel-props")
+       (handler-case
+           (%run-kernel-props arguments output)
+         (error (condition) (host-error condition))))
+      ((string= (first arguments) "cluster-init")
+       (handler-case
+           (%run-cluster-init-command arguments output)
+         (error (condition) (host-error condition))))
+      ((string= (first arguments) "--mint-token")
+       (handler-case
+           (%run-mint-token-command arguments)
+         (error (condition) (host-error condition))))
+      ((member "--mint-token" arguments :test #'string=)
+       (handler-case
+           (let ((at (cl:position "--mint-token" arguments :test #'string=)))
+             (%run-mint-token-command
+              (append (nthcdr at arguments)
+                      (subseq arguments 0 at))))
+         (error (condition) (host-error condition))))
+      ((string= (first arguments) "--serve-hit")
+       (handler-case
+           (%command-serve-hit-command arguments output)
+         (error (condition) (host-error condition))))
+      ((string= (first arguments) "--recv-hit")
+       (handler-case
+           (%run-recv-hit-command arguments output)
+         (error (condition) (host-error condition))))
+      ((member (first arguments)
+               '("--transport-push" "--transport-pull")
+               :test #'string=)
+       (handler-case
+           (%run-transport-command
+            (if (string= (first arguments) "--transport-push") :push :pull)
+            arguments output)
+         (error (condition) (host-error condition))))
+      ((or (member "--watch" arguments :test #'string=)
+           (member "--stabilize" arguments :test #'string=)
+           (member "--schedule" arguments :test #'string=)
+           (member "--supervise" arguments :test #'string=))
+       (run-language
+        (lambda ()
+          (%run-runtime-command arguments output error-output))))
+      ((or (string= (first arguments) "--help")
+           (string= (first arguments) "-h"))
+       (if (null (rest arguments))
+           (progn
+             (%usage output)
+             (finish-output output)
+             0)
+           (progn
+             (format error-output
+                     "pp: error: --help does not accept arguments~%")
+             (%usage error-output)
+             (finish-output error-output)
+             1)))
+      ((member "--reconcile" arguments :test #'string=)
+       (run-language
+        (lambda ()
+          (%run-reconcile-command
+           (remove "--reconcile" arguments :test #'string= :count 1)
+           output error-output))))
+      ((string= (first arguments) "-e")
+       (run-language
+        (lambda ()
+          (multiple-value-bind (operands grants why no-cache check ignored-keep ignored-grace)
+              (%parse-command-options (rest arguments))
+            (declare (ignore ignored-keep ignored-grace))
+            (if (= (length operands) 1)
+                (%run-language-text (first operands) "<?>"
+                                    :brace output :all-values t
+                                    :grant-specs grants :why why
+                                    :no-cache no-cache :check check
+                                    :error-output error-output)
+                (error "-e requires exactly one expression"))))))
+      ((string= (first arguments) "--reconcile")
+       (run-language
+        (lambda () (%run-reconcile-command (rest arguments) output error-output))))
+      ((string= (first arguments) "graph")
+       (run-language
+        (lambda () (%run-graph-command arguments output error-output))))
+      ((or (member (first arguments)
+                   '("why" "--why" "gc" "--grant" "--no-cache" "--check")
+                   :test #'string=)
+           (%gc-option-p (first arguments)))
+       (run-language
+        (lambda ()
+          (cond
+            ((or (string= (first arguments) "gc")
+                 (%gc-option-p (first arguments)))
+             (%run-gc-command
+              (if (string= (first arguments) "gc")
+                  (rest arguments)
+                  arguments)
+              output))
+            ((or (string= (first arguments) "why")
+                 (string= (first arguments) "--why"))
+             (%run-why-command (rest arguments) output error-output))
+            (t
+             (multiple-value-bind
+                   (operands grants why no-cache check ignored-keep ignored-grace)
+                 (%parse-command-options arguments)
+               (declare (ignore ignored-keep ignored-grace))
+               (%run-language-files
+                operands output :grant-specs grants :why why
+                :no-cache no-cache :check check
+                :error-output error-output)))))))
+      ((string= (first arguments) "--once")
+       (run-language
+        (lambda ()
+          (multiple-value-bind (operands grants why no-cache check ignored-keep ignored-grace)
+              (%parse-command-options (rest arguments))
+            (declare (ignore ignored-keep ignored-grace))
+            (unless (= (length operands) 1)
+              (error "--once requires exactly one source file"))
+            (%run-language-files
+             operands output :grant-specs grants :why why
+             :no-cache no-cache :check check :error-output error-output)))))
+      ((member (first arguments)
+               '("fmt" "--emit-braces" "--roundtrip-braces"
+                 "--compare-hash" "--list-comments" "lint")
+               :test #'string=)
+       (handler-case
+           (%run-frontend-command arguments output error-output)
+         (frontend-error (condition) (frontend-error condition))
+         (error (condition) (host-error condition))))
+      ((string= (first arguments) "--dump-surface-tables")
+       (if (null (rest arguments))
+           (%dump-surface-tables output)
+           (progn
+             (format error-output
+                     "pp: error: --dump-surface-tables does not accept arguments~%")
+             (%usage error-output)
+             (finish-output error-output)
+             1)))
+      ((string= (first arguments) "--kernel-fixture-corpus")
+       (handler-case
+           (progn
+             (unless (= (length (rest arguments)) 1)
+               (error "--kernel-fixture-corpus requires exactly one path"))
+             (%dispatch-corpus-path (second arguments) output))
+         (error (condition) (host-error condition))))
+      ((member (first arguments) '("--kernel-fixture" "kernel-fixture"
+                                   "--kernel-fixture-stdin" "--stdin")
+               :test #'string=)
+       (handler-case
+           (%dispatch-fixture (rest arguments) input output)
+         (error (condition) (host-error condition))))
+      ((string= (first arguments) "run")
+       (run-language
+        (lambda ()
+          (multiple-value-bind (operands grants why no-cache check ignored-keep ignored-grace)
+              (%parse-command-options (rest arguments))
+            (declare (ignore ignored-keep ignored-grace))
+            (%run-language-files
+             operands output :grant-specs grants :why why
+             :no-cache no-cache :check check :error-output error-output)))))
+      ((%language-source-path-p (first arguments))
+       (run-language
+        (lambda ()
+          (multiple-value-bind (operands grants why no-cache check ignored-keep ignored-grace)
+              (%parse-command-options arguments)
+            (declare (ignore ignored-keep ignored-grace))
+            (%run-language-files
+             operands output :grant-specs grants :why why
+             :no-cache no-cache :check check :error-output error-output)))))
+      ((%runtime-flag-p (first arguments))
+       (format error-output
+               "pp: error: ~A is unavailable: effect/distribution runtime services are not installed~%"
+               (first arguments))
+       (finish-output error-output)
+       2)
+      (t
+       (format error-output
+               "pp: error: unsupported command or source input: ~A~%"
+               (first arguments))
+       (%usage error-output)
+       (finish-output error-output)
+       2))))
+
+(defun main ()
+  ;; SAVE-LISP-AND-DIE invokes this function in the resulting executable.
+  ;; Keeping EXIT here (rather than in RUN) makes isolated checks composable.
+  (sb-ext:exit :code (run)))

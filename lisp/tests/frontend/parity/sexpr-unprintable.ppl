@@ -1,0 +1,3 @@
+; typed parameter is intentionally not printable on the brace surface
+(def (f x:T) (quote [1 "x" :ok]))
+($env "HOME")

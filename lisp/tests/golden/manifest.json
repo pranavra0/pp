@@ -1,0 +1,197 @@
+{
+  "cases": {
+    "canonical-codec": {
+      "argv": [
+        "_build/default/src/app/main.exe",
+        "lisp/tests/golden/codec.pp"
+      ],
+      "exit": 0,
+      "files": [
+        {
+          "bytes": 11,
+          "path": "VERSION",
+          "sha256": "a9519c090f5a3a9330dd6c6ee4a2de576e829d965404ca2e8d224f4c3cd3c604"
+        },
+        {
+          "bytes": 148,
+          "path": "objects/73fdb88c19e8d675a5363f6402b7c687c8f4aad0f397090f16025015b0abdedc",
+          "sha256": "f8e6c72b1d242f8b85d4eb9e84adb37961422b0881d8d454ce06a18806706405"
+        },
+        {
+          "bytes": 81,
+          "path": "traces/b69bbf57f7a90dbc24e2369e81936af214cab9b6e02c07c37cf15f17e9a5e2c0",
+          "sha256": "3682ae352927837a9a3f54bc6698940b3ffbbbb713f6d76d53704847fce8a407"
+        }
+      ],
+      "object": {
+        "bytes_file": "canonical-value.object",
+        "path": "objects/73fdb88c19e8d675a5363f6402b7c687c8f4aad0f397090f16025015b0abdedc",
+        "sha256": "f8e6c72b1d242f8b85d4eb9e84adb37961422b0881d8d454ce06a18806706405",
+        "value_hash": "73fdb88c19e8d675a5363f6402b7c687c8f4aad0f397090f16025015b0abdedc"
+      },
+      "source": "codec.pp",
+      "stderr": "",
+      "stdout": "[3 2.5 \"m0\" :kw sym (1 . 2) [1 [2]] {\"a\" 1, \"b\" 2} #{1 2} nil true false]\n"
+    },
+    "diagnostic-source-range": {
+      "argv": [
+        "_build/default/src/app/main.exe",
+        "lisp/tests/golden/diagnostics-input.pp"
+      ],
+      "exit": 1,
+      "source_range": "lisp/tests/golden/diagnostics-input.pp:1",
+      "stderr": "pp: error: expected ',' or ')', got 2 at lisp/tests/golden/diagnostics-input.pp:1\n",
+      "stderr_file": "diagnostic.stderr",
+      "stderr_sha256": "141b7e3ab3de5b19351fd64aa8e412e24e15fb81526af2af3fa2293c77c8b2ce",
+      "stdout": ""
+    },
+    "node-trace": {
+      "argv": [
+        "_build/default/src/app/main.exe",
+        "lisp/tests/golden/node.pp"
+      ],
+      "exit": 0,
+      "files": [
+        {
+          "bytes": 11,
+          "path": "VERSION",
+          "sha256": "a9519c090f5a3a9330dd6c6ee4a2de576e829d965404ca2e8d224f4c3cd3c604"
+        },
+        {
+          "bytes": 6,
+          "path": "objects/d98fba09338648079975ad61b2a3ca43cb3ddf4e2c36c7724f66aab333224012",
+          "sha256": "4e6c3813e003f04595e720e0f16cb553fd24d40bbd41fdfc1ad486ac7abe16aa"
+        },
+        {
+          "bytes": 81,
+          "path": "traces/4fd253ec30afc9223a64014727ecf6125921edc56dfcd0470e45de121ca4f73c",
+          "sha256": "9a6ebb8f8cc3a8f839ef1832688659e6b11c22d31fcff481facf79b9be97bc66"
+        }
+      ],
+      "node_key": "4fd253ec30afc9223a64014727ecf6125921edc56dfcd0470e45de121ca4f73c",
+      "object": {
+        "bytes_file": null,
+        "path": "objects/d98fba09338648079975ad61b2a3ca43cb3ddf4e2c36c7724f66aab333224012",
+        "sha256": "4e6c3813e003f04595e720e0f16cb553fd24d40bbd41fdfc1ad486ac7abe16aa",
+        "value_hash": "d98fba09338648079975ad61b2a3ca43cb3ddf4e2c36c7724f66aab333224012"
+      },
+      "source": "node.pp",
+      "stderr": "",
+      "stdout": "42\n",
+      "trace": {
+        "bytes_file": "node-trace.txt",
+        "path": "traces/4fd253ec30afc9223a64014727ecf6125921edc56dfcd0470e45de121ca4f73c",
+        "sha256": "9a6ebb8f8cc3a8f839ef1832688659e6b11c22d31fcff481facf79b9be97bc66"
+      }
+    },
+    "store-layout": {
+      "argv": [
+        "_build/default/src/app/main.exe",
+        "lisp/tests/golden/node.pp"
+      ],
+      "exit": 0,
+      "files": [
+        {
+          "bytes": 11,
+          "path": "VERSION",
+          "sha256": "a9519c090f5a3a9330dd6c6ee4a2de576e829d965404ca2e8d224f4c3cd3c604"
+        },
+        {
+          "bytes": 6,
+          "path": "objects/d98fba09338648079975ad61b2a3ca43cb3ddf4e2c36c7724f66aab333224012",
+          "sha256": "4e6c3813e003f04595e720e0f16cb553fd24d40bbd41fdfc1ad486ac7abe16aa"
+        },
+        {
+          "bytes": 81,
+          "path": "traces/4fd253ec30afc9223a64014727ecf6125921edc56dfcd0470e45de121ca4f73c",
+          "sha256": "9a6ebb8f8cc3a8f839ef1832688659e6b11c22d31fcff481facf79b9be97bc66"
+        }
+      ],
+      "ignore": [
+        "locks/**"
+      ],
+      "source": "node.pp",
+      "stderr": "",
+      "stdout": "42\n"
+    },
+    "transport-message": {
+      "argv": [
+        "_build/default/src/app/main.exe",
+        "--serve-hit",
+        "0000000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "artifacts": [
+        {
+          "bytes": 33,
+          "normalized_sha256": "c256262327c0c31a1e4a57bce3347d72e25460fca4cad6278fc0912a76742792",
+          "path": "home/.pp/cluster/id",
+          "sha256": null,
+          "volatile": true
+        },
+        {
+          "bytes": 65,
+          "normalized_sha256": "c5f0564904014407571c28919a323787b86bd48206fa33347971d485ad0bccee",
+          "path": "home/.pp/cluster/secret",
+          "sha256": null,
+          "volatile": true
+        },
+        {
+          "bytes": 11,
+          "normalized_sha256": "a9519c090f5a3a9330dd6c6ee4a2de576e829d965404ca2e8d224f4c3cd3c604",
+          "path": "home/.pp/store/VERSION",
+          "sha256": "a9519c090f5a3a9330dd6c6ee4a2de576e829d965404ca2e8d224f4c3cd3c604",
+          "volatile": false
+        },
+        {
+          "bytes": 142,
+          "normalized_sha256": "41335773698e664a49d0aaf89f1eee0665a73fdaa579818ae50dd0772ab32f78",
+          "path": "inputs/token",
+          "sha256": null,
+          "volatile": true
+        },
+        {
+          "bytes": 90,
+          "normalized_sha256": "b92648e54526f6d4503397a7598949dfe070d4e23953d9b10db9682dc9cce480",
+          "path": "outputs/reply",
+          "sha256": "b92648e54526f6d4503397a7598949dfe070d4e23953d9b10db9682dc9cce480",
+          "volatile": false
+        }
+      ],
+      "exit": 0,
+      "generated_inputs": [
+        "token",
+        "shared_root",
+        "reply_file"
+      ],
+      "reply_file": "transport-reply.txt",
+      "reply_sha256": "b92648e54526f6d4503397a7598949dfe070d4e23953d9b10db9682dc9cce480",
+      "setup": {
+        "cluster-init": {
+          "exit": 0,
+          "stderr": "",
+          "stdout": "pp cluster-init: minted <cluster-secret> (mode 0600) and cluster id <cluster-id>\npp cluster-init: distribute BOTH files to other cluster members out of band, at the same path (~/.pp/cluster/) \u2014 pp never transmits them\n"
+        },
+        "mint-token": {
+          "exit": 0,
+          "stderr": "",
+          "stdout": ""
+        },
+        "serve-hit": {
+          "exit": 0,
+          "stderr": "",
+          "stdout": ""
+        }
+      },
+      "stderr": "",
+      "stdout": "",
+      "unknown_key": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "reference": {
+    "binary": "_build/default/src/app/main.exe",
+    "binary_argument_required": true,
+    "daemon": false,
+    "engine": "ocaml"
+  },
+  "schema": "pp-m0-golden-v1"
+}
