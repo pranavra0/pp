@@ -19,6 +19,13 @@
 
 (defun language-fail (message &optional (code "language.error") range)
   (error 'language-error :code code :message message :range range))
+(define-condition language-exit (error)
+  ((status :initarg :status :reader language-exit-status)))
+
+(defun language-exit (status)
+  (error 'language-exit :status status))
+
+(export '(language-exit language-exit-status) (find-package '#:pp.runtime))
 (export 'language-error-range (find-package '#:pp.runtime))
  
 ;;; The evaluator's macro table is explicit state, but primitive callbacks
@@ -1337,6 +1344,130 @@ In particular NaN is unequal to itself while signed zeroes compare equal."
                    (expt 10.0d0 exponent)))
                (runtime-int-result (if negative (- whole) whole)))))))))
 
+(defun runtime-manifest-key-name (value)
+  (typecase value
+    ((or value-keyword value-string)
+     (if (typep value 'value-keyword)
+         (value-keyword-value value)
+         (value-string-value value)))
+    (t nil)))
+
+(defun runtime-manifest-fields (value force)
+  "Return VALUE's keyword/string fields, rejecting malformed or duplicate keys."
+  (unless (typep value 'value-map)
+    (language-fail "runtime manifest expects a map" "runtime.configuration"))
+  (let ((seen nil) (fields nil))
+    (dolist (entry (value-map-entries value) (nreverse fields))
+      (let ((name (runtime-manifest-key-name (car entry))))
+        (unless name
+          (language-fail
+           (format nil "runtime manifest keys must be keywords or strings, got ~A"
+                   (runtime-string-of-value (car entry)))
+           "runtime.configuration"))
+        (when (member name seen :test #'string=)
+          (language-fail
+           (format nil "runtime manifest has duplicate field :~A" name)
+           "runtime.configuration"))
+        (push name seen)
+        (push (cons name (funcall force (cdr entry))) fields)))))
+
+(defun runtime-manifest-field (fields name)
+  (cdr (assoc name fields :test #'string=)))
+
+(defun runtime-manifest-positive-int (value field)
+  (unless (and (typep value 'value-int) (plusp (value-int-value value)))
+    (language-fail
+     (format nil "runtime manifest :~A expects a positive integer, got ~A"
+             field (if value (runtime-string-of-value value) "missing"))
+     "runtime.configuration"))
+  (value-int-value value))
+
+(defun runtime-manifest-function-p (value)
+  (or (typep value 'value-closure) (typep value 'value-builtin)))
+
+(defun runtime-manifest-normalize (value force deep)
+  "Validate a runtime manifest and return its canonical pp map plus schedule name.
+
+Executable values are allowed only where the runtime protocol consumes them
+(schedule policies and reporters).  Build and execution policies are data-only;
+authority, closures, and delayed values fail closed."
+  (let* ((raw-fields (runtime-manifest-fields value force))
+         (allowed '("schedule" "reporter" "build-policy" "execution-policy"))
+         (normalized nil)
+         (schedule-name nil))
+    (dolist (field raw-fields)
+      (let* ((name (car field))
+             (raw (cdr field))
+             (field-value
+               (if (member name '("build-policy" "execution-policy")
+                           :test #'string=)
+                   (funcall deep raw)
+                   raw)))
+        (unless (member name allowed :test #'string=)
+          (language-fail (format nil "runtime manifest has unknown field :~A" name)
+                         "runtime.configuration"))
+        (when (member name '("build-policy" "execution-policy")
+                      :test #'string=)
+          (unless (and (fboundp 'runtime-configuration-value-durable-p)
+                       (runtime-configuration-value-durable-p field-value))
+            (language-fail
+             (format nil "runtime manifest :~A must be canonical data" name)
+             "runtime.authority")))
+        (cond
+          ((string= name "reporter")
+           (unless (runtime-manifest-function-p field-value)
+             (language-fail
+              (format nil "runtime manifest :reporter expects a function, got ~A"
+                      (runtime-string-of-value field-value))
+              "runtime.configuration")))
+          ((string= name "schedule")
+           (let* ((schedule-fields (runtime-manifest-fields field-value force))
+                  (kind (runtime-manifest-field schedule-fields "kind"))
+                  (schedule-allowed
+                    '("kind" "width" "policy" "redundancy")))
+             (dolist (schedule-field schedule-fields)
+               (unless (member (car schedule-field) schedule-allowed
+                               :test #'string=)
+                 (language-fail
+                  (format nil "runtime manifest schedule has unknown field :~A"
+                          (car schedule-field))
+                  "runtime.configuration")))
+             (unless (or (typep kind 'value-keyword)
+                         (typep kind 'value-string))
+               (language-fail
+                "runtime manifest :schedule :kind expects a string or keyword"
+                "runtime.configuration"))
+             (let ((kind (runtime-string-like kind)))
+               (setf schedule-name
+                     (cond
+                       ((string= kind "serial") "serial")
+                       ((member kind '("parallel" "race") :test #'string=)
+                        (format nil "~A:~D" kind
+                                (runtime-manifest-positive-int
+                                 (runtime-manifest-field schedule-fields "width")
+                                 "width")))
+                       ((string= kind "custom")
+                        (let ((policy
+                                (runtime-manifest-field schedule-fields "policy")))
+                          (unless (runtime-manifest-function-p policy)
+                            (language-fail
+                             "custom schedule :policy expects a function"
+                             "runtime.configuration"))
+                          (when (runtime-manifest-field
+                                 schedule-fields "redundancy")
+                            (runtime-manifest-positive-int
+                             (runtime-manifest-field schedule-fields "redundancy")
+                             "redundancy"))
+                          "custom"))
+                       (t
+                        (language-fail
+                         (format nil "runtime manifest: unknown schedule kind ~A"
+                                 kind)
+                         "runtime.configuration"))))))))
+        (push (cons (make-vkeyword name) field-value) normalized)))
+    (values (make-vmap (canonical-map-entries (nreverse normalized)))
+            schedule-name)))
+
  (defun runtime-install-pure-primitives (&optional (catalog (make-runtime-primitive-catalog)))
    "Populate CATALOG with deterministic, effect-free builtins and finalize it.
 Implementations accept (ARGS ENV &key FORCE FORCE-DEEP APPLY EVAL EAGER).  APPLY
@@ -1446,12 +1577,177 @@ fallback."
                                 definitions)))
                        (t
                         (setf last-value
+
                               (runtime-force-deep
                                (funcall eval expression local-env)
                                force-deep force))))))
                  (if definitions
                      (make-venvmap (nreverse definitions))
-                     last-value)))))
+                     last-value))))
+    (runtime-configure* (args force force-deep)
+      (unless (= (length args) 1)
+        (runtime-primitive-arity-error "configure-runtime" 1 (length args)))
+      (runtime-dynamic-require-script-tier
+       "configure-runtime: may not be called inside a node body (scripting-tier only)")
+      (let ((session (runtime-dynamic-session nil)))
+        (unless session
+          (language-fail "configure-runtime requires a runtime session"
+                         "runtime.session"))
+        (multiple-value-bind (manifest schedule-name)
+            (runtime-manifest-normalize
+             (force* (first args) force) force
+             (or force-deep force #'identity))
+          (runtime-session-set-runtime-manifest session manifest)
+          (let* ((fields (runtime-manifest-fields manifest #'identity))
+                 (reporter (runtime-manifest-field fields "reporter")))
+            (when reporter
+              (runtime-session-register-reporter session reporter)))
+          ;; A command-level schedule override owns the scheduler before the
+          ;; script runs.  Otherwise make the selected handler observable; the
+          ;; trusted host may consume the manifest later at the node boundary.
+          (when (and schedule-name
+                     (not (runtime-session-schedule-locked-p session)))
+            (runtime-dynamic-record-event
+             (make-vmap
+              (canonical-map-entries
+               (list (cons (make-vkeyword "kind")
+                           (make-vkeyword "runtime-schedule"))
+                     (cons (make-vkeyword "handler")
+                           (make-vstring schedule-name)))))))
+          (make-vnil))))
+    (runtime-config-value (args)
+      (unless (null args)
+        (runtime-primitive-arity-error "runtime-config" 0 (length args)))
+      (runtime-dynamic-require-script-tier
+       "runtime-config: may not be called inside a node body (scripting-tier only)")
+      (let ((session (runtime-dynamic-session nil)))
+        (unless session
+          (language-fail "runtime-config requires a runtime session"
+                         "runtime.session"))
+        (or (runtime-session-runtime-manifest session)
+            (make-vmap nil))))
+    (runtime-register-reporter (args force)
+      (unless (= (length args) 1)
+        (runtime-primitive-arity-error "register-reporter" 1 (length args)))
+      (runtime-dynamic-require-script-tier
+       "register-reporter: may not be called inside a node body (scripting-tier only)")
+      (let ((reporter (force* (first args) force))
+            (session (runtime-dynamic-session nil)))
+        (unless session
+          (language-fail "register-reporter requires a runtime session"
+                         "runtime.session"))
+        (unless (runtime-manifest-function-p reporter)
+          (language-fail
+           (format nil "register-reporter expects a function, got ~A"
+                   (runtime-string-of-value reporter))
+           "runtime.configuration"))
+        (runtime-session-register-reporter session reporter)
+        (make-vnil)))
+    (runtime-emit-event (args force)
+      (unless (= (length args) 1)
+        (runtime-primitive-arity-error "emit-event" 1 (length args)))
+      (runtime-dynamic-require-script-tier
+       "emit-event: may not be called inside a node body (scripting-tier only)")
+      (runtime-dynamic-record-event (force* (first args) force))
+      (make-vnil))
+    (argv-values (args force)
+      (declare (ignore force))
+      (unless (null args)
+        (runtime-primitive-arity-error "argv" 0 (length args)))
+      (labels ((text (value)
+                 (cond ((stringp value) value)
+                       ((typep value 'value-string)
+                        (value-string-value value))
+                       (t (language-fail
+                           "argv observation returned a non-string argument"
+                           "runtime.observation"))))
+               (collect (value)
+                 (cond
+                   ((null value) nil)
+                   ((typep value 'value-nil) nil)
+                   ((stringp value) (list value))
+                   ((typep value 'value-vector)
+                    (map 'list #'text (value-vector-values value)))
+                   ((typep value 'value-pair)
+                    (mapcar #'text (pair-values value)))
+                   ((listp value) (mapcar #'text value))
+                   (t (language-fail
+                       "argv observation returned an invalid argument vector"
+                       "runtime.observation")))))
+        (let* ((invocation (and (fboundp 'runtime-dynamic-invocation)
+                                (runtime-dynamic-invocation nil)))
+               (invocation-p (and (listp invocation)
+                                  (member :argv invocation)))
+               (invocation-service
+                 (and invocation (fboundp 'runtime-observation-service)
+                      (runtime-observation-service :invocation-argv)))
+               (service (and (fboundp 'runtime-observation-service)
+                             (runtime-observation-service :observe-argv)))
+               (available (or invocation-p invocation-service service))
+               (observed
+                 (cond (invocation-p (getf invocation :argv))
+                       (invocation-service
+                        (funcall invocation-service invocation))
+                       (service (funcall service))
+                       (t nil))))
+          (unless available
+            (language-fail
+             "argv requires an invocation observation service"
+             "runtime.observation"))
+          (let ((strings (collect observed)))
+            (when (fboundp 'runtime-observation-record)
+              (runtime-observation-record
+               (make-cell-argv)
+               (hash-concat (cons "argv" strings))))
+            (value-list (mapcar #'make-vstring strings))))))
+    (stat-kind (path operation)
+      (let* ((canonical (canonicalize-path path :realpath #'identity))
+             (canonical-string (canonical-path-to-string canonical))
+             (capabilities
+               (if (fboundp 'runtime-dynamic-capabilities)
+                   (runtime-dynamic-capabilities)
+                   nil)))
+        (unless (some (lambda (capability)
+                        (capability-check-fs-read-p capability canonical))
+                      capabilities)
+          (language-fail
+           (format nil "~A: capability error: no read access for ~A"
+                   operation canonical-string)
+           "runtime.authority"))
+        (let ((observed
+                (and (fboundp 'runtime-observation-call)
+                     (runtime-observation-call :observe-stat canonical-string))))
+          (unless observed
+            (language-fail
+             (format nil "~A: stat observation service is unavailable" operation)
+             "runtime.observation"))
+          (let ((kind
+                  (cond
+                    ((stringp observed) observed)
+                    ((and (consp observed) (stringp (car observed)))
+                     (car observed))
+                    ((and (consp observed) (keywordp (car observed)))
+                     (string-downcase (symbol-name (car observed))))
+                    (t nil))))
+            (unless (member kind '("absent" "file" "dir") :test #'string=)
+              (language-fail
+               (format nil "~A: stat observation returned an invalid kind" operation)
+               "runtime.observation"))
+            (when (fboundp 'runtime-observation-record)
+              (runtime-observation-record
+               (make-cell-stat canonical-string)
+               (hash-string (concatenate 'string "stat:" kind))))
+            kind))))
+    (exit-value (args force)
+      (unless (member (length args) '(0 1))
+        (runtime-primitive-arity-error "exit" "zero or one" (length args)))
+      (let ((values (args* args force)))
+        (if (null values)
+            0
+            (if (typep (first values) 'value-int)
+                (value-int-value (first values))
+                (language-fail "exit expects an optional integer status"
+                               "primitive.type"))))))
     ;; Arithmetic and comparisons.
     (register "+" (lambda (args env &key force &allow-other-keys)
                      (declare (ignore env))
@@ -1791,9 +2087,11 @@ fallback."
     ;; String and presentation conversions.
     (register "print" (lambda (args env &key force-deep force &allow-other-keys)
                         (declare (ignore env))
-                        (dolist (value (args* args (or force-deep force)))
-                          (write-string (runtime-string-of-value value))
-                          (terpri))
+                        (let ((values (args* args (or force-deep force))))
+                          (unless (null values)
+                            (dolist (value values)
+                              (write-string (runtime-string-of-value value)))
+                            (terpri)))
                         (make-vnil))
               :shape (runtime-shape-range 0) :category :observations)
     (register "error" (lambda (args env &key force &allow-other-keys)
@@ -1806,6 +2104,40 @@ fallback."
                           (language-fail (value-string-value (first values))
                                          "primitive.error")))
               :shape (runtime-shape-exact 1) :category :other)
+    (register "argv"
+              (lambda (args env &key force &allow-other-keys)
+                (declare (ignore env))
+                (argv-values args force))
+              :shape (runtime-shape-exact 0) :category :observations)
+    (dolist (spec '(("file-exists?" nil) ("dir?" t)))
+      (destructuring-bind (name want-directory) spec
+        (register name
+                  (lambda (args env &key force &allow-other-keys)
+                    (declare (ignore env))
+                    (let ((values (args* args force)))
+                      (unless (and (= (length values) 1)
+                                   (typep (first values) 'value-string))
+                        (language-fail
+                         (format nil "~A expects a path string" name)
+                         "primitive.type"))
+                      (let ((kind (stat-kind
+                                   (value-string-value (first values))
+                                   name)))
+                        (make-vbool
+                         (if want-directory
+                             (string= kind "dir")
+                             (not (string= kind "absent")))))))
+                  :shape (runtime-shape-exact 1) :category :observations)))
+    (register "exit"
+              (lambda (args env &key force &allow-other-keys)
+                (declare (ignore env))
+                (let ((status (exit-value args force))
+                      (service (and (fboundp 'runtime-observation-service)
+                                    (runtime-observation-service :exit))))
+                  (if service
+                      (funcall service status)
+                      (language-exit status))))
+              :shape (runtime-shape-range 0 1) :category :other)
     (register "cap-none" (lambda (args env &key &allow-other-keys)
                            (declare (ignore env))
                            (unless (null args)
@@ -1831,11 +2163,31 @@ fallback."
                                          (runtime-primitive-arity-error
                                           "current-capabilities" 0 (length args)))
                                        (runtime-dynamic-require-script-tier
-                                        "current-capabilities: may not be called inside a node body")
+                                        "current-capabilities: may not be called inside a node body (scripting-tier only)")
                                        (make-vcapability
                                         (compose-capabilities
                                          (runtime-dynamic-capabilities))))
               :shape (runtime-shape-exact 0) :category :capabilities)
+    (register "configure-runtime"
+              (lambda (args env &key force force-deep &allow-other-keys)
+                (declare (ignore env))
+                (runtime-configure* args force force-deep))
+              :shape (runtime-shape-exact 1) :category :domains)
+    (register "runtime-config"
+              (lambda (args env &key &allow-other-keys)
+                (declare (ignore env))
+                (runtime-config-value args))
+              :shape (runtime-shape-exact 0) :category :domains)
+    (register "register-reporter"
+              (lambda (args env &key force &allow-other-keys)
+                (declare (ignore env))
+                (runtime-register-reporter args force))
+              :shape (runtime-shape-exact 1) :category :domains)
+    (register "emit-event"
+              (lambda (args env &key force &allow-other-keys)
+                (declare (ignore env))
+                (runtime-emit-event args force))
+              :shape (runtime-shape-exact 1) :category :domains)
     (register "cap-restrict"
               (lambda (args env &key force &allow-other-keys)
                 (declare (ignore env))
@@ -2186,6 +2538,8 @@ fallback."
     ;; discard/recreate the catalog at a run boundary to reset it.
     (register "gensym" (lambda (args env &key force &allow-other-keys)
                           (declare (ignore env))
+                          (runtime-dynamic-require-script-tier
+                           "gensym: may not be called inside a node body (scripting-tier only)")
                           (let* ((values (args* args force))
                                  (prefix (cond ((null values) "g")
                                                ((and (= (length values) 1)

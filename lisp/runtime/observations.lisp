@@ -102,9 +102,27 @@
     (or (runtime-observation-call :observe-tree canonical)
         (runtime-observation-call :tree-hash canonical))))
 (defun runtime-observe-stat (path)
-  (let ((canonical (store-canonical-path path)))
-    (or (runtime-observation-call :observe-stat canonical)
-        (runtime-observation-call :stat-hash canonical))))
+  (let* ((canonical (store-canonical-path path))
+         (observed (or (runtime-observation-call :observe-stat canonical)
+                       (runtime-observation-call :stat-hash canonical))))
+    ;; The application stat service reports the semantic kind, while traces
+    ;; record the canonical identity of that observation.  Keep the two
+    ;; boundaries explicit: a raw kind must be framed exactly as the app
+    ;; records it, and an already-hashed stat service result passes through.
+    (cond
+      ((member observed '("absent" "file" "dir") :test #'string=)
+       (hash-string (concatenate 'string "stat:" observed)))
+      ((and (consp observed)
+            (member (car observed) '("absent" "file" "dir") :test #'string=))
+       (hash-string (concatenate 'string "stat:" (car observed))))
+      ((and (consp observed)
+            (keywordp (car observed))
+            (member (string-downcase (symbol-name (car observed)))
+                    '("absent" "file" "dir") :test #'string=))
+       (hash-string
+        (concatenate 'string "stat:"
+                     (string-downcase (symbol-name (car observed))))))
+      (t observed))))
 (defun runtime-observe-env (name)
   (let* ((name (or (runtime-observation-text name)
                    (runtime-observation-error "environment name must be text")))

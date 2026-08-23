@@ -9,6 +9,20 @@
 (defun version-string ()
   +version+)
 
+(defvar *command-program-arguments* nil)
+
+(defun %command-split-program-arguments (arguments)
+  (let ((command nil)
+        (program nil)
+        (seen-separator nil))
+    (dolist (argument arguments)
+      (if (or seen-separator (string= argument "--"))
+          (if (string= argument "--")
+              (setf seen-separator t)
+              (push argument program))
+          (push argument command)))
+    (values (nreverse command) (nreverse program))))
+
 
 (defun %property-range ()
   (pp.kernel:make-source-range
@@ -441,10 +455,39 @@ Flatten only capability containers; no user value is accepted as authority."
        "unseal expects a sealed value"
        "primitive.type")))
 
+(defun %command-runtime-file-known-p (path)
+  (let* ((session (ignore-errors (runtime-dynamic-session nil)))
+         (service (and session
+                       (runtime-session-find-service session :store-traces)))
+         (traces (and service (funcall service)))
+         (canonical (pp.runtime:store-canonical-path path)))
+    (and (%command-loader-path-authorized-p canonical)
+         traces
+         (some
+          (lambda (key)
+            (some
+             (lambda (trace)
+               (some
+                (lambda (read)
+                  (let* ((raw (store-trace-read-cell read))
+                         (cell (if (typep raw 'pp.kernel:cell)
+                                   raw
+                                   (pp.kernel:cell-parse
+                                    (pp.runtime:store-identity-string raw)))))
+                    (and (typep cell 'pp.kernel:cell-runtime-file)
+                         (string=
+                          canonical
+                          (pp.runtime:store-canonical-path
+                           (pp.kernel:cell-runtime-file-value cell))))))
+                (store-trace-reads trace)))
+             (trace-repository-load traces :key key)))
+          (trace-repository-keys traces)))))
+
 (defun %command-observe-file (path &optional sealed)
   (let* ((canonical (pp.runtime:store-canonical-path path))
          (capabilities (pp.runtime:runtime-dynamic-capabilities)))
-    (unless (%command-capability-allows-file-p capabilities canonical sealed)
+    (unless (or (and (not sealed) (%command-runtime-file-known-p canonical))
+                (%command-capability-allows-file-p capabilities canonical sealed))
       (pp.runtime:language-fail
        (format nil "permission denied: ~A" canonical)
        "runtime.authority"))
@@ -453,6 +496,25 @@ Flatten only capability containers; no user value is accepted as authority."
                       (format nil "cannot read file: ~A" canonical)
                       "runtime.observation"))))
       (if sealed bytes (pp.runtime:store-hash-content bytes)))))
+(defun %command-observe-stat (path)
+  (let* ((canonical (pp.runtime:store-canonical-path path))
+         (target (pp.kernel:canonicalize-path
+                  canonical :realpath #'pp.runtime:store-canonical-path))
+         (target-string (pp.kernel:canonical-path-to-string target)))
+    (unless (%command-capability-allows-file-p nil target-string nil :read)
+      (pp.runtime:language-fail
+       (format nil "file-exists?: capability error: no read access for ~A"
+               target-string)
+       "runtime.authority"))
+    #+sbcl
+    (handler-case
+        (let ((mode (sb-posix:stat-mode (sb-posix:lstat target-string))))
+          (cond ((= (logand mode sb-posix:s-ifmt) sb-posix:s-ifdir) "dir")
+                ((= (logand mode sb-posix:s-ifmt) sb-posix:s-ifreg) "file")
+                (t "absent")))
+      (error () "absent"))
+    #-sbcl
+    (if (probe-file target-string) "file" "absent")))
 
  (defun %command-read-file-value (path &optional sealed)
   "Read an observed file, preferring the current node's scratch tree."
@@ -1022,7 +1084,88 @@ Flatten only capability containers; no user value is accepted as authority."
       (error "schedule: remote placement requires an explicit trusted transport service"))
     policy))
 
-(defun %command-schedule-node-force (session policy)
+(defun %command-runtime-manifest-schedule (session fallback override)
+  "Return the active host policy and optional pp custom callback.
+
+The manifest is deliberately inspected at the node boundary: configuration
+usually precedes the first force in a source block, while the scheduler must
+already exist so that such a force has a callback installed.  CLI policy is
+an explicit authority override and therefore bypasses the manifest."
+  (if override
+      (values fallback nil)
+      (let* ((manifest (runtime-session-runtime-manifest session))
+             (schedule (and manifest
+                            (%command-map-field manifest "schedule"))))
+        (if (null schedule)
+            (values fallback nil)
+            (let* ((kind-value (%command-map-field schedule "kind"))
+                   (kind (%command-value-text kind-value "runtime schedule kind")))
+              (cond
+                ((string= kind "serial")
+                 (values (%command-runtime-policy "serial") nil))
+                ((member kind '("parallel" "race") :test #'string=)
+                 (let ((width-value (%command-map-field schedule "width")))
+                   (unless (typep width-value 'value-int)
+                     (error "runtime schedule :width must be a positive integer"))
+                   (values
+                    (%command-runtime-policy
+                     (format nil "~A:~D" kind (value-int-value width-value)))
+                    nil)))
+                ((string= kind "custom")
+                 (let ((callback (%command-map-field schedule "policy")))
+                   (unless (pp.runtime::runtime-manifest-function-p callback)
+                     (error "runtime schedule :policy must be a function"))
+                   (values (%command-runtime-policy "serial") callback)))
+                (t (error "runtime schedule has unknown kind: ~A" kind))))))))
+
+(defun %command-custom-schedule-policy (session callback jobs)
+  "Validate CALLBACK's data-only partition and return a host policy."
+  (let* ((state (runtime-session-evaluator session))
+         (descriptors
+           (make-vvector-from-list
+            (mapcar (lambda (job) (distribution-job-descriptor job)) jobs)))
+         (raw (runtime-session-call
+               session callback (list descriptors)
+               (runtime-session-global-env session)))
+         (result (runtime-evaluator-force-deep state raw))
+         (mode-value (%command-map-field result "mode"))
+         (batches-value (%command-map-field result "batches"))
+         (mode (%command-value-text mode-value "custom scheduler mode"))
+         (width-value (%command-map-field result "width"))
+         (width (if width-value
+                    (progn
+                      (unless (and (typep width-value 'value-int)
+                                   (plusp (value-int-value width-value)))
+                        (error "custom scheduler width must be a positive integer"))
+                      (value-int-value width-value))
+                    1))
+         (seen (make-array (length jobs) :initial-element nil)))
+    (unless (typep result 'value-map)
+      (error "custom scheduler must return a map"))
+    (unless (member mode '("serial" "parallel" "race") :test #'string=)
+      (error "custom scheduler returned an unknown mode: ~A" mode))
+    (unless (typep batches-value 'value-vector)
+      (error "custom scheduler must return vector batches"))
+    (loop for batch across (value-vector-values batches-value) do
+      (unless (typep batch 'value-vector)
+        (error "custom scheduler batches must be vectors"))
+      (loop for index-value across (value-vector-values batch) do
+        (unless (and (typep index-value 'value-int)
+                     (<= 0 (value-int-value index-value))
+                     (< (value-int-value index-value) (length jobs)))
+          (error "custom scheduler indexes must be in range"))
+        (let ((index (value-int-value index-value)))
+          (when (aref seen index)
+            (error "custom scheduler must schedule every job exactly once"))
+          (setf (aref seen index) t))))
+    (unless (every #'identity seen)
+      (error "custom scheduler must schedule every job exactly once"))
+    (%command-runtime-policy
+     (if (string= mode "serial")
+         "serial"
+         (format nil "~A:~D" mode width)))))
+
+(defun %command-schedule-node-force (session policy &key override)
   "Install the distribution scheduler at the persistent-node boundary."
   (let* ((state (runtime-session-evaluator session))
          (base (and (fboundp 'runtime-evaluator-state-node-force-function)
@@ -1066,8 +1209,24 @@ Flatten only capability containers; no user value is accepted as authority."
                   (job (make-distribution-job
                         :key key :width (distribution-policy-width policy)
                         :data-closed-p closed
-                        :descriptor (list (list "key" key))))
-                  (result nil))
+                        :descriptor
+                        (make-vmap
+                         (canonical-map-entries
+                          (list
+                           (cons (make-vkeyword "key") (make-vstring key))
+                           (cons (make-vkeyword "width")
+                                 (make-vint (distribution-policy-width policy)))
+                           (cons (make-vkeyword "data-closed")
+                                 (make-vbool closed)))))))
+                  (result nil)
+                  (active-policy nil)
+                  (custom nil))
+             (multiple-value-setq (active-policy custom)
+               (%command-runtime-manifest-schedule session policy override))
+             (when custom
+               (setf active-policy
+                     (%command-custom-schedule-policy session custom (list job))))
+             (setf (distribution-scheduler-policy scheduler) active-policy)
              (setf (gethash key jobs)
                    (list run-state thunk node-key run))
              (unwind-protect
@@ -1086,17 +1245,50 @@ Flatten only capability containers; no user value is accepted as authority."
              (distribution-result-payload result)))))
     scheduler))
 
+(defun %command-runtime-schedule-event-p (event)
+  (and (typep event 'value-map)
+       (let ((kind (%command-map-field event "kind")))
+         (and (typep kind 'value-keyword)
+              (string= (value-keyword-value kind) "runtime-schedule")))))
+
+(defun %command-report-runtime-events (session output &key suppress-schedule)
+  "Invoke session reporters once with one deeply forced canonical vector."
+  (let ((reporters (runtime-session-reporters session)))
+    (when reporters
+      (let* ((override-service (runtime-session-find-service
+                                session :schedule-override))
+             (suppress-schedule
+               (or suppress-schedule
+                   (and override-service (funcall override-service))))
+             (events (runtime-session-events session))
+             (events (if suppress-schedule
+                         (remove-if #'%command-runtime-schedule-event-p events)
+                         events))
+             (state (runtime-session-evaluator session))
+             (vector (runtime-evaluator-force-deep
+                      state (make-vvector-from-list events))))
+        (let ((*standard-output* output))
+          (%command-dynamic-top-level
+           session
+           (lambda ()
+             (dolist (reporter reporters)
+               (runtime-evaluator-force-deep
+                state
+                (runtime-session-call
+                 session reporter (list vector)
+                 (runtime-session-global-env session)))))))))))
+
 (defun %command-fenced-policy (text)
   (cond ((string= text "retry") :retry)
         ((string= text "abort") :abort)
         ((string= text "ask")
          (error "fenced: ask policy requires an interactive recovery command"))
         (t (error "--fenced-policy expects retry|abort|ask"))))
-
  (defun %command-runtime-options (arguments)
   "Extract lifecycle options while preserving ordinary command operands."
   (let ((rest nil) (watch nil) (once nil) (stabilize nil) (supervise nil)
-        (interval 1.0) (policy "serial") (fenced :abort))
+        (interval 1.0) (policy "serial") (policy-explicit nil)
+        (fenced :abort))
     (loop while arguments do
       (let ((argument (pop arguments)))
         (cond
@@ -1110,7 +1302,8 @@ Flatten only capability containers; no user value is accepted as authority."
            (when (< interval 0) (error "--watch-interval must be nonnegative")))
           ((string= argument "--schedule")
            (unless arguments (error "--schedule requires a policy"))
-           (setf policy (pop arguments)))
+           (setf policy (pop arguments)
+                 policy-explicit t))
           ((string= argument "--fenced-policy")
            (unless arguments (error "--fenced-policy requires retry|abort|ask"))
            (setf fenced (%command-fenced-policy (pop arguments))))
@@ -1122,7 +1315,8 @@ Flatten only capability containers; no user value is accepted as authority."
     (values (nreverse rest)
             (list :watch watch :once once :stabilize stabilize
                   :supervise supervise :interval interval
-                  :policy policy :fenced fenced))))
+                  :policy policy :policy-explicit policy-explicit
+                  :fenced fenced))))
 
 (defun %command-recover-fenced (session policy error-output)
   (let ((count (runtime-fenced-recover-unknown session policy)))
@@ -1222,7 +1416,7 @@ Flatten only capability containers; no user value is accepted as authority."
     desired))
 
  (defun %command-watch-trace-snapshot (session)
-  (pp.runtime:runtime-dynamic-with-top-level
+  (%command-dynamic-top-level
    session
    (lambda ()
      (let ((pinned nil))
@@ -1270,8 +1464,9 @@ Flatten only capability containers; no user value is accepted as authority."
  (defun %run-watch-files
     (operands output error-output grants why no-cache check options)
   (unless operands (error "--watch requires a source file"))
-  (let* ((session (%make-command-session grants :why why :no-cache no-cache
-                                         :check check :error-output error-output))
+  (let* ((session (%make-command-session
+                   grants :why why :no-cache no-cache :source-roots operands
+                   :check check :error-output error-output))
          (policy (%command-runtime-policy (getf options :policy)))
          (once (or (getf options :once) (not (getf options :watch))))
          (stabilize (getf options :stabilize))
@@ -1294,7 +1489,7 @@ Flatten only capability containers; no user value is accepted as authority."
                              :session session :grant-specs grants :why why
                              :no-cache no-cache :check check
                              :error-output error-output)))
-                     (runtime-dynamic-with-top-level
+                    (%command-dynamic-top-level
                       session
                       (lambda ()
                         (%command-supervise-pass
@@ -1307,7 +1502,11 @@ Flatten only capability containers; no user value is accepted as authority."
                                       :grant-specs grants :why why
                                       :no-cache no-cache :check check
                                       :error-output error-output)))))
-    (%command-schedule-node-force session policy)
+    (when (getf options :policy-explicit)
+      (runtime-session-register-service
+       session :schedule-override (lambda () t)))
+    (%command-schedule-node-force
+     session policy :override (getf options :policy-explicit))
     (when (getf options :supervise)
       (%command-install-process-services session))
     (funcall pass)
@@ -1336,11 +1535,16 @@ Flatten only capability containers; no user value is accepted as authority."
           (return-from %run-runtime-command
             (%run-watch-files files output error-output grants why no-cache check
                               (list* :policy policy options))))
-        (let ((session (%make-command-session grants :why why :no-cache no-cache
-                                              :check check :error-output error-output)))
+        (let ((session (%make-command-session
+                        grants :why why :no-cache no-cache :source-roots files
+                        :check check :error-output error-output)))
           (when (getf options :supervise)
             (%command-install-process-services session))
-          (%command-schedule-node-force session policy)
+          (when (getf options :policy-explicit)
+            (runtime-session-register-service
+             session :schedule-override (lambda () t)))
+          (%command-schedule-node-force
+           session policy :override (getf options :policy-explicit))
           (when (getf options :supervise)
             (unless (= (length files) 1)
               (error "--supervise requires exactly one source file"))
@@ -1351,7 +1555,7 @@ Flatten only capability containers; no user value is accepted as authority."
                           (first files) output :print-values nil :return-value t
                           :session session :grant-specs grants :why why
                           :no-cache no-cache :check check :error-output error-output)))
-              (runtime-dynamic-with-top-level
+              (%command-dynamic-top-level
                session
                (lambda ()
                  (runtime-dynamic-with-capabilities
@@ -1362,6 +1566,7 @@ Flatten only capability containers; no user value is accepted as authority."
                      (runtime-evaluator-force-deep
                       (runtime-session-evaluator session) value)
                      output)))))
+              (%command-report-runtime-events session output)
               (return-from %run-runtime-command 0)))
           (%run-language-files files output :session session :grant-specs grants
                                :why why :no-cache no-cache :check check
@@ -1371,6 +1576,31 @@ Flatten only capability containers; no user value is accepted as authority."
   (and (plusp (length path))
        (char= (char path 0) #\/)))
 
+(defun %command-path-directory (path)
+  (namestring
+   (make-pathname :name nil :type nil :defaults (pathname path))))
+
+(defun %command-source-root (path)
+  (pp.runtime:store-canonical-path (%command-path-directory path)))
+
+(defun %command-loader-roots ()
+  (let* ((session (ignore-errors (runtime-dynamic-session nil)))
+         (service (and session
+                       (runtime-session-find-service session :load-roots))))
+    (or (and service (funcall service))
+        (list (pp.runtime:store-canonical-path (truename "."))))))
+
+(defun %command-loader-path-authorized-p (path)
+  (let* ((canonical (pp.runtime:store-canonical-path path))
+         (target (pp.kernel:canonicalize-path
+                  canonical :realpath #'pp.runtime:store-canonical-path)))
+    (some (lambda (root)
+            (pp.kernel:path-under-p
+             (pp.kernel:canonicalize-path
+              root :realpath #'pp.runtime:store-canonical-path)
+             target))
+          (%command-loader-roots))))
+
 (defun %command-load-path (state path)
   (unless (and (stringp path) (plusp (length path)))
     (language-fail "load path must be a non-empty string" "evaluator.load"))
@@ -1379,30 +1609,50 @@ Flatten only capability containers; no user value is accepted as authority."
       (let* ((range (and state
                          (pp.runtime::runtime-evaluator-state-current-location
                           state)))
-             (source (and range (source-range-source range))))
-        (if (and source
-                 (plusp (length source))
-                 (char/= (char source 0) #\<))
-            (namestring
-             (merge-pathnames
-              path
-              (make-pathname :name nil :type nil :defaults (pathname source))))
+             (source (and range (source-range-source range)))
+             (source-directory
+               (and source
+                    (plusp (length source))
+                    (char/= (char source 0) #\<)
+                    (%command-path-directory source)))
+             (directories
+               (remove-duplicates
+                (append (and source-directory (list source-directory))
+                        (list (namestring (truename ".")))
+                        (%command-loader-roots))
+                :test #'equal))
+             (candidates (mapcar (lambda (directory)
+                                   (namestring
+                                    (merge-pathnames path
+                                                     (pathname directory))))
+                                 directories)))
+        (or (find-if #'probe-file candidates)
+            (first candidates)
             path))))
 
 (defun %command-load-forms (state path environment modulep)
   (let* ((resolved (%command-load-path state path))
-         ;; Source files use the brace reader by default, while an explicitly
-         ;; sexpr-suffixed file keeps its own surface.
-         (surface (if (%suffix-p (string-downcase resolved) ".ppl")
-                      :sexpr
-                      :brace)))
+         (canonical (pp.runtime:store-canonical-path resolved)))
+    (unless (%command-loader-path-authorized-p canonical)
+      (language-fail
+       (format nil "load path is outside the permitted source roots: ~A"
+               canonical)
+       "evaluator.load"))
     (handler-case
-        (let* ((forms (%read-language-forms
-                       (%read-source-file resolved) resolved surface))
+        (let* ((text (%read-source-file canonical))
+               ;; Source files use the brace reader by default, while an
+               ;; explicitly sexpr-suffixed file keeps its own surface.
+               (surface (if (%suffix-p (string-downcase canonical) ".ppl")
+                            :sexpr
+                            :brace))
+               (forms (%read-language-forms text canonical surface))
                (expanded (runtime-evaluator-expand-toplevel state forms))
                (old-environment
                  (runtime-evaluator-state-initial-env state))
                (base-environment (if modulep old-environment environment)))
+          (pp.runtime:runtime-observation-record
+           (pp.kernel:make-cell-runtime-file canonical)
+           (pp.runtime:store-hash-content text))
           ;; MODULE evaluation exports only definitions introduced by the
           ;; loaded forms.  LOAD uses the caller's scope as its base.
           (unwind-protect
@@ -1420,8 +1670,9 @@ Flatten only capability containers; no user value is accepted as authority."
       (language-error (condition)
         (error condition))
       (error (condition)
-        (language-fail (format nil "load ~A: ~A" resolved condition)
+        (language-fail (format nil "load ~A: ~A" canonical condition)
                        "evaluator.load")))))
+
 
 (defun %command-install-loaders (session)
   (runtime-session-register-callback
@@ -1435,9 +1686,26 @@ Flatten only capability containers; no user value is accepted as authority."
   session)
 
 (defun %make-command-session
-    (grant-specs &key (why nil) (no-cache nil) (check nil) error-output)
+    (grant-specs &key (why nil) (no-cache nil) (check nil) error-output
+                         source-roots)
   "Create a normal command session with an explicit HOME-derived store."
   (let* ((capabilities (%command-capabilities grant-specs))
+         (program-arguments (copy-list *command-program-arguments*))
+         (invocation (list :argv program-arguments))
+         (exit-status nil)
+         (roots
+           (remove-duplicates
+            (append
+             (remove nil
+                     (mapcar (lambda (path)
+                               (ignore-errors (%command-source-root path)))
+                             source-roots))
+             (list (pp.runtime:store-canonical-path (truename "."))
+                   (pp.runtime:store-canonical-path
+                    (merge-pathnames
+                     (pathname ".pp/")
+                     (pathname (%command-home))))))
+            :test #'equal))
          (evaluator-state (runtime-evaluator-default-state
                            :capabilities capabilities))
          (session
@@ -1445,10 +1713,46 @@ Flatten only capability containers; no user value is accepted as authority."
             :evaluator-state evaluator-state
             :store-root (%command-store-root)
             :capabilities capabilities)))
+    (runtime-session-register-service
+     session :record-read
+     (lambda (ignored-session cell-id hash)
+       (declare (ignore ignored-session))
+       (let ((cell (pp.kernel:cell-parse
+                    (pp.runtime:store-identity-string cell-id))))
+         (when (typep cell 'pp.kernel:cell-runtime-file)
+           (let ((serialized (pp.kernel:cell-serialize cell)))
+             (pp.runtime:runtime-session-set-run-pin
+              session cell-id hash)
+             (pp.runtime:runtime-session-set-run-pin
+              session serialized hash))))
+       (pp.runtime:runtime-session-add-observation session
+                                                   (cons cell-id hash))))
+    (runtime-session-register-service
+     session :invocation (lambda () invocation))
+    (runtime-session-register-service
+     session :invocation-argv
+     (lambda (&optional ignored)
+       (declare (ignore ignored))
+       (copy-list program-arguments)))
+    (runtime-session-register-service
+     session :observe-argv
+     (lambda () (copy-list program-arguments)))
+    (runtime-session-register-service
+     session :exit
+     (lambda (status)
+       (setf exit-status status)
+       (throw 'pp-command-exit status)))
+    (runtime-session-register-service
+     session :exit-status (lambda () exit-status))
+    (runtime-session-register-service
+     session :load-roots (lambda () roots))
     (%command-install-loaders session)
     (runtime-session-register-service
      session :observe-file
      (lambda (path) (%command-observe-file path nil)))
+    (runtime-session-register-service
+     session :observe-stat
+     (lambda (path) (%command-observe-stat path)))
     (runtime-session-register-service
      session :observe-sealed
      (lambda (path) (%command-observe-file path t)))
@@ -1466,6 +1770,9 @@ Flatten only capability containers; no user value is accepted as authority."
        (when (and why error-output)
          (format error-output "[why] ~A~%" text)
          (finish-output error-output))))
+    ;; runtime-dynamic-record-event already owns the session append.  The
+    ;; store's default record-event callback would append a second copy.
+    (runtime-session-unregister-service session :record-event)
     (%command-install-observation-primitives session error-output)
     (let ((policy-service (runtime-session-find-service session :cache-policy)))
       (when policy-service
@@ -1473,6 +1780,12 @@ Flatten only capability containers; no user value is accepted as authority."
          (funcall policy-service)
          :no-cache no-cache :why why :check check)))
     session))
+(defun %command-session-invocation (session)
+  (let ((service (runtime-session-find-service session :invocation)))
+    (and service (funcall service))))
+(defun %command-dynamic-top-level (session thunk)
+  (runtime-dynamic-with-top-level
+   session thunk :invocation (%command-session-invocation session)))
 
 
 (defun %parse-decimal (text)
@@ -1590,41 +1903,42 @@ environment, so leading loads must establish the initial environment first."
               (%command-schedule-node-force
                session (%command-runtime-policy "serial")))
             (runtime-session-begin-evaluation session)
-            (runtime-dynamic-with-top-level
-             session
-             (lambda ()
-               (let ((state (runtime-session-evaluator session)))
-                 (multiple-value-bind (forms environment loaded-values)
-                     (%language-preload-leading-loads state forms)
-                   (let* ((binding-p (some #'%language-binding-form-p forms))
-                          (last-value (car (last loaded-values))))
-                     (when (and all-values (not binding-p) print-values)
-                       (dolist (value loaded-values)
-                         (%language-print-value state value output)))
-                     (if (and all-values (not binding-p))
-                         (dolist (form forms)
-                           (handler-case
-                               (progn
-                                 (setf last-value
-                                       (runtime-evaluator-eval
-                                        state form :environment environment))
-                                 (when print-values
-                                   (%language-print-value
-                                    state last-value output)))
-                             (error (condition)
-                               (if continue-errors
-                                   (progn
-                                     (format output "Error: ~A~%"
-                                             (%language-error-text condition))
-                                     (finish-output output))
-                                   (error condition)))))
-                         (setf last-value
-                               (runtime-evaluator-eval-expressions
-                                state forms :environment environment)))
-                     (unless (and all-values (not binding-p))
-                       (when print-values
-                         (%language-print-value state last-value output)))
-                     (if return-value last-value 0)))))))
+            (let ((*standard-output* output))
+              (%command-dynamic-top-level
+               session
+               (lambda ()
+                 (let ((state (runtime-session-evaluator session)))
+                   (multiple-value-bind (forms environment loaded-values)
+                       (%language-preload-leading-loads state forms)
+                     (let* ((binding-p (some #'%language-binding-form-p forms))
+                            (last-value (car (last loaded-values))))
+                       (when (and all-values (not binding-p) print-values)
+                         (dolist (value loaded-values)
+                           (%language-print-value state value output)))
+                       (if (and all-values (not binding-p))
+                           (dolist (form forms)
+                             (handler-case
+                                 (progn
+                                   (setf last-value
+                                         (runtime-evaluator-eval
+                                          state form :environment environment))
+                                   (when print-values
+                                     (%language-print-value
+                                      state last-value output)))
+                               (error (condition)
+                                 (if continue-errors
+                                     (progn
+                                       (format output "Error: ~A~%"
+                                               (%language-error-text condition))
+                                       (finish-output output))
+                                     (error condition)))))
+                           (setf last-value
+                                 (runtime-evaluator-eval-expressions
+                                  state forms :environment environment)))
+                       (unless (and all-values (not binding-p))
+                         (when print-values
+                           (%language-print-value state last-value output)))
+                       (if return-value last-value 0))))))))
         (language-error (condition)
           (%language-reraise-with-source condition forms source)))))
 
@@ -1644,9 +1958,10 @@ environment, so leading loads must establish the initial environment first."
     (unless (runtime-session-find-service session :scheduler)
       (%command-schedule-node-force
        session (%command-runtime-policy "serial")))
-    (runtime-dynamic-with-top-level
-     session
-     (lambda ()
+    (let ((*standard-output* output))
+      (%command-dynamic-top-level
+       session
+       (lambda ()
        (let ((state (runtime-session-evaluator session))
              (environment nil))
          (setf environment (runtime-evaluator-state-initial-env state))
@@ -1775,32 +2090,45 @@ environment, so leading loads must establish the initial environment first."
                (error (condition)
                  (setf pending "")
                  (report condition))))
-           0))))))
-
-
+           (%command-report-runtime-events session output)
+           0)))))))
 (defun %run-language-text
     (text source surface output &key (all-values nil) session grant-specs
                                   (why nil) (no-cache nil) (check nil)
                                   error-output)
-  (%run-language-forms
-   (%read-language-forms text source surface)
-   source output :all-values all-values :session session
-   :grant-specs grant-specs :why why :no-cache no-cache :check check
-   :error-output error-output))
+  (let ((session (or session
+                     (%make-command-session
+                      grant-specs :why why :no-cache no-cache
+                      :check check :error-output error-output))))
+    (let ((result
+            (%run-language-forms
+             (%read-language-forms text source surface)
+             source output :all-values all-values :session session
+             :grant-specs grant-specs :why why :no-cache no-cache :check check
+             :error-output error-output)))
+      (%command-report-runtime-events session output)
+      result)))
 
 (defun %run-language-files
     (paths output &key session grant-specs (why nil) (no-cache nil)
                          (check nil) error-output)
   (unless paths
     (error "expected at least one .pp or .ppl source file"))
-  (dolist (path paths 0)
-    (%run-language-forms
-     (%read-language-forms
-      (%read-source-file path) path
-      (%source-surface path))
-     path output :print-values nil :session session
-     :grant-specs grant-specs :why why :no-cache no-cache :check check
-     :error-output error-output)))
+  (let ((session
+          (or session
+              (%make-command-session
+               grant-specs :why why :no-cache no-cache :source-roots paths
+               :check check :error-output error-output))))
+    (dolist (path paths)
+      (%run-language-forms
+       (%read-language-forms
+        (%read-source-file path) path
+        (%source-surface path))
+       path output :print-values nil :session session
+       :grant-specs grant-specs :why why :no-cache no-cache :check check
+       :error-output error-output))
+    (%command-report-runtime-events session output)
+    0))
 (defun %gc-option-p (argument)
   (or (string= argument "--gc-keep-epochs")
       (string= argument "--gc-grace-seconds")))
@@ -1835,7 +2163,7 @@ environment, so leading loads must establish the initial environment first."
     (when operands
       (error "gc does not accept source files"))
     (when (<= keep 0)
-      (error "--gc-keep-epochs must be positive"))
+      (error "invalid --gc-keep-epochs: must be positive"))
     (let ((layout (pp.runtime:make-store-layout (%command-store-root))))
       (pp.runtime:store-layout-init layout)
       (pp.runtime:runtime-store-with-repositories
@@ -2040,8 +2368,9 @@ environment, so leading loads must establish the initial environment first."
     (unless (= (length operands) 2)
       (error "--reconcile requires ROOT and one source file"))
     (let* ((root (first operands)) (source-path (second operands))
-           (session (%make-command-session grants :why why :no-cache no-cache
-                                           :check check :error-output error-output))
+           (session (%make-command-session
+                     grants :why why :no-cache no-cache :source-roots (list source-path)
+                     :check check :error-output error-output))
            (target (pp.kernel:canonicalize-path root
                                                  :realpath #'pp.runtime:store-canonical-path)))
       (declare (ignore target))
@@ -2051,7 +2380,7 @@ environment, so leading loads must establish the initial environment first."
                   (getf runtime-options :policy)))
         (%command-recover-fenced
          session (getf runtime-options :fenced) error-output))
-      (pp.runtime:runtime-dynamic-with-top-level
+      (%command-dynamic-top-level
        session
        (lambda ()
          (unless (%command-capability-allows-file-p nil root nil :write)
@@ -2404,7 +2733,7 @@ environment, so leading loads must establish the initial environment first."
       (if rejection
           (setf decision (list :kind :deny :key key :reason rejection))
           (setf decision
-                (runtime-dynamic-with-top-level
+                (%command-dynamic-top-level
                  session
                  (lambda ()
                    (let* ((traces-service
@@ -3090,7 +3419,11 @@ environment, so leading loads must establish the initial environment first."
                       (input *standard-input*)
                       (output *standard-output*)
                       (error-output *error-output*))
-  (labels ((language-error (condition)
+  (multiple-value-bind (command-arguments program-arguments)
+      (%command-split-program-arguments arguments)
+    (let ((arguments command-arguments)
+          (*command-program-arguments* program-arguments))
+      (labels ((language-error (condition)
              (format error-output "pp: error: ~A~%"
                      (%language-error-text condition))
              (finish-output error-output)
@@ -3111,11 +3444,13 @@ environment, so leading loads must establish the initial environment first."
              (finish-output error-output)
              1)
            (run-language (thunk)
-             (handler-case
+             (catch 'pp-command-exit
+               (handler-case
                  (funcall thunk)
-               (frontend-error (condition) (frontend-error condition))
+               (pp.runtime:language-exit (condition)
+                 (pp.runtime:language-exit-status condition))
                (language-error (condition) (language-error condition))
-               (error (condition) (host-error condition)))))
+               (error (condition) (host-error condition))))))
     (cond
       ((null arguments)
        (run-language
@@ -3307,7 +3642,8 @@ environment, so leading loads must establish the initial environment first."
                (first arguments))
        (%usage error-output)
        (finish-output error-output)
-       2))))
+       2)))))
+)
 
 (defun main ()
   ;; SAVE-LISP-AND-DIE invokes this function in the resulting executable.
