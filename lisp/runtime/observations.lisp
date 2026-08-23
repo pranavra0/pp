@@ -135,9 +135,21 @@
             (hash-concat (list "env-present" value))
             (hash-concat (list "env-absent")))))))
 (defun runtime-observe-argv ()
-  (or (runtime-observation-call :observe-argv)
-      (let ((inv (runtime-dynamic-invocation nil)))
-        (and inv (runtime-observation-call :invocation-argv inv)))))
+  ;; Frame and digest exactly like the argv primitive records its read, so a
+  ;; stored trace validates against the current argv; an empty argv still
+  ;; hashes (a bare nil would read as "cell gone" and stale every trace).
+  (let ((available
+          (and (fboundp 'runtime-observation-service)
+               (or (runtime-observation-service :observe-argv)
+                   (let ((inv (runtime-dynamic-invocation nil)))
+                     (and inv (runtime-observation-service :invocation-argv))))))
+        (observed
+          (or (runtime-observation-call :observe-argv)
+              (let ((inv (runtime-dynamic-invocation nil)))
+                (and inv (runtime-observation-call :invocation-argv inv))))))
+    (and available
+         (hash-concat (cons "argv"
+                            (if (listp observed) observed (list observed)))))))
 
 (defun runtime-observation-probe (name)
   (let ((session (runtime-observation-session)))

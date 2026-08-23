@@ -1,104 +1,30 @@
 # pp SPEC: the semantic laws
 
-> The normative document: what pp's forms mean, as testable laws. Not a
-> description of the current implementation. Every law carries a status
-> marker:
-> - holds: the evaluator satisfies the law within the tested scope cited for
->   that law, using pinned tests, property tests, or focused shell scenarios.
-> - partial: the mechanism exists but is buggy or incomplete. The prose cites
->   the matching test or status-table entry.
-> - unimplemented: a target only. Nothing in the current implementation does
->   this yet.
+> Law statements with status markers; design rationale lives in
+> [DESIGN.md](DESIGN.md), current limits in the Appendix A table. Markers:
+> - holds: satisfied within the tested scope cited for that law.
+> - partial: mechanism exists but is buggy or incomplete; the status cites
+>   the gap.
+> - unimplemented: a target only.
 >
-> Enforcement is the expected-output, property, and integration suites in
-> [TESTING.md](TESTING.md). Claims are limited to the evidence cited per law.
-> A law-linkage gate (`tests/072`) keeps holds honest:
-> `tests/072-law-pins.sh` cross-references every LAW id here against the
-> `# pins: LAW-<n>` markers declared by the suite and fails the build if a
-> holds law has neither a pinned test nor a pending-backfill entry. A pin
-> naming a renamed or deleted law is likewise a red build. Kernel laws
-> (identity, capability-value bans, traces, handler restore, failure caching)
-> are pinned first; the rest are paid down under the same gate.
->
-> Cross-references: design rationale and the numbered design decisions live in
-> [DESIGN.md](DESIGN.md); current limits are summarized by the status table at
-> the end of this document.
+> `tests/072-law-pins.sh` fails the build if a holds law has no
+> `# pins: LAW-<n>` marker in some test and no pending-backfill entry, or if
+> a pin names a nonexistent law.
 
----
-
-## 0. Preamble: what pp believes
-
-Order comes from data dependencies, not from source position. Build systems,
-package managers, init systems, and orchestrators all manage dependency
-graphs, execution order, caching, and side effects — and all re-derive them
-badly, because their languages model computation as a sequence of mutations.
-Shell scripts have no dependency model. Dockerfiles chain snapshots even
-though a build is a DAG, which is why invalidating one layer ruins everything
-downstream. The systems that got this right (Excel, React, Haskell, Jane
-Street's Incremental, Nix) share one law: computation is a DAG with explicit
-data flow; same inputs, same outputs; principled caching. pp takes that law
-as its semantics.
-
-Identity is structure. Every value has a content hash. Two computations with
-the same code and the same input values are the same computation, regardless
-of where or when they appear. Caching, deduplication, early cutoff, and
-distribution are not features bolted onto pp; they follow directly from
-content-addressed identity.
-
-pp is pure by default; effects need capabilities. A capability is authority: a
-ceiling on what a computation may touch. It is unforgeable, minted only at
-the root, and can only be narrowed. It is not an ordering mechanism and is not
-affine: ordering comes from data flow and the single-writer reconciler
-(section 9). This replaces Unix ambient authority, as Plan 9 intended.
-
-`force` is the only execution primitive. Where a computation runs (this
-core, another core, another machine) is a scheduler decision, never part of
-the language surface. Parallelism and distribution are the same feature at
-different scales: running a computation on three nodes and taking the first
-result is a handler swap, not an infrastructure project.
-
-Static typing is a perspective, not a foundation. Hardware, topology, and
-data are all dynamic. pp is dynamically typed: annotations are optional,
-gradual claims, checked when a value is forced. Unison's type system is too
-static for the top level of a real system; pp is not.
-
-The endgame is the operating system expressed as expressions: users,
-services, and the filesystem over a reactive, content-addressed substrate.
-Builds are the beachhead that proves the substrate works (scope discipline:
-DESIGN.md nails down builds before provisioning and orchestration).
-
-### 0.1 The two tiers
-
-pp has two tiers, like every one of its models: Haskell's pure/IO split,
-React's render/effects split, Excel's formulas/macros split.
+## The two tiers
 
 - the node tier: pure, strict at node boundaries, content-addressed, cached,
   and distributable. A node (`node` / `defnode`) is the unit of persistence
-  and caching. To be cacheable it must be pure and analyzable. This tier is
-  where the build, DevOps, and distribution work happens.
-- the scripting tier: dynamic, imperative, REPL glue. `write-file` wherever
-  you like, with full dynamism and no restrictions. Not cached, not
-  distributed, not keyed.
+  and caching; to be cacheable it must be pure and analyzable.
+- the scripting tier: dynamic, imperative, REPL glue. Uncached, unkeyed,
+  unrestricted — free effects live here.
 
-The bargain that connects them: purity is the price of a cache hit. A cache
-hit means the node does not run, so a cached node must not perform
-uncontrolled shared-state writes — the hit would silently drop them. Code
-that wants free effects is not a cacheable node; nothing bans it from the
-scripting tier. These restrictions are a bargain the programmer opts into,
-not a language-wide prohibition.
-
-Status of the tier split itself: holds for the core boundary. The
-`node`/`defnode` reader forms are real persistence boundaries: the evaluator
-routes them through `~/.pp/store` with verifying traces, so a node caches
-across runs while a scripting-tier expression does not. They share the same
-store. Node-visible runtime inputs are closed: a dependency is a keyed value,
-a recorded cell, an explicit probe, or a scripting-only operation rejected at
-the node boundary. In particular, capability inspection, runtime manifests,
-and fresh-name allocation cannot silently vary a cached node
-(`tests/109-node-ambient.sh`). The node tier's write discipline is
-sandbox-scratch only (LAW 18, `tests/017`); provider-specific foreign
-execution remains governed by its executor cacheability classification (LAW
-16).
+The bargain connecting them: purity is the price of a cache hit. A cache hit
+means the node does not run, so a cached node must not perform uncontrolled
+shared-state writes; caching is opt-in per node. Node-visible runtime inputs
+are closed (LAW 16, LAW 18): capability inspection, runtime manifests, and
+fresh-name allocation cannot silently vary a cached node
+(`tests/109-node-ambient.sh`).
 
 ---
 
@@ -118,23 +44,9 @@ every right-hand side and in the body, regardless of textual order. A `let`
 is a local Excel sheet: a set of named cells that may reference each other
 freely, without regard to position.
 
-Grounding: Excel formulas reference cells by name, never by "the cell above
-me"; Haskell's `let` and `where` are recursive for the same reason. The two
-rejected alternatives each betray a principle. Sequential scope (Scheme's
-`let*`, shell) makes textual position load-bearing — the exact disease of
-snapshot-chain builds — and fights content-addressing, since reordering
-bindings would change the hash (LAW 3). Parallel scope (Scheme's `let`) is
-position-independent but cannot express a local dependency graph at all,
-forcing nested `let`s that smuggle order back in as tree depth. Mutual scope
-is the only choice under which "order from dependencies, not position" holds
-inside a binding form, not just between top-level nodes.
-
 **Status: holds**: the engine builds a mutual environment for `ELet`
 bindings; sibling references evaluate correctly and reordering independent
 bindings does not change the result (`tests/007-phase0-laws.pp`).
-
-Test: `let (y = x + 1, x = 1) { y }` gives `2` ; reordering
-the bindings must not change the result.
 
 ### [LAW 2] Evaluation order within a scope is derived from dependencies; genuine cycles are force-time errors
 
@@ -143,11 +55,6 @@ references, not their positions. A dependency cycle among bindings is a
 runtime error at force time, reporting the cycle, unless the cycle is
 mediated by a function value: a lambda delays demand, so mutually recursive
 functions are legal and ordinary, as in Haskell and at pp's own top level.
-
-Grounding: this is the language-in-the-small mirror of the build engine. The
-wanted-set is ordered by the discovered graph; cycles report the force path,
-the principle DESIGN.md records for cutoff over dynamic dependency graphs.
-There is no solver and no declaration step: demand discovers the order.
 
 Timing: local `let` bindings are ephemeral — never persisted, keyed, or
 stored — so they are free to be lazy on-demand thunks regardless of the node
@@ -158,27 +65,15 @@ local binding is not one. An unreferenced binding never runs.
 including the binding names (for example `a -> b -> a`). Function values still
 delay demand, so mutually recursive functions remain valid.
 
-Test: `let (even? = fn(n) { if n = 0 { true } else { odd?(n - 1) } }, odd? = fn(n) { if n = 0 { false } else { even?(n - 1) } }) { even?(10) }`
-evaluates to `true` . `let (a = b, b = a) { a }` gives a
-deterministic cycle error identically .
-
 ### [LAW 3] Binding order is not part of a computation's identity
 
 Two `let` forms that differ only in the textual order of their bindings
 denote the same computation and must have the same content hash: the code
 hash canonicalises binding sets.
 
-Grounding: if reordering independent bindings changed the hash, the cache
-would treat one computation as two — position leaked into identity, the
-failure content-addressing exists to prevent.
-
 **Status: holds**: the expression hasher sorts the named bindings of a
 mutually visible `let`; `let*` and statement-bearing scopes retain source
 order.
-
-Test: the node keys (once nodes exist: LAW 15) of
-`let (a = 1, b = 2) { a + b }` and `let (b = 2, a = 1) { a + b }` are equal; a
-cached result for one is a hit for the other.
 
 ### [LAW 4] One scope model everywhere: `let` = `do`-block `def`s = `module` = top level
 
@@ -187,10 +82,6 @@ program) is one thing: a set of mutually visible DAG nodes ordered by
 dependency. Top-level `def`s already behave this way, since later `def`s are
 visible to earlier bodies. LAW 1 extends the same model downward so the
 language has one scoping story, not three.
-
-Grounding: the point is unification. A module is just a bigger `let`; the top
-level is just an implicit module. Excel does not have a different reference
-model per worksheet region.
 
 Value defs. A definition binding a bare name to an expression (AST
 `EDefValue`; s-expression surface `(def x v)`, brace surface `let x = v`) is
@@ -230,11 +121,6 @@ throughout that scope; value bindings retain statement timing and report a
 named "referenced before its definition" error when demanded early. Modules
 remain fresh scopes, while `let*` remains explicitly sequential.
 
-Test: a module whose first `def` calls its second behaves identically to
-the same two `def`s at top level, ; `load-module` without
-`import` leaves the caller's scope untouched in both; `let x = 5` followed by
-`print(x)` prints `5` (`tests/025`).
-
 ### [LAW 5] `let*` survives only as explicit sequential sugar
 
 `let* (a = e1, b = e2) { body }` is the scripting-tier form for "I really do
@@ -245,15 +131,8 @@ right-hand side is compiled in an environment that contains only the
 preceding bindings, and the body sees the final binding. The default, and the
 primitive form, remains mutual `let`.
 
-Grounding: sequence is sometimes the true structure — a REPL session is a
-sequence. The law keeps that expressible without making it the default
-meaning of binding.
-
 **Status: holds**: the reader emits `ELetStar`; the evaluator handles it
 sequentially and tests pin shadowing (`tests/007-phase0-laws.pp`).
-
-Test: `let* (x = 1, x = x + 1) { x }` evaluates to `2` 
-(shadowing, strictly sequential visibility).
 
 ---
 
@@ -273,18 +152,9 @@ key is `H(code-hash ‖ arg-value-hashes)` (LAW 15): the key cannot exist before
 the argument values do. Within the node tier, application is strict, and
 results are memoized by key.
 
-Grounding: this turns the constructive-trace rebuilder from "Build systems à
-la carte" into language semantics: an aggregator (`link`) keyed on child
-result hashes forces its children first, by construction. Haskell's laziness
-is not the model here; Nix's rule that a derivation's inputs are realised
-before it builds is.
-
 **Status: holds**: `node { e }` and applied `defnode` computations memoize
 persistently under the LAW 20 key. Node arguments are forced before the body,
 and equal applications share one computation across processes.
-
-Test: `tests/097-node-application.sh` proves argument forcing, equal-argument
-reuse, distinct argument keys, free-variable invalidation, and scheduler use.
 
 ### [LAW 7] Laziness is demand-pruning at node granularity
 
@@ -294,19 +164,12 @@ nodes; unchanged ones hit the cache, undemanded ones never run. LLVM's build
 as one thunk expanding into 50,000 units on force survives — at node
 granularity, not per expression.
 
-Grounding: Nix needs "dynamic derivations" and a socket mechanism for this;
-a language whose graph expands under evaluation gets it natively. Demand
-pruning is Excel not recalculating sheets nobody looks at.
-
 **Status: holds**: the fully forced desired object plus the node keys used to
 derive it form the explicit wanted root. Push watch selects affected work
 through child-result edges while pull watch reconstructs keys from pinned
 source and island values in a fresh process. Cache validation, stabilization,
 transport, and GC use the same child/result/tree edges (`tests/032`,
 `tests/050`, `tests/101`).
-
-Test: a root demanding 1 of a manifest's 3 children executes exactly 1 child
-(journal/trace proves it).
 
 ### [LAW 8] `delay`/`force` is ephemeral, in-memory laziness: a different thing from `node`
 
@@ -315,17 +178,9 @@ persisted, never keyed into any store. `force` is idempotent and is the
 identity on non-thunks. Lazy sequences (`lazy-seq`, stdlib `cons` chains)
 live here. `node` is persistence; `delay` is timing.
 
-Grounding: conflating the two is how the store fills with micro-entries.
-Excel draws the same distinction: a formula cell is recalculated and tracked,
-but a spilled intermediate value that nobody addresses is not.
-
 **Status: holds**: `node { e }` persists to `~/.pp/store` while `delay` and
 local bindings are fresh, in-memory thunks. Only persistent node thunks use the
 session's content-addressed deduplication table.
-
-Test: `force(delay(42))` evaluates to `42`; `force(42)` evaluates to `42`;
-a delayed computation's effect fires at most once across two forces,
-identical .
 
 ### [LAW 9] `if` evaluates exactly one branch
 
@@ -333,32 +188,19 @@ The untaken branch of a conditional is never evaluated: no effects fire, no
 errors raise, and no nodes are demanded from it. `and`/`or` inherit this by
 desugaring to `if`.
 
-Grounding: branch pruning is the smallest unit of demand-pruning. A build
-system that speculatively evaluates both arms is Make, not Excel.
-
 **Status: holds**: the explicit heap-continuation evaluator forces the
 condition before entering exactly one selected branch; focused language tests
 cover this boundary.
-
-Test: `if true { 1 } else { undefined-symbol }` evaluates to `1`; the untaken
-branch's `perform log(…)` produces no stderr.
 
 ### [LAW 10] Tail calls run in constant stack
 
 A tail-recursive computation runs at unbounded depth (at least a million
 calls deep) without stack growth.
 
-Grounding: a language proposing to be the operating system cannot have "your
-service loop overflowed" as semantics. Loops are recursion; recursion must be
-safe.
-
 **Status: holds**: the heap-continuation evaluator and CPS-aware
 dynamic-scope frames keep recursive calls through `with-caps`,
 `with-handler`, and `with-config` bounded in native stack and linear in depth
 (`tests/007-phase0-laws.pp`, `tests/110-tail-scopes.sh`).
-
-Test: a tail-recursive countdown from a million evaluates to `0` with no
-overflow.
 
 ### [LAW 11] Non-tail depth is a heap problem, not a crash
 
@@ -366,14 +208,9 @@ Non-tail recursion, such as the standard library's `map` over a
 million-element list, completes without native stack overflow: evaluation
 uses an explicit heap-allocated work stack.
 
-Grounding: the same operating-system argument applies. "Rewrite your fold" is
-not an acceptable answer from a substrate.
-
 **Status: holds**: the evaluator always uses its heap-allocated continuation
 machine. Builtin list traversal is iterative, so evaluator and primitive
 frames both remain bounded.
-
-Test: `length(map(inc, range(0, 1000000)))` evaluates to `1000000`.
 
 ### [LAW 12] Quotation is total; the language is data
 
@@ -383,24 +220,14 @@ defined against the AST (`Core_model.expr`), so every surface shares one
 quoted-data language. A Lisp whose quoted conditional (`'(if a b c)`) crashes
 is not homoiconic.
 
-Grounding: metaprogramming, including the `defmacro` form that replaced this
-project's earlier, abandoned fexpr design, depends on code-as-data being
-total, not best-effort.
-
 **Status: holds**: `quote_to_value` handles all expr forms; the reader
 parses quasiquote/unquote/unquote-splicing and a runtime walker expands them,
 including splicing, nested quasiquote, vectors, and maps. `defmacro` receives
-argument forms as quoted data, computes over them with `quote`/`quasiquote`/
-`list`/`cons`/`gensym`, and converts the result back to syntax. Its shape is
-recognised structurally at the single expansion point before the evaluator
-and expression hasher consume it; every reader surface therefore shares the
-same macro semantics.
-
-Test (sexpr/AST notation: braces have no bare list literal outside
-`list(…)`, only calls and `[…]` vectors): `'(if a b c)` evaluates to the
-list `(if a b c)`; `` `(1 ,(+ 1 1)) `` evaluates to `(1 2)`. Quoting the brace
-form of the same `if`, `quote { if a { b } else { c } }`, yields the
-identical list `(if a b c)` — one quoted-data language regardless of reader.
+argument forms as quoted data, computes over them with
+`quote`/`quasiquote`/`list`/`cons`/`gensym`, and converts the result back to
+syntax; its shape is recognised structurally at the single expansion point
+before the evaluator and expression hasher consume it, so every reader
+surface shares the same macro semantics.
 
 ---
 
@@ -413,16 +240,8 @@ the next begins; `en`'s value is the block's value. A `perform` fires eagerly
 when its expression is evaluated. `do` is the sequencing form, the one place
 where program order is the semantics, by explicit request.
 
-Grounding: this is Haskell's two-tier answer. Pure values may be computed
-whenever; `IO` actions happen in the order written. Effects are the boundary
-where the world's arrow of time enters, so they get an explicit, small,
-sequential sublanguage instead of leaking ordering into everything.
-
 **Status: holds**: the evaluator forces every `do` step; focused process tests
 verify the deterministic effect stream for each program.
-
-Test: `do { perform log("a"); perform log("b"); 1 }` writes `a` then `b`
-to stderr.
 
 ### [LAW 14] Undemanded values fire no effects
 
@@ -432,16 +251,9 @@ in a demanded value fires when demand reaches it. If you need an effect to
 happen, sequence it in `do` or make it a node input; do not rely on the
 evaluation order of pure positions.
 
-Grounding: Excel does not run the formulas of cells nobody references. The
-alternative, effects firing from speculative or positional evaluation, is
-exactly the ambient, order-by-accident world pp exists to replace.
-
 **Status: holds** for the current thunk semantics: an unforced binding's
 `perform` does not fire. Its interaction with LAW 6's strictness follows by
 construction, since node arguments are demanded.
-
-Test: `let (x = perform log("never")) { 1 }` evaluates to `1` with empty
-stderr.
 
 ### [LAW 15] Ordering never comes from capabilities
 
@@ -450,21 +262,11 @@ writes happen". Ordering comes from data flow (a consumer forces its
 producer) and from the single-writer reconciler (section 9). No law in this
 spec may be enforced by making a capability linear, affine, or consumable.
 
-Grounding: the design history explored affine write-capabilities and rejected
-them: they import an imperative language's mutation-policing into a model
-whose whole point is that there is exactly one writer per domain, so there is
-no race to police. The factoring stays clean this way: capabilities are
-authority and security; the DAG plus the reconciler are determinism and
-ordering.
-
 **Status: holds** as a constraint on current code: capabilities play no
 ordering role anywhere in the implementation, and the single-writer
 reconciler enforces ordering through data flow rather than capability
 consumption (`tests/018`, `tests/023`, `tests/033`). Capabilities remain
 authority and security only.
-
-Test: structural — no spec test may require capability consumption for its
-ordering claim.
 
 ---
 
@@ -475,11 +277,6 @@ ordering claim.
 Only nodes are cached. A node must be pure up to its declared effects: no
 uncontrolled shared-state writes, no unrecorded reads. Code that refuses the
 bargain lives in the scripting tier: uncached, unrestricted, unsurprising.
-
-Grounding: this turns the two-tier preamble into law. Nix's insight is that a
-package is a pure function of its inputs because that is what makes the store
-possible, not because purity is a virtue in itself. The restriction is the
-feature.
 
 **Status: holds for the provider-classified contract**: `node { e }` is
 opt-in and cached persistently: the same
@@ -504,10 +301,6 @@ canonical ordinary pp data; the runtime preserves it but interprets none of it
 (`lifecycle_unit`, `tests/102`). Thus no cacheable foreign process runs without
 an explicit provider guarantee.
 
-Test: the same `node { e }` forced twice across two processes runs once,
-which the store proves (`tests/010`, `tests/014`); a scripting-tier expression
-forced twice runs twice.
-
 ### [LAW 17] A cache hit does not replay ephemeral effects
 
 A hit returns the stored result; `log`/stdout emitted during the original run
@@ -515,28 +308,16 @@ are not re-emitted. A hit and a miss may differ only in ephemeral output and
 wall-clock time. Any observable difference beyond that is a caching-soundness
 bug.
 
-Grounding: this is "a hit means the node does not run", taken seriously.
-React does not re-run your logging when it skips a re-render; pretending
-otherwise would make hits observable and caching unsound.
-
 **Status: holds** (for the node tier): a `node { e }` hit serves the stored
 result and does not re-emit the `log`/stdout produced on the miss. This is
 verified by the persistent-node tests (`tests/010` and `tests/014`), where a
 node's in-body `COMPUTE` log fires only on the miss.
-
-Test: force a logging `node { e }` twice, the second run in a fresh
-process: the result is identical, and the log is emitted exactly once, on
-the miss, .
 
 ### [LAW 18] A cached node's writes are sandbox-scratch only
 
 Inside a node, `write-file` targets a sandbox-local scratch path; only output
 blob hashes escape. Writes to any reconciled domain go exclusively through
 the reconciler (LAW 28). In the scripting tier, `write-file` is free.
-
-Grounding: this is Nix and Bazel-style sandboxing: the build writes wherever
-it likes inside a throwaway directory, and only content-addressed outputs
-exist afterward. Without this, "single writer" (LAW 28) is only a slogan.
 
 **Status: holds**: the node/scripting split and output boundary are enforced.
 Inside a node, a relative `write-file` targets the node's sandbox scratch, a
@@ -547,11 +328,6 @@ errors, even with a read-write grant. The scripting tier is unchanged
 process domains apply desired state through the single writer
 (`stdlib/domain-fs.pp`, `stdlib/domain-proc.pp`), while a tool's own absolute-
 path writes remain outside the sandbox's control.
-
-Test: a node calling `perform write-file("/abs/x", …)` errors and the file is
-not written; the same call in scripting tier
-succeeds; a node's scratch write never appears outside its sandbox
-(`tests/017`).
 
 ---
 
@@ -565,20 +341,12 @@ negligible (this project uses SHA-256) and must cover everything
 semantically part of the value, in particular, a closure's hash covers its
 captured free-variable values.
 
-Grounding: Unison hashes definitions; pp hashes computations and world
-observations. Everything downstream (dedup, cutoff, distribution, "same
-inputs same outputs") is only as sound as this law.
-
 **Status: holds.** Closure captures are folded into the hash so two closures over
 different referenced captures hash differently while unrelated environment
 bindings are ignored, and the ambient handler stack is
 folded in too. Stored values are content-addressed by result hash and shared
 across runs. Persistent computation identity is LAW 20; ephemeral memo tables
 need not be durable.
-
-Test: two closures over different captured values hash differently;
-structurally equal values built by different routes hash equally, checked in
-the engine.
 
 ### [LAW 20] Node key = H(code-hash ‖ arg-value-hashes); authority and handlers are not identity
 
@@ -588,13 +356,6 @@ capability set (authority is checked at hit time, LAW 23), the handler stack
 (LAW 26/27), or the ambient environment beyond referenced free variables.
 What a node reads during execution is recorded in its trace, and that governs
 validity, not identity.
-
-Grounding: this is the key/trace split for identity versus validity from
-"Build systems à la carte", and Nix's content-addressed derivation
-realisations. A key built from `hash(expr, full-env, caps, config)` leaks
-catastrophically: touch one standard-library binding and every key in the
-program changes, or widen a capability and the whole world rebuilds.
-Authority may gate access to a result; it must never rename the result.
 
 **Status: holds**: the persistent node key is
 `H(code-structure ‖ free-var value-hashes ‖ argument-value-hashes)`. The free
@@ -634,13 +395,6 @@ routes, so both are banned outright, independently of each other.
   both key and trace, and a broad capability could ride a cached result out to
   a caller narrower than the node's creator.
 
-Test: rebinding an unreferenced global does not change the node key;
-widening the root grant does not invalidate a cached result; changing a
-referenced free variable does (`tests/011`). A node whose free variable is,
-or whose captured closure contains, a capability gives `Capability_error`
-(`tests/capability-adversarial.sh`); a body returning one, bare or embedded,
-is rejected before it can be stored.
-
 ### [LAW 21] Cutoff is hash equality; validity is the trace, not the key
 
 If a recomputed node's result hash equals the prior result hash, dependents
@@ -648,11 +402,6 @@ are not dirtied, even though an input changed. A cached result is valid only
 if some stored trace's every `(cell, hash)` observation still matches; one
 key may hold many traces, for example from different observed toolchains or
 platforms.
-
-Grounding: content-addressing makes the cutoff in Jane Street's Incremental
-free and exact: hash equality instead of user-supplied equality functions.
-This is the comment-only-header-edit story from DESIGN.md: a compile must
-re-run, but a link must not.
 
 **Status: holds**: each node key maps to a set of traces; every trace records
 the `(file-cell, content-hash)` observations the node made, plus `config:` and
@@ -673,12 +422,6 @@ child-result cells and is dirtied only when a child result hash changes.
 plus coarse readable-tree cells; changes and reverts are covered by
 `tests/100`. Legacy `run` dynamic-library closure tracking remains coarse.
 
-Test: editing a file read by a node re-runs it; an unchanged read hits;
-reverting the file hits the original trace in the set (`tests/010`); a
-touch that only changes the modification time rebuilds nothing, and a
-header edit that leaves the compile result byte-identical re-runs the
-compile but not the value-keyed link (`tests/016`).
-
 ---
 
 ## 6. Capabilities
@@ -691,11 +434,6 @@ holds capabilities, passes them, narrows them with `cap-restrict`, and unions
 what it already holds with `cap-compose`; it never constructs one.
 `filesystem("/", :rw)` is an unbound symbol, not a value.
 
-Grounding: the capability tradition's first theorem is that authority you can
-fabricate is not authority, it is a comment. pp's founding argument demands
-that capabilities replace Unix ambient authority; a mintable capability is
-ambient authority with extra steps.
-
 **Status: holds**: `filesystem`/`network`/`process` and similar names are
 unbound symbols; only `--grant` at process startup mints capabilities.
 `cap-restrict` and `cap-compose` only narrow or union capabilities the code
@@ -705,15 +443,6 @@ wildcards, and an unspecified port is unrestricted). `CapSecret {path}` is a
 newer kind (`--grant secret:<path>`, canonicalised at mint like filesystem
 grants). Both mint only via `--grant`, the same as every other kind, adding
 kinds does not change the root-mint invariant.
-
-Test: the adversarial suite (`tests/capability-adversarial.sh`) checks
-that no program, through any user-code surface, reads or writes a path it was
-not granted, and that evaluating `filesystem("/", :rw)` is an unbound-symbol
-error . `tests/045-network.sh` checks that no `net:` grant,
-or a `net:` grant for a different host, denies `perform http-get(…)`/
-`perform http-post(…)`, while a covering grant (an exact host, or `net:*`)
-allows it, aware of both host and port; a grant for one host or port never
-authorises another.
 
 ### [LAW 22b] `with-caps` narrows to a held value, never widens
 
@@ -740,19 +469,6 @@ call, raised exception alike (LAW 27). It runs the body via a nested call
 wrapped in a real exception handler — specifically so a raised error still
 restores the ambient.
 
-Test: composing two capabilities each narrowed from the same broad root
-grants only their union, never the root's full authority
-(`compose-does-not-resurrect`); a capability value held from before a
-`with-caps` narrowing fails the subset check when reused inside the narrowed
-extent even though it is still lexically in scope
-(`with-caps-widen-rejected`); requesting a wider `cap-restrict` mode than the
-underlying capability holds is rejected
-(`cap-restrict-mode-widen-rejected`); a `with-caps` body that raises, or ends
-in a tail call, still restores the prior ambient afterward
-(`with-caps-exception-safe`, `with-caps-tail-safe`); `effect(…)` is an
-unbound-symbol error (`effect-removed`), all in
-`tests/capability-adversarial.sh`.
-
 ### [LAW 23] Authority checks are component-wise, full-path, and transitive at hit time
 
 Three requirements apply. Path scope matching is by path component on the
@@ -764,11 +480,6 @@ launder a broad read through an aggregating parent, for example
 `PUB = f(SECRET)`. Introspection surfaces, such as `pp why` and other
 hit/miss observability, are capability-filtered, because the mere existence
 of a key is itself an oracle.
-
-Grounding: the cache is a communication channel between past and future
-executions, so authority must gate the channel, not just live `perform`s.
-DESIGN.md derives the transitive requirement and its precomputed
-`closure-cap-req` fast path from this.
 
 **Status: holds**: path checks are component-aware and full-path (`/tmp` does
 not grant `/tmpevil`), and the full path is uniformly canonicalised first:
@@ -793,10 +504,6 @@ the capability later still yields a hit.
 unauthorized, verified trace) to stderr and redacts cells outside the caller's
 authority (`tests/019`).
 
-Test: grant `fs:/tmp:ro`: reading `/tmpevil/x` errors. A caller scoped to
-`src/` gets no hit on a node whose transitive closure touched `/etc/passwd`;
-`tests/013` and `tests/014` verify this capability-hit boundary.
-
 ### [LAW 24] Loader reads are runtime authority, not user effects
 
 `load`, `import`, `island`, and standard-library and module resolution are
@@ -813,11 +520,6 @@ is opt-in runtime authority (`--fetch-islands`/`--update`, journaled; see
 docs/THREAT-MODEL-islands.md), so with it disabled, evaluation never touches
 the network.
 
-Grounding: every program loads its own source, so charging that to user
-capabilities would make a caller scoped to `src/` unable to hit any node
-whose closure touches the standard library. The runtime/user split is
-load-bearing, not cosmetic.
-
 **Status: holds**: every loader read goes through `Loader.read`: bounded to
 the directories of the programs named on the command line, the working
 directory, and `~/.pp`. Loading anything else errors, with or without a
@@ -829,26 +531,14 @@ exempt from the hit-time authority requirement (`tests/020`). The bound is
 now realpath-canonical (LAW 23, `tests/036`): a symlinked source tree is
 authorised identically to the real path.
 
-Test: a program granted nothing can `load(…)` beside its own source and
-hit a node cache whose trace contains that load; loading a path outside
-every source root errors even with a broad filesystem grant; editing the
-loaded file invalidates the node (`tests/020`).
-
 ### [LAW 25] Unenforced authority may not exist
 
 A capability kind that nothing enforces (`CapTime` and `CapMemory` today)
 must not appear in the surface language. Resource budgets return only when a
 scheduler enforces them.
 
-Grounding: this is this spec's honesty rule applied to the language itself.
-An unenforced security surface is worse than none, because it teaches users
-to trust a fiction.
-
 **Status: holds**: `CapTime`/`CapMemory` have been removed from the
 capability type and surface language.
-
-Test: evaluating the time/memory constructors is an unbound-symbol error
-when a scheduler enforces budgets.
 
 ---
 
@@ -862,13 +552,6 @@ node boundaries freely and appear in no key and no trace. Semantic handlers (
 a mock `read-file`, fault injection, an alternate `run`) change meaning:
 each intercepted `perform` inside a node records a synthetic trace cell
 `handler:<effect> → handler-identity`.
-
-Grounding: swapping a mock for the real implementation changes the synthetic
-cell and invalidates only nodes that performed that effect. Handler
-arguments are ordinary computation data, and handler-made observations join
-the same trace, so duplicating them into the handler cell adds no correctness.
-This is what makes "the scheduler is just a handler" (LAW 31) compatible with
-caching.
 
 **Status: holds**: every `perform` inside a node records a `handler:<effect>`
 trace cell whose observed hash is the intercepting handler's value hash, or a
@@ -894,28 +577,15 @@ are) and is not convergent, so it has no sound node-cached meaning. It is
 legal only in probe observe functions, domain observe/apply functions, and
 the scripting tier.
 
-Test: force a node under a mock `read-file` handler, then under the real
-one: two executions, two results, no cross-contamination (`tests/015`). A
-result-transparent handler swap yields a hit with identical result hash (the
-`--check` audit).
-
 ### [LAW 27] Effect, handler, and config scopes are dynamic extent: exception-safe and tail-safe
 
 `effect`, `with-handler`, and `with-config` establish dynamic-extent state
 restored on every exit: normal return, tail call, raised error alike. Scope
 state never leaks out of the form that established it.
 
-Grounding: fail-open dynamic scope is an ambient-authority generator: a
-leaked handler or capability set is authority nobody granted. The semantics
-of try/finally are the floor here, not a nicety.
-
 **Status: holds**: `effect`, `with-handler`, and `with-config` now restore
 capabilities, handlers, and config on normal return, exception, and tail
 call. Handler invocation saves and restores the operand stack.
-
-Test: `do { with-handler(log = h) { tail-loop() } ; perform log("x") }`:
-the final `log` uses the builtin, not `h`. An error raised inside `effect`
-leaves the capability set exactly as it was before entry.
 
 ---
 
@@ -929,20 +599,11 @@ unchanged inputs re-serves the failure without re-running; changing its
 validating trace permits re-execution. Authority denials and internal host
 exceptions are not computation results and are never cached.
 
-Grounding: this applies Nix's realisations and the verifying traces from
-"Build systems à la carte" to failure. A clean build that re-runs every
-known-broken compile is not incremental. Determinism means failures are as
-reproducible as successes.
-
 **Status: holds**: successful and failing outcomes use the same object and
 trace persistence path. Evaluator and operational errors retain the reads made
 before failure and are re-served until that trace changes; authority-dependent
 errors reset the thunk without persisting. A raising thunk cannot retain an
 `Evaluating` marker (`tests/012`, `tests/014`, `tests/103`).
-
-Test: force a failing node twice: same error text both times, body run
-once, since the in-node `log` fires only on the miss; touch its input, force
-again, and it re-runs (`tests/012`).
 
 ### [LAW 29] Errors carry structured source diagnostics
 
@@ -950,9 +611,6 @@ A runtime error carries a structured diagnostic with an optional source range,
 stable error code, message, and related ranges. Source ranges use a source
 name, byte offset, and one-based line and column positions; ranges are
 half-open. Human-readable rendering is a CLI presentation concern.
-
-Grounding: an error without a location is a riddle, and the substrate for an
-operating system should not answer riddles with stack-free strings.
 
 **Status: holds**: every reader attaches token-precise ranges to its
 `ELocated` forms, and the shared error boundary fills an absent primary range
@@ -965,11 +623,6 @@ A loaded file's forms are ranged against that file, not the loading form:
 one at a time under the same never-doubled range decoration as the outer
 driver, and an error inside the loaded file is decorated with its own range
 before unwinding past `load`.
-
-Test: `car(5)` at line 3 of `f.pp` reports a primary range in `f.pp` with
-byte-identical stderr (`tests/027`); case (g) loads a file whose second form
-is `car(5)` and checks the reported location is the loaded file's line, not
-the loading form's.
 
 ---
 
@@ -994,12 +647,6 @@ function receives only data-closed job descriptors and returns validated
 batches; it cannot execute a thunk or obtain authority. CLI schedule options
 override a manifest. Explicit request `:policy` values override a manifest's
 default `:execution-policy` when constructing `run-closed!` requests.
-
-Grounding: this is React verbatim — you return the desired DOM, the
-reconciler applies the diff. Same idea behind Kubernetes controllers and
-Terraform's plan/apply, done in a language that makes the desired value cheap
-to recompute (it is cached) and re-observes reality rather than trusting a
-state file.
 
 **Status: holds** (the full form, with per-domain stratification): the
 write-discipline law is now enforced generically, for any registered domain,
@@ -1069,13 +716,6 @@ passes through untouched, so every pre-existing program and flag combination
 before. A member's recovery from `kill -9` is this law's existing
 per-machine story, unchanged (`tests/049-host-domains.sh`).
 
-Test: first reconcile creates the tree; a null reconcile writes nothing;
-manual drift and foreign files converge away; a shrunk desired map deletes
-the leavers; no write grant gives a capability error; a self-reading desired
-state gives a stratification error (`tests/018`); the process domain's
-equivalents hold (`tests/033`); a from-scratch third-party domain holds all
-of the above plus plan caching and verify-after-write failure (`tests/046`).
-
 ### [LAW 31] Fenced effects are reconciler-only, journaled, at-most-once per pass
 
 Non-convergent actions, such as sending an email or charging a card, may not
@@ -1092,19 +732,11 @@ deduplicates. An `intent` without a matching `done` after a crash has status
 unknown, and resolves by `--fenced-policy retry | abort | ask`, never by
 silent retry.
 
-Grounding: the desired-state law covers convergent writes only. Pretending
-it tames non-idempotent actions is how systems double-charge cards. This
-carve-out is named, not hidden.
-
 **Status: holds**: the engine uses the same primitive and journal
 format; a `fenced(…)` inside a node body raises an error; an unknown-status
 action is resolved by policy; a killed mid-apply action is retried exactly
 once under `--fenced-policy retry` and marked done under `--fenced-policy
 abort` (`tests/034`).
-
-Test: kill `pp --watch --reconcile ROOT --fenced-policy retry` between
-`intent fenced` and `done fenced`; on restart the action runs exactly once
-more (crash plus one recovery retry) — no silent double-execution.
 
 ---
 
@@ -1117,11 +749,6 @@ annotated value is forced, a mismatch is a runtime error reporting the
 annotation's definition site. No annotation, no check. The evaluator enforces
 the same claim on every supported execution path.
 
-Grounding: static typing is a perspective, not a foundation; static subsets
-live inside the dynamic top level as checked claims — the differentiator from
-Unison. Force-time checking makes annotations meaningful without a phase
-that must see the whole dynamic graph.
-
 **Status: holds**: the evaluator enforces type annotations at force time.
 `def`/`fn`/`defnode` bodies carry their definition-site location, so type
 errors cite the annotation site. Per-parameter annotations are checked too,
@@ -1129,11 +756,6 @@ however a surface spells them (s-expressions: `(def (f x : int) …)`,
 `(fn [x : int] …)`; braces: `def f(x: int) { … }`, `fn(x: int) { … }`).
 Reader desugaring rewrites each into a located type check that runs ahead of
 the body (`tests/026-param-types.sh`).
-
-Test: `def f(x): int { "s" }` forced gives the same type error, citing the
-annotation site; `f("oops")` against `def f(x: int) { … }` gives
-`type mismatch: expected int, got "oops"`, citing the definition site;
-unannotated code never type-errors.
 
 ---
 
@@ -1150,11 +772,6 @@ config has observed an input: the read participates in the node's identity
 and validity like any other observation, so the same code under different
 config is a different computation.
 
-Grounding: this is the ReaderT/React-context pattern: parameters that flow
-by enclosure, not by threading arguments through every call. Keeping config
-out of the authority system keeps "what" and "may" from contaminating each
-other.
-
 **Status: holds**: computed config keys work, nested scopes shadow, and
 config frames are restored on every exit: normal, tail, and exception
 (`tests/006-config-test.pp`, `tests/007-phase0-laws.pp`). The "config read is
@@ -1162,10 +779,6 @@ an observed input" clause is real at node granularity: a `config(k)` inside a
 node records a `config:<k>` trace cell, where absence is
 itself a distinct observation, re-observed against the caller's config stack
 on a hit, and ambient config is excluded from the node key (`tests/015`).
-
-Test:
-`with-config({"k" -> 1}) { with-config({"k" -> 2}) { config(string-append("", "k")) } }`
-evaluates to `2`; outside both forms it evaluates to the default.
 
 ---
 
@@ -1178,11 +791,6 @@ there never will be. Where a force runs is decided by the active,
 result-transparent (LAW 26) schedule handler; cluster membership is ambient
 config or capability. A program is byte-identical whether it runs on one
 core, eight, or a cluster.
-
-Grounding: this is pp's core founding demand. Microservices exist because no
-language lets you say "evaluate this elsewhere and flow the result back."
-The moment location is syntax, every caller hard-codes topology, and you have
-rebuilt the deployment-boundary blunt instrument inside the language.
 
 **Status: holds** for the negative half: no location surface exists in any
 reader, and this absence is verified. The positive half now lands for local
@@ -1215,25 +823,12 @@ supervisor's existing per-machine story verbatim. Explicit store GC (`pp gc`,
 never automatic) is orthogonal to placement: it runs only as its own command,
 documented alongside LAW 30.
 
-Test: no reader accepts a placement form (unchanged). `tests/038`
-stress-tests concurrent workers against one store and a `race:N` fan-out.
-For host-qualified domain distribution, `--member-name`
-converges only its own slice while another host's stays untouched, and a
-member's recovery from `kill -9` holds on that slice
-(`tests/049-host-domains.sh`); store size stays bounded across both repeated
-one-shot passes and a genuine `--watch`-loop/`pp gc` race, with the kept
-root's closure surviving the sweep (`tests/050-gc.sh`'s T7 assertions).
-
 ### [LAW 35] "Run on N, take the first" is a handler, not a feature
 
 Redundant, parallel, or distributed execution policies (fan-out, racing,
 work-stealing, locality) are swappable schedule handlers: library code, with
 zero change to the language surface. Parallelism and distribution are the
 same feature at different scales.
-
-Grounding: this sentence is pp's founding demand, restated as an acceptance
-test. If shipping it requires new syntax, LAW 34 has been violated
-somewhere.
 
 **Status: holds** at the runtime boundary. Schedule handlers are ordinary
 opaque service values rather than branches in the evaluator or force path.
@@ -1247,12 +842,6 @@ declared-nondeterminism cells exist. The first success wins, losers are
 killed, and the parent re-enters cache lookup exactly as the batch path does.
 Cluster and distributed racing remains bounded by its declared threat model.
 
-Test: `tests/038`'s race:3 case exercises `--schedule race:3` with
-byte-identical program text (only the command-line flag differs) and check
-for an identical result hash, exactly one surviving trace line (the store's
-own content dedup, not merely fork timing), wall-clock roughly one run rather
-than N.
-
 ---
 
 ## 13. Evaluator correctness
@@ -1264,9 +853,6 @@ continuation machine own every expression form, and its printers preserve
 round-trip structure and hashes. No shipped feature may exist outside this
 verified surface.
 
-Grounding: one explicit evaluator keeps semantics inspectable. A second
-execution path would allow syntax, identity, or error behavior to drift.
-
 **Status: holds**: the saved-image evaluator handles both readers, signed
 integer and float literals, macros, persistent nodes, and source locations
 under the focused language, frontend, node, and store suites. Signed literals
@@ -1277,10 +863,6 @@ expanded AST; `tests/041-defmacro.pp` exercises that boundary.
 VInt persistence uses the signed 63-bit range supported by the current
 Common Lisp image.
 
-Test: `scripts/run-tests.sh bin/pp` runs the evaluator and all focused shell
-scenarios; `tests/014` verifies persistent cache hits.
----
-
 ## 14. Reproducibility and volatility
 
 ### [LAW 37] Same inputs, same output, and nondeterminism must be declared
@@ -1289,10 +871,6 @@ A node given the same input value hashes produces the same result hash.
 There is no ambient entropy: `random`, wall-clock, and similar sources are
 either trace-recorded cells — a nondeterministic read is an observation of
 the world — or unavailable inside nodes.
-
-Grounding: this is the Excel/Nix law, verbatim: same inputs, same outputs.
-Every other law's cache-soundness quietly depends on it. Hidden entropy is a
-hidden input, which is the one thing content-addressing cannot forgive.
 
 **Status: holds**: `random` remains removed; the sanctioned nondeterministic
 dependency is now the probe (`register-probe(name, observe-fn, read-cap)`,
@@ -1305,12 +883,6 @@ authority was already spent evaluating the probe. A node itself still has no
 ambient entropy: nondeterminism enters only through a declared probe cell,
 never through an effect with no cell.
 
-Test: a node reading `probe(name)` re-forces exactly when the probe's
-underlying value changes across two separate runs, and hits, with no
-recompute, when it does not (`tests/043-probes.sh`); an
-unregistered probe name is a hard error; a probe registered but never read
-never fires, demand-pruned, mirroring LAW 7.
-
 ### [LAW 38] Volatile nodes are contained as cells and barred from shared caches
 
 A node whose tool is irreducibly nondeterministic (`__DATE__`, timestamp
@@ -1320,10 +892,6 @@ cell, observed and pinned per pass, so its instability stops at one edge
 instead of re-keying its whole ancestor cone on every build. Volatile
 results never enter a shared cache. Canonicalisation adapters
 (`-frandom-seed`, `ZERO_AR_DATE`) are preferred where they exist.
-
-Grounding: this budgets the reproducibility problem Nix keeps finding as
-permanent gardening, rather than wishing it away. Cutoff above a volatile
-node is otherwise dead, and the store grows without bound along that cone.
 
 **Status: holds**: the detection half already exists:
 `pp --check` runs every missed node's body twice, compares result hashes,
@@ -1337,13 +905,6 @@ instability never re-keys or invalidates anything beyond that one cell edge.
 Probe results are never written to `~/.pp/store` at all: the session's probe cache
 is in-memory and cleared every pass, which is stronger than merely being
 excluded from shared caches, since there is no cache to exclude them from.
-
-Test: a node whose tool emits a random value, wrapped as a probe, is
-observed once per pass and re-forces the reading node only when the probe's
-value changes across runs, never on an unrelated node, and never by
-re-running the underlying volatile read more than once per pass
-(`tests/043-probes.sh`). The pre-existing `--check`
-double-build detection (`tests/019`) is unchanged.
 
 ### [LAW 39] Sealed cells: confidential reads are a distinct value kind, banned at the node boundary
 
@@ -1365,12 +926,6 @@ holding what a node returns. When a path is covered by both `secret:` and
 `fs:` grants, filesystem behaviour wins: granting plain access over the same
 path says "not secret here".
 
-Grounding: this project's approach of content-addressing every file read
-into the store as a snapshot is sound for ordinary data, but a
-confidentiality bug for secrets. A security boundary needs a distinct value
-kind for the existing node-boundary and authority machinery to pattern-match
-on, not a new parallel authorisation path.
-
 **Status: holds**: implemented. `tests/044-sealed.sh` covers: redacted print,
 `unseal` round-trip, recursive store scans proving the secret's bytes never
 land under `~/.pp/store`, the node-boundary ban both directions with stable
@@ -1378,14 +933,13 @@ stderr, rotation invalidating exactly the observing node, a caller without
 the `secret:` grant unable to hit a node whose cached closure read it, and
 the both-grants case behaving as plain filesystem access.
 
-Test: `tests/044-sealed.sh`.
-
 ---
 
 ## Appendix A: Current status
 
-Every law is currently marked `holds`; this table is the checked contract
-between the language's stated semantics and the implementation.
+The checked contract between stated semantics and implementation. The
+law-linkage gate (`tests/072-law-pins.sh`) keeps it synchronized with the
+suite.
 
 | Law | Area | Status | Evidence |
 |---|---|---|---|
@@ -1414,21 +968,17 @@ between the language's stated semantics and the implementation.
 | LAW 26 | two handler classes, synthetic trace cells | holds | semantic handler use is traced by effect and handler identity (`tests/015`); result-transparent scheduler handlers remain outside identity and traces (`tests/038`) |
 | LAW 27 | exception/tail-safe dynamic extent | holds | save-stack restore on every exit |
 | LAW 28 | failure traces, error memoization | holds | evaluative failures use the same durable trace lifecycle as successes and are re-served until a recorded read changes; authority denials and internal exceptions remain uncached (`tests/012`, `tests/014`, `tests/103`) |
-| LAW 29 | source locations in errors | holds | every top-level form's location is appended to unlocated runtime errors ; arity/capability errors name the callee/operation; `pp: error:` single-line reporting; a loaded file's own forms are individually located and decorated with that file's location before the error can unwind past the `load` (`tests/027`, including case (g)) |
+| LAW 29 | source locations in errors | holds | every top-level form's location is appended to unlocated runtime errors; arity/capability errors name the callee/operation; `pp: error:` single-line reporting; a loaded file's own forms are individually located and decorated with that file's location before the error can unwind past the `load` (`tests/027`, including case (g)) |
 | LAW 30 | desired-state plus single writer | holds | registered domains enforce plan, journal, atomic apply, verify, and stratification; `stdlib/domain-fs.pp` and `stdlib/domain-proc.pp` hold filesystem and process policy (`tests/018`, `tests/023`, `tests/033`, `tests/046`) |
 | LAW 31 | fenced effects, intent journal | holds | scripting-tier `fenced(KIND, SPEC)`, `--fenced-policy retry|abort|ask`, intent/done journal, recovery without silent retry; `tests/034` |
 | LAW 32 | gradual types, strict evaluator | holds | the evaluator enforces; tests 004/005 restored; `tests/007-phase0-laws.pp` |
-| LAW 33 | config: computed keys, tail-safe scoping | holds | computed keys and tail-safe scoping ; config reads inside nodes are `config:<key>` trace cells, ambient config out of the node key (`tests/015`) |
+| LAW 33 | config: computed keys, tail-safe scoping | holds | computed keys and tail-safe scoping; config reads inside nodes are `config:<key>` trace cells, ambient config out of the node key (`tests/015`) |
 | LAW 34 | no location surface / scheduler exists | holds | the language has no location form; local process-pool scheduling, host-qualified domains, and explicit GC are implemented (`tests/038`, `tests/049`, `tests/050`) |
 | LAW 35 | run-on-N-take-first as handler | holds | `race:N` process-pool fan-out lands (`tests/038`) |
 | LAW 36 | evaluator correctness | holds | signed literals agree across readers and formatting (`tests/105`); macro expansion is shared ahead of evaluation |
 | LAW 37 | declared nondeterminism | holds | `register-probe`/`probe` are the one sanctioned nondeterministic dependency, evaluated at most once per pass outside the reading node's trace stack, exposed only as a `probe:<name>` cell (`tests/043-probes.sh`) |
 | LAW 38 | volatile-node containment | holds | `--check` double-run detection unchanged (`tests/019`); containment is the same probe mechanism as LAW 37; a volatile read wrapped as a probe is observed and pinned once per pass as its own cell, in-memory only, never written to `~/.pp/store` (`tests/043-probes.sh`) |
 | LAW 39 | sealed cells | holds | `CapSecret`/`VSealed`: confidential reads redact on print, exclude from the content-addressed store, ban at the node boundary both directions, gate hits on a covering grant; `unseal(v)` is the explicit boundary (`tests/044-sealed.sh`) |
-
-All 40 laws in the table are marked `holds` and have a pinned behavioral
-test. The law-linkage gate (`tests/072-law-pins.sh`) keeps the table and
-the test suite synchronized.
 
 ---
 
@@ -1822,7 +1372,6 @@ example programs. LAW 24's island clause was checked specifically: it
 constrains `EIsland`'s inline pin and its identity in the code hash, not any
 lexical spelling. LAW 22's "`(filesystem "/" :rw)` is an unbound symbol" is
 the same error in either surface.
-
 
 ### B.7 Judgment calls frozen by this annex
 

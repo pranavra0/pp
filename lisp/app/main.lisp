@@ -1072,6 +1072,14 @@ Flatten only capability containers; no user value is accepted as authority."
          (pp.runtime:language-fail "register-domain expects one argument"
                                    "primitive.arity"))
        (%command-register-domain session (first args) (or force #'identity))))
+(defun %command-log-text (value)
+  ;; log is a presentation observation: non-text values render through the
+  ;; canonical value printer instead of failing (tests/002, tests/070).
+  (if (typep value '(or pp.kernel:value-string pp.kernel:value-symbol
+                        pp.kernel:value-keyword))
+      (%command-value-text value "log")
+      (pp.runtime:runtime-string-of-value value)))
+
     (%command-install-primitive
      state "register-probe"
      (lambda (args environment &key force &allow-other-keys)
@@ -1107,9 +1115,9 @@ Flatten only capability containers; no user value is accepted as authority."
                            arguments)))
              (format error-output "[~A] ~A~%"
                      (if (= (length values) 2)
-                         (%command-value-text (first values) "log")
+                         (%command-log-text (first values))
                          "info")
-                     (%command-value-text (car (last values)) "log"))
+                     (%command-log-text (car (last values))))
              (finish-output error-output)
              (pp.kernel:make-vnil)))
           ((string= name "read-file")
@@ -1775,6 +1783,13 @@ an explicit authority override and therefore bypasses the manifest."
    session :load-module
    (lambda (state path)
      (%command-load-forms state path nil t)))
+  (runtime-session-register-callback
+   session :island
+   (lambda (state uri pin)
+     ;; Resolution never touches the network and verifies the pin on every
+     ;; resolve; the module root loads as a module (exports only).
+     (let ((dir (pp.runtime:island-resolve uri pin)))
+       (%command-load-forms state (pp.runtime:island-entry-file dir) nil t))))
   session)
 
 (defun %make-command-session
@@ -2221,6 +2236,151 @@ environment, so leading loads must establish the initial environment first."
        :error-output error-output))
     (%command-report-runtime-events session output)
     0))
+;;; ---- Islands: `pp --update` and `pp island-pins` ----
+
+(defun %island-token-char-p (char)
+  (or (digit-char-p char) (alpha-char-p char)
+      (member char '(#\- #\_ #\: #\. #\/ #\#))))
+
+(defun %island-find-delimited (haystack needle)
+  "Positions of NEEDLE in HAYSTACK not flanked by token characters."
+  (loop with n = (length needle) and h = (length haystack)
+        for i from 0 to (- h n)
+        when (and (string= haystack needle :start1 i :end1 (+ i n))
+                  (or (zerop i)
+                      (not (%island-token-char-p (char haystack (1- i)))))
+                  (or (= (+ i n) h)
+                      (not (%island-token-char-p (char haystack (+ i n))))))
+        collect i))
+
+(defun %island-splice (text at length replacement)
+  (concatenate 'string
+               (subseq text 0 at) replacement
+               (subseq text (+ at length))))
+
+(defun %command-island-update-file (path output error-output)
+  "Re-resolve every island form in PATH and rewrite its inline pin.
+Conservative textual splice: any ambiguity prints the exact replacement and
+changes nothing for that form — never a half-written file."
+  (let* ((canonical (namestring path))
+         (original (%read-source-file canonical))
+         (surface (if (%suffix-p (string-downcase canonical) ".ppl")
+                      :sexpr :brace))
+         (forms (mapcan #'pp.runtime:island-forms-in
+                        (%read-language-forms original canonical surface)))
+         (text original)
+         (updated 0) (skipped 0))
+    (labels ((skip (uri message suggestion)
+               (incf skipped)
+               (format error-output "[update] ~A: ~A~%  apply by hand: ~A~%"
+                       uri message suggestion))
+             (replace-all (old fresh)
+               (loop for hits = (%island-find-delimited text old)
+                     while hits
+                     do (setf text (%island-splice text (first hits)
+                                                   (length old) fresh)))))
+      (dolist (form forms)
+        (let* ((uri (car form)) (old-pin (cdr form)))
+          (multiple-value-bind (scheme locator ref-hint)
+              (pp.runtime:island-parse-uri uri)
+            (let ((fresh (pp.runtime:island-repin scheme locator uri ref-hint)))
+              (cond
+                ((and old-pin (string= old-pin fresh)))  ; already current
+                ((and old-pin (pp.runtime:island-pin-p old-pin))
+                 ;; Same pin = same content, so every delimited occurrence
+                 ;; re-pins to the same fresh hash.
+                 (if (%island-find-delimited text old-pin)
+                     (progn (replace-all old-pin fresh) (incf updated))
+                     (skip uri "old pin not found in file text"
+                           (format nil "replace ~A... with ~A"
+                                   (pp.runtime:island-short old-pin) fresh))))
+                (old-pin
+                 (skip uri
+                       (format nil "existing pin argument is not a 64-hex ~
+hash: ~A" old-pin)
+                       (format nil "write island(~A, \"~A\")" uri fresh)))
+                (t
+                 ;; Insert after the URI as written.  Try the delimited
+                 ;; forms first (<uri>, "uri") — a bare-URI search would
+                 ;; also match INSIDE them — and use the first candidate
+                 ;; with exactly one hit.
+                 (let ((hit (loop for candidate in
+                                     (list (format nil "<~A>" uri)
+                                           (format nil "\"~A\"" uri)
+                                           uri)
+                                  for hits =
+                                  (%island-find-delimited text candidate)
+                                  when (= (length hits) 1)
+                                    return (cons candidate (first hits)))))
+                   (if hit
+                       (let ((close (cl:position #\) text
+                                              :start (+ (cdr hit)
+                                                        (length (car hit))))))
+                         (if close
+                             ;; The separator is surface-specific: brace
+                             ;; files take a comma, sexpr files whitespace.
+                             (let ((sep (if (eq surface :sexpr) " " ", ")))
+                               (setf text
+                                     (%island-splice text close 0
+                                                     (format nil "~A\"~A\""
+                                                             sep fresh)))
+                               (incf updated))
+                             (skip uri "no closing paren found after URI"
+                                   (format nil "add pin \"~A\" to the form"
+                                           fresh))))
+                       (skip uri "URI not found uniquely in file text"
+                             (format nil "add pin \"~A\" to the form" fresh))))))))))
+      (unless (string= text original)
+        ;; Rewrite user source after staging the complete edit.
+        (let ((tmp (format nil "~A.pp-update.~D" canonical (sb-posix:getpid))))
+          (with-open-file (stream tmp :direction :output
+                                       :if-exists :supersede)
+            (write-string text stream))
+          (rename-file tmp canonical)))
+      (format output "~D pin(s) updated~@[, ~D skipped~]~%"
+              updated (and (plusp skipped) skipped))
+      0)))
+
+(defun %run-island-update (paths output error-output)
+  (unless paths
+    (error "--update requires a source file"))
+  (let ((status 0))
+    (dolist (path paths status)
+      (setf status (%command-island-update-file path output error-output)))))
+
+(defun %run-island-pins (arguments output error-output)
+  (let* ((paths (remove-if
+                 (lambda (argument)
+                   (char= (char argument 0) #\-))
+                 arguments))
+         (path (first paths)))
+    (unless path
+      (error "island-pins requires a source file"))
+    (let* ((canonical (namestring path))
+           (text (%read-source-file canonical))
+           (surface (if (%suffix-p (string-downcase canonical) ".ppl")
+                        :sexpr :brace))
+           (forms (mapcan #'pp.runtime:island-forms-in
+                          (%read-language-forms text canonical surface))))
+      (if (null forms)
+          (progn
+            (format output "(no island forms in ~A)~%" path)
+            0)
+          (progn
+            (dolist (form forms)
+              (let* ((uri (car form)) (pin (cdr form)))
+                (cond
+                  ((null pin) (format output "~A~C(unpinned)~%" uri #\Tab))
+                  ((not (pp.runtime:island-pin-p pin))
+                   (format output "~A~C(invalid pin: ~A)~%" uri #\Tab pin))
+                  (t
+                   (let ((dir (pp.runtime:island-cached-tree pin)))
+                     (format output "~A~C~A~C~A~%" uri #\Tab pin #\Tab
+                             (cond ((not (probe-file dir)) "uncached")
+                                   ((pp.runtime:island-verify dir pin) "TAMPERED")
+                                   (t "cached"))))))))
+            0)))))
+
 (defun %gc-option-p (argument)
   (or (string= argument "--gc-keep-epochs")
       (string= argument "--gc-grace-seconds")))
@@ -2230,8 +2390,7 @@ environment, so leading loads must establish the initial environment first."
           '("--watch" "--watch-interval" "--stabilize" "--schedule"
             "--fenced-policy" "--supervise" "--member-name"
             "--desired-object" "--publish-object" "--remote-node"
-            "--pin-file" "--dump-pins" "--update"
-            "--fetch-islands" "island-pins" "cluster-init" "--mint-token"
+            "--pin-file" "--dump-pins" "cluster-init" "--mint-token"
             "--transport-push" "--transport-pull" "--serve-hit" "--recv-hit"
             "graph")
           :test #'string=))
@@ -3579,6 +3738,33 @@ environment, so leading loads must establish the initial environment first."
        (handler-case
            (%run-kernel-props arguments output)
          (error (condition) (host-error condition))))
+      ((string= (first arguments) "--update")
+       (run-language
+        (lambda ()
+          (let ((pp.runtime:*island-fetch-enabled* t)
+                (pp.runtime:*island-update-mode* t))
+            (%run-island-update (rest arguments) output error-output)))))
+      ((string= (first arguments) "island-pins")
+       (run-language
+        (lambda ()
+          (%run-island-pins (rest arguments) output error-output))))
+      ((member "--fetch-islands" arguments :test #'string=)
+       (run-language
+        (lambda ()
+          (let ((pp.runtime:*island-fetch-enabled* t))
+            (multiple-value-bind (operands grants why no-cache check
+                                  ignored-keep ignored-grace)
+                (%parse-command-options arguments)
+              (declare (ignore ignored-keep ignored-grace))
+              (%run-language-files
+               operands output :grant-specs grants :why why
+               :no-cache no-cache :check check :error-output error-output))))))
+      ((%runtime-flag-p (first arguments))
+       (format error-output
+               "pp: error: ~A is unavailable: effect/distribution runtime services are not installed~%"
+               (first arguments))
+       (finish-output error-output)
+       2)
       ((string= (first arguments) "cluster-init")
        (handler-case
            (%run-cluster-init-command arguments output)

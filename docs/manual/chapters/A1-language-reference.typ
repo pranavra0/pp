@@ -2,10 +2,9 @@
 
 = Language reference
 
-This appendix gives the full detail the language chapter summarized. Each
-section covers one construct and shows it running. pp is a Lisp-1: functions and
-variables share one namespace, and evaluation is inner-first and strict — a
-form's arguments are values by the time it runs.
+Full detail on the language chapter's summary. Each section covers one
+construct and shows it running. pp is a Lisp-1: one namespace for functions
+and variables; inner-first, strict evaluation.
 
 The special forms — the syntax the reader treats specially, rather than
 ordinary function calls — are: `if`, `do`, `let`, `let*`, `fn`, `def`, `node`,
@@ -124,12 +123,11 @@ A mismatch names the offending value and its source location.
 
 == Quotation
 
-Braces are pp's surface syntax; s-expressions are its AST. `quote { ... }` is
-the bridge: it turns the one form inside into that AST, as data. This is the
-same position Elixir takes — homoiconicity lives at the AST layer, not the
-surface. The brace text you type is not itself a data structure, but the tree
-it reads to is, and `quote` hands you that tree. Quotation is total: any form
-the reader accepts, `quote` turns into data.
+Braces are the surface syntax; s-expressions are the AST. `quote { ... }` is
+the bridge: it turns its one form into that AST as data. Homoiconicity lives
+at the AST layer (Elixir's position): the brace text is not a data structure,
+but the tree it reads to is, and quotation is total — any form a reader
+accepts becomes data.
 
 Quasiquote builds structure with holes. The body of `quasiquote { ... }` is a
 template written in ordinary brace syntax, denoting the s-expression data it

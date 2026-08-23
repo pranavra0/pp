@@ -2,11 +2,9 @@
 
 = Builtins and the standard library
 
-This appendix indexes the two layers of pp's vocabulary that are not special
-forms: the builtins provided by the saved image (`lisp/runtime/language.lisp`)
-and the standard library written in pp itself (`stdlib/*.pp`). Special forms —
-`let`, `def`, `fn`, `delay`, `force`, `node`, `perform`, `with-handler`, `quote`, and
-the rest — belong to the language reference, not here.
+The two layers of pp's vocabulary that are not special forms: builtins from
+the saved image (`lisp/runtime/language.lisp`) and the pp-written standard
+library (`stdlib/*.pp`). Special forms belong to the language reference.
 
 Signatures use pp calling syntax: `name(arg, …)`. A trailing `…` marks a
 variadic position; `[arg]` marks an optional one. Unless noted, a builtin
@@ -208,8 +206,8 @@ and policy helpers. `configure-runtime` installs a manifest at script scope.
 )
 
 The reader forms `quasiquote`, `unquote`, and `unquote-splicing` are also
-registered as builtins, and you normally reach them through the reader's
-quasiquote syntax; outside a quasiquote the latter two are an error. The
+registered as builtins, normally reached through the reader's quasiquote
+syntax; outside a quasiquote the latter two are an error.
 
 == Lists
 

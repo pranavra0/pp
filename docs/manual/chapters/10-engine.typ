@@ -2,16 +2,15 @@
 
 = The evaluator
 
-pp runs every program through one explicit continuation evaluator. It
-interprets the shared AST directly and uses one force path for ephemeral and
-persistent thunks. Source text is parsed by pp's readers; the host reader is
-never exposed to a program.
+pp runs every program through one explicit continuation evaluator: shared AST
+interpreted directly, one force path for ephemeral and persistent thunks.
+Source text is parsed by pp's readers; the host reader is never exposed to a
+program.
 
 Correctness is checked by expected-output programs, focused property sweeps,
-and process-level shell scenarios. The expected-output suite checks stdout,
-stderr, source ranges, and exit status. The shell scenarios cover store
-persistence, authority, effects, watch loops, transport, reconciliation, and
-crash recovery.
+and process-level shell scenarios: stdout, stderr, source ranges, exit status;
+store persistence, authority, effects, watch loops, transport,
+reconciliation, crash recovery.
 
 == The expected-output suite
 

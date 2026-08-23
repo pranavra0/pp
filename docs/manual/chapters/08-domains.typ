@@ -2,20 +2,17 @@
 
 = Domains and the reconciler
 
-A node computes a value. But a build has to change the world: write files, start
-processes. pp will not let you do that by mutating it directly. Instead you
-compute a desired state: a pure, hashable value that says what the world should
-contain — `{path → content}`, `{service → spec}`. A domain observes the world,
-diffs it against your desired value, and applies the minimal change to converge
-them. This is React's contract verbatim. You never touch the DOM. You return the
-desired DOM and the reconciler applies the diff. Here the world is the
-filesystem and the process table.
+A node computes a value; a build must change the world. You do not mutate it
+directly — you compute a desired state: a pure, hashable value saying what the
+world should contain (`{path → content}`, `{service → spec}`). A domain
+observes the world, diffs against your desired value, applies the minimal
+change to converge. React's contract verbatim: return the desired DOM; the
+reconciler applies the diff.
 
-The payoff is that convergence follows from the value, not from a script you
-maintain. Your desired state is a pure function of input cells. So pp caches it,
-re-derives it cheaply when an input changes, and re-observes reality rather than
-trusting a state file. Drift is just a difference the next pass erases — a file
-someone edited by hand, a service that died.
+Convergence follows from the value, not from a maintained script: desired
+state is a pure function of input cells, so pp caches it, re-derives cheaply
+on change, and re-observes reality rather than trusting a state file. Drift —
+a hand-edited file, a dead service — is just a difference the next pass erases.
 
 == A domain is observe / diff / apply
 
@@ -38,65 +35,56 @@ stratification. The desired state may not read the domain's own cells, or
 reconcile would loop forever. Reading your output tree to decide your output
 tree is refused.
 
-The trusted mechanics that actually touch the world are a small set of core
-primitives: atomic temp-file-plus-`rename`, `fork`/`exec`/reap, a per-domain
-key-value store (`tree-observe`, `materialize-file`, `remove-file`,
-`proc-spawn`, and the like). Everything else is a pp library. The filesystem and
-process domains ship as `stdlib/domain-fs.pp` and `stdlib/domain-proc.pp`. This
-is real pp source you can read. It holds all the policy over the core-enforced
-protocol: what counts as a create versus an update, when to restart a service.
-There is no privileged reconciler engine hidden in the runtime. A domain is a
-library.
+The trusted mechanics touching the world are a few core primitives: atomic
+temp-file-plus-`rename`, `fork`/`exec`/reap, a per-domain key-value store
+(`tree-observe`, `materialize-file`, `remove-file`, `proc-spawn`, …).
+Everything else is pp library: the filesystem and process domains ship as
+`stdlib/domain-fs.pp` and `stdlib/domain-proc.pp`, real readable source
+holding all policy over the core-enforced protocol (create vs update, when to
+restart). No privileged reconciler engine hides in the runtime.
 
 == Reconciling a filesystem
 
-`pp --reconcile ROOT prog.pp` auto-loads the fs domain and registers it with a
-write capability narrowed to `ROOT`. It takes the program's final value as the
-desired state of the tree under `ROOT`: a canonical tree value. File entries
-carry a mode and blob identity; directory entries make parents explicit. It
-diffs that against the real directory by content hash and materializes missing
-and changed files atomically. It also deletes files under `ROOT` that the map
-does not mention. The domain is the single writer, and the write grant is your
-consent to that authority. An fs write grant over `ROOT` is required. Without
-it, nothing is written.
+`pp --reconcile ROOT prog.pp` auto-loads the fs domain with a write capability
+narrowed to `ROOT` and takes the program's final canonical tree value as the
+desired state. File entries carry mode and blob identity; directory entries
+make parents explicit. It diffs by content hash and materializes missing and
+changed files atomically; files under `ROOT` the map does not mention are
+deleted. An fs write grant over `ROOT` is required; without it nothing is
+written.
 
-The transcript below reconciles a two-file desired state into a fresh root, so
-both files appear. It then introduces drift by hand, deleting one file and
-editing another, and reconciles again. The second pass reports exactly one
-create and one update, and the tree is restored. The summary line pp prints
-names the counts per kind. Its absolute root path is filtered to `ROOT` so the
-output is machine-independent.
+The transcript below reconciles two files into a fresh root, introduces drift
+by hand (one delete, one edit), and reconciles again: exactly one create and
+one update, tree restored. The summary names counts per kind, its root path
+filtered to `ROOT` for machine-independent output.
 
 #example("domain-reconcile", sh: true)
 
-Nothing in `site.pp` describes how to converge. There is no "if missing, create"
-logic. It states the desired tree, and the domain works out the difference.
-Reverting `conf/app.txt` and restoring the deleted `index.html` are the same
-mechanism, driven entirely by the diff.
+Nothing in `site.pp` says how to converge — no "if missing, create". It states
+the desired tree; the diff does the rest. Reverting one file and restoring
+another are the same mechanism.
 
-File contents are raw blob identities in the content-addressed store. A blob
-identity diffs without loading its bytes. So `rm -rf` on the tree
-restores from the store with zero tool re-runs when the desired-state nodes hit.
+File contents are raw blob identities, which diff without loading bytes:
+`rm -rf` on the tree restores from the store with zero tool re-runs when the
+desired-state nodes hit.
 
 == Watching, and other domains
 
-`pp --watch --reconcile ROOT prog.pp` runs the program, reconciles, then polls
-the observed cells and re-runs on any change. This is a controller loop. Every
-registered domain is re-observed and re-applied on each tick, whichever cell
-changed. This is cheap when nothing moved, because the plan cache turns a no-op
-pass into a hit. An externally deleted file or a drifted config is caught within
-one poll interval.
+`pp --watch --reconcile ROOT prog.pp` runs, reconciles, polls observed cells,
+and re-runs on change — a controller loop. Every registered domain is
+re-observed and re-applied each tick, whichever cell changed; cheap when
+nothing moved because the plan cache turns a no-op pass into a hit. External
+deletion or drift is caught within one poll interval.
 
-The process domain is the same protocol over a different world.
-`pp --supervise prog.pp` (usually with `--watch`) takes a `{service-name →
-spec}` map and keeps the process table matching it. It starts missing services,
-stops removed ones, and restarts a service whose spec changed. It also restarts
-one killed out from under it, within a poll interval. It requires
-`--grant process` and refuses stratification on its own `proc:` cells, exactly
-as the fs domain does. A from-scratch third-party domain is anything with an
-observe/diff/apply triple registered via `register-domain`. It gets the same
-journal bracket, plan cache, verify-after-write, and stratification for free.
-The protocol is generic, not filesystem-shaped.
+The process domain is the same protocol over a different world:
+`pp --supervise prog.pp` (usually with `--watch`) takes `{service-name → spec}`
+and keeps the process table matching: starts missing services, stops removed
+ones, restarts changed or killed services within a poll interval. Requires
+`--grant process`; refuses stratification on its own `proc:` cells like the fs
+domain. A third-party domain — any observe/diff/apply triple via
+`register-domain` — gets the same journal bracket, plan cache,
+verify-after-write, and stratification for free. The protocol is generic, not
+filesystem-shaped.
 
 Load `stdlib/domain.pp` for composition helpers such as `domain(spec)`,
 `probe(name, observe, cap)`, and `register-domains(domains)`. These are ordinary

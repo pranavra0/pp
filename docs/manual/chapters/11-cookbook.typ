@@ -42,9 +42,9 @@ Run the program with the store enabled, then inspect the node's explanation:
 pp why program.pp
 ```
 
-The explanation names hits, misses, and the cells in the trace. A content key
-is not a timestamp or a best guess about dependencies. A hit is allowed only
-after pp verifies the trace against the current world.
+The explanation names hits, misses, and trace cells. A content key is not a
+timestamp or a dependency guess: a hit is allowed only after pp verifies the
+trace against the current world.
 
 The store chapter explains the output and the CLI reference lists the audit
 flags. Start there when a cache result surprises you.
@@ -56,9 +56,8 @@ Observation sigils make a world read visible at the call site:
 #example("cap-read")
 
 This example is expected to fail. Granting a capability is a command-line
-decision, not something the program can manufacture. Narrow a held capability
-before passing it to a helper when the helper needs less authority than its
-caller.
+decision; narrow a held capability before passing it to a helper that needs
+less authority.
 
 == Build an artifact graph
 
