@@ -1,3 +1,0 @@
-# M3 pure parity: typed parameter failure and located diagnostic.
-def only-int(x: int): int { x }
-only-int("oops")

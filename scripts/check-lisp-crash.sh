@@ -3,14 +3,14 @@ set -uo pipefail
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 FIXTURE="$ROOT/lisp/tests/store/crash/build.pp"
-LISP=""
+BINARY=""
 TIMEOUT_SECONDS=30
 MAX_WRITES=256
 fail=0
 
 usage() {
   cat >&2 <<'EOF'
-usage: scripts/check-lisp-crash.sh --lisp PATH [--timeout-seconds N] [--max-writes N]
+usage: scripts/check-lisp-crash.sh --binary PATH [--timeout-seconds N] [--max-writes N]
 
 PATH is required.  The selected executable must honor PP_CRASH_AT=BOUNDARY:N
 for before, mid, pre-rename, and post-rename durable-write hooks.
@@ -24,9 +24,9 @@ bad() {
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --lisp)
-      [ "$#" -ge 2 ] || { echo 'crash: --lisp requires a path' >&2; exit 2; }
-      LISP=$2
+    --binary)
+      [ "$#" -ge 2 ] || { echo 'crash: --binary requires a path' >&2; exit 2; }
+      BINARY=$2
       shift 2
       ;;
     --timeout-seconds)
@@ -51,12 +51,12 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-[ -n "$LISP" ] || { usage; exit 2; }
-case "$LISP" in
+[ -n "$BINARY" ] || { usage; exit 2; }
+case "$BINARY" in
   /*) ;;
-  *) LISP="$(CDPATH= cd -- "$(dirname -- "$LISP")" && pwd -P)/$(basename -- "$LISP")" ;;
+  *) BINARY="$(CDPATH= cd -- "$(dirname -- "$BINARY")" && pwd -P)/$(basename -- "$BINARY")" ;;
 esac
-[ -x "$LISP" ] || { printf 'crash: Lisp executable is not executable: %s\n' "$LISP" >&2; exit 2; }
+[ -x "$BINARY" ] || { printf 'crash: executable is not executable: %s\n' "$BINARY" >&2; exit 2; }
 [ -f "$FIXTURE" ] || { printf 'crash: fixture is missing: %s\n' "$FIXTURE" >&2; exit 2; }
 case "$TIMEOUT_SECONDS" in ''|*[!0-9]*) echo 'crash: timeout must be an integer' >&2; exit 2;; esac
 case "$MAX_WRITES" in ''|*[!0-9]*) echo 'crash: max-writes must be an integer' >&2; exit 2;; esac
@@ -69,7 +69,7 @@ trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 invoke() {
   local home=$1 hook=$2 output=$3 error=$4
   set +e
-  python3 - "$ROOT" "$LISP" "$FIXTURE" "$home" "$hook" "$output" "$error" \
+  python3 - "$ROOT" "$BINARY" "$FIXTURE" "$home" "$hook" "$output" "$error" \
     "$TIMEOUT_SECONDS" <<'PY'
 import os
 import subprocess
@@ -325,6 +325,6 @@ done
 [ "$crashes" -gt 0 ] || bad "no SIGKILL crash points observed"
 [ "$crashes" -eq "$recovered" ] || bad "$recovered/$crashes crash points recovered"
 if [ "$fail" -eq 0 ]; then
-  printf 'LISP CRASH-INJECTION PASSED crashes=%s boundaries=4\n' "$crashes"
+  printf 'CRASH-INJECTION PASSED crashes=%s boundaries=4\n' "$crashes"
 fi
 exit "$fail"

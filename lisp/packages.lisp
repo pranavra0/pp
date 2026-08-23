@@ -367,7 +367,7 @@
    #:runtime-dynamic-tail-capability-depth
    #:runtime-dynamic-tail-handler-identities
    #:runtime-dynamic-tail-lookup-handler
-   ;; M4 durable store and repository boundary.  These APIs accept canonical
+   ;; Durable store and repository boundary. These APIs accept canonical
    ;; pp.kernel values/octets only; no host persistence objects are exposed.
    #:store-octets #:store-copy-octets #:store-string-octets #:store-octets-string
    #:store-content-octets #:store-hash-octets #:store-hash-content
@@ -420,7 +420,7 @@
    #:store-gc-mark-graph #:store-gc-sweep #:store-gc-run
    #:runtime-store-with-repositories #:runtime-store-put-node-result
    #:runtime-store-load-node-traces
-   ;; M4 effects, configuration, observations, and verified cache.
+   ;; Effects, configuration, observations, and verified cache.
    #:runtime-effect #:runtime-effect-p #:make-runtime-effect
    #:runtime-effect-name #:runtime-effect-function #:runtime-effect-hash
    #:runtime-effect-authority #:runtime-effects-error
@@ -470,7 +470,7 @@
    #:runtime-cache-hit-failed-p #:runtime-cache-miss-p #:runtime-cache-lookup
    #:cache-policy-create #:cache-policy-configure #:cache-policy-lookup
    #:cache-policy-note-volatile
-   ;; M4 persistent nodes and thunk identity adapters.
+   ;; Persistent nodes and thunk identity adapters.
    #:runtime-node-error #:runtime-node-service #:runtime-node-repository
    #:runtime-node-authority-value-p #:runtime-node-persistent-value-p
    #:runtime-node-forced-free-variables #:runtime-node-key-of

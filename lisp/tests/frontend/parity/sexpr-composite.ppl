@@ -1,3 +1,0 @@
-; quote/composite and observation
-(quote [1 "x" :ok])
-($env "HOME")

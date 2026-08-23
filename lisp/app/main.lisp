@@ -1,7 +1,6 @@
 ;;;; pp command boundary.  Source commands always select pp.frontend readers;
-;;;; user text is never silently handed to CL:READ.  The M1 fixture protocol
-;;;; carries already-delimited kernel fields and remains safe for shell parity
-;;;; tests.
+;;;; user text is never silently handed to CL:READ.  Input is parsed as pp
+;;;; text or as explicit machine-readable command data.
 
 (in-package #:pp.app)
 
@@ -10,89 +9,14 @@
 (defun version-string ()
   +version+)
 
-(defun %split-tabs (line)
-  "Split LINE on literal tabs without interpreting its contents.
 
-The empty field is meaningful, so this is intentionally not a whitespace
-reader and never calls READ or READ-FROM-STRING."
-  (let ((fields '())
-        (start 0)
-        (length (length line)))
-    (loop for i from 0 below length
-          when (char= (char line i) #\Tab)
-            do (push (subseq line start i) fields)
-               (setf start (1+ i)))
-    (nreverse (cons (subseq line start) fields))))
-
-(defun %need-exact (fields count operation)
-  (unless (= (length fields) count)
-    (error "~A requires exactly ~D tab-delimited field~:P"
-           operation count))
-  fields)
-
-(defun %need-at-least (fields count operation)
-  (when (< (length fields) count)
-    (error "~A requires at least ~D tab-delimited field~:P"
-           operation count))
-  fields)
-
-(defun %fixture-operation-p (operation)
-  (member (string-downcase operation)
-          '("hash-string" "hash-concat" "node-key-skeleton"
-            "identity" "codec-roundtrip" "cell-roundtrip")
-          :test #'string=))
-
-(defun %dispatch-corpus-path (path output)
-  (unless (and (stringp path) (probe-file path))
-    (error "parity corpus is not a readable file: ~A" path))
-  (with-open-file (corpus path :direction :input)
-    (let ((records (%dispatch-parity-corpus corpus output)))
-      (declare (ignore records))
-      0)))
-
-(defun %identity-roundtrip (kind text)
-  (let ((constructor (ecase kind
-                       ((:node-key) #'pp.kernel:make-node-key)
-                       ((:cache-key) #'pp.kernel:make-cache-key)
-                       ((:object-hash) #'pp.kernel:make-object-hash)
-                       ((:observed-hash) #'pp.kernel:make-observed-hash)
-                       ((:cell-id) #'pp.kernel:make-cell-id)))
-        (printer (ecase kind
-                   ((:node-key) #'pp.kernel:node-key-string)
-                   ((:cache-key) #'pp.kernel:cache-key-string)
-                   ((:object-hash) #'pp.kernel:object-hash-string)
-                   ((:observed-hash) #'pp.kernel:observed-hash-string)
-                   ((:cell-id) #'pp.kernel:cell-id-string))))
-    (funcall printer (funcall constructor text))))
-
-(defun %parse-identity-kind (text)
-  (let ((name (string-downcase text)))
-    (cond ((string= name "node-key") :node-key)
-          ((string= name "cache-key") :cache-key)
-          ((string= name "object-hash") :object-hash)
-          ((string= name "observed-hash") :observed-hash)
-          ((string= name "cell-id") :cell-id)
-          (t (error "unknown identity kind: ~A" text)))))
-
-
-(defun %fixture-exact (fields operation)
-  (unless (= (length fields) 4)
-    (error "~A requires exactly four tab-delimited fields" operation))
-  fields)
-
-(defun %fixture-canonical (constructor spec)
-  (format nil "~A:~A" constructor spec))
-
-(defun %fixture-env ()
-  (pp.kernel:make-env nil))
-
-(defun %fixture-range ()
+(defun %property-range ()
   (pp.kernel:make-source-range
-   :source "parity"
+   :source "kernel-props"
    :start-pos (pp.kernel:make-position :offset 0 :line 1 :column 1)
    :end-pos (pp.kernel:make-position :offset 1 :line 1 :column 2)))
 
-(defun %fixture-expr (constructor spec)
+(defun %property-expr (constructor spec)
   (let ((lit (pp.kernel:make-eliteral (pp.kernel:make-vint 1)))
         (sym (pp.kernel:make-esymbol "x")))
     (cond
@@ -130,243 +54,11 @@ reader and never calls READ or READ-FROM-STRING."
       ((string= constructor "config") (pp.kernel:make-econfig lit))
       ((string= constructor "typed") (pp.kernel:make-typed lit sym))
       ((string= constructor "located")
-       (pp.kernel:make-elocated (%fixture-range) lit))
+       (pp.kernel:make-elocated (%property-range) lit))
       ((string= constructor "match")
        (pp.kernel:make-ematch
         sym (list (list (pp.kernel:make-pvariable "x") nil lit))))
-      (t (error "unknown expr constructor: ~A" constructor)))))
-
-(defun %fixture-value (constructor spec)
-  (let* ((one (pp.kernel:make-vint 1))
-         (env (%fixture-env))
-         (closure (pp.kernel:make-closure
-                   (list "x") (pp.kernel:make-esymbol "x") env)))
-    (cond
-      ((string= constructor "nil") (pp.kernel:make-vnil))
-      ((string= constructor "bool")
-       (cond ((string= spec "true") (pp.kernel:make-vbool t))
-             ((string= spec "false") (pp.kernel:make-vbool nil))
-             (t (error "invalid bool fixture"))))
-      ((string= constructor "int")
-       (pp.kernel:make-vint (parse-integer spec :junk-allowed nil)))
-      ((string= constructor "float")
-       (or (and (pp.kernel:decode-hex-float spec)
-                (pp.kernel:make-vfloat (pp.kernel:decode-hex-float spec)))
-           (error "invalid float fixture")))
-      ((string= constructor "string") (pp.kernel:make-vstring spec))
-      ((string= constructor "keyword") (pp.kernel:make-vkeyword spec))
-      ((string= constructor "symbol") (pp.kernel:make-vsymbol spec))
-      ((string= constructor "pair") (pp.kernel:make-vpair one (pp.kernel:make-vnil)))
-      ((string= constructor "vector") (pp.kernel:make-vvector-from-list (list one)))
-      ((string= constructor "map")
-       (pp.kernel:make-vmap (list (cons (pp.kernel:make-vstring "a") one))))
-      ((string= constructor "set") (pp.kernel:make-vset (list one)))
-      ((string= constructor "closure") (pp.kernel:make-vclosure closure))
-      ((string= constructor "builtin") (pp.kernel:make-vbuiltin "print"))
-      ((string= constructor "capability")
-       (pp.kernel:make-vcapability (pp.kernel:mint-capability "process")))
-      ((string= constructor "thunk")
-       (pp.kernel:make-vthunk
-        (pp.kernel:make-thunk (pp.kernel:make-esymbol "x") env
-                              :config-hash "")))
-      ((string= constructor "env-map")
-       (pp.kernel:make-venvmap (list (cons "x" one))))
-      ((string= constructor "sealed") (pp.kernel:make-vsealed spec))
-      (t (error "unknown value constructor: ~A" constructor)))))
-
-(defun %fixture-pattern (constructor spec)
-  (let ((lit (pp.kernel:make-pliteral (pp.kernel:make-vint 1))))
-    (cond ((string= constructor "literal") lit)
-          ((string= constructor "variable") (pp.kernel:make-pvariable spec))
-          ((string= constructor "wildcard") (pp.kernel:make-pwildcard))
-          ((string= constructor "list") (pp.kernel:make-plist (list lit)))
-          ((string= constructor "tagged") (pp.kernel:make-ptagged spec (list lit)))
-          (t (error "unknown pattern constructor: ~A" constructor)))))
-
-(defun %fixture-capability (constructor spec)
-  (let ((realpath (lambda (path) path)))
-    (cond
-      ((string= constructor "none") (pp.kernel:make-cap-none))
-      ((member constructor '("filesystem" "network" "secret" "process")
-               :test #'string=)
-       (pp.kernel:mint-capability spec :realpath realpath))
-      ((string= constructor "compose")
-       (pp.kernel:compose-capabilities
-        (list (pp.kernel:make-cap-none)
-              (pp.kernel:mint-capability "process"))))
-      ((string= constructor "restrict")
-       (pp.kernel:restrict-capability
-        (pp.kernel:mint-capability "fs:/parity:ro" :realpath realpath)
-        (pp.kernel:canonicalize-path "/parity" :realpath realpath)))
-      (t (error "unknown capability constructor: ~A" constructor)))))
-
-(defun %fixture-cell (constructor spec)
-  (cond
-    ((string= constructor "file") (pp.kernel:make-cell-file spec))
-    ((string= constructor "runtime-file") (pp.kernel:make-cell-runtime-file spec))
-    ((string= constructor "tool") (pp.kernel:make-cell-tool spec))
-    ((string= constructor "tree") (pp.kernel:make-cell-tree spec))
-    ((string= constructor "stat") (pp.kernel:make-cell-stat spec))
-    ((string= constructor "env") (pp.kernel:make-cell-env spec))
-    ((string= constructor "argv") (pp.kernel:make-cell-argv))
-    ((string= constructor "config") (pp.kernel:make-cell-config spec))
-    ((string= constructor "handler") (pp.kernel:make-cell-handler spec))
-    ((string= constructor "probe") (pp.kernel:make-cell-probe spec))
-    ((string= constructor "sealed") (pp.kernel:make-cell-sealed spec))
-    ((string= constructor "node") (pp.kernel:make-cell-node spec))
-    ((string= constructor "domain")
-     (let ((at (cl:position #\: spec)))
-       (unless at (error "domain cell requires NAME:SUB spec"))
-       (pp.kernel:make-cell-domain (subseq spec 0 at) (subseq spec (1+ at)))))
-    ((string= constructor "unknown") (pp.kernel:make-cell-unknown spec))
-    (t (error "unknown cell constructor: ~A" constructor))))
-
-(defun %fixture-identity (constructor spec)
-  (cond
-    ((string= constructor "node-key")
-     (pp.kernel:node-key-to-string (pp.kernel:make-node-key spec)))
-    ((string= constructor "cache-key")
-     (pp.kernel:cache-key-to-string (pp.kernel:make-cache-key spec)))
-    ((string= constructor "object-hash")
-     (pp.kernel:object-hash-to-string (pp.kernel:make-object-hash spec)))
-    ((string= constructor "observed-hash")
-     (pp.kernel:observed-hash-to-string (pp.kernel:make-observed-hash spec)))
-    ((string= constructor "cell-id")
-     (pp.kernel:cell-id-to-string (pp.kernel:make-cell-id spec)))
-    (t (error "unknown identity constructor: ~A" constructor))))
-
-(defun %fixture-emit (output category name canonical digest)
-  (format output "~A~C~A~C~A~C~A~%"
-          category #\Tab name #\Tab canonical #\Tab digest))
-
-(defun %dispatch-parity-row (fields output)
-  (%fixture-exact fields (or (first fields) "fixture"))
-  (destructuring-bind (category name constructor spec) fields
-    (cond
-      ((string= category "expr")
-       (let ((value (%fixture-expr constructor spec)))
-         (%fixture-emit output category name
-                        (%fixture-canonical constructor spec)
-                        (pp.kernel:hash-expr value))))
-      ((string= category "value")
-       (let ((value (%fixture-value constructor spec)))
-         (%fixture-emit output category name
-                        (%fixture-canonical constructor spec)
-                        (pp.kernel:hash-value value))))
-      ((string= category "pattern")
-       (let ((value (%fixture-pattern constructor spec)))
-         (%fixture-emit output category name
-                        (%fixture-canonical constructor spec)
-                        (pp.kernel:hash-pattern value))))
-      ((string= category "capability")
-       (let* ((value (%fixture-capability constructor spec))
-              (scope (pp.kernel:canonicalize-path
-                      "/parity" :realpath (lambda (path) path)))
-              (composed (pp.kernel:compose-capabilities
-                         (list value (pp.kernel:make-cap-none))))
-              (restricted (pp.kernel:restrict-capability value scope))
-              (canonical
-                (format nil "~A|subset=~A|compose=~A|restrict=~A"
-                        (pp.kernel:capability-to-string value)
-                        (if (pp.kernel:subseteq value (list value))
-                            "true" "false")
-                        (if (pp.kernel:subseteq composed (list value))
-                            "true" "false")
-                        (if (pp.kernel:subseteq restricted (list value))
-                            "true" "false"))))
-         (%fixture-emit output category name canonical
-                        (pp.kernel:capability-hash value))))
-      ((string= category "cell")
-       (let ((canonical (pp.kernel:cell-serialize
-                        (%fixture-cell constructor spec))))
-         (%fixture-emit output category name canonical
-                        (pp.kernel:hash-string canonical))))
-      ((string= category "identity")
-       (let ((canonical (%fixture-identity constructor spec)))
-         (%fixture-emit output category name canonical
-                        (pp.kernel:hash-string canonical))))
-      ((string= category "codec")
-       (let ((value (pp.kernel:decode-value spec)))
-         (unless value (error "invalid codec fixture: ~A" name))
-         (let ((canonical (pp.kernel:encode-value value)))
-           (unless canonical (error "non-data codec fixture: ~A" name))
-           (%fixture-emit output category name canonical
-                          (pp.kernel:hash-string canonical)))))
-      (t (error "unknown parity category: ~A" category)))))
-
-(defun %dispatch-fields (fields output)
-  (let ((operation (string-downcase (or (first fields) "")))
-        (arguments (rest fields)))
-    (cond
-      ((string= operation "hash-string")
-       (%need-exact arguments 1 operation)
-       (format output "~A~%" (pp.kernel:hash-string (first arguments))))
-      ((string= operation "hash-concat")
-       (%need-at-least arguments 1 operation)
-       (format output "~A~%" (pp.kernel:hash-concat arguments)))
-      ((string= operation "node-key-skeleton")
-       (%need-at-least arguments 1 operation)
-       (format output "~A~%"
-               (pp.kernel:node-key-skeleton (first arguments)
-                                             (rest arguments))))
-      ((string= operation "identity")
-       (%need-exact arguments 2 operation)
-       (format output "~A~%"
-               (%identity-roundtrip (%parse-identity-kind (first arguments))
-                                    (second arguments))))
-      ((string= operation "codec-roundtrip")
-       (%need-exact arguments 1 operation)
-       (let ((value (pp.kernel:decode-value (first arguments))))
-         (unless value (error "invalid canonical codec fixture"))
-         (format output "~A~%" (pp.kernel:encode-value value))))
-      ((string= operation "cell-roundtrip")
-       (%need-exact arguments 1 operation)
-       (let ((cell (pp.kernel:cell-parse (first arguments))))
-         (unless cell (error "invalid cell encoding"))
-         (format output "~A~%" (pp.kernel:cell-serialize cell))))
-      (t (error "unknown kernel fixture operation: ~A" operation)))))
-(defun %parity-category-p (fields)
-  (member (string-downcase (or (first fields) ""))
-          '("expr" "value" "pattern" "capability" "cell" "identity" "codec")
-          :test #'string=))
-
-(defun %dispatch-stdin (input output &key parity return-count)
-  (let ((records 0))
-    (loop for line = (read-line input nil nil)
-          while line
-          do (unless (or (string= line "")
-                         (and (> (length line) 0) (char= (char line 0) #\#)))
-               (let ((fields (%split-tabs line)))
-                 (incf records)
-                 (if (or parity (%parity-category-p fields))
-                     (%dispatch-parity-row fields output)
-                     (%dispatch-fields fields output)))))
-    (finish-output output)
-    (if return-count records 0)))
-
-(defun %dispatch-parity-corpus (input output)
-  (let ((records (%dispatch-stdin input output :parity t :return-count t)))
-    (when (zerop records)
-      (error "parity corpus is empty"))
-    records))
-
-(defun %dispatch-fixture (arguments input output)
-  ;; Operation mode is selected by a recognized operation token before any
-  ;; filesystem probe.  A corpus path remains accepted for compatibility, but
-  ;; explicit callers should use --kernel-fixture-corpus.
-  (cond
-    ((null arguments) (%dispatch-stdin input output))
-    ((%fixture-operation-p (first arguments))
-     (%dispatch-fields arguments output)
-     (finish-output output)
-     0)
-    ((and (= (length arguments) 1) (probe-file (first arguments)))
-     (%dispatch-corpus-path (first arguments) output))
-    (t
-     (%dispatch-fields arguments output)
-     (finish-output output)
-     0)))
-
+      (t (error "unknown expression kind: ~A" constructor)))))
 (defun %read-source-file (path)
   "Read PATH as characters without invoking the host reader."
   (unless (and (stringp path) (probe-file path))
@@ -445,9 +137,8 @@ reader and never calls READ or READ-FROM-STRING."
         (%frontend-error-message condition))))
 
 (defun %emit-frontend-text (text output)
-  ;; Both OCaml printers terminate a non-empty program with one newline.
-  ;; The frontend printer intentionally returns a string without imposing
-  ;; stream policy, so the app owns that final delimiter.
+  ;; The frontend returns text without stream policy; the app owns the final
+  ;; delimiter.
   (write-string text output)
   (when (and (> (length text) 0)
              (char/= (char text (1- (length text))) #\Newline))
@@ -527,10 +218,8 @@ be decimal, so ordinary user messages are not rewritten accidentally."
                 (let ((column-end (%decimal-end message cursor)))
                   (when column-end
                     (setf cursor column-end)
-                    ;; A range can be a point (LINE:COLUMN) or a span
-                    ;; (LINE:COLUMN-LINE:COLUMN).  We only need LINE for the
-                    ;; OCaml command-line presentation, but validate either
-                    ;; form before consuming the prefix.
+                    ;; A range can be a point or a span. Validate either form
+                    ;; before consuming the prefix.
                     (when (and (< cursor (length message))
                                (char= (char message cursor) #\-))
                       (incf cursor)
@@ -649,9 +338,9 @@ and is evaluated directly by the REPL path."
 (defun %language-fallback-range (forms source)
   "Return the first source range available for a source-level fallback.
 
-Evaluator failures normally carry their own range.  This is only used for
+Evaluator failures normally carry their own range. This is only used for
 runtime failures that escape without one, so the command boundary can still
-render the OCaml-style `source:line` suffix."
+render a source:line suffix."
   (when source
     (or (loop for form in forms
               when (typep form 'expr-located)
@@ -1749,10 +1438,12 @@ Flatten only capability containers; no user value is accepted as authority."
     (grant-specs &key (why nil) (no-cache nil) (check nil) error-output)
   "Create a normal command session with an explicit HOME-derived store."
   (let* ((capabilities (%command-capabilities grant-specs))
+         (evaluator-state (runtime-evaluator-default-state
+                           :capabilities capabilities))
          (session
            (make-runtime-session
+            :evaluator-state evaluator-state
             :store-root (%command-store-root)
-            :evaluator-arguments (list :capabilities capabilities)
             :capabilities capabilities)))
     (%command-install-loaders session)
     (runtime-session-register-service
@@ -3212,7 +2903,7 @@ environment, so leading loads must establish the initial environment first."
                ("typed" "x") ("located" "x") ("match" "x")))
            (expressions
              (mapcar (lambda (spec)
-                       (%fixture-expr (first spec) (second spec)))
+                       (%property-expr (first spec) (second spec)))
                      expr-specs))
            (printable-expressions
              (remove-if
@@ -3289,7 +2980,7 @@ environment, so leading loads must establish the initial environment first."
         (check-injective "pattern" patterns #'hash-pattern)
         (check-injective "value" values #'hash-value)
         (dotimes (index count)
-          (let ((form (%fixture-expr
+          (let ((form (%property-expr
                        "literal-int" (format nil "~D" (+ seed index)))))
             (handler-case
                 (check-injective "expr-sweep"
@@ -3360,13 +3051,7 @@ environment, so leading loads must establish the initial environment first."
           "Frontend commands:~%  pp fmt --to-braces <file.ppl> [-i]~%  pp fmt --to-sexpr <file.pp> [-i]~%  pp --emit-braces <file.ppl>~%  pp --roundtrip-braces <file.ppl>~%  pp --compare-hash <file1.pp> <file2.pp>~%  pp --list-comments sexpr|brace <file>~%  pp lint <file.pp>~%  pp --dump-surface-tables~%~%")
   (format stream
           "Admin and verification commands:~%  pp --dump-builtins~%  pp --check-kernel-props [--seed N] [--count N]~%  pp cluster-init~%  pp --mint-token OUT TTL-SECS [--grant SPEC]~%  pp --transport-push|--transport-pull KIND HASH ROOT~%  pp --serve-hit KEY TOKEN-FILE SHARED-ROOT REPLY-FILE~%  pp --recv-hit REPLY-FILE SHARED-ROOT~%~%")
-  (format stream
-          "Fixture corpus mode: pp --kernel-fixture-corpus PATH~%")
-  (format stream
-          "Fixture stdin fields are tab-delimited: parity-corpus, hash-string,~%")
-  (format stream
-          "hash-concat, node-key-skeleton, identity, codec-roundtrip, or~%")
-  (format stream "cell-roundtrip.~%"))
+)
 
 
 (defun %run-frontend-command (arguments output error-output)
@@ -3592,19 +3277,6 @@ environment, so leading loads must establish the initial environment first."
              (%usage error-output)
              (finish-output error-output)
              1)))
-      ((string= (first arguments) "--kernel-fixture-corpus")
-       (handler-case
-           (progn
-             (unless (= (length (rest arguments)) 1)
-               (error "--kernel-fixture-corpus requires exactly one path"))
-             (%dispatch-corpus-path (second arguments) output))
-         (error (condition) (host-error condition))))
-      ((member (first arguments) '("--kernel-fixture" "kernel-fixture"
-                                   "--kernel-fixture-stdin" "--stdin")
-               :test #'string=)
-       (handler-case
-           (%dispatch-fixture (rest arguments) input output)
-         (error (condition) (host-error condition))))
       ((string= (first arguments) "run")
        (run-language
         (lambda ()

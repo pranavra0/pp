@@ -6,8 +6,7 @@ and every sigil with exactly one meaning. It supersedes the earlier
 2026-07-14 after a two-round design review. [DESIGN.md](DESIGN.md) records
 the rejected alternatives and why.
 
-The surface described here is implemented. The migration plan that tracked
-it is retired to git history.
+The surface described here is implemented and is the stable source contract.
 
 ---
 

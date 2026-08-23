@@ -1,23 +1,12 @@
-;; defmacro (M3, D10's promise) — expected-output test.
+;; defmacro: an expected-output test for total macro expansion.
 ;;
-;; This is tests/041-defmacro.pp's twin, authored in the sexpr surface — the
-;; AST-native notation `defmacro`/`quote`/`quasiquote` have always used
-;; (M7 demoted it from "the syntax" to "the AST", never deprecated it: it is
-;; exactly the pre-M7-migration original of this file, git show
-;; the M7 S5 gate: this file and the .pp must produce byte-identical output —
-;; a macro author may write braces or sexprs and the language does not know
-;; the difference.
+;; This is tests/041-defmacro.pp's twin in the sexpr surface. Both surfaces
+;; lower to the same AST, so observable values and hashes stay identical.
 ;;
-;; Expansion happens at ONE shared point before the evaluator ever sees a
-;; form (macro.ml), so this file exercises it purely through observable
-;; VALUES (never node-body `log` side effects — LAW 17's "a hit replays no
-;; log" would make repeated `dune runtest` runs against a developer's real
-;; ~/.pp/store flaky if this were a fresh-vs-cached-run distinction; a
-;; node's printed RESULT is deterministic regardless of hit/miss, so that's
-;; all this file checks). The LAW 20 rekey property itself — editing a
-;; macro's definition re-keys a node built from its expansion — is
-;; tests/042-defmacro-rekey.sh's job, under an isolated $HOME where hit vs.
-;; miss can be observed directly.
+;; Expansion happens at one shared point before evaluation sees a form. This
+;; test checks observable values only; a cache hit replays no node-body log
+;; (SPEC law 17). Editing a macro definition re-keys a node built from its
+;; expansion (SPEC law 20), covered by tests/042-defmacro-rekey.sh.
 
 (print "=== control-flow macro (unless), via quasiquote ===")
 (defmacro (unless cond then-branch)

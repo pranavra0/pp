@@ -1,27 +1,27 @@
 # Releasing pp
 
-This guide describes the release process and the clean exported-source gate used
-by CI.
+This guide describes the release process for the saved Common Lisp image and
+the clean exported-source gate used by CI.
 
 ## Version wiring
 
-`pp --version` and the REPL banner read `Version.string`, which is populated by
-`dune-build-info` from the top-level `(version ...)` field in `dune-project`.
-That field is the version source of truth in both a checkout and a `.git`-free
-archive. The fallback in `src/kernel/version.ml` is only for builds outside
-Dune's package machinery and must remain consistent with `dune-project`.
+`bin/pp --version` and the REPL banner read `+version+` in
+`lisp/app/main.lisp`. Change that value for a release and rebuild the saved
+image with `scripts/build-lisp.sh`.
 
 ## Cutting vX.Y.Z
 
-1. Change `(version ...)` in `dune-project` from the development value to
-   `X.Y.Z`, run `dune build` to regenerate `pp.opam`, and commit both files.
-2. Write release notes from the Conventional Commits range since the last tag.
+1. Change `+version+` to `X.Y.Z` in `lisp/app/main.lisp`.
+2. Review the Conventional Commits range since the previous release and write
+   release notes.
 3. Update version references and closed items in `docs/SPEC.md`.
-4. Run the local gates: `dune build`, `dune runtest --force`, and the core and
-   full fuzzers with count 2000.
-5. Commit, tag `vX.Y.Z`, and push the commit and tag.
+4. Run `scripts/build-lisp.sh --output lisp/pp`.
+5. Run `scripts/check-architecture.sh`, `scripts/run-tests.sh bin/pp`, and
+   `scripts/check-lisp-crash.sh --binary bin/pp`.
+6. Run `scripts/check-clean-export.sh`.
+7. Commit, tag `vX.Y.Z`, and push the commit and tag.
 
-Do not invent a tag or version: use the value in `dune-project`.
+Do not invent a tag or version: use the value printed by `bin/pp --version`.
 
 ## Clean exported-source gate
 
@@ -31,25 +31,20 @@ The executable gate is one command:
 ./scripts/check-clean-export.sh
 ```
 
-It archives `HEAD` with `git archive`, extracts into a fresh temporary
- directory with no `.git`, then uses the CI opam environment to run `dune build`
-and the canonical `dune runtest --force`. It runs the exported
-`_build/default/src/app/main.exe --version` and compares its output exactly with
-the version parsed from the exported `dune-project`. CI runs this gate on every
-push and pull request (in addition to the normal Linux and macOS gates).
-
-The archive gate deliberately reuses `dune runtest --force`; closed-runner
-confinement remains covered by `tests/102` in that suite rather than being
-copied into the release script.
+It archives `HEAD` with `git archive`, extracts into a fresh directory with no
+`.git`, builds a new saved image, and runs the complete shell suite against
+that image. It also checks that the exported executable reports a non-empty
+version. The gate catches untracked source, generated-image, and local-path
+dependencies that a checkout build can hide.
 
 ## CI and unreleased metadata
 
-Pushes and pull requests to `master` run the canonical build on Ubuntu and
-macOS, architecture and unit gates, `dune runtest --force`, core fuzzing at
-count 2000, full grammar fuzzing at count 2000, and the clean exported-source
-gate. Fuzzing is part of PR validation; there is no separate scheduled-fuzz
-workflow.
+Pushes and pull requests run on Linux and macOS with SBCL installed. CI builds
+the saved image, runs the architecture checks and shell suite, and then runs
+the clean exported-source gate on Linux. The test runner uses an isolated
+`HOME` for every case; no daemon or pre-existing store is part of release
+validation.
 
-The current `0.2.0-dev` value in `dune-project` is unreleased development
-metadata, not a release tag or promised release version. A release must replace
-it with the intended `X.Y.Z` value before tagging.
+Keep generated `lisp/pp`, `lisp/pp.sbcl-image`, and build-id files out of
+source commits. The release artifact is produced by the build script from
+tracked Lisp sources.

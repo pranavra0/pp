@@ -1,4 +1,4 @@
-;;;; M4 verified cache lookup and trace decisions.
+;;;; Verified cache lookup and trace decisions.
 (in-package #:pp.runtime)
 
 (defstruct (runtime-cache-policy (:constructor %make-runtime-cache-policy))

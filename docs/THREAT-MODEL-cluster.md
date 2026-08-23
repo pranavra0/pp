@@ -107,14 +107,13 @@ This model does not consider these adversaries:
 ## Trust anchors
 
 - one cluster secret. `pp cluster-init` mints it on the root machine
-  (`Cap_token.init` in `src/kernel/cap_token.ml`): 32 bytes from Cryptokit's secure random
-  generator, hex-encoded, written to `~/.pp/cluster/secret` with file mode
-  0600. It refuses to overwrite an existing secret, so there is no silent
-  rotation that would invalidate every token already issued. Alongside the
-  secret sits `~/.pp/cluster/id`, a bare cluster-id label. This is not
+  (`lisp/kernel/cap-token.lisp`): a cryptographically random secret
+  generated and written to `~/.pp/cluster/secret` with file mode 0600.
+  It refuses to overwrite an existing secret, so there is no silent rotation
+  that would invalidate every token already issued. Alongside the secret sits
+  `~/.pp/cluster/id`, a bare cluster-id label. This is not
   secret; it is embedded in the clear in every token, so a token minted for
-  one cluster is rejected by another even in the implausible case that the
-  two clusters' secrets happened to share bytes
+  one cluster is rejected by another.
 - distribution happens out of band. The operator copies both files to
   other cluster members by hand, using scp, configuration management, or
   whatever they already use to distribute ssh host keys. pp never
@@ -124,16 +123,16 @@ This model does not consider these adversaries:
   and redistributing it to every member, and a member without a copy
   simply cannot mint or verify tokens. That is a hard capability boundary,
   not a soft degradation
-- no per-member identity in this version. pp uses HMAC-SHA256 through
-  Cryptokit, already a project dependency used for content hashing, so
-  this introduces no new cryptographic surface. HMAC is symmetric: every
-  member holding the secret can both mint and verify tokens. No adversary
-  in this model needs non-repudiation — there is no dispute over "which
-  member said this" to resolve, because a single owner trusts every
-  member the same way they trust every machine they have copied an ssh
-  private key to. Asymmetric public-key infrastructure was considered and
-  rejected for this reason: it would add complexity without defending
-  against any adversary this model considers
+- no per-member identity in this version. pp uses HMAC-SHA256 through the
+  runtime's cryptographic provider, already used for content hashing, so this
+  introduces no new cryptographic surface.
+  HMAC is symmetric: every member holding the secret can both mint and verify
+  tokens. No adversary in this model needs non-repudiation — there is no dispute
+  over "which member said this" to resolve, because a single owner trusts every
+  member the same way they trust every machine they have copied an ssh private
+  key to. Asymmetric public-key infrastructure was considered and rejected for
+  this reason: it would add complexity without defending against any adversary
+  this model considers.
 
 ## Falsifiable claims
 
@@ -141,9 +140,9 @@ Each claim below is an adversarial test. All run end-to-end in
 `tests/047-cluster-sync.sh`, using two or three `pp` process invocations
 that differ only in their `$HOME` directory. This stands in for distinct
 machines at the process level, sharing a "world" directory the way the
-continuous-integration loopback local-directory transport does. See the
-module header of `src/runtime/transport.ml` for why the tests use this shape
-rather than a true single-process, dual-store setup.
+continuous-integration loopback local-directory transport does. The runtime
+distribution boundary keeps this process-level setup separate from a
+single-process, dual-store setup.
 
 - claim T1: pp re-hashes every synced artifact before use, and refuses any
   mismatch rather than silently accepting it. `Transport.ingest_object` and

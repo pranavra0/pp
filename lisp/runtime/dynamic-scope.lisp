@@ -1,4 +1,4 @@
-;;;; M3 dynamic scope boundary.
+;;;; Dynamic scope boundary.
 ;;;;
 ;;;; The only special binding here is the deliberately dynamic current scope.
 ;;;; It is not a registry: every stack and every callback belongs to the scope's
@@ -356,9 +356,8 @@ The extent is exception-safe and restores an outer dynamic scope."
   (unwind-protect (funcall thunk)
     (runtime-dynamic-pop-observation-collection)))
 
-;;; Tail brackets pass an idempotent leave callback, matching the OCaml
-;;; dynamic_scope contract while remaining safe for ordinary zero-argument
-;;; callbacks through the simple WITH-* variants above.
+;;; Tail brackets pass an idempotent leave callback and remain safe for
+;;; ordinary zero-argument callbacks.
 (defun runtime-dynamic-with-tail-capabilities (capabilities thunk)
   (runtime-dynamic-push-capabilities capabilities)
   (let ((closed nil))
@@ -582,9 +581,8 @@ session-owned :PERFORM service.  Missing services fail closed."
        (format nil "runtime service is unavailable: ~A" name)
        "runtime.service")))
 
-;;; Deterministic observation identities used by config/handler traces.  The
-;;; hashes are plain canonical strings in M3; durable trace encoding belongs to
-;;; the later store slice.
+;;; Deterministic observation identities used by configuration and handler
+;;; traces.
 (defun runtime-dynamic-observe-config (key)
   (multiple-value-bind (value present) (runtime-dynamic-config-lookup key)
     (if present

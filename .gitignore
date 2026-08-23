@@ -1,18 +1,18 @@
-# pp build artifacts
-*.cmo
-*.cmi
-*.cmx
+# Build artifacts
 *.o
 
-# pp binary — root convenience symlink (bin/pp is tracked instead)
+# Saved Lisp image and launcher payload.
+/lisp/pp
+/lisp/pp.sbcl-image
+/lisp/pp.sbcl-image.build-id
 /pp
 /pp-native
 
+# Tool caches
+_build/
+
 # Cache
 .pp/
-
-# OCaml
-_build/
 
 # Fuzzer
 fuzz

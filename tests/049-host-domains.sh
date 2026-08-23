@@ -186,5 +186,5 @@ EOF
   || bad "backcompat-flat-no-member-name" "$(cat "$TMP/out-flat")"
 
 rm -rf "$TMP"
-if [ "$fail" -eq 0 ]; then echo "=== M5 STAGE C HOST-QUALIFIED DOMAINS TEST PASSED ==="; fi
+if [ "$fail" -eq 0 ]; then echo "=== HOST-QUALIFIED DOMAINS TEST PASSED ==="; fi
 exit $fail

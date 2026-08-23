@@ -1,9 +1,0 @@
-; The metamorphic fuzzer (docs/TESTING.md). Links the pp library for
-; in-process property checks and shells out to the single pp binary.
-; Run:  dune exec fuzz -- --grammar full --count 1500
-(executable
- (name fuzz)
- (modules fuzz)
- (libraries pp.app pp.runtime pp.frontend pp.kernel unix)
- ; -no-strict-sequence: same rationale as src/dune — pre-existing style.
- (flags -no-strict-sequence))

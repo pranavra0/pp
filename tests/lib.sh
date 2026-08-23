@@ -2,15 +2,10 @@
 # `set -uo pipefail`:
 #
 #     . "$(dirname "$0")/lib.sh"
-# It resolves the pp binary to an absolute path (so HOME-isolated runs that
-# move cwd still find it), isolates the store under a throwaway HOME, and
-# provides the ok/bad assertion helpers plus the `fail` accumulator that the
-# script's trailing `exit $fail` reports. A script that drives several hosts
-# just overrides HOME per invocation; the export here is the fallback.
 #
-# Pair/parity callers may provide PP_OCAML and PP_LISP as explicit paths.  The
-# selector below keeps shell cases composable without making existing tests
-# know about either engine; ordinary calls continue to use PP.
+# It resolves the accepted pp launcher to an absolute path, isolates the store
+# under a throwaway HOME, and provides the ok/bad assertion helpers plus the
+# `fail` accumulator that the script's trailing `exit $fail` reports.
 #
 # `assert` stays per-script: its shape differs by suite.
 resolve_pp_binary() {
@@ -23,35 +18,7 @@ resolve_pp_binary() {
 PP=${PP:-bin/pp}
 PP=$(resolve_pp_binary "$PP")
 export PP
-if [ -n "${PP_OCAML:-}" ]; then
-  PP_OCAML=$(resolve_pp_binary "$PP_OCAML")
-  export PP_OCAML
-fi
-if [ -n "${PP_LISP:-}" ]; then
-  PP_LISP=$(resolve_pp_binary "$PP_LISP")
-  export PP_LISP
-fi
 
-engine_binary() {
-  case "${1:-default}" in
-    default|pp) printf '%s\n' "$PP" ;;
-    ocaml)
-      [ -n "${PP_OCAML:-}" ] || { echo "PP_OCAML is required for engine=ocaml" >&2; return 2; }
-      printf '%s\n' "$PP_OCAML" ;;
-    lisp)
-      [ -n "${PP_LISP:-}" ] || { echo "PP_LISP is required for engine=lisp" >&2; return 2; }
-      printf '%s\n' "$PP_LISP" ;;
-    *) echo "unknown engine: $1" >&2; return 2 ;;
-  esac
-}
-
-run_engine() {
-  [ "$#" -ge 1 ] || { echo "run_engine requires an engine name" >&2; return 2; }
-  local binary
-  binary=$(engine_binary "$1") || return
-  shift
-  "$binary" "$@"
-}
 
 TMP=$(mktemp -d)
 export HOME="$TMP"

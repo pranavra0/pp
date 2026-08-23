@@ -1,252 +1,105 @@
 # pp testing
 
-pp's correctness rests on two pillars: an expected-output test suite and a
-metamorphic fuzzer. Every `.pp` test is checked against a blessed
-`tests/NNN-*.pp.expected` file that records the tree-walker's output. The
-fuzzer generates semantics-preserving program twins and asserts they produce
-identical output.
+The test suite runs the saved Common Lisp image through two complementary
+interfaces: expected-output programs and shell scenarios. Expected-output
+files pin stdout, stderr, and the final exit status. Shell scenarios exercise
+process boundaries, isolated stores, capabilities, effects, and filesystem
+state that a single invocation cannot cover.
 
-This file describes the machinery only. Each test file's own header
-comment states what that test proves. Read the file, not a catalogue.
+This file describes the machinery only. Each test file's own header states
+what that test proves; read the file rather than maintaining a second
+catalogue here.
 
 ## Run the suite
 
 ```sh
-dune runtest          # runs scripts/run-tests.sh
-dune runtest --force  # re-run even if dune's cache says nothing changed
+scripts/build-lisp.sh --output lisp/pp
+scripts/run-tests.sh bin/pp
 ```
 
-`dune runtest` first runs the architecture gates and five focused OCaml test
-executables, then `scripts/run-tests.sh` does two things:
+`scripts/run-tests.sh` runs every `tests/NNN-*.pp` program against its
+`tests/NNN-*.pp.expected` file and then runs each `tests/*.sh` shell suite.
+Each case receives an isolated temporary `HOME`; shell cases use
+`tests/lib.sh` for the selected `PP`, temporary files, and assertions.
 
-- runs every `tests/NNN-*.pp` and diffs its stdout against
-  `tests/NNN-*.pp.expected`; a missing `.expected` file is a failure
-- runs each `tests/*.sh` shell suite in turn
+Cases run concurrently by default. Set `TEST_JOBS=1` for deterministic serial
+debugging. `TEST_CASE_TIMEOUT` bounds each case and defaults to 120 seconds.
+Results are buffered and replayed in enumeration order.
 
-The shell suites cover what a single-process stdout diff cannot:
-multi-process store scenarios (mutating files, grants or globals between
-`pp` invocations), expected-output oracles, watch loops, and tested local and
-remote transport paths. Network simulation is not part of this gate.
-
-The category counts are printed by `scripts/test-categories.sh`. The focused
-executables are deliberately small and use real kernel, repository,
-observation, lifecycle, and reader implementations; they do not replace the
-process and filesystem integration tests.
-
-
-## Smallest relevant gate
-
-Use the narrowest target while iterating, then run the full gate before handoff:
-
-```sh
-dune build @unit                 # five focused executables
-dune build @architecture         # warnings, dependencies, state, API, AST slices
-dune exec ./tools/fuzz.exe -- --grammar full --count 2000
-dune runtest                     # all focused, language, integration, and gates
-```
-
-Changes to evaluator, kernel identity, or durable repository code still require
-the full suite and the full fuzzer. The architecture gate's controlled-probe
-test is `tests/094-architecture-gates.sh`; it proves each checker rejects a
-temporary violation and removes the probe.
-
-The suite is slow: a full run takes about 3.5 minutes.
-
-
-## Find what a test covers
-
-Each test file's header comment states what it proves and which fixes it
-pins. To list every test's first header line:
-
-```sh
-awk 'FNR==1{d=0} /^#!/{next} /^# pins:/{next} /^#/ && !d {print FILENAME ": " substr($0,3); d=1}' tests/*.pp tests/*.sh
-```
+The category counts come from `scripts/test-categories.sh`. The focused shell
+suites cover language laws, readers and printers, effects and capabilities,
+durable nodes and traces, lifecycle, reconciliation, transport, crash
+recovery, and adversarial worlds. `scripts/check-architecture.sh` builds a
+fresh saved image and exercises version and pure evaluation before the suite.
 
 ## Add a test
 
-A `.pp` test needs no wiring beyond its `.expected` file: drop
-`tests/NNN-name.pp` and a blessed `tests/NNN-name.pp.expected` in `tests/`
-and the driver's glob picks them up. To create the `.expected` file, run
-the test once and capture its output. A shell suite needs one invocation
-added to `scripts/run-tests.sh`, which calls each suite explicitly.
+A `.pp` test needs no wiring beyond its `.expected` file: add
+`tests/NNN-name.pp`, run it once with an isolated home, and save stdout,
+stderr, and the exit line as `tests/NNN-name.pp.expected`. A shell scenario
+needs only an executable `tests/NNN-name.sh`; the runner discovers it
+automatically.
 
 Conventions:
 
-- start the file with a header comment stating what the test proves —
-  this is the only place that information lives
-- add a `# pins: LAW-<n>` line when the test pins a SPEC law; the marker
-  is machine-parsed by tests/072-law-pins.sh, so keep the exact format
-- source `tests/lib.sh` after the shell options; it resolves `PP`, creates
-  the temporary directory, isolates `HOME`, and initializes shared assertions
+- start each file with a short header comment stating what it proves;
+- add a `# pins: LAW-<n>` line when the test pins a SPEC law; the marker is
+  machine-parsed by `tests/072-law-pins.sh`, so keep the exact format;
+- source `tests/lib.sh` after shell options; it resolves `PP`, creates the
+  temporary directory, isolates `HOME`, and initializes assertions;
+- use a scratch project and scratch store for external tools or filesystem
+  tests; never mutate a developer's checkout.
 
 ## Standing gates
 
-Five suites are gates rather than feature tests. They attach an
-obligation to the build, so a change cannot ship unexamined.
+These suites attach an obligation to the build:
 
-- tests/072-law-pins.sh — law linkage. Every SPEC law whose status is
-  "holds" must have a test carrying a matching `# pins: LAW-<n>` marker,
-  or an explicit entry on the PENDING backfill list. A pin naming a
-  nonexistent law fails, and a stale PENDING entry fails, so neither
-  list can rot.
-- tests/067-surface-tables-drift.sh — surface tables drift. The
-  generated block in docs/SPEC.md must match `pp --dump-surface-tables`,
-  and the grant descriptors must appear in exactly one `.ml` file
-  (src/frontend/surface_tables.ml). A table edit not mirrored into SPEC, or a
-  hand-copied table, is a red build. The same gate checks that
-  `pp --dump-builtins` renders the declarative builtin catalog.
-- tests/074-adversarial-worlds.sh — adversarial worlds coverage. Every
-  user-observable read head (`$env`, `$file`, `$probe` and the rest)
-  must have either an adversarial fixture in
-  `tests/fixtures/adversarial/<head>.sh` or a documented honest-edge
-  entry in DESIGN.md. The head set comes from the surface table, so a
-- tests/071-kernel-props.sh and tests/075-cap-props.sh — kernel property
-  sweeps. QuickCheck-style generators in src/app/kernel_props.ml prove hash
-  injectivity, the quote round-trip and the print round-trip over random
-  ASTs and values (071), and the capability algebra — restriction only
-  narrows, composition is exactly union, the subset gate is sound, and the
-  node-boundary ban catches buried authority (075). These are kernel
-  AST/capability properties, not durable repository integration; the latter
-  is covered by the process/filesystem suites and crash gate.
-  The generators match exhaustively on the constructor tags, so a new AST or
-  capability kind breaks the build until it is generated and covered.
-- tests/073-crash-injection.sh — crash injection. Every durable store
-  write funnels through one atomic-write choke point. `PP_CRASH_AT`
-  kills pp with SIGKILL at each write boundary of a real build, and a
-  plain restart must neither crash nor produce anything but the
-  byte-identical clean-build result.
+- `tests/072-law-pins.sh` checks that every SPEC law marked `holds` has a
+  matching test marker or an explicit pending entry, and rejects stale law
+  ids;
+- `tests/089-state-inventory.sh` rejects deleted implementation trees,
+  generated images, and stale build metadata;
+- `tests/092-dependency-boundaries.sh` checks the saved-image boundary and
+  absence of removed native build metadata;
+- `tests/094-architecture-gates.sh` runs the architecture checks in a
+  controlled temporary copy;
+- `tests/071-kernel-props.sh` and `tests/075-cap-props.sh` sweep hash,
+  quotation, print-roundtrip, and capability algebra properties;
+- `scripts/check-lisp-crash.sh` can inject a kill at each durable-write
+  boundary and verify restart leaves only a clean, byte-identical store.
 
-`tools/fuzz.ml` generates random pp programs, then applies
-semantics-preserving transforms to produce a twin. It runs both the original
-and the twin and compares observable behavior: same successful exit status,
-stdout, and effect log, or (for failures) the same normalized error tag.
-Unmatched errors, mismatched successful results or effect logs, and crashes
-are failures. A mismatch is deduplicated by signature, shrunk to a minimal
-repro, and written to a failure directory. The fuzzer depends only on OCaml's
-`unix` library and is fully deterministic: program i under seed S is always
-the same program.
+Run the smallest relevant shell suite while iterating, then run the complete
+saved-image suite before handoff. Changes to evaluator, identity, or durable
+repository code require the corresponding language, node, and store suites.
 
+## Expected-output cases
 
-### The twin transforms
-
-Three transforms produce the semantics-preserving twin:
-
-- **do-wrap**: wraps the program's body in a `(do …)`, which is an
-  identity for a single expression — `(do e)` must produce identical
-  output to `e`.
-- **let-identity**: wraps a value expression in `(let ((_ e)) …)`, an
-  unused binding that must not change semantics.
-- **eta-identity**: eta-expands a `fn` application — `(f x)` becomes
-  `((fn (y) (f y)) x)` — which must be behaviorally identical.
-
-Transforms skip subtrees containing `def`, `fn`, `quote`, `quasiquote`,
-`load`, `load-module`, `defmacro` arguments, or `match` patterns, where
-the transform would change semantics or scoping.
-
-Every generated program also passes through `pp --roundtrip-braces`, which
-prints the sexpr AST as brace text, re-reads it with the brace reader, and
-asserts structural AST equality and hash equality (SPEC law 20). Generated
-persistent nodes additionally exercise explicit cache-hit probes. A probe
-passes only when diagnostics contain a line-structured
-`node <shortkey>: hit — ok trace verified (` or
-`node <shortkey>: hit — failing trace verified (` line after the main
-execution; arbitrary `hit` text is not sufficient. Any round-trip or
-cache-probe failure gates the run like a twin mismatch.
-
+The worker appends `# exit: N` to captured output before comparing it with the
+committed expected file. A missing expected file is a failure, not an implicit
+blessing. To bless a deliberately new case:
 
 ```sh
-dune build                                              # builds bin/pp + the fuzzer
-dune exec ./tools/fuzz.exe -- --grammar core --count 2000
-dune exec ./tools/fuzz.exe -- --grammar full --count 2000
+tmp=$(mktemp -d)
+HOME="$tmp" bin/pp tests/NNN-name.pp >"$tmp/out" 2>&1
+status=$?
+{ cat "$tmp/out"; printf '\n# exit: %d\n' "$status"; } \
+  > tests/NNN-name.pp.expected
+rm -rf "$tmp"
 ```
 
-The fuzzer shells out to the interpreter, defaulting to `bin/pp`. Run
-from the repo root, or pass `--pp PATH`.
+Review the output and source before committing a blessing. Diagnostics and
+source ranges are part of the observable contract.
 
-Options (defaults in parens):
-
-| flag | meaning |
-|---|---|
-| `--seed N` (0) | RNG seed. Program i is `Random.full_init [|seed; i|]`. |
-| `--count K` (1000) | number of programs |
-| `--max-depth D` (6) | expression-tree depth limit |
-| `--timeout-ms T` (5000) | per-run wall-clock timeout; overrun = CRASH |
-| `--out DIR` (`fuzz-failures`) | failure artifact directory |
-| `--grammar core\|full` (core) | grammar profile, see below |
-| `--start N` (0) | first iteration index (to reproduce a specific program) |
-| `--dump N` | print program N and exit |
-| `--pp PATH` (`bin/pp`) | interpreter binary |
-| `--stdlib PATH` (`$CWD/stdlib/list.pp`) | path baked into generated `(load …)` |
-| `--shrink-budget N` (300) | max twin-pair executions per shrink |
-
-### Grammars
-
-- `core` — forms that must always agree: literals, control flow,
-  functions, definitions, the arithmetic and collection builtins,
-  strings, `print`, literal-key config, and the stdlib list functions.
-  Any non-PASS on `core` is a real bug; its exit code is the CI gate.
-- `full` — `core` plus harder surface: type annotations with deliberate
-  ill-typed calls, modules and computed config keys, effects and
-  handlers, deep recursion, scoping edge cases, and `defmacro`.
-
-The fuzzer never generates nondeterministic or security-sensitive
-forms: `random`, wall-clock reads, file writes, capability constructors
-and grants, probes, sealed cells, or network. Cluster distribution has
-no language surface at all, so there is nothing to generate for it.
-
-| verdict | condition | CI effect |
-|---|---|---|
-| PASS | both sides succeed with identical stdout and effect log | — |
-| MATCHED-ERROR | both sides fail with the same normalized error tag | — |
-| MISMATCH | successful results or effect logs differ | fails |
-| UNMATCHED-ERROR | no derived twin, metamorphic checking disabled, only one side fails, or failure tags do not match | fails |
-| CRASH | either side times out, dies by signal, or exits > 128 | fails |
-
-Exit code is non-zero for any MISMATCH, UNMATCHED-ERROR, or CRASH. A clean
-successful summary reports zero unmatched errors and a nonzero count of full
-cache probes. PASS may include a separately reported MATCHED-ERROR subcount.
-Signatures normalize the payload (digits become `#`, wrappers stripped) so
-thousands of failures collapse to a handful of bug classes.
-
-### Failure artifacts
-
-  min.ppl            # shrunk minimal repro
-  min.tw.out / min.twin.out
-```
-
-Shrinking is greedy to a fixpoint: drop top-level forms, hoist a child
-over its parent, replace subtrees with simple atoms, halve integers. A
-reduction is accepted only if the exact signature is preserved. The
-budget counts executions, not wall-clock, so shrinking a timeout crash
-is slow — lower `--timeout-ms` or `--shrink-budget` for those.
-
-### Reproducing a failure
-
-Every artifact records its iteration number. To regenerate program 1234
-of a `--seed 0 --grammar full` run:
+## Focused commands
 
 ```sh
-dune exec ./tools/fuzz.exe -- --grammar full --seed 0 --dump 1234 > repro.ppl
-dune exec ./tools/fuzz.exe -- --grammar full --seed 0 --start 1234 --count 1
-pp repro.ppl
+bin/pp --version
+bin/pp -e '1 + 2'
+scripts/check-architecture.sh
+scripts/run-tests.sh bin/pp
+scripts/check-lisp-crash.sh --binary bin/pp
 ```
 
-Generated programs are sexpr text, so the redirected file takes the
-`.ppl` extension — `.pp` dispatches to the brace reader. `--max-depth`
-and `--stdlib` must match the original run for byte-identity.
-
-### Adding a grammar rule
-
-1. Verify the form against `src/` first: reader syntax, primitive
-   names, the evaluator's handling. Do not invent function names.
-2. For a new expression production, add a weighted arm to the right
-   typed generator in `fuzz.ml`. Keep it well-scoped and type-correct.
-3. For a new top-level production, write a `stmt_*` returning `sx list`
-   and register it with a weight in `gen_program`. If it needs the
-   stdlib, set `env.stdlib <- true`.
-4. Nondeterministic forms stay banned until the roadmap gates them.
-5. For every grammar change, run a sanity sample of at least 100 generated
-   programs and check these invariants: successful twins have identical
-   stdout and effect logs; failed twins either have the identical normalized
-   error tag or produce UNMATCHED-ERROR; no crash is accepted; round-trip
-   checks pass; and generated node programs produce a full cache probe.
+The crash checker is intentionally separate because it starts and kills
+multiple processes. It is a release and store-safety check, not a replacement
+for the ordinary suite.

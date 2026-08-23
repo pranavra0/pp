@@ -1,30 +1,9 @@
 #!/usr/bin/env bash
-# tests/054 — the brace reader (SPEC Appendix B): a location-preserving
-# sexpr<->brace printer, tested across both readers.
-#
-#   (a) a nontrivial .ppb program (infix precedence, pipeline, cell literals,
-#       and/or, map/vector literals, do/let/let*/if-else, node + needs,
-#       with-handler/with-config/config, defmacro, quote{}/quasiquote{}/
-#       unquote/splice, `;` separators, `#` comments) runs correctly;
-#   (b) cross-surface loading: a .pp loads a .ppb and vice versa; a pinned
-#       island whose tree ships entry.ppb imports from a .pp program, and a
-#       .ppb program imports an island via the string-URI spelling;
-#   (c) assert parity (SPEC law 29): the SAME assert at the same line
-#       produces the same desugared message in both surfaces (condition
-#       rendered in s-expression notation), modulo only the file name;
-#   (d) `pp --emit-braces` on a real sexpr test file produces a .ppb whose
-#       output matches the .pp original's;
-#   (e) `pp --roundtrip-braces` (AST + hash equality through the printer and
-#       the second reader, SPEC law 20) holds for every .pp in the tree;
-#   (f) the metamorphic fuzzer's round-trip gate passes on a few hundred
-#       full-grammar programs (2 readers).
+# tests/054 — the brace reader: a location-preserving sexpr<->brace printer.
+# The cases below exercise both readers, cross-surface loading, diagnostics,
+# formatting, and whole-tree AST/hash round trips through the accepted image.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
-FUZZ=${FUZZ:-tools/fuzz.exe}
-if [ ! -x "$FUZZ" ] && [ -x "_build/default/tools/fuzz.exe" ]; then
-  FUZZ="_build/default/tools/fuzz.exe"
-fi
-case "$FUZZ" in /*) : ;; *) FUZZ="$PWD/$FUZZ" ;; esac
 ROOT="$PWD"
 STDLIB="$ROOT/stdlib/list.pp"
 
@@ -245,22 +224,6 @@ for f in "$ROOT"/tests/[0-9]*.pp \
 done
 [ "$rt_fail" = 0 ] && ok "roundtrip-whole-tree"
 
-# ---- (f) the fuzz gate: a few hundred full-grammar programs through
-#      2 readers produce one shared AST ----
-if [ ! -x "$FUZZ" ]; then
-  bad "fuzz-roundtrip-gate" "fuzzer binary not found at $FUZZ"
-else
-  if ( cd "$ROOT" && "$FUZZ" --grammar full --count 300 --pp "$PP" \
-         --stdlib "$STDLIB" --out "$TMP/fuzz-failures" > "$TMP/fuzz.log" 2>&1 ); then
-    if grep -q 'roundtrip  300 checked, 0 failed' "$TMP/fuzz.log"; then
-      ok "fuzz-roundtrip-gate (300 full-grammar programs)"
-    else
-      bad "fuzz-roundtrip-gate" "roundtrip summary line missing:" "$(tail -8 "$TMP/fuzz.log")"
-    fi
-  else
-    bad "fuzz-roundtrip-gate" "$(tail -20 "$TMP/fuzz.log")"
-  fi
-fi
 
 if [ "$fail" = 0 ]; then
   echo "=== 054 BRACE READER: ALL PASS ==="

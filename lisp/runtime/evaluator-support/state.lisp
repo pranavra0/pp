@@ -203,8 +203,8 @@ own the diagnostic range."
              (expr-defvalue-expression expression) :value))
       (t nil))))
 
- (defun runtime-evaluator-make-scope (state environment expressions)
-  "Prebind block definitions, matching OCaml's definition scope.
+(defun runtime-evaluator-make-scope (state environment expressions)
+  "Prebind block definitions.
 The returned scope is mutable only as the block advances; all user values remain
 kernel records and no host symbol table is involved."
   (declare (ignore state))

@@ -5,7 +5,7 @@
   #-sbcl (handler-case (not (= f f)) (error () t)))
 
 (defun canonical-float-string (number)
-  "Return the same shortest exact hexadecimal spelling as OCaml [%h]."
+  "Return a shortest exact hexadecimal spelling for NUMBER."
   (let ((f (coerce number 'double-float)))
     (cond
       ((canonical-float-nan-p f) "nan")

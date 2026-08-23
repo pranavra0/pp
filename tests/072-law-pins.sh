@@ -21,7 +21,7 @@
 # a deferred promise.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
-ROOT="${DUNE_SOURCEROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd -P)
 SPEC="$ROOT/docs/SPEC.md"
 TESTS="$ROOT/tests"
 

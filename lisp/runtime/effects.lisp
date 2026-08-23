@@ -1,4 +1,4 @@
-;;;; M4 effect boundary.
+;;;; Effect boundary and dispatch.
 (in-package #:pp.runtime)
 (defvar *runtime-effects-dispatching* nil)
 (defstruct (runtime-effect (:constructor %make-runtime-effect (name function hash authority)) (:conc-name %runtime-effect-)) name function hash authority)

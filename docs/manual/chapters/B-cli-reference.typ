@@ -2,11 +2,11 @@
 
 = Command-line reference
 
-This appendix lists every flag `pp` accepts, grouped by what you use it for.
-It comes from the argument parser in `src/app/cli.ml`. Where the built-in
-`pp --help` and this table disagree, the source wins. A few flags marked
-internal are dispatch machinery that `pp` invokes on itself. They are here for
-completeness; you should not need to type them by hand.
+This appendix lists the flags `pp` accepts, grouped by what you use them for.
+It comes from `bin/pp --help`; where the built-in help and this table disagree,
+the executable wins. A few flags marked internal are dispatch machinery that
+`pp` invokes on itself. They are here for completeness; you should not need
+to type them by hand.
 
 Flags compose the way you would expect: `--grant`, `--schedule`,
 and `--watch` all layer onto whichever run mode you pick. Anything after a bare
@@ -187,7 +187,6 @@ placement's pin wire).
   [`--dump-pins <path> <file.pp>`], [After the run, write every observed cell and probe value to `<path>` as `(pin …)` / `(pin-probe …)` lines. A probe value that is not plain data (code, a handle, a sealed secret) is skipped with a warning.],
 )
 
-The pin-file's `(pin …)` / `(pin-probe …)` lines are their own small wire
-format (`src/runtime/remote.ml`'s `parse_pin_line`), not pp source — they are not
-read by either pp reader, so they keep their fixed parenthesized shape
-regardless of the surface a program is written in.
+The pin-file's `(pin …)` / `(pin-probe …)` lines are a small wire format,
+not pp source. They are not read by either pp reader, so they keep their fixed
+parenthesized shape regardless of the surface a program is written in.

@@ -1,2 +1,0 @@
-; canonical roundtrip AST/hash fixture
-(def (f x) (quote [1 "x" :ok]))

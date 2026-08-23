@@ -1,7 +1,6 @@
-;;;; Pure M3 language layer.
-;;;; This file deliberately contains no source reader, host EVAL/READ/INTERN,
-;;;; evaluator loop, session state, or host effects.  The evaluator supplies
-;;;; force/eval/apply callbacks at the narrow seams below.
+;;;; Pure language operations.
+;;;; This file contains no source reader, host EVAL/READ/INTERN, evaluator
+;;;; loop, session state, or host effects. The evaluator supplies callbacks.
 
 (in-package #:pp.runtime)
 
@@ -692,7 +691,7 @@ NIL is also the representation of the empty pp list; callers that need to
       (t (language-fail "value cannot be converted to a pattern"
                         "language.pattern")))))
 (defun runtime-pp-value-equal (left right)
-  "OCaml pattern literals use direct value equality, not content hashes.
+  "Pattern literals use direct value equality, not content hashes.
 In particular NaN is unequal to itself while signed zeroes compare equal."
   (cond
     ((and (typep left 'value-float) (typep right 'value-float))
@@ -786,8 +785,8 @@ In particular NaN is unequal to itself while signed zeroes compare equal."
                                         (walk (value-pair-cdr tail)
                                               (rest pats) bs2)
                                         (values nil nil))))
-                                 ;; OCaml deliberately permits extra fields
-                                 ;; on tagged values; preserve that behavior.
+                                 ;; Tagged values may carry extra fields.
+                                 ;; Preserve those fields' matching behavior.
                                  (t (values nil nil)))))
                       (walk (value-pair-cdr v)
                             (pattern-tagged-patterns p) bindings))
@@ -814,7 +813,7 @@ In particular NaN is unequal to itself while signed zeroes compare equal."
                       (write-char ch out)))))))
 
 (defun runtime-float-presentation (number)
-  "Render floats with pp/OCaml spellings, never host D exponents."
+  "Render floats with pp spellings, never host D exponents."
   (let ((number (coerce number 'double-float)))
     (cond
       ((canonical-float-nan-p number) "nan")
@@ -1094,9 +1093,8 @@ In particular NaN is unequal to itself while signed zeroes compare equal."
    (let ((implementation (value-builtin-implementation builtin))
          (force (or force #'identity))
          (force-deep (or force-deep force #'identity)))
-     ;; Preserve the pre-M3 callback ABI for callers that provide no
-     ;; metaprogramming services; this matters for small standalone probes and
-     ;; custom pure descriptors that do not accept unknown keywords.
+     ;; Keep the callback shape compatible with standalone pure callers that
+     ;; do not accept unknown keyword arguments.
      (if (or eval eager)
          (funcall implementation args env
                   :force force :force-deep force-deep :apply apply
@@ -2405,8 +2403,8 @@ fallback."
                              (walk loc (expr-config-key-expression e))
                              (and (expr-config-default e)
                                   (walk loc (expr-config-default e)))))
-               ;; Type expressions are syntax data in the current frontend;
-               ;; OCaml leaves them untouched during macro expansion.
+               ;; Type expressions are syntax data and remain unchanged during
+               ;; macro expansion.
                (expr-typed (make-typed (walk loc (expr-typed-expression e))
                                        (expr-typed-type e)))
                (expr-match (make-ematch

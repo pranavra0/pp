@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT=$(cd "$(dirname "$0")/.." && pwd)
+ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd -P)
 EXPORT=$(mktemp -d)
 trap 'rm -rf "$EXPORT"' EXIT
 
-# Archive and extract in a directory that cannot contain the checkout's .git.
 if ! git -C "$ROOT" archive HEAD | tar -x -C "$EXPORT"; then
   printf '::error title=clean-export::failed to create clean archive (root=%s export=%s)\n' "$ROOT" "$EXPORT"
   exit 1
@@ -15,23 +14,12 @@ if [ -e "$EXPORT/.git" ]; then
   exit 1
 fi
 
-if command -v opam >/dev/null 2>&1; then
-  OPAM_SWITCH=$(opam switch show)
-  DUNE=(opam exec --switch="$OPAM_SWITCH" -- dune)
-elif DUNE=$(command -v dune 2>/dev/null); then
-  DUNE=("$DUNE")
-else
-  printf '::error title=clean-export::could not locate dune (root=%s export=%s)\n' "$ROOT" "$EXPORT"
-  exit 1
-fi
 cd "$EXPORT"
-"${DUNE[@]}" build
-TEST_JOBS="${TEST_JOBS:-1}" "${DUNE[@]}" runtest --force
-./_build/default/src/app/main.exe --version > version.out
-expected=$(sed -nE 's/^[[:space:]]*\(version[[:space:]]+([^ )]+)\).*/\1/p' dune-project)
+scripts/build-lisp.sh --output lisp/pp
+TEST_JOBS="${TEST_JOBS:-1}" scripts/run-tests.sh bin/pp
+./bin/pp --version > version.out
 actual=$(sed -n 's/^pp v//p' version.out)
-[ -n "$expected" ] || { echo 'could not parse version from dune-project' >&2; exit 1; }
-[ "$actual" = "$expected" ] || {
-  printf 'version mismatch: dune-project=%s executable=%s\n' "$expected" "$actual" >&2
+[ -n "$actual" ] || {
+  printf 'clean-export: executable did not report a version\n' >&2
   exit 1
 }

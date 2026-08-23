@@ -208,5 +208,5 @@ else
 fi
 
 rm -rf "$TMP"
-if [ "$fail" -eq 0 ]; then echo "=== M5 STAGE C STORE GC TEST PASSED ==="; fi
+if [ "$fail" -eq 0 ]; then echo "=== STORE GC TEST PASSED ==="; fi
 exit $fail

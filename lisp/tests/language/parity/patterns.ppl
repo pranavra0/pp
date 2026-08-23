@@ -1,8 +1,0 @@
-;; M3 pure parity: quote, list patterns, variables, and guards.
-(print (quote (+ 1 2)))
-(def (classify xs)
-  (match xs
-    ((list a b) if (< a b) "ascending")
-    (_ "other")))
-(print (classify (list 1 2)))
-(print (classify (list 2 1)))

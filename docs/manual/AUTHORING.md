@@ -63,10 +63,10 @@ Conventions:
 - Reproducible only: no timestamps, no wall-clock timings, no absolute paths, no
   random data in output. Run sh examples with `cd examples` semantics in mind —
   pp reports source locations relative to its working directory.
-- Verify every primitive/form against the binary before using it (`pp -e '…'`,
-  `grep src/runtime/primitives.ml`, the `tests/` and `examples/` trees). This codebase
-  has a history of docs claiming things that aren't true; that's the whole
-  reason the examples run.
+- Verify every primitive/form against the binary before using it (`bin/pp -e
+  '…'`, `lisp/runtime/language.lisp`, the `tests/` and `examples/` trees).
+  This codebase has a history of docs claiming things that aren't true; that's
+  the whole reason the examples run.
 
 ## Build
 

@@ -22,7 +22,7 @@ run() {
 
 run normal-return 0 'print(1)'
 run language-error 1 'error("boom")'
-run ocaml-exception 1 'read-string("1e")'
+run reader-error 1 'read-string("1e")'
 run child-signal 0 'perform run("sh", "-c", "kill -TERM $$")'
 run effect-continuation 0 'with-handler(log = fn(m) { print(m) }) { perform log("ok") }'
 

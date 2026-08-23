@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
-# The physical library graph is checked independently of the full suite.
+# tests/092 — the accepted executable has no native build-tool dependency.
 set -euo pipefail
-ROOT="${DUNE_SOURCEROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+
+ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd -P)
 cd "$ROOT"
-bash tools/check-dependencies.sh
+[ -f lisp/pp.asd ]
+[ -f scripts/build-lisp.sh ]
+[ -x bin/pp ]
+[ ! -e dune ]
+[ ! -e dune-project ]
+[ ! -e pp.opam ]
+printf '%s\n' 'ok   dependency-boundary'
