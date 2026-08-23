@@ -1,32 +1,18 @@
 #!/usr/bin/env bash
-# tests/067 — SPEC drift test + single-source grep check.
+# tests/067 — generated surface data and ownership checks.
 #
-# The closed surface sets (observation `$KIND` heads, `with{}` clause keywords,
-# `needs` grant-descriptor sugar) are one typed value each in
-# src/frontend/surface_tables.ml. Two ratchets keep every derived copy honest:
-#
-#   (1) SPEC drift — docs/SPEC.md carries a *generated* block between
-#       markers. `pp --dump-surface-tables` regenerates it; this test diffs.
-#       A table edit not mirrored into SPEC is a red build.
-#
-#   (2) Single source — the grant descriptors (`fs.read`/`fs.write`/`fs.rw`)
-#       must appear in exactly one .ml file (surface_tables.ml). A hand-copy
-#       re-introduced in the reader/lint/fuzzer would fail here. (The `$`-head
-#       and `caps:`/`config:`/`handler` keyword strings overlap the
-#       cell-literal syntax and the `config` reserved word respectively, so
-#       this grep is scoped to the grant set — the one set with no other
-#       legitimate use; the drift test (1) covers all three tables' content.)
+# The closed surface sets are defined in lisp/frontend/frontend.lisp. The
+# generated SPEC block and the grant sugar must remain derived from that data.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 SPEC="docs/SPEC.md"
 BEGIN='<!-- BEGIN GENERATED surface-tables -->'
 END='<!-- END GENERATED surface-tables -->'
 
-# (1) SPEC drift.
+# Generated SPEC block.
 if [ ! -f "$SPEC" ]; then
   bad "spec-file-present" "docs/SPEC.md not found (cwd $(pwd))"
 else
-  # Extract lines strictly between the markers.
   in_block=$(awk -v b="$BEGIN" -v e="$END" '
     $0 == b { grab=1; next }
     $0 == e { grab=0 }
@@ -45,21 +31,19 @@ else
   fi
 fi
 
-# (2) Single source: grant descriptors live only in surface_tables.ml.
+# Grant sugar is owned by the frontend surface table.
 for d in "fs.read" "fs.write" "fs.rw"; do
-  hits=$(grep -l -F "$d" src/frontend/*.ml 2>/dev/null | sort)
-  if [ "$hits" = "src/frontend/surface_tables.ml" ]; then
+  hits=$(grep -l -F "$d" lisp/frontend/*.lisp 2>/dev/null | sort)
+  if [ "$hits" = "lisp/frontend/frontend.lisp" ]; then
     ok "single-source:$d"
   else
     bad "single-source:$d" \
-        "expected '$d' only in src/frontend/surface_tables.ml, found in:" \
+        "expected '$d' only in lisp/frontend/frontend.lisp, found in:" \
         "$(printf '%s\n' "$hits" | sed 's/^/       /')"
   fi
 done
 
-# (3) Builtin inventory: the user-facing inventory is rendered from the
-# descriptor catalog, so a registration cannot silently disappear from the
-# generated table or appear twice.
+# Builtins render from the catalog.
 builtins=$($PP --dump-builtins)
 if grep -q '^| builtin | arity | category |$' <<<"$builtins" \
     && [ "$(grep -c '^| `map` |' <<<"$builtins")" = 1 ] \
