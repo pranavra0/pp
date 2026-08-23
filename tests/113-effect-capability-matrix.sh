@@ -29,11 +29,14 @@ while IFS=$'\t' read -r operation authority source owner; do
   [ -f "$ROOT/$owner" ] || bad "matrix-owner-$operation" "missing $owner"
 done < "$MATRIX"
 
+actual_source="$ROOT/lisp/app/main.lisp"
 awk '
-  /^  \| "[^"]+"/ {
-    line=$0; sub(/^  \| "/, "", line); sub(/".*/, "", line); print line
+  /runtime-session-register-callback/ { dispatch=1 }
+  dispatch && /^[[:space:]]*\(\(string= name "/ {
+    line=$0; sub(/.*string= name "/, "", line); sub(/".*/, "", line); print line
   }
-' "$ROOT/src/runtime/evaluator_effects.ml" | sort -u > "$TMP/actual-effects"
+  dispatch && /^[[:space:]]*session\)\)/ { dispatch=0 }
+' "$actual_source" | sort -u > "$TMP/actual-effects"
 awk -F '\t' '$1 ~ /^perform:/ { sub(/^perform:/, "", $1); print $1 }' \
   "$MATRIX" | sort -u > "$TMP/matrix-effects"
 if diff -u "$TMP/actual-effects" "$TMP/matrix-effects" > "$TMP/effect-diff"; then
@@ -42,15 +45,23 @@ else
   bad effect-dispatch-complete "$(cat "$TMP/effect-diff")"
 fi
 
-cat > "$TMP/domain-state.pp" <<'EOF'
-perform domain-state-get("key")
-EOF
-"$PP" "$TMP/domain-state.pp" > "$TMP/domain-state.out" 2>&1
-status=$?
-if [ "$status" -eq 1 ] && grep -q "not running inside a domain" "$TMP/domain-state.out"; then
-  ok domain-state-context-gated
+if grep -q 'runtime-domain-with-domain' \
+       "$ROOT/lisp/runtime/lifecycle/domains.lisp" &&
+   grep -q 'runtime-dynamic-with-domain' \
+       "$ROOT/lisp/runtime/lifecycle/domains.lisp"; then
+  ok domain-context-api
 else
-  bad domain-state-context-gated "status=$status: $(cat "$TMP/domain-state.out")"
+  bad domain-context-api "domain lifecycle lacks an explicit dynamic boundary"
+fi
+
+printf 'secret\n' > "$TMP/authority-input"
+printf 'perform read-file("%s")\n' "$TMP/authority-input" > "$TMP/authority.pp"
+"$PP" "$TMP/authority.pp" > "$TMP/authority.out" 2>&1
+status=$?
+if [ "$status" -eq 1 ] && grep -q "permission denied" "$TMP/authority.out"; then
+  ok effect-authority-gated
+else
+  bad effect-authority-gated "status=$status: $(cat "$TMP/authority.out")"
 fi
 
 if [ "$fail" -eq 0 ]; then echo "=== EFFECT CAPABILITY MATRIX TEST PASSED ==="; fi
