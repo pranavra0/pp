@@ -12,6 +12,23 @@
   ;; select the innermost range once, rather than having nested evaluator
   ;; boundaries accumulate textual prefixes.
   (language-fail message code range))
+ 
+(defvar *runtime-evaluator-forward-value-thunks* nil)
+
+(defun runtime-evaluator-register-forward-values! (scope)
+  (when *runtime-evaluator-forward-value-thunks*
+    (dolist (entry (runtime-definition-scope-value-thunks scope))
+      (setf (gethash (cdr entry) *runtime-evaluator-forward-value-thunks*)
+            (car entry))))
+  scope)
+
+(defun runtime-evaluator-activate-forward-value! (scope name)
+  (when *runtime-evaluator-forward-value-thunks*
+    (let ((entry (assoc name (runtime-definition-scope-value-thunks scope)
+                        :test #'string=)))
+      (when entry
+        (remhash (cdr entry) *runtime-evaluator-forward-value-thunks*))))
+  name)
 
 (defun runtime-evaluator-services (state)
   (make-runtime-macro-services
@@ -25,7 +42,6 @@
    (runtime-evaluator-services state)
    (runtime-evaluator-state-macro-state state)
    expression))
-
 (defun runtime-evaluator-expand-toplevel (state expressions)
   (runtime-expand-toplevel
    (runtime-evaluator-services state)
@@ -360,10 +376,18 @@ instead of the language type error we owe the caller."
                 (not (value-bool-value value))))))
 
 (defun runtime-evaluator-lookup (state environment name)
-  (or (runtime-evaluator-env-lookup environment name)
-      (runtime-primitive-lookup (runtime-evaluator-state-catalog state) name)
-      (runtime-evaluator-error (format nil "unbound symbol: ~A" name)
-                               "evaluator.unbound")))
+  (let ((value (runtime-evaluator-env-lookup environment name)))
+    (when (and (typep value 'value-thunk)
+               *runtime-evaluator-forward-value-thunks*
+               (gethash (value-thunk-thunk value)
+                        *runtime-evaluator-forward-value-thunks*))
+      (runtime-evaluator-error
+       (format nil "~A: referenced before its definition" name)
+       "evaluator.binding"))
+    (or value
+        (runtime-primitive-lookup (runtime-evaluator-state-catalog state) name)
+        (runtime-evaluator-error (format nil "unbound symbol: ~A" name)
+                                 "evaluator.unbound"))))
 
 (defun runtime-evaluator-string-like (value)
   (or (runtime-string-like value)
@@ -494,6 +518,15 @@ callback that observes the scope cannot leak a host list shape."
   (setf (runtime-evaluator-state-handler-stack state) saved)
   (runtime-evaluator-notify-restore
    (runtime-evaluator-state-with-handlers-function state) state saved))
+(defun runtime-evaluator-lazy-application-thunk
+    (state function arguments environment)
+  (declare (ignore state))
+  (make-vthunk
+   (runtime-evaluator-make-thunk
+    (make-eapply (make-eliteral function)
+                 (mapcar #'make-eliteral arguments))
+    environment)))
+
 
  (defun runtime-evaluator-restore-config! (state saved)
   (setf (runtime-evaluator-state-config-stack state) saved)
@@ -501,6 +534,7 @@ callback that observes the scope cannot leak a host list shape."
    (runtime-evaluator-state-with-config-function state) state saved))
 
  (defun runtime-evaluator-perform (state name arguments environment)
+
   (let ((handler (loop for handlers in (runtime-evaluator-state-handler-stack state)
                        for entry = (assoc name handlers :test #'string=)
                        when entry do (return (cdr entry)))))
@@ -761,6 +795,7 @@ callback that observes the scope cannot leak a host list shape."
           (:do-activate
            (destructuring-bind (scope name mode) data
              (runtime-evaluator-scope-activate-value scope name value)
+             (runtime-evaluator-activate-forward-value! scope name)
              (if (eq mode :module)
                  ;; Module definitions are sequenced for their side effect;
                  ;; the module expression itself returns its export map.
@@ -1003,6 +1038,7 @@ callback that observes the scope cannot leak a host list shape."
     ((typep expression 'expr-do)
      (let ((scope (runtime-evaluator-make-scope
                    state environment (expr-do-expressions expression))))
+       (runtime-evaluator-register-forward-values! scope)
        (runtime-evaluator-schedule tasks :do-step
                                    (list scope (expr-do-expressions expression)
                                          nil continuation))))
@@ -1010,6 +1046,7 @@ callback that observes the scope cannot leak a host list shape."
      (let* ((base (runtime-evaluator-state-initial-env state))
             (scope (runtime-evaluator-make-scope
                     state base (expr-module-expressions expression))))
+       (runtime-evaluator-register-forward-values! scope)
        (runtime-evaluator-schedule tasks :do-step
                                    (list scope (expr-module-expressions expression)
                                          :module continuation))))
@@ -1164,10 +1201,11 @@ innermost source range with its caller's range (or NIL)."
       (unless tasks
         (runtime-evaluator-error "machine stopped without a result"
                                  "evaluator.machine"))
-      (runtime-evaluator-step! state)
       (let* ((task (pop tasks))
              (kind (runtime-evaluator-task-kind task))
              (data (runtime-evaluator-task-data task)))
+        (unless (member kind '(:continue :finish))
+          (runtime-evaluator-step! state))
         (case kind
           (:finish
            (setf result data finished t))
@@ -1251,26 +1289,36 @@ innermost source range with its caller's range (or NIL)."
            (destructuring-bind
                (function remaining results environment continuation)
                data
+             (declare (ignore results))
              (let ((list-value (runtime-evaluator-force state remaining)))
                (typecase list-value
                  (value-nil
                   (setf tasks
                         (runtime-evaluator-schedule-continue
-                         tasks (value-list (nreverse results))
-                         continuation)))
+                         tasks (make-vnil) continuation)))
                  (value-pair
-                  (setf tasks
-                        (runtime-evaluator-schedule-continue
-                         tasks function
-                         (cons (runtime-evaluator-frame
-                                :apply-final function nil
-                                (list (value-pair-car list-value))
-                                environment)
-                               (cons (runtime-evaluator-frame
-                                      :map-result function
-                                      (value-pair-cdr list-value)
-                                      results environment)
-                                     continuation)))))
+                  (let* ((car-thunk
+                           (runtime-evaluator-lazy-application-thunk
+                            state function
+                            (list (value-pair-car list-value))
+                            environment))
+                         (map-builtin
+                           (runtime-primitive-lookup
+                            (runtime-evaluator-state-catalog state) "map"))
+                         (tail-expression
+                           (make-eapply
+                            (make-eliteral map-builtin)
+                            (list (make-eliteral function)
+                                  (make-eliteral
+                                   (value-pair-cdr list-value)))))
+                         (tail-thunk
+                           (make-vthunk
+                            (runtime-evaluator-make-thunk
+                             tail-expression environment))))
+                    (setf tasks
+                          (runtime-evaluator-schedule-continue
+                           tasks (make-vpair car-thunk tail-thunk)
+                           continuation))))
                  (t
                   (runtime-evaluator-error
                    "map expects a proper list" "primitive.type"))))))
@@ -1456,10 +1504,12 @@ ENVIRONMENT defaults to the evaluator's initial environment."
         (runtime-evaluator-state-last-error-location-depth state) 0
         (runtime-evaluator-state-location-stack state) nil)
   (handler-case
-      (runtime-evaluator-run-expression
-       state (if expand (runtime-evaluator-expand-expression state expression)
-                 expression)
-       (or environment (runtime-evaluator-state-initial-env state)))
+      (let ((*runtime-evaluator-forward-value-thunks*
+              (make-hash-table :test #'eq)))
+        (runtime-evaluator-run-expression
+         state (if expand (runtime-evaluator-expand-expression state expression)
+                   expression)
+         (or environment (runtime-evaluator-state-initial-env state))))
     (language-error (condition)
       (runtime-evaluator-reraise-error state condition))
     (error (condition)
@@ -1480,13 +1530,15 @@ ENVIRONMENT defaults to the evaluator's initial environment."
         (runtime-evaluator-state-last-error-location-depth state) 0
         (runtime-evaluator-state-location-stack state) nil)
   (handler-case
-      (let ((expanded (runtime-evaluator-expand-toplevel state expressions)))
-        (runtime-evaluator-run
-         state (list (make-runtime-evaluator-task
-                      :eval (list (make-edo expanded)
-                                  (or environment
-                                      (runtime-evaluator-state-initial-env state))
-                                  nil)))))
+      (let ((*runtime-evaluator-forward-value-thunks*
+              (make-hash-table :test #'eq)))
+        (let ((expanded (runtime-evaluator-expand-toplevel state expressions)))
+          (runtime-evaluator-run
+           state (list (make-runtime-evaluator-task
+                        :eval (list (make-edo expanded)
+                                    (or environment
+                                        (runtime-evaluator-state-initial-env state))
+                                    nil))))))
     (language-error (condition)
       (runtime-evaluator-reraise-error state condition))
     (error (condition)

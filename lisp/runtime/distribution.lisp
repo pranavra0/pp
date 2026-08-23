@@ -479,9 +479,27 @@
 
 (defun %distribution-wait-one (scheduler)
   #+sbcl
-  (multiple-value-bind (pid status) (sb-posix:waitpid -1 0)
-    (multiple-value-bind (result job) (%distribution-reap-pid scheduler pid status)
-      (values pid result job)))
+  (handler-case
+      (multiple-value-bind (pid status) (sb-posix:waitpid -1 0)
+        (multiple-value-bind (result job) (%distribution-reap-pid scheduler pid status)
+          (values pid result job)))
+    (error ()
+      ;; A loser may have been reaped while another completion was handled.
+      ;; Remove one stale ownership entry so the scheduler can make progress.
+      (let ((pid nil) (entry nil))
+        (maphash (lambda (candidate value)
+                   (unless pid
+                     (setf pid candidate entry value)))
+                 (distribution-scheduler-live-children scheduler))
+        (when pid
+          (remhash pid (distribution-scheduler-live-children scheduler))
+          (when entry
+            (%distribution-delete-file (cdr entry))))
+        (values pid
+                (make-distribution-result
+                 :status :failed
+                 :error "worker exited before completing")
+                (and entry (car entry))))))
   #-sbcl (declare (ignore scheduler) (distribution-fail "process" "wait is unavailable")))
 
 (defun %distribution-run-parallel (scheduler jobs width)

@@ -100,7 +100,9 @@
 (defun runtime-observe-tree (path)
   (let ((canonical (store-canonical-path path)))
     (or (runtime-observation-call :observe-tree canonical)
-        (runtime-observation-call :tree-hash canonical))))
+        (runtime-observation-call :tree-hash canonical)
+        (and (fboundp 'runtime-artifact-observe-value)
+             (hash-value (runtime-artifact-observe-value canonical))))))
 (defun runtime-observe-stat (path)
   (let* ((canonical (store-canonical-path path))
          (observed (or (runtime-observation-call :observe-stat canonical)
@@ -139,23 +141,35 @@
 
 (defun runtime-observation-probe (name)
   (let ((session (runtime-observation-session)))
-    (when session
-      (let ((old (runtime-session-find-probe session name)))
-        (if old (hash-value old)
-            (let ((domain (runtime-session-find-domain session name)))
-              (when domain
-                (let ((observe (runtime-domain-entry-observe domain))
-                      (cap (runtime-domain-entry-cap domain)))
-                  (when observe
-                    (let ((run (lambda ()
-                                 (if (functionp observe) (funcall observe)
-                                     (runtime-session-call session observe nil (runtime-session-global-env session))))))
-                      (let ((value (if (runtime-dynamic-current nil)
-                                       (runtime-dynamic-without-observations run)
-                                       (funcall run))))
-                        (runtime-session-set-probe session name value)
-                        (hash-value value))))))))))))
-
+    (unless session
+      (runtime-observation-error
+       (format nil "no such probe registered: ~A" name)))
+    (let ((old (runtime-session-find-probe session name)))
+      (if old
+          (hash-value old)
+          (let ((domain (runtime-session-find-domain session name)))
+            (unless domain
+              (runtime-observation-error
+               (format nil "no such probe registered: ~A" name)))
+            (let ((observe (runtime-domain-entry-observe domain)))
+              (unless observe
+                (runtime-observation-error
+                 (format nil "probe has no observer: ~A" name)))
+              (let ((run (lambda ()
+                           (if (functionp observe)
+                               (funcall observe)
+                               (runtime-session-call
+                                session observe nil
+                                (runtime-session-global-env session))))))
+                (let ((value (if (runtime-dynamic-current nil)
+                                 (runtime-dynamic-without-observations run)
+                                 (funcall run))))
+                  (let ((hash (hash-value value)))
+                    (runtime-session-set-probe session name value)
+                    (when (runtime-dynamic-current-node)
+                      (runtime-observation-record
+                       (make-cell-probe name) hash))
+                    hash)))))))))
 (defun runtime-observe-domain (name sub)
   (let* ((session (runtime-observation-session))
          (domain (and session (runtime-session-find-domain session name))))
@@ -167,7 +181,6 @@
         (cond ((typep value 'value-nil) nil)
               ((typep value 'value-string) (value-string-value value))
               (t (hash-value value)))))))
-
 (defun runtime-observe-node-trace (key &optional (seen nil))
   (let* ((name (store-identity-string key))
          (session (runtime-observation-session))
@@ -184,7 +197,10 @@
                                      (cons name seen))))
                               (and current
                                    (string=
-                                    (store-identity-string current)
+                                    (store-identity-string
+                                     (if (store-digest-p current)
+                                         current
+                                         (pp.kernel:hash-string current)))
                                     (store-identity-string
                                      (store-trace-read-hash read))))))
                           (store-trace-reads trace)))
