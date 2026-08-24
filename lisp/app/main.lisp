@@ -1223,6 +1223,9 @@ Flatten only capability containers; no user value is accepted as authority."
          (let ((key (one-text (list (first args)) force "config")))
            (multiple-value-bind (value present)
                (pp.runtime:runtime-configuration-read key)
+             (pp.runtime:runtime-observation-record
+              (pp.kernel:make-cell-config key)
+              (if present (pp.kernel:hash-value value) "config-cell:absent"))
              (if present value
                  (if (= (length args) 2)
                      (%command-force-argument (second args) force)
