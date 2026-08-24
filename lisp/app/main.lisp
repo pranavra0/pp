@@ -687,6 +687,19 @@ Flatten only capability containers; no user value is accepted as authority."
     #-sbcl
     (if (probe-file target-string) "file" "absent")))
 
+ (defun %command-file-bytes-value (bytes sealed)
+  (if sealed
+      (pp.kernel:make-vsealed (pp.runtime::store-codec-octets-string bytes))
+      (handler-case
+          (pp.kernel:make-vstring (pp.runtime:store-octets-string bytes))
+        ;; `slurp` is normally a text operation, but it is also the
+        ;; construction path used by `blob` for opaque tools. Preserve
+        ;; malformed UTF-8 byte-for-byte and let blob consume the sealed
+        ;; representation below.
+        (error ()
+          (pp.kernel:make-vsealed
+           (pp.runtime::store-codec-octets-string bytes))))))
+
  (defun %command-read-file-value (path &optional sealed)
   "Read an observed file, preferring the current node's scratch tree."
   (let* ((scratch
@@ -694,7 +707,7 @@ Flatten only capability containers; no user value is accepted as authority."
                 (ignore-errors (pp.runtime:runtime-sandbox-resolve path))))
          (scratch-bytes (and scratch (pp.runtime:store-read-octets scratch))))
     (if scratch-bytes
-        (pp.kernel:make-vstring (pp.runtime:store-octets-string scratch-bytes))
+        (%command-file-bytes-value scratch-bytes sealed)
         (let* ((canonical (pp.runtime:store-canonical-path path))
                (capabilities (pp.runtime:runtime-dynamic-capabilities)))
           (unless (%command-capability-allows-file-p capabilities canonical sealed)
@@ -739,9 +752,7 @@ Flatten only capability containers; no user value is accepted as authority."
                                     (pp.runtime:runtime-session-set-run-pin
                                      session cell-id value)))
                              :record record))))
-                  (if sealed
-                      (pp.kernel:make-vsealed (map 'string #'code-char bytes))
-                      (pp.kernel:make-vstring (pp.runtime:store-octets-string bytes))))
+                  (%command-file-bytes-value bytes sealed))
                 (let* ((bytes
                          (or (pp.runtime:store-read-octets canonical)
                              (pp.runtime:language-fail
@@ -751,10 +762,7 @@ Flatten only capability containers; no user value is accepted as authority."
                                  (pp.runtime:store-hash-octets bytes)
                                  (pp.runtime:store-hash-content bytes))))
                   (pp.runtime:runtime-observation-record cell hash)
-                  (if sealed
-                      (pp.kernel:make-vsealed (map 'string #'code-char bytes))
-                      (pp.kernel:make-vstring
-                       (pp.runtime:store-octets-string bytes))))))))))
+                  (%command-file-bytes-value bytes sealed))))))))
  
 (defun %command-value-text (value name)
   (cond ((typep value 'pp.kernel:value-string)
@@ -1411,11 +1419,21 @@ Flatten only capability containers; no user value is accepted as authority."
          (unless (= (length args) 1)
            (pp.runtime:language-fail "blob expects one argument" "primitive.arity"))
          (let ((value (%command-force-argument (first args) force)))
-           (unless (typep value 'pp.kernel:value-string)
-             (pp.runtime:language-fail "blob expects a string" "primitive.type"))
-           (pp.kernel:make-vstring
-            (pp.runtime::runtime-artifact-blob-put
-             (pp.kernel:value-string-value value))))))
+           (cond
+             ((typep value 'pp.kernel:value-string)
+              (pp.kernel:make-vstring
+               (pp.runtime::runtime-artifact-blob-put
+                (pp.kernel:value-string-value value))))
+             ;; A malformed-UTF-8 `slurp` is represented as sealed raw bytes
+             ;; so opaque tool blobs retain their executable bytes.
+             ((typep value 'pp.kernel:value-sealed)
+              (pp.kernel:make-vstring
+               (pp.runtime::runtime-artifact-blob-put
+                (pp.runtime::store-codec-string-octets
+                 (pp.kernel:value-sealed-bytes value)))))
+             (t
+              (pp.runtime:language-fail "blob expects a string"
+                                        "primitive.type"))))))
       (extend
        "blob-get"
        (lambda (args environment &key force &allow-other-keys)
