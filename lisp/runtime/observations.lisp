@@ -221,6 +221,19 @@
                                      (store-trace-read-hash read))))))
                           (store-trace-reads trace)))
           (return (store-identity-string (store-trace-result-hash trace))))))))
+(defun runtime-observation-handler-hash (name)
+  (let* ((session (runtime-observation-session))
+         (state (and session (runtime-session-evaluator session)))
+         (handler
+           (and state
+                (loop for handlers in
+                      (runtime-evaluator-state-handler-stack state)
+                      for entry = (assoc name handlers :test #'string=)
+                      when entry do (return (cdr entry))))))
+    (if handler
+        (hash-value handler)
+        "handler-cell:builtin")))
+
 (defun runtime-observe-cell (cell &optional (seen nil))
   (check-type cell cell)
   (let* ((cell (runtime-observation-canonical-cell cell))
@@ -237,7 +250,9 @@
               (multiple-value-bind (v p)
                   (runtime-configuration-lookup (cell-config-value cell))
                 (if p (hash-value v) "config-cell:absent")))
-             (cell-handler (runtime-dynamic-observe-handler (cell-handler-value cell)))
+             (cell-handler
+              (runtime-observation-handler-hash
+               (cell-handler-value cell)))
              (cell-probe
               (hash-value (runtime-observation-probe
                            (cell-probe-value cell))))

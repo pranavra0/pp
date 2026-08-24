@@ -557,7 +557,12 @@ callback that observes the scope cannot leak a host list shape."
                        for entry = (assoc name handlers :test #'string=)
                        when entry do (return (cdr entry)))))
     (cond
-      (handler (runtime-evaluator-apply-value state handler arguments environment))
+      (handler
+       (progn
+         (when (fboundp 'runtime-observation-record)
+           (runtime-observation-record
+            (make-cell-handler name) (hash-value handler)))
+         (runtime-evaluator-apply-value state handler arguments environment)))
       ((runtime-evaluator-state-perform-function state)
        (funcall (runtime-evaluator-state-perform-function state)
                 state name arguments environment))
@@ -864,13 +869,19 @@ callback that observes the scope cannot leak a host list shape."
                     environment body rest))))
           (:config
            (destructuring-bind (default environment) data
-             (multiple-value-bind (configured present)
-                 (runtime-evaluator-config-lookup state
-                                                  (runtime-evaluator-string-like value))
-               (cond
-                 (present (runtime-evaluator-schedule-continue tasks configured rest))
-                 (default (runtime-evaluator-schedule-eval tasks default environment rest))
-                 (t (runtime-evaluator-schedule-continue tasks (make-vnil) rest))))))
+             (let ((key (runtime-evaluator-string-like value)))
+               (multiple-value-bind (configured present)
+                   (runtime-evaluator-config-lookup state key)
+                 (runtime-observation-record
+                  (make-cell-config key)
+                  (if present (hash-value configured) "config-cell:absent"))
+                 (cond
+                   (present (runtime-evaluator-schedule-continue
+                             tasks configured rest))
+                   (default (runtime-evaluator-schedule-eval
+                             tasks default environment rest))
+                   (t (runtime-evaluator-schedule-continue
+                       tasks (make-vnil) rest)))))))
           (:load
            (destructuring-bind (scope remaining mode finalp) data
              ;; A loader returns the exports of its evaluated forms.  Merge

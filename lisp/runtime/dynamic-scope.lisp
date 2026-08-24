@@ -526,7 +526,11 @@ session-owned :PERFORM service.  Missing services fail closed."
          (session (runtime-dynamic-session))
          (service (runtime-dynamic-find-service :perform)))
     (cond
-      (handler (runtime-dynamic-call-handler handler arguments environment))
+      (handler
+       (progn
+         (when (fboundp 'runtime-observation-record-handler)
+           (runtime-observation-record-handler name))
+         (runtime-dynamic-call-handler handler arguments environment)))
       (effect (apply effect arguments))
       (service
        (funcall service (runtime-session-evaluator session) name arguments environment))
