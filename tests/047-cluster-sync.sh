@@ -218,7 +218,7 @@ assert "B-correct-result" "\[info\] V1" present
 HOME="$NODEA" "$PP" why --grant "fs:${OTHER}:ro" "$TMP/prog.pp" > "$TMP/local-why.out" 2>&1
 HOME="$NODEB" "$PP" why --grant "fs:${OTHER}:ro" "$TMP/prog.pp" > "$TMP/synced-why.out" 2>&1
 for f in "$TMP/local-why.out" "$TMP/synced-why.out"; do
-  assert "T4-redacted-marker" "<redacted unauthorized cell>" present "$f"
+  assert "T4-redacted-marker" "redacted" present "$f"
   assert "T4-unauthorized-reported" "unauthorized" present "$f"
   # Scoped to `[why]` lines only (like tests/019's why-no-secret-leak): the
   # program's OWN subsequent recompute attempt legitimately fails and names

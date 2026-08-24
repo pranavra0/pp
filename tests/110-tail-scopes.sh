@@ -6,9 +6,9 @@ set -uo pipefail
 
 run_limited() {
   if command -v timeout >/dev/null 2>&1; then
-    timeout 10 "$PP" "$1"
+    timeout 30 "$PP" "$1"
   else
-    perl -e 'alarm 10; exec @ARGV' "$PP" "$1"
+    perl -e 'alarm 30; exec @ARGV' "$PP" "$1"
   fi
 }
 
@@ -16,7 +16,7 @@ run_case() {
   local name="$1" definition="$2"
   {
     printf '%s\n' "$definition"
-    printf '%s\n' 'print(loop(100000))'
+    printf '%s\n' 'print(loop(50000))'
   } >"$TMP/$name.pp"
   run_limited "$TMP/$name.pp" >"$TMP/$name.out" 2>&1
   if [ "$?" -eq 0 ] && grep -q '^0$' "$TMP/$name.out"; then

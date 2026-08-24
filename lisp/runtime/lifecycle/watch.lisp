@@ -31,11 +31,14 @@
         (list durable))))
 
 (defun runtime-watch-reset-dirty (session keys)
-  (dolist (key keys)
-    (let ((thunk (runtime-session-find-node-thunk session key)))
-      (when thunk
-        (setf (thunk-status thunk) (make-thunk-status-unevaluated)))))
-  keys)
+  (let ((state (runtime-session-evaluator session)))
+    (when keys
+      (clrhash (runtime-evaluator-state-persistent-cache state)))
+    (dolist (key keys)
+      (let ((thunk (runtime-session-find-node-thunk session key)))
+        (when thunk
+          (setf (thunk-status thunk) (make-thunk-status-unevaluated)))))
+    keys))
 
 (defun runtime-watch-observation-hash (cell)
   (and (fboundp 'runtime-observe-id)
@@ -80,17 +83,68 @@
 
 (defun runtime-watch-stabilize (session changed-cells)
   (let* ((reverse (runtime-watch-build-reverse-index session))
-         (initial (remove-duplicates (mapcan (lambda (cell)
-                                               (copy-list (gethash cell reverse)))
-                                             changed-cells)
-                                     :test #'equal))
-         (dirty (if (fboundp 'store-index-dirty-keys)
-                    (store-index-dirty-keys initial reverse
-                                            (lambda (key)
-                                              (runtime-watch-dependency-cells session key)))
-                    initial)))
-    (runtime-watch-reset-dirty session dirty)))
+         (external-cells
+           (remove-if
+            (lambda (cell)
+              (typep (cell-parse (store-identity-string cell)) 'cell-node))
+            changed-cells))
+         (initial (remove-duplicates
+                   (mapcan (lambda (cell)
+                             (copy-list (gethash cell reverse)))
+                           external-cells)
+                   :test #'equal))
+         (child-snapshots nil)
+         (parent-snapshots nil))
+    ;; Dirty only direct external trace readers.  During the next force,
+    ;; recursive cache validation refreshes child traces before deciding
+    ;; whether a dependent parent can still hit.
+    (dolist (key initial)
+      (let ((thunk (runtime-session-find-node-thunk session key)))
+        (when thunk
+          (let ((status (thunk-status thunk)))
+            (when (typep status 'thunk-status-evaluated)
+              (push (list key thunk (thunk-status-evaluated-value status))
+                    child-snapshots)))
+          (dolist (parent
+                    (gethash (cell-serialize (make-cell-node key)) reverse))
+            (let ((parent-thunk
+                    (runtime-session-find-node-thunk session parent)))
+              (when (and parent-thunk
+                         (typep (thunk-status parent-thunk)
+                                'thunk-status-evaluated))
+                (push (list key parent-thunk (thunk-status parent-thunk))
+                      parent-snapshots)))))))
+    (runtime-watch-reset-dirty session initial)
+    (dolist (key initial)
+      (let ((thunk (runtime-session-find-node-thunk session key)))
+        (when thunk
+          (runtime-evaluator-force
+           (runtime-session-evaluator session)
+           thunk))))
+    (dolist (child child-snapshots)
+      (let* ((key (first child))
+             (thunk (second child))
+             (old-value (third child))
+             (status (thunk-status thunk)))
+        (when (and (typep status 'thunk-status-evaluated)
+                   (equal-value old-value
+                                (thunk-status-evaluated-value status)))
+          (dolist (parent parent-snapshots)
+            (when (string= key (first parent))
+              (let* ((parent-thunk (second parent))
+                     (parent-status (third parent)))
+                (setf (thunk-status parent-thunk) parent-status)
+                (when (typep parent-status 'thunk-status-evaluated)
+                  (setf (gethash
+                         (node-key-to-string
+                          (runtime-evaluator-node-key
+                           (runtime-session-evaluator session)
+                           parent-thunk))
+                         (runtime-evaluator-state-persistent-cache
+                          (runtime-session-evaluator session)))
+                        (thunk-status-evaluated-value parent-status)))))))))
 
+    initial))
 (defun runtime-watch-snapshot (session)
   (make-runtime-watch-snapshot
    (sort (copy-list (runtime-session-observations session)) #'string< :key #'car)))

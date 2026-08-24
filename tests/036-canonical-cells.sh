@@ -141,12 +141,12 @@ EOF
 
 rm -rf "$TMP/.pp"
 run --grant "fs:$NEWDIR:ro" "$TMP/stat.pp"
-"$PP" graph > "$TMP/graph1" 2>&1
+"$PP" graph --grant "fs:$NEWDIR:ro" "$TMP/stat.pp" > "$TMP/graph1" 2>&1
 CELL1=$(grep -oE 'stat:[^ ]*newfile\.txt' "$TMP/graph1" | head -1)
 
 printf 'X' > "$TARGET"
 run --grant "fs:$NEWDIR:ro" "$TMP/stat.pp"
-"$PP" graph > "$TMP/graph2" 2>&1
+"$PP" graph --grant "fs:$NEWDIR:ro" "$TMP/stat.pp" > "$TMP/graph2" 2>&1
 CELL2=$(grep -oE 'stat:[^ ]*newfile\.txt' "$TMP/graph2" | head -1)
 
 if [ -n "$CELL1" ] && [ "$CELL1" = "$CELL2" ]; then

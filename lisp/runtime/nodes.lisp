@@ -263,16 +263,21 @@
                  (unless (find pair reads :test #'equal)
                    (push pair reads))))))
       (handler-case
-          (let ((value
-                  (runtime-dynamic-with-capabilities
-                   captured-capabilities
-                   (lambda ()
-                     (runtime-dynamic-with-service
-                      :record-read collector
-                      (lambda ()
-                        (runtime-dynamic-with-node
-                         (make-runtime-node-frame :key key :persistent t)
-                         run)))))))
+          (let* ((caller-caps
+                   (copy-list
+                    (runtime-evaluator-state-capabilities state)))
+                 (value
+                   (runtime-dynamic-with-capabilities
+                    captured-capabilities
+                    (lambda ()
+                      (runtime-dynamic-with-service
+                       :record-read collector
+                       (lambda ()
+                         (runtime-dynamic-with-node
+                          (make-runtime-node-frame :key key :persistent t)
+                          run)))))))
+            (setf (runtime-evaluator-state-capabilities state) caller-caps)
+            (runtime-evaluator-notify-capabilities state caller-caps)
             (let ((authority-kind (runtime-node-authority-kind value)))
               (when authority-kind
                 (runtime-node-error

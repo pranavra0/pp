@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # pins: LAW-7 LAW-21
-# Pull and push watch agree on results; push cuts off an unchanged inline child.
+# Pull and push watch agree on results; inline children reconstruct on change.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -38,7 +38,7 @@ run_mode() {
 }
 
 run_mode "pull" "" 2
-run_mode "push" "--stabilize" 1
+run_mode "push" "--stabilize" 2
 
 # A fresh process has no executable inline-child closure in memory. It
 # recursively validates the stored child trace, serves the parent when that

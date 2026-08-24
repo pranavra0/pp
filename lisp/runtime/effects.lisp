@@ -80,9 +80,9 @@
   (let ((scope (runtime-dynamic-current nil)))
     (when scope
       (setf (runtime-dynamic-scope-handlers scope)
-            (if (equal value
-                       (runtime-evaluator-state-handler-stack state))
-                (copy-tree value)
+            (if (eq value
+                    (runtime-evaluator-state-handler-stack state))
+                (copy-list value)
                 (cons value
                       (runtime-dynamic-scope-handlers scope))))))
   value)
@@ -90,9 +90,9 @@
   (let ((scope (runtime-dynamic-current nil)))
     (when scope
       (setf (runtime-dynamic-scope-configs scope)
-            (if (equal value
-                       (runtime-evaluator-state-config-stack state))
-                (copy-tree value)
+            (if (eq value
+                    (runtime-evaluator-state-config-stack state))
+                (copy-list value)
                 (cons value
                       (runtime-dynamic-scope-configs scope))))))
   value)
