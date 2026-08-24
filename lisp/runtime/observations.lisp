@@ -304,7 +304,9 @@
 
 Unlike the observation replay check, this runs before the host provider is
 called.  Keeping the gate here prevents a provider from disclosing a listing
-for a lexical path that resolves outside the ambient filesystem grant."
+for a lexical path that resolves outside the ambient filesystem grant.
+Reconciler domain callbacks may observe the resource they own through their
+write capability; ordinary callers still require read authority."
   (handler-case
       (let* ((text (or (runtime-observation-text path)
                        (and (stringp path) path)))
@@ -314,9 +316,13 @@ for a lexical path that resolves outside the ambient filesystem grant."
                                              :realpath #'store-canonical-path)))
              (capabilities (runtime-dynamic-capabilities)))
         (and target
-             (some (lambda (cap)
-                     (capability-check-fs-read-p cap target))
-                   capabilities)))
+             (or (some (lambda (cap)
+                         (capability-check-fs-read-p cap target))
+                       capabilities)
+                 (and (runtime-dynamic-current-domain)
+                      (some (lambda (cap)
+                              (capability-check-fs-write-p cap target))
+                            capabilities)))))
     (error () nil)))
 
 (defun runtime-observation-authorized-p (capabilities cell &optional (seen nil))
