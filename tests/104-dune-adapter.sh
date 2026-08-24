@@ -81,25 +81,47 @@ if [ "$(cat "$DEST/a.out")" = "A2" ] \
   ok "dune-artifact-restoration"
 else bad "dune-artifact-restoration" "$(cat "$TMP/out")"; fi
 
-cat >"$TMP/closed.pp" <<EOF
+DUNE_PATH=$(command -v dune || true)
+if [ -z "$DUNE_PATH" ]; then
+  bad "dune-command-available" "Dune is required for the adapter contract"
+else
+  cat >"$TMP/closed.pp" <<EOF
 load("$PWD/stdlib/dune.pp")
-print(dune-closed-request({
-  :tool -> {:tree -> {"bin/dune" -> {:kind -> :file, :mode -> 493, :blob -> blob("tool")}}},
+let spec = {
+  :tool -> {:tree -> {"bin/dune" -> {:kind -> :file, :mode -> 493, :blob -> blob(slurp("$DUNE_PATH"))}}},
   :tool-path -> "bin/dune",
   :target -> "a.out",
-  :inputs -> {:tree -> {"a.in" -> {:kind -> :file, :mode -> 420, :blob -> blob("A2\n")}}},
+  :inputs -> {:tree -> {
+    "dune-project" -> {:kind -> :file, :mode -> 420, :blob -> blob("(lang dune 3.0)\n")},
+    "dune" -> {:kind -> :file, :mode -> 420, :blob -> blob("(rule (target a.out) (deps a.in) (action (copy %{deps} %{target})))\n")},
+    "a.in" -> {:kind -> :file, :mode -> 420, :blob -> blob("A2\n")}
+  }},
   :platform -> {"os" -> "linux"},
   :closed-output -> "_build/default/a.out"
-}))
+}
+print(dune-closed-request(spec))
+let result = dune-build(:closed-source, spec)
+let output = result[:outputs][:tree]["_build/default/a.out"]
+print(result[:exit])
+print(blob-get(output[:blob]))
 EOF
-"$PP" "$TMP/closed.pp" >"$TMP/closed.out" 2>&1
-if grep -q -- '"--root" "/in"' "$TMP/closed.out" \
-    && grep -q '"_build/default/a.out"' "$TMP/closed.out"; then
-  ok "dune-closed-immutable-request"
-else bad "dune-closed-immutable-request" "$(cat "$TMP/closed.out")"; fi
+  "$PP" --grant process --grant "fs:$DUNE_PATH:ro" "$TMP/closed.pp" \
+    >"$TMP/closed.out" 2>&1
+  if ! grep -q -- '"--root" "/in"' "$TMP/closed.out" \
+      || ! grep -q '"_build/default/a.out"' "$TMP/closed.out"; then
+    bad "dune-closed-immutable-request" "$(cat "$TMP/closed.out")"
+  elif grep -q ':exit 0' "$TMP/closed.out" \
+      && grep -Fq '"A2\n"' "$TMP/closed.out"; then
+    ok "dune-closed-run"
+  elif grep -q 'closed Linux runner unavailable' "$TMP/closed.out"; then
+    ok "dune-closed-runner-unavailable"
+  else
+    bad "dune-closed-run" "$(cat "$TMP/closed.out")"
+  fi
+fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-grep -Rni --include='*.ml' --include='*.mli' 'dune' "$ROOT/src/runtime" \
+grep -Rni --include='*.lisp' 'dune' "$ROOT/lisp/runtime" \
   >"$TMP/core-dune"
 grep_status=$?
 case "$grep_status" in

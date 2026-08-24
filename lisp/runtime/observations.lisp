@@ -182,9 +182,8 @@
                                   domain name run))))
                   (let ((hash (hash-value value)))
                     (runtime-session-set-probe session name value)
-                    (when (runtime-dynamic-current-node)
-                      (runtime-observation-record
-                       (make-cell-probe name) hash))
+                    (runtime-observation-record
+                     (make-cell-probe name) hash)
                     value)))))))))
 (defun runtime-observe-domain (name sub)
   (let* ((session (runtime-observation-session))
@@ -197,30 +196,39 @@
         (cond ((typep value 'value-nil) nil)
               ((typep value 'value-string) (value-string-value value))
               (t (hash-value value)))))))
+(defparameter +runtime-observation-node-stale+ "node-trace:stale")
+
 (defun runtime-observe-node-trace (key &optional (seen nil))
   (let* ((name (store-identity-string key))
          (session (runtime-observation-session))
          (traces (runtime-observation-repository :store-traces)))
-    (when (and session traces (not (member name seen :test #'string=)))
-      (dolist (trace (trace-repository-load traces :key name))
-        (when (and (store-trace-outcome-ok-p (store-trace-outcome trace))
-                   (every (lambda (read)
-                            (let ((current
-                                    (runtime-observe-cell
-                                     (cell-parse
-                                      (store-identity-string
-                                       (store-trace-read-cell read)))
-                                     (cons name seen))))
-                              (and current
-                                   (string=
-                                    (store-identity-string
-                                     (if (store-digest-p current)
-                                         current
-                                         (pp.kernel:hash-string current)))
-                                    (store-identity-string
-                                     (store-trace-read-hash read))))))
-                          (store-trace-reads trace)))
-          (return (store-identity-string (store-trace-result-hash trace))))))))
+    (cond
+      ((or (null session) (null traces)) nil)
+      ((member name seen :test #'string=)
+       +runtime-observation-node-stale+)
+      (t
+        (or
+         (dolist (trace (trace-repository-load traces :key name))
+           (when (and (store-trace-outcome-ok-p (store-trace-outcome trace))
+                      (every (lambda (read)
+                               (let ((current
+                                       (runtime-observe-cell
+                                        (cell-parse
+                                         (store-identity-string
+                                          (store-trace-read-cell read)))
+                                        (cons name seen))))
+                                 (and current
+                                      (string=
+                                       (store-identity-string
+                                        (if (store-digest-p current)
+                                            current
+                                            (pp.kernel:hash-string current)))
+                                       (store-identity-string
+                                        (store-trace-read-hash read))))))
+                             (store-trace-reads trace)))
+             (return (store-identity-string
+                      (store-trace-result-hash trace)))))
+         +runtime-observation-node-stale+)))))
 (defun runtime-observation-handler-hash (name)
   (let* ((session (runtime-observation-session))
          (state (and session (runtime-session-evaluator session)))
@@ -290,6 +298,26 @@
     (runtime-observation-record
      (cell-parse (store-identity-string (store-trace-read-cell read)))
      (store-trace-read-hash read))))
+
+(defun runtime-observation-authorize-tree-effect (path)
+  "Check the canonical directory named by a TREE-OBSERVE effect.
+
+Unlike the observation replay check, this runs before the host provider is
+called.  Keeping the gate here prevents a provider from disclosing a listing
+for a lexical path that resolves outside the ambient filesystem grant."
+  (handler-case
+      (let* ((text (or (runtime-observation-text path)
+                       (and (stringp path) path)))
+             (canonical (and text (store-canonical-path text)))
+             (target (and canonical
+                          (canonicalize-path canonical
+                                             :realpath #'store-canonical-path)))
+             (capabilities (runtime-dynamic-capabilities)))
+        (and target
+             (some (lambda (cap)
+                     (capability-check-fs-read-p cap target))
+                   capabilities)))
+    (error () nil)))
 
 (defun runtime-observation-authorized-p (capabilities cell &optional (seen nil))
   (handler-case

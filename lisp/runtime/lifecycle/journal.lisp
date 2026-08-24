@@ -245,12 +245,15 @@
                 (gethash (runtime-journal-fenced-intent-key entry) pending) entry))
          (runtime-journal-fenced-done
           (unless (gethash (runtime-journal-fenced-done-key entry) intents)
-            (error "lifecycle journal fenced done has no intent"))
+            (error "invalid journal: lifecycle journal fenced done has no intent"))
           (remhash (runtime-journal-fenced-done-key entry) pending)))
        nil)
      nil)
     (let (entries)
-      (maphash (lambda (key entry) (declare (ignore key)) (push entry entries)) pending)
+      (maphash (lambda (key entry)
+                 (declare (ignore key))
+                 (push entry entries))
+               pending)
       (sort entries #'string< :key #'runtime-journal-fenced-intent-key))))
 
 (defun runtime-journal-has-fenced-done-p (session key)

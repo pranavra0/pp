@@ -396,7 +396,17 @@
       (let ((value (funcall (distribution-scheduler-runner scheduler) job)))
         (if (typep value 'distribution-result)
             value
-            (make-distribution-result :payload value)))
+            (handler-case
+                (make-distribution-result :payload value)
+              ;; A serial scheduler stays in this process.  Executable pp
+              ;; values (closures and builtins) are valid at this boundary,
+              ;; but cannot cross the distribution wire; retain them without
+              ;; attempting to canonicalize them as durable data.
+              (distribution-error (condition)
+                (if (or (typep value 'value-closure)
+                        (typep value 'value-builtin))
+                    (%make-distribution-result :status :ok :payload value)
+                    (error condition))))))
     (distribution-error (condition)
       (make-distribution-result :status :failed
                                 :error (distribution-error-detail condition)))

@@ -97,7 +97,14 @@ cp "$TMP/f1-noise.pp" "$TMP/f.pp"
 "$PP" "$TMP/f.pp" > "$TMP/o" 2>&1; assert "closure-noise-hit" "$TMP/o" absent
 cp "$TMP/f2.pp" "$TMP/f.pp"
 "$PP" "$TMP/f.pp" > "$TMP/o" 2>&1; assert "closure-x2-miss" "$TMP/o" present
-sed -i 's/let (x = 2)/let (x = 1)/' "$TMP/f.pp"
+tmp="$TMP/f.rewrite"
+while IFS= read -r line || [ -n "$line" ]; do
+  case "$line" in
+    "let (x = 2)") printf '%s\n' 'let (x = 1)' ;;
+    *) printf '%s\n' "$line" ;;
+  esac
+done < "$TMP/f.pp" > "$tmp"
+mv "$tmp" "$TMP/f.pp"
 "$PP" "$TMP/f.pp" > "$TMP/o" 2>&1; assert "closure-x1-revert-hit" "$TMP/o" absent
 
 # --- (d) widening the capability grant must NOT invalidate (caps ∉ key) ---

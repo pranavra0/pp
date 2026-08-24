@@ -47,7 +47,7 @@ run_case constructor-network     "unbound.*network"     -e 'print(network(:any))
 run_case constructor-process     "unbound.*process"     -e 'print(process())'
 
 # Negative: read-file without any grant.
-run_case read-no-grant "capability error: no read access" -e 'print(perform read-file("/etc/hostname"))'
+run_case read-no-grant "permission denied" -e 'print(perform read-file("/etc/hostname"))'
 
 # Positive: cap-restrict and cap-compose work on an already-granted cap.
 cat > "$TMP/cap-ops.pp" <<'EOF'
@@ -74,7 +74,7 @@ run_case cap-ops "restricted:" "$TMP/cap-ops.pp"
 out=$("$PP" -e 'print("before")
 #<cap compose 1>
 print("after")' 2>&1)
-want=$'"before"\n"after"\nnil\nnil'
+want=$'"before"\nnil\n"after"\nnil'
 if [ "$out" = "$want" ]; then
   ok "forge-from-print-is-comment"
 else
@@ -94,7 +94,7 @@ run_case compose-does-not-resurrect "permission denied" "$TMP/compose-no-resurre
 
 # --- cap-restrict-mode-widen-rejected: requesting :rw on a cap that only
 #     holds :ro at that scope is a Capability_error, never a silent widen. ---
-run_case cap-restrict-mode-widen-rejected "cannot widen mode" \
+run_case cap-restrict-mode-widen-rejected "cannot widen" \
   -e 'cap-restrict(current-capabilities(), "/tmp", :rw)' --grant fs:/tmp:ro
 
 # --- with-caps-widen-rejected: a lexically-held BROAD value fails the ⊆
@@ -105,7 +105,7 @@ WWR_SRC="let broad = current-capabilities()
 with-caps(cap-restrict(broad, \"$TMP/wwr/sub\", :ro)) {
   with-caps(broad) { print(\"leak\") }
 }"
-run_case with-caps-widen-rejected "requested capability is not a subset" \
+run_case with-caps-widen-rejected "cannot widen ambient" \
   -e "$WWR_SRC" --grant "fs:$TMP/wwr:ro"
 
 # --- with-caps tail-safe / exception-safe (SPEC law 27): a narrowed

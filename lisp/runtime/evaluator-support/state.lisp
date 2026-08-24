@@ -123,17 +123,24 @@ hash path rejects the value."
   (handler-case
       (hash-value value)
     (error (condition)
-      (if (typep value 'value-thunk)
-          (let* ((thunk (value-thunk-thunk value))
-                 (expression (thunk-expression thunk))
-                 (type-ann (thunk-type-ann thunk)))
-            (declare (ignore condition))
-            (hash-concat
-             (list "runtime-thunk"
-                   (hash-expr expression)
-                   (env-env-hash (thunk-environment thunk))
-                   (if type-ann (hash-expr type-ann) "untyped"))))
-          (error condition)))))
+      (cond
+        ((typep value 'value-thunk)
+         (let* ((thunk (value-thunk-thunk value))
+                (expression (thunk-expression thunk))
+                (type-ann (thunk-type-ann thunk)))
+           (hash-concat
+            (list "runtime-thunk"
+                  (hash-expr expression)
+                  (env-env-hash (thunk-environment thunk))
+                  (if type-ann (hash-expr type-ann) "untyped")))))
+        ((typep value 'value-closure)
+         (let ((closure (value-closure-closure value)))
+           (hash-concat
+            (list "runtime-closure"
+                  (or (closure-fn-name closure) "")
+                  (hash-expr (closure-body closure))
+                  (env-env-hash (closure-env closure))))))
+        (t (error condition))))))
 
 (defun runtime-evaluator-env-lookup (environment name)
   (let ((entry (find name (env-bindings environment) :key #'car :test #'string=)))
