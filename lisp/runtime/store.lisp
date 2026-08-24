@@ -280,19 +280,24 @@
 #+sbcl
 (defun store-exclusive-temp-name (directory prefix suffix)
   "Return a freshly created regular file in DIRECTORY; the caller owns it."
-  (loop
-    (let ((candidate (merge-pathnames
-                      (format nil "~A~A~A" prefix (store-random-hex 16) suffix)
-                      (pathname directory))))
-      (handler-case
-          (progn
-            (sb-posix:close
-             (sb-posix:open (namestring candidate)
-                            (logior sb-posix:o-wronly sb-posix:o-creat
-                                    sb-posix:o-excl sb-posix:o-nofollow)
-                            #o600))
-            (return (namestring candidate)))
-        (sb-posix:syscall-error () nil)))))
+  (let ((directory
+          (if (and (plusp (length directory))
+                   (char= (char directory (1- (length directory))) #\/))
+              directory
+              (concatenate 'string directory "/"))))
+    (loop
+      (let ((candidate (merge-pathnames
+                        (format nil "~A~A~A" prefix (store-random-hex 16) suffix)
+                        (pathname directory))))
+        (handler-case
+            (progn
+              (sb-posix:close
+               (sb-posix:open (namestring candidate)
+                              (logior sb-posix:o-wronly sb-posix:o-creat
+                                      sb-posix:o-excl sb-posix:o-nofollow)
+                              #o600))
+              (return (namestring candidate)))
+          (sb-posix:syscall-error () nil))))))
 
 #+sbcl
 (defun store-exclusive-directory (base prefix)

@@ -65,10 +65,18 @@
       (runtime-journal-append session
                               (make-runtime-journal-exec (cons program (rest argv)))))
     #+sbcl
-    (let* ((tmpdir (or (sb-ext:posix-getenv "TMPDIR") "/tmp"))
+    (let* ((tmpdir (or (and (sb-ext:posix-getenv "TMPDIR")
+                            (plusp (length (sb-ext:posix-getenv "TMPDIR")))
+                            (sb-ext:posix-getenv "TMPDIR"))
+                       "/tmp"))
            (out (store-exclusive-temp-name tmpdir "pp-run-" ".out"))
            (err (store-exclusive-temp-name tmpdir "pp-run-" ".err"))
            (process nil))
+      ;; The exclusive reservation prevents collisions; run-program must
+      ;; recreate the paths because its pathname output mode rejects existing
+      ;; files.
+      (sb-posix:unlink out)
+      (sb-posix:unlink err)
       (unwind-protect
            (progn
              (setf process
@@ -332,6 +340,15 @@
                      (pp.kernel:decode-value (store-octets-string bytes)))))
         (or value
             (error "corrupt durable process state: ~A" key))))))
+
+(defun runtime-domain-state-get (session domain key)
+  (handler-case
+      (runtime-process-state-get session domain key)
+    (error ()
+      (error "corrupt state: ~A" key))))
+
+(defun runtime-domain-state-put (session domain key value)
+  (runtime-process-state-put session domain key value))
 
 (defun runtime-process-state-put (session domain key value)
   (let ((path (runtime-process-state-path session domain key)))

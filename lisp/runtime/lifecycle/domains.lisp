@@ -117,21 +117,25 @@
       (let* ((key-text (runtime-domain-plan-cache-key diff observed desired))
              (policy (runtime-domain-service-value session :cache-policy))
              (traces (runtime-domain-service-value session :store-traces))
-             (objects (runtime-domain-service-value session :store-objects)))
-        (when (and policy traces objects (fboundp 'runtime-cache-lookup))
+             (objects (runtime-domain-service-value session :store-objects))
+             (blobs (runtime-domain-service-value session :store-blobs)))
+        (when (and policy traces objects blobs (fboundp 'runtime-cache-lookup))
           (let* ((key (cache-key-of-string key-text))
                  (hit (runtime-cache-lookup
                        :policy policy :traces traces :objects objects
-                       :blobs (runtime-domain-service-value session :store-blobs)
+                       :blobs blobs
                        :key key :observe-id (lambda (id)
                                               (declare (ignore id)) nil)
                        :replay (lambda (&rest ignored)
                                  (declare (ignore ignored)) nil)
                        :authorized (lambda (ignored)
                                      (declare (ignore ignored)) t))))
-            (when (and (fboundp 'runtime-cache-result-hit-ok-p)
-                       (funcall (symbol-function 'runtime-cache-result-hit-ok-p)
+            (when (and (fboundp 'runtime-cache-hit-ok-p)
+                       (funcall (symbol-function 'runtime-cache-hit-ok-p)
                                 hit))
+              (format *error-output* "domain ~A: plan ~A: hit~%"
+                      name key-text)
+              (finish-output *error-output*)
               (return-from runtime-domain-cache-plan
                 (runtime-cache-result-value hit)))))
         (let* ((plan
@@ -140,6 +144,7 @@
                         (runtime-session-call session diff
                                               (list observed desired)
                                               (runtime-session-global-env session)))))
+               (plan (runtime-domain-force session plan))
                (result-hash (pp.kernel:hash-value plan)))
           (when (and objects traces
                      (fboundp 'object-repository-put)
@@ -219,6 +224,12 @@
                                       callback
                                       (list (runtime-domain-planned-plan planned)))))
     (runtime-journal-append session (make-runtime-journal-domain-done hash))
+    (format *error-output* "[reconcile:~A] ~{~A~^ ~}~%"
+            (runtime-domain-target-name target)
+            (mapcar (lambda (pair)
+                      (format nil "~A=~A" (car pair) (cdr pair)))
+                    (runtime-domain-planned-summary planned)))
+    (finish-output *error-output*)
     planned))
 
 (defun runtime-domain-verify (session planned)

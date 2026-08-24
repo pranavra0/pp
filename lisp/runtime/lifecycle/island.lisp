@@ -278,6 +278,8 @@ The root itself yields nothing; directories are recursed into."
   (let* ((url (ecase scheme (:github (format nil "https://github.com/~A" locator))
                      (:git locator)))
          (tmpdir (or (and (fboundp 'sb-ext:posix-getenv)
+                          (sb-ext:posix-getenv "TMPDIR")
+                          (plusp (length (sb-ext:posix-getenv "TMPDIR")))
                           (sb-ext:posix-getenv "TMPDIR"))
                      "/tmp"))
          (tmp (store-exclusive-directory tmpdir "pp-island")))
@@ -297,12 +299,16 @@ The root itself yields nothing; directories are recursed into."
 
 (defun island-run-git (&rest arguments)
   (let* ((tmpdir (or (and (fboundp 'sb-ext:posix-getenv)
+                          (sb-ext:posix-getenv "TMPDIR")
+                          (plusp (length (sb-ext:posix-getenv "TMPDIR")))
                           (sb-ext:posix-getenv "TMPDIR"))
                      "/tmp"))
          (err (store-exclusive-temp-name tmpdir "pp-git-" ".err"))
-         (process (sb-ext:run-program "git" arguments
-                                      :search t :wait t :input "/dev/null"
-                                      :output nil :error err)))
+         (process (progn
+                    (sb-posix:unlink err)
+                    (sb-ext:run-program "git" arguments
+                                        :search t :wait t :input "/dev/null"
+                                        :output nil :error err))))
     (unwind-protect
          (unless (and process (zerop (sb-ext:process-exit-code process)))
            (let ((detail (ignore-errors
