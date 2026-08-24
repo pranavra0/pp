@@ -25,7 +25,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y sbcl ocaml-dune libdigest-sha-perl
+          sudo apt-get install -y sbcl libdigest-sha-perl
 
       - name: Build saved image
         run: scripts/build-lisp.sh --output lisp/pp
