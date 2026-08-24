@@ -34,6 +34,15 @@ if ! command -v timeout >/dev/null 2>&1; then
 fi
 
 # wait_for (poll-until-condition) comes from lib.sh.
+stable_pid() {
+  local file="$1" first second
+  first=$(cat "$file" 2>/dev/null) || return 1
+  [ -n "$first" ] || return 1
+  sleep 0.5
+  second=$(cat "$file" 2>/dev/null)
+  [ "$first" = "$second" ]
+}
+
 
 # ===========================================================================
 # Part 1: --member-name converges ONLY that host's fs slice.
@@ -122,7 +131,7 @@ EOF
 HOME="$HOSTC_HOME" timeout 20 "$PP" --watch --watch-interval 0.3 --grant process \
   --member-name C "$TMP/prog-proc.pp" > "$TMP/watch-out" 2>&1 &
 WATCH_PID=$!
-wait_for 5 test -f "$TMP/pid-c" || { echo "FAIL member-svc-started: pidfile missing"; fail=1; }
+wait_for 5 stable_pid "$TMP/pid-c" || { echo "FAIL member-svc-started: pidfile missing"; fail=1; }
 [ -e "$TMP/pid-other" ] && { echo "FAIL member-only-own-slice: svc-other (a DIFFERENT host's service) was started"; fail=1; } \
   || ok "member-only-own-slice (svc-other, host OTHER's service, never started)"
 OLD_C=$(cat "$TMP/pid-c" 2>/dev/null)
