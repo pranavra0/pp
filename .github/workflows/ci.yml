@@ -8,6 +8,11 @@ on:
 
 permissions:
   contents: read
+env:
+  # Deep-recursion is intentionally serial and exceeds the 120-second per-case
+  # default on GitHub-hosted runners; retain a bounded per-case watchdog.
+  TEST_CASE_TIMEOUT: "600"
+
 
 jobs:
   build:
