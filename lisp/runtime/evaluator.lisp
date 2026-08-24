@@ -586,7 +586,7 @@ linear continuation and scope growth in tail-recursive programs."
     (let* ((scope-frame (first cursor))
            (scope-kind (and scope-frame
                             (runtime-evaluator-frame-kind scope-frame))))
-      (unless (member scope-kind '(:with-config :with-caps :with-handlers))
+      (unless (member scope-kind '(:with-config :with-handlers))
         (return-from runtime-evaluator-tail-scope-transition
           (values continuation nil)))
       ;; Dropping location wrappers is safe at a tail boundary: the callee's
@@ -616,7 +616,7 @@ linear continuation and scope growth in tail-recursive programs."
                  (:with-caps
                   (runtime-evaluator-state-capabilities state))
                  (:with-handlers
-                  (runtime-evaluator-state-handler-stack state))))
+                  (first (runtime-evaluator-state-handler-stack state)))))
              (new-stack
                (if (eq scope-kind :with-config)
                    (cons current baseline)

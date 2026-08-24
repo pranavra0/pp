@@ -648,6 +648,7 @@ here preserves the same source contract as the brace surface."
         ((string= head "force") (let ((x (one))) (forms) (make-eforce x)))
         ((string= head "delay") (let ((x (one))) (forms) (make-edelay x)))
         ((string= head "node") (let ((x (one))) (forms) (make-enode x)))
+        ((string= head "with-caps") (make-ewith-caps (one) (body)))
         ((string= head "defnode")
          (let ((location (fe-loc (fe-cur p))))
            (if (eq (fe-kind p) :lparen)

@@ -274,7 +274,7 @@
             (string= (%a-current-target p)
                      (runtime-artifact-entry-target entry)))))))
 
-(defun %a-materialize-one (root entry)
+(defun %a-materialize-one (root entry &key (verify t))
   (let* ((relative (runtime-artifact-entry-path entry))
          (p (%ap root relative))
          (kind (%ak p))
@@ -292,7 +292,7 @@
        #+sbcl (sb-posix:chmod (store-absolute-path p)
                               (runtime-artifact-entry-mode entry)))
       (:file
-       (unless (and kind (%a-entry-matches-p root entry))
+       (unless (and verify kind (%a-entry-matches-p root entry))
          (let ((bytes (runtime-artifact-blob-get
                        (runtime-artifact-entry-blob entry))))
            (with-open-file (s p :direction :output
@@ -303,14 +303,14 @@
        #+sbcl (sb-posix:chmod (store-absolute-path p)
                               (runtime-artifact-entry-mode entry)))
       (:symlink
-       (unless (and kind (%a-entry-matches-p root entry))
+       (unless (and verify kind (%a-entry-matches-p root entry))
          (when kind (%a-delete-tree p))
          #+sbcl (sb-posix:symlink
                  (runtime-artifact-entry-target entry)
                  (store-absolute-path p))
          #-sbcl (error "symlink unavailable"))))))
 
-(defun runtime-artifact-materialize (root es)
+(defun runtime-artifact-materialize (root es &key (read-current t))
   (runtime-artifact-tree-validate es)
   (let ((kind (%ak root)))
     (cond ((null kind) (store-ensure-directory root))
@@ -320,10 +320,10 @@
       (runtime-artifact-error "artifact root is not a directory: ~A" root)))
   (dolist (entry es)
     (%a-check-parents root (runtime-artifact-entry-path entry))
-    (%a-materialize-one root entry))
+    (%a-materialize-one root entry :verify read-current))
   t)
 
-(defun runtime-artifact-reconcile (root desired)
+(defun runtime-artifact-reconcile (root desired &key (read-current t))
   (let* ((es (runtime-artifact-tree-from-value desired))
          (desired-paths (make-hash-table :test #'equal))
          (create 0)
@@ -337,21 +337,23 @@
              (runtime-artifact-error "artifact root is not a directory: ~A" root)))
       (unless (eq (%ak root) :directory)
         (runtime-artifact-error "artifact root is not a directory: ~A" root)))
-    (dolist (current (%a-current-tree root))
-      (let ((path (car current)))
-        (unless (gethash path desired-paths)
-          (incf delete (%a-delete-tree (%ap root path))))))
+    (when read-current
+      (dolist (current (%a-current-tree root))
+        (let ((path (car current)))
+          (unless (gethash path desired-paths)
+            (incf delete (%a-delete-tree (%ap root path)))))))
     (dolist (entry es)
       (let ((kind (%ak (%ap root (runtime-artifact-entry-path entry)))))
         (cond
           ((null kind)
            (unless (eq (runtime-artifact-entry-kind entry) :directory)
              (incf create)))
-          ((not (%a-entry-matches-p root entry))
+          ((and read-current (not (%a-entry-matches-p root entry)))
            (unless (eq (runtime-artifact-entry-kind entry) :directory)
              (incf update))))))
-    (runtime-artifact-materialize root es)
+    (runtime-artifact-materialize root es :read-current read-current)
     (values create update delete)))
+
 
 (defun runtime-artifact-snapshot (root &optional paths)
   (let ((entries (make-hash-table :test #'equal)))

@@ -10,6 +10,7 @@
   +version+)
 
 (defvar *command-program-arguments* nil)
+(defvar *command-effect-output* nil)
 ;; The command boundary keeps the source currently being parsed so frontend
 ;; diagnostics can explain removed surface forms whose lower-level parser
 ;; failure has no token range.
@@ -67,6 +68,8 @@
        (pp.kernel:make-eliteral
         (pp.kernel:make-vint (parse-integer spec :junk-allowed nil))))
       ((string= constructor "symbol") (pp.kernel:make-esymbol spec))
+      ((string= constructor "if")
+       (pp.kernel:make-eif sym lit lit))
       ((string= constructor "let") (pp.kernel:make-elet (list (cons "x" lit)) lit))
       ((string= constructor "fn") (pp.kernel:make-efn (list "x") lit))
       ((string= constructor "apply") (pp.kernel:make-eapply sym (list lit)))
@@ -1534,12 +1537,13 @@ Flatten only capability containers; no user value is accepted as authority."
                              (pp.runtime:runtime-evaluator-force
                               state argument))
                            arguments)))
-             (format error-output "[~A] ~A~%"
-                     (if (= (length values) 2)
-                         (%command-log-text (first values))
-                         "info")
-                     (%command-log-text (car (last values))))
-             (finish-output error-output)
+             (let ((stream (or *command-effect-output* error-output)))
+               (format stream "[~A] ~A~%"
+                       (if (= (length values) 2)
+                           (%command-log-text (first values))
+                           "info")
+                       (%command-log-text (car (last values))))
+               (finish-output stream))
              (pp.kernel:make-vnil)))
           ((string= name "read-file")
            (unless (= (length arguments) 1)
@@ -1942,7 +1946,7 @@ an explicit authority override and therefore bypasses the manifest."
 (defun %command-recover-fenced (session policy error-output)
   (let ((count (runtime-fenced-recover-unknown session policy)))
     (when (plusp count)
-      (format error-output "[fenced] ~D unknown-status action~:P in journal; applying policy=~A~%"
+      (format error-output "[fenced] ~D unknown-status action~:P in journal; applying policy=~(~A~)~%"
               count policy)
       (finish-output error-output))
     count))
@@ -2102,7 +2106,8 @@ an explicit authority override and therefore bypasses the manifest."
          (stabilize (getf options :stabilize))
          (force-rerun nil)
          (pass
-           (lambda ()
+           (lambda (&optional (pass-output output)
+                             (pass-error-output error-output))
              (if (getf options :supervise)
                  (progn
                    (unless (= (length operands) 1)
@@ -2115,11 +2120,12 @@ an explicit authority override and therefore bypasses the manifest."
                              (%source-surface source)))
                           (value
                             (%run-language-forms
-                             forms source output
+                             forms source pass-output
                              :print-values nil :return-value t
                              :session session :grant-specs grants :why why
                              :no-cache (or no-cache force-rerun) :check check
-                             :error-output error-output)))
+                             :retain-thunks stabilize
+                             :error-output pass-error-output)))
                     (let ((desired
                             (runtime-evaluator-force-deep
                              (runtime-session-evaluator session) value)))
@@ -2132,15 +2138,16 @@ an explicit authority override and therefore bypasses the manifest."
                               (%command-member-domain-desired
                                desired (getf options :member-name) "proc")
                               desired)
-                          output)))
+                              pass-error-output)))
                       desired))
                 )
-                 (%run-language-files operands output :session session
+                 (%run-language-files operands pass-output :session session
                                       :grant-specs grants :why why
                                       :no-cache (or no-cache force-rerun)
                                       :member-name (getf options :member-name)
                                       :check check
-                                      :error-output error-output)))))
+                                      :retain-thunks stabilize
+                                      :error-output pass-error-output)))))
     (when (getf options :pin-file)
       (%command-load-pin-file session (getf options :pin-file)))
     (when (getf options :policy-explicit)
@@ -2151,40 +2158,64 @@ an explicit authority override and therefore bypasses the manifest."
     (when (or (getf options :supervise)
               (getf options :member-name))
       (%command-install-process-services session))
-    (funcall pass)
-    (when (getf options :dump-pins)
-      (%command-dump-pins session (getf options :dump-pins)
-                          error-output))
     (if once
-        0
+        (progn
+          (funcall pass)
+          (when (getf options :dump-pins)
+            (%command-dump-pins session (getf options :dump-pins)
+                                error-output))
+          0)
+        (let ((pass-output (make-string-output-stream))
+              (pass-error-output (make-string-output-stream)))
+          (let ((*command-effect-output* pass-error-output))
+            (funcall pass pass-output pass-error-output))
+          (when (getf options :dump-pins)
+            (%command-dump-pins session (getf options :dump-pins)
+                                error-output))
           (let ((snapshot (%command-watch-trace-snapshot session operands)))
-          (loop
-            (runtime-watch-call-sleep (getf options :interval))
-            (let* ((current (%command-watch-trace-snapshot session operands))
-                   (changed (mapcar #'car
-                                    (set-difference current snapshot
-                                                    :test #'equal))))
-              (runtime-session-reset-pass-state session)
-              (when changed
-                (format error-output "[watch] ~D cell(s) changed~%"
-                        (length changed))
-                (when stabilize (runtime-watch-stabilize session changed))
-                (setf force-rerun t
-                      session
-                      (%make-command-session
-                       grants :why why :no-cache no-cache :source-roots operands
-                       :check check :error-output error-output))
-                (when (getf options :pin-file)
-                  (%command-load-pin-file session (getf options :pin-file)))
-                (when (getf options :policy-explicit)
-                  (runtime-session-register-service
-                   session :schedule-override (lambda () t)))
-                (%command-schedule-node-force
-                 session policy :override (getf options :policy-explicit))
-                (runtime-session-begin-watch session)
-                (funcall pass)
-                (setf force-rerun nil)
-                (setf snapshot (%command-watch-trace-snapshot session operands)))))))
+            (write-string (get-output-stream-string pass-output) output)
+            (write-string (get-output-stream-string pass-error-output)
+                          error-output)
+            (loop
+              (runtime-watch-call-sleep (getf options :interval))
+              (let* ((current (%command-watch-trace-snapshot session operands))
+                     (changed (mapcar #'car
+                                      (set-difference current snapshot
+                                                      :test #'equal))))
+                (runtime-session-reset-pass-state session)
+                (when changed
+                  (format error-output "[watch] ~D cell(s) changed~%"
+                          (length changed))
+                  (let ((pass-output (make-string-output-stream))
+                        (pass-error-output (make-string-output-stream)))
+                    (let ((*command-effect-output* pass-error-output))
+                      (when stabilize
+                        (runtime-watch-stabilize session changed))
+                      (if stabilize
+                          (setf force-rerun nil)
+                          (setf force-rerun t
+                                session
+                                (%make-command-session
+                                 grants :why why :no-cache no-cache
+                                 :source-roots operands
+                                 :check check :error-output error-output)))
+                      (when (getf options :pin-file)
+                        (%command-load-pin-file session (getf options :pin-file)))
+                      (when (getf options :policy-explicit)
+                        (runtime-session-register-service
+                         session :schedule-override (lambda () t)))
+                      (%command-schedule-node-force
+                       session policy :override (getf options :policy-explicit))
+                      (unless stabilize
+                        (runtime-session-begin-watch session))
+                      (funcall pass pass-output pass-error-output))
+                    (setf force-rerun nil
+                          snapshot
+                          (%command-watch-trace-snapshot session operands))
+                    (write-string (get-output-stream-string pass-output)
+                                  output)
+                    (write-string (get-output-stream-string pass-error-output)
+                                  error-output))))))))
 ))
 
  (defun %command-pin-data-value (expression)
@@ -2789,7 +2820,8 @@ environment, so leading loads must establish the initial environment first."
                                  (continue-errors nil)
                                  (return-value nil)
                                  session grant-specs (why nil)
-                                 (no-cache nil) (check nil) error-output)
+                                 (no-cache nil) (check nil) (retain-thunks nil)
+                                 error-output)
   "Evaluate FORMS through one explicit command session."
   (if (null forms)
       (if return-value nil 0)
@@ -2807,7 +2839,8 @@ environment, so leading loads must establish the initial environment first."
             (unless (runtime-session-find-service session :scheduler)
               (%command-schedule-node-force
                session (%command-runtime-policy "serial")))
-            (runtime-session-begin-evaluation session)
+            (runtime-session-begin-evaluation
+             session :retain-thunks retain-thunks)
             (let ((*standard-output* output))
               (%command-dynamic-top-level
                session
@@ -3104,7 +3137,7 @@ environment, so leading loads must establish the initial environment first."
 
 (defun %run-language-files
     (paths output &key session grant-specs (why nil) (no-cache nil)
-                         (check nil) error-output member-name)
+                         (retain-thunks nil) (check nil) error-output member-name)
   (unless paths
     (error "expected at least one .pp or .ppl source file"))
   (let ((session
@@ -3124,7 +3157,7 @@ environment, so leading loads must establish the initial environment first."
                    path output :print-values nil :session session
                    :return-value t
                    :grant-specs grant-specs :why why :no-cache no-cache :check check
-                   :error-output error-output))
+                   :retain-thunks retain-thunks :error-output error-output))
           (frontend-error (condition)
             (error 'frontend-error
                    :code (frontend-error-code condition)
@@ -3564,7 +3597,11 @@ hash: ~A" old-pin)
                 (value (pp.runtime:runtime-evaluator-force-deep
                         (pp.runtime:runtime-session-evaluator session) raw-value))
                 (entries (pp.runtime::runtime-artifact-tree-from-value value))
-                (observed (pp.runtime::runtime-artifact-observe-value root)))
+                (read-current
+                  (%command-capability-allows-file-p nil root nil :read))
+                (observed (if read-current
+                              (pp.runtime::runtime-artifact-observe-value root)
+                              (pp.kernel:make-vmap nil))))
            (%reconcile-stratification-check session root)
            (multiple-value-bind (plan creates updates deletes)
                (%reconcile-plan root entries observed)
@@ -3594,9 +3631,12 @@ hash: ~A" old-pin)
                (let ((counts
                        (let ((pp.runtime::*runtime-artifact-session* session))
                          (multiple-value-list
-                          (pp.runtime::runtime-artifact-reconcile root value)))))
+                          (pp.runtime::runtime-artifact-reconcile
+                           root value :read-current read-current)))))
                  (let* ((observed-after
-                          (pp.runtime::runtime-artifact-observe-value root))
+                          (if read-current
+                              (pp.runtime::runtime-artifact-observe-value root)
+                              observed))
                         (plan-after
                           (multiple-value-bind (p c u d)
                               (%reconcile-plan root entries observed-after)
@@ -3608,8 +3648,8 @@ hash: ~A" old-pin)
                                  (pp.kernel:hash-value observed-after)
                                  (pp.kernel:hash-value value)))))
                    (when objects
-                     (pp.runtime::object-repository-put
-                      objects :key (pp.kernel:hash-value plan-after)
+                     (pp.runtime::object-repository-put objects
+                      :key (pp.kernel:hash-value plan-after)
                       :value plan-after))
                    (when traces
                      (pp.runtime::trace-repository-put
