@@ -899,7 +899,7 @@ Flatten only capability containers; no user value is accepted as authority."
          (absolute (pp.runtime:store-absolute-path path)))
     (when (%command-symlink-p absolute)
       (pp.runtime:language-fail
-       (format nil "remove-file: capability denied for symlink path: ~A"
+       (format nil "remove-file: refusing symlink path (capability denied): ~A"
                absolute)
        "runtime.authority"))
     (let ((canonical (pp.runtime:store-canonical-path absolute)))
@@ -960,7 +960,7 @@ Flatten only capability containers; no user value is accepted as authority."
        (pp.kernel:make-vnil))
       ((%command-symlink-p absolute)
        (pp.runtime:language-fail
-        (format nil "write-file: capability denied for symlink path: ~A"
+        (format nil "write-file: refusing symlink path (capability denied): ~A"
                 absolute)
         "runtime.authority"))
       (t
@@ -2789,14 +2789,16 @@ hash: ~A" old-pin)
 (defun %reconcile-stratification-check (session root)
   (let ((prefix (format nil "~A/" (string-right-trim "/" (pp.runtime:store-canonical-path root)))))
     (dolist (observation (pp.runtime:runtime-session-observations session))
-      (let* ((cell (car observation))
+      (let* ((cell-id (pp.runtime:store-identity-string (car observation)))
+             (cell (pp.kernel:cell-parse cell-id))
              (kind (pp.kernel:cell-kind cell))
              (data (pp.kernel:cell-data cell)))
         (when (and (member kind '(:file :tree :stat)) (stringp data)
                    (or (string= data (string-right-trim "/" prefix))
                        (and (>= (length data) (length prefix))
                             (string= prefix data :end2 (length prefix)))))
-          (error "reconcile: desired state reads its own domain: ~A" data))))))
+          (error "reconcile: stratification violation: desired state reads its own domain: ~A"
+                 data))))))
 (defun %reconcile-list (values)
   (reduce (lambda (tail value)
             (pp.kernel:make-vpair value tail))
