@@ -58,7 +58,8 @@ write_program
 
 build() {
   "$PP" --grant process --grant "fs:$PROJECT:ro" \
-    --grant "fs:$DEST:wo" --reconcile "$DEST" "$TMP/build.pp" \
+    --grant "fs:$SBCL_PATH:ro" --grant "fs:$DEST:wo" \
+    --reconcile "$DEST" "$TMP/build.pp" \
     >"$TMP/out" 2>&1
 }
 
