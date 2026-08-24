@@ -837,12 +837,24 @@ Flatten only capability containers; no user value is accepted as authority."
      "runtime.tier"))
   (%command-process-required)
   (let ((journal (merge-pathnames
-                  "journal/log/"
-                  (pathname (%command-store-root)))))
+                  "journal/log"
+                  (pp.runtime:store-directory-pathname
+                   (%command-store-root)))))
     (when (probe-file journal)
-      (pp.runtime:language-fail
-       "run: invalid journal log path"
-       "runtime.process")))
+      #+sbcl
+      (unless (= (logand (sb-posix:stat-mode (sb-posix:lstat journal))
+                         sb-posix:s-ifmt)
+                 sb-posix:s-ifreg)
+        (pp.runtime:language-fail
+         "run: invalid journal log path"
+         "runtime.process"))
+      #-sbcl
+      (when (probe-file (merge-pathnames "journal/log/" 
+                                         (pp.runtime:store-directory-pathname
+                                          (%command-store-root))))
+        (pp.runtime:language-fail
+         "run: invalid journal log path"
+         "runtime.process"))))
   (unless (plusp (length arguments))
     (pp.runtime:language-fail "run expects a command" "primitive.arity"))
   (let ((argv
@@ -1127,9 +1139,10 @@ Flatten only capability containers; no user value is accepted as authority."
                (%command-strict-text value "run-closed!: environment")))))
    (pp.kernel:value-map-entries value)))
 
- (defun %command-closed-tree (value label)
+ (defun %command-closed-tree (value label &optional allow-implicit-parents)
   (handler-case
-      (pp.runtime:runtime-artifact-tree-from-value value)
+      (pp.runtime:runtime-artifact-tree-from-value
+       value :require-parents (not allow-implicit-parents))
     (error (condition)
       (pp.runtime:language-fail
        (format nil "run-closed!: ~A: ~A" label condition)
@@ -1166,7 +1179,7 @@ Flatten only capability containers; no user value is accepted as authority."
                 (find #\Return argument))
         (pp.runtime:language-fail
          "run-closed!: invalid argument" "runtime.closed")))
-    (%command-closed-tree tool "tool tree")
+    (%command-closed-tree tool "tool tree" t)
     (%command-closed-tree inputs "input tree")
     (dolist (path outputs)
       (unless (pp.runtime:runtime-artifact-valid-path-p path)
@@ -1899,7 +1912,7 @@ an explicit authority override and therefore bypasses the manifest."
   (let ((rest nil) (watch nil) (once nil) (stabilize nil) (supervise nil)
         (interval 1.0) (policy "serial") (policy-explicit nil)
         (fenced :abort) (member-name nil) (pin-file nil) (dump-pins nil)
-        (publish-root nil))
+        (publish-root nil) (desired-object nil) (desired-shared-root nil))
     (loop while arguments do
       (let ((argument (pop arguments)))
         (cond
@@ -1930,6 +1943,11 @@ an explicit authority override and therefore bypasses the manifest."
           ((string= argument "--publish-object")
            (unless arguments (error "--publish-object requires a shared root"))
            (setf publish-root (pop arguments)))
+          ((string= argument "--desired-object")
+           (unless (>= (length arguments) 2)
+             (error "--desired-object requires a hash and shared root"))
+           (setf desired-object (pop arguments)
+                 desired-shared-root (pop arguments)))
           (t (push argument rest)))))
     (when (and watch once)
       (error "--once cannot be combined with --watch"))
@@ -1941,7 +1959,9 @@ an explicit authority override and therefore bypasses the manifest."
                   :policy policy :policy-explicit policy-explicit
                   :fenced fenced :member-name member-name
                   :pin-file pin-file :dump-pins dump-pins
-                  :publish-root publish-root))))
+                  :publish-root publish-root
+                  :desired-object desired-object
+                  :desired-shared-root desired-shared-root))))
 
 (defun %command-recover-fenced (session policy error-output)
   (let ((count (runtime-fenced-recover-unknown session policy)))
@@ -2143,7 +2163,7 @@ an explicit authority override and therefore bypasses the manifest."
                 )
                  (%run-language-files operands pass-output :session session
                                       :grant-specs grants :why why
-                                      :no-cache (or no-cache force-rerun)
+                                      :no-cache no-cache
                                       :member-name (getf options :member-name)
                                       :check check
                                       :retain-thunks stabilize
@@ -2182,23 +2202,22 @@ an explicit authority override and therefore bypasses the manifest."
                      (changed (mapcar #'car
                                       (set-difference current snapshot
                                                       :test #'equal))))
-                (runtime-session-reset-pass-state session)
                 (when changed
                   (format error-output "[watch] ~D cell(s) changed~%"
                           (length changed))
+                  (runtime-session-reset-pass-state session)
                   (let ((pass-output (make-string-output-stream))
                         (pass-error-output (make-string-output-stream)))
                     (let ((*command-effect-output* pass-error-output))
                       (when stabilize
                         (runtime-watch-stabilize session changed))
-                      (if stabilize
-                          (setf force-rerun nil)
-                          (setf force-rerun t
-                                session
-                                (%make-command-session
-                                 grants :why why :no-cache no-cache
-                                 :source-roots operands
-                                 :check check :error-output error-output)))
+                      (unless stabilize
+                        (setf force-rerun t
+                              session
+                              (%make-command-session
+                               grants :why why :no-cache no-cache
+                               :source-roots operands
+                               :check check :error-output error-output)))
                       (when (getf options :pin-file)
                         (%command-load-pin-file session (getf options :pin-file)))
                       (when (getf options :policy-explicit)
@@ -3560,18 +3579,26 @@ hash: ~A" old-pin)
          :keep keep)))))
 
  (defun %run-reconcile-command-basic (arguments output error-output
-                                      &key runtime-options)
+                                      &key runtime-options desired-value)
   (multiple-value-bind (operands grants why no-cache check keep-epochs grace-seconds)
       (%parse-command-options arguments)
     (declare (ignore grace-seconds))
     (when (<= keep-epochs 0)
       (error "--gc-keep-epochs must be positive"))
-    (unless (= (length operands) 2)
+    (unless (or desired-value (= (length operands) 2))
       (error "--reconcile requires ROOT and one source file"))
-    (let* ((root (first operands)) (source-path (second operands))
+    (let* ((root (first operands))
+           (source-path (second operands))
            (session (%make-command-session
-                     grants :why why :no-cache no-cache :source-roots (list source-path)
+                     grants :why why :no-cache no-cache
+                     :source-roots (and source-path (list source-path))
                      :check check :error-output error-output))
+           (desired-blobs
+             (let ((shared-root (and runtime-options
+                                     (getf runtime-options :desired-shared-root))))
+               (and shared-root
+                    (pp.runtime:make-blob-repository
+                     (pp.runtime:make-store-layout shared-root)))))
            (target (pp.kernel:canonicalize-path root
                                                  :realpath #'pp.runtime:store-canonical-path)))
       (declare (ignore target))
@@ -3586,14 +3613,19 @@ hash: ~A" old-pin)
        (lambda ()
          (unless (%command-capability-allows-file-p nil root nil :write)
            (error "reconcile: capability denied for write: ~A" root))
-         (let* ((forms (%read-language-forms (%read-source-file source-path)
-                                          source-path (%source-surface source-path)))
-                (raw-value (let ((pp.runtime::*runtime-artifact-session* session))
-                             (%run-language-forms forms source-path output
-                                                  :print-values nil :return-value t
-                                                  :session session :grant-specs grants
-                                                  :why why :no-cache no-cache :check check
-                                                  :error-output error-output)))
+         (let* ((raw-value
+                  (if desired-value
+                      (%command-map-field desired-value "fs")
+                      (let ((forms
+                              (%read-language-forms (%read-source-file source-path)
+                                                    source-path
+                                                    (%source-surface source-path))))
+                        (let ((pp.runtime::*runtime-artifact-session* session))
+                          (%run-language-forms forms source-path output
+                                               :print-values nil :return-value t
+                                               :session session :grant-specs grants
+                                               :why why :no-cache no-cache :check check
+                                               :error-output error-output)))))
                 (value (pp.runtime:runtime-evaluator-force-deep
                         (pp.runtime:runtime-session-evaluator session) raw-value))
                 (entries (pp.runtime::runtime-artifact-tree-from-value value))
@@ -3602,6 +3634,10 @@ hash: ~A" old-pin)
                 (observed (if read-current
                               (pp.runtime::runtime-artifact-observe-value root)
                               (pp.kernel:make-vmap nil))))
+           (when desired-blobs
+             (%command-publish-copy-blobs
+              value desired-blobs
+              (funcall (runtime-session-find-service session :store-blobs))))
            (%reconcile-stratification-check session root)
            (multiple-value-bind (plan creates updates deletes)
                (%reconcile-plan root entries observed)
@@ -3683,12 +3719,26 @@ hash: ~A" old-pin)
                    (finish-output error-output)
                    0))))))))
 ))
-(defun %run-reconcile-command (arguments output error-output)
+ (defun %run-reconcile-command (arguments output error-output)
   (multiple-value-bind (operands options)
       (%command-runtime-options arguments)
-    (let ((reconcile (remove "--reconcile" operands :test #'string= :count 1)))
-      (%run-reconcile-command-basic
-       reconcile output error-output :runtime-options options))))
+    (let ((reconcile (remove "--reconcile" operands :test #'string= :count 1))
+          (desired-hash (getf options :desired-object))
+          (shared-root (getf options :desired-shared-root)))
+      (if desired-hash
+          (let* ((layout (pp.runtime:make-store-layout shared-root))
+                 (objects (progn
+                            (pp.runtime:store-layout-init layout)
+                            (pp.runtime:make-object-repository layout)))
+                 (value (pp.runtime:object-repository-get
+                         objects :key desired-hash)))
+            (unless value
+              (error "desired object unavailable: ~A" desired-hash))
+            (%run-reconcile-command-basic
+             reconcile output error-output :runtime-options options
+             :desired-value value))
+          (%run-reconcile-command-basic
+           reconcile output error-output :runtime-options options)))))
 (defun %run-graph-command (arguments output error-output)
   (multiple-value-bind (operands grants why no-cache check ignored-keep ignored-grace)
       (%parse-command-options (remove "graph" arguments :test #'string= :count 1))

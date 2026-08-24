@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     env:
@@ -22,14 +22,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install SBCL
+      - name: Install dependencies
         run: |
-          if [ "${{ runner.os }}" = "macOS" ]; then
-            brew install sbcl dune
-          else
-            sudo apt-get update
-            sudo apt-get install -y sbcl ocaml-dune libdigest-sha-perl
-          fi
+          sudo apt-get update
+          sudo apt-get install -y sbcl ocaml-dune libdigest-sha-perl
 
       - name: Build saved image
         run: scripts/build-lisp.sh --output lisp/pp

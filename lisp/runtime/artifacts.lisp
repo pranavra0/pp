@@ -70,7 +70,7 @@
          (runtime-artifact-symlink p (value-string-value target))))
       (t (runtime-artifact-error "invalid tree entry at ~A" p)))))
 
-(defun runtime-artifact-tree-from-value (v)
+(defun runtime-artifact-tree-from-value (v &key (require-parents t))
   (let* ((e (and (typep v 'value-map) (value-map-entries v)))
          (top (and e (caar e)))
          (m (and e (cdar e))))
@@ -101,9 +101,12 @@
                              (find parent entries
                                    :key #'runtime-artifact-entry-path
                                    :test #'string=)))
-                       (unless (and parent-entry
-                                    (eq (runtime-artifact-entry-kind parent-entry)
-                                        :directory))
+                       (unless (and (or (not require-parents)
+                                        parent-entry)
+                                    (or (not require-parents)
+                                        (eq (runtime-artifact-entry-kind
+                                             parent-entry)
+                                            :directory)))
                          (runtime-artifact-error
                           "tree path has no directory parent: ~A" path))))))
         entries))))
