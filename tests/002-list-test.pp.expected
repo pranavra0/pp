@@ -2,10 +2,6 @@
 "map +1 [1 2 3 4 5] =>"(2 3 4 5 6)
 ""
 "=== 2. map is lazy (does not force unused elements) ==="
-"  computing"50
-"  computing"40
-"  computing"30
-"  computing"20
 "  computing"10
 "first element:"20
 "(only one computing message should appear)"

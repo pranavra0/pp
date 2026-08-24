@@ -33,6 +33,7 @@
     ("config" 1 2 t "config")))
  (defparameter *frontend-sigil-expressions* (make-hash-table :test #'eq))
  (defparameter *frontend-list-literal-expressions* (make-hash-table :test #'eq))
+ (defparameter *frontend-list-spread-expressions* (make-hash-table :test #'eq))
  (defparameter *frontend-map-spread-expressions* (make-hash-table :test #'eq))
  (defparameter *frontend-qq-name-expressions* (make-hash-table :test #'equal))
  (defparameter *frontend-qq-parse-depth* 0)
@@ -295,6 +296,18 @@
       (value-string-value (expr-literal-value e))
       (frontend-fail (format nil "~A expects a string literal" what)
                      :code "reader.syntax")))
+
+(defun fe-require-island-literal (e what)
+  "Accept quoted URIs and the explicit reader's unquoted URI atom.
+
+The sexpr surface permits `file:/path` as an island atom.  It is still
+tokenized by our reader (never the host reader), and converting that symbol
+here preserves the same source contract as the brace surface."
+  (typecase e
+    (expr-literal (fe-require-string-literal e what))
+    (expr-symbol (expr-symbol-name e))
+    (t (frontend-fail (format nil "~A expects a string literal or URI atom" what)
+                      :code "reader.syntax"))))
 ;;; ---------------------------------------------------------------------------
 ;;; Shared reader-level desugars
 
@@ -647,13 +660,19 @@
                (let ((name (fe-symbol-token p)) (v (one)))
                  (forms) (make-edefvalue name (make-elocated location (make-enode v)))))))
         ((string= head "do") (make-edo (fe-check-block-defs (forms))))
-        ((string= head "with-caps") (make-ewith-caps (one) (body)))
-        ((string= head "with-config") (make-ewith-config (one) (body)))
-        ((string= head "perform") (let ((n (fe-symbol-token p))) (make-eperform n (forms))))
+        ((string= head "perform")
+         (let ((name (fe-symbol-token p)))
+           (make-eperform name (forms))))
         ((string= head "with-handler")
          (let ((items (progn (fe-expect p :lbracket "with-handler requires handler vector") (fe-parse-seq p :rbracket))) (hs nil))
-           (loop while items do (unless (cdr items) (frontend-fail "handler specs must be pairs" :code "reader.syntax"))
-             (let ((n (pop items)) (v (pop items))) (push (cons (if (typep n 'expr-symbol) (expr-symbol-name n) (value-keyword-value (expr-literal-value n))) v) hs)))
+           (loop while items do
+             (unless (cdr items) (frontend-fail "handler specs must be pairs" :code "reader.syntax"))
+             (let ((n (pop items)) (v (pop items)))
+               (push (cons (if (typep n 'expr-symbol)
+                               (expr-symbol-name n)
+                               (value-keyword-value (expr-literal-value n)))
+                           v)
+                     hs)))
            (make-ewith-handler (nreverse hs) (body))))
         ((string= head "module") (make-emodule (fe-check-block-defs (forms))))
         ((string= head "import") (let ((x (one))) (forms) (make-eimport x)))
@@ -664,7 +683,7 @@
         ((string= head "island")
          (let ((u (one)) (pin (unless (eq (fe-kind p) :rparen) (one))))
            (forms)
-           (make-eisland (fe-require-string-literal u "island URI")
+           (make-eisland (fe-require-island-literal u "island URI")
                          (and pin (fe-require-string-literal pin "island pin")))))
         ((string= head "with-config") (make-ewith-config (one) (body)))
         ((string= head "config") (let ((k (one)) (d (unless (eq (fe-kind p) :rparen) (one)))) (forms) (make-econfig k d)))
@@ -900,7 +919,7 @@
         (frontend-token-value tok)
         (frontend-fail "expected name" :code "reader.syntax"
                        :range (frontend-token-range tok)))))
-(defun fe-bargs (p)
+(defun fe-bargs (p &key handler-p)
   "Read a call's argument list, lowering spread segments to APPLY inputs.
 
 The first return value is the ordinary argument list when no spread occurs.
@@ -947,7 +966,10 @@ shape (and therefore their hashes)."
             (fe-bskip-lines p)
             (cond
               ((eq (fe-bkind p) :comma)
-               (fe-bnext p) (fe-bskip-lines p))
+               (fe-bnext p) (fe-bskip-lines p)
+               (when (and handler-p (eq (fe-bkind p) :rparen))
+                 (frontend-fail "handler name must be a symbol or keyword"
+                                :code "reader.syntax")))
               ((eq (fe-bkind p) :rparen)
                (fe-bnext p)
                (if spreadp
@@ -962,8 +984,8 @@ shape (and therefore their hashes)."
                               :range (frontend-token-range (fe-bcur p))
                               :incomplete-p (eq (fe-bkind p) :eof)))))))))
 
-(defun fe-bargs-no-spread (p)
-  (multiple-value-bind (args spreadp) (fe-bargs p)
+(defun fe-bargs-no-spread (p &key handler-p)
+  (multiple-value-bind (args spreadp) (fe-bargs p :handler-p handler-p)
     (when spreadp
       (frontend-fail "spread is only supported in function calls"
                      :code "reader.syntax"))
@@ -1056,18 +1078,20 @@ shape (and therefore their hashes)."
                      (unless (= where (1- (length items)))
                        (frontend-fail "list spread must be the final element"
                                       :code "reader.syntax"))
-                     (let ((tail (cdar (last items))))
-                       (return
-                         (reduce (lambda (e acc)
-                                   (make-eapply (make-esymbol "cons")
-                                                (list (cdr e) acc)))
-                                 (subseq items 0 where)
-                                 :from-end t :initial-value tail)))))))
+                     (let* ((tail (cdar (last items)))
+                            (result
+                              (reduce (lambda (e acc)
+                                        (make-eapply (make-esymbol "cons")
+                                                     (list (cdr e) acc)))
+                                      (subseq items 0 where)
+                                      :from-end t :initial-value tail)))
+                       (setf (gethash result *frontend-list-spread-expressions*) t)
+                       (return result)))))
             (t (frontend-fail "expected ',' or ']'"
                               :code (if (eq (fe-bkind p) :eof)
                                         "reader.incomplete" "reader.syntax")
                               :range (frontend-token-range (fe-bcur p))
-                              :incomplete-p (eq (fe-bkind p) :eof))))))))
+                              (incomplete-p (eq (fe-bkind p) :eof))))))))))
 (defun fe-bblock (p &key return-forms)
   ;; A block opener may be separated from its head by newlines/semicolons.
   (fe-bskip-nl p)
@@ -1356,6 +1380,25 @@ quasiquote uses direct VECTOR/HASH-MAP/HASH-SET applications for the latter."
                      (if expression (q expression) (sym name)))
                    (q name)))
              (args (xs) (mapcar #'q xs))
+             (spread-chain (root)
+               (let ((head nil) (tail root))
+                 (loop while (and (typep tail 'expr-apply)
+                                  (typep (expr-apply-function tail) 'expr-symbol)
+                                  (string= (expr-symbol-name
+                                            (expr-apply-function tail)) "cons")
+                                  (= (length (expr-apply-arguments tail)) 2))
+                       do (push (first (expr-apply-arguments tail) ) head)
+                          (setf tail (second (expr-apply-arguments tail))))
+                 (values (nreverse head) tail)))
+             (spread-tail (tail)
+               (if (and (typep tail 'expr-apply)
+                        (typep (expr-apply-function tail) 'expr-symbol)
+                        (member (expr-symbol-name (expr-apply-function tail))
+                                '("unquote" "splice") :test #'string=))
+                   (first (expr-apply-arguments tail))
+                   tail))
+             (spread-root-p (root)
+               (gethash root *frontend-list-spread-expressions*))
              (call (name xs) (fe-qq-chain (cons (sym name) (args xs)))))
     (typecase e
       ((or expr-symbol expr-literal) (make-equote e))
@@ -1375,6 +1418,14 @@ quasiquote uses direct VECTOR/HASH-MAP/HASH-SET applications for the latter."
               (name (and (typep fn 'expr-symbol) (expr-symbol-name fn)))
               (xs (expr-apply-arguments e)))
          (cond
+           ((spread-root-p e)
+            (multiple-value-bind (heads tail) (spread-chain e)
+              (fe-qq-chain
+               (append (mapcar #'q heads)
+                       (list (make-eapply
+                              (make-esymbol "list")
+                              (list (sym "unquote-splicing")
+                                    (spread-tail tail))))))))
            ((and (string= name "list")
                  (gethash e *frontend-list-literal-expressions*))
             (fe-qq-chain (args xs)))
@@ -1661,7 +1712,7 @@ from a user-written bare primitive, including nested lowered children."
                 (make-esymbol n)))
            ((string= n "with-handler")
             (fe-bexpect p :lparen "with-handler requires '('")
-            (let ((pairs (fe-bargs-no-spread p)) (handlers nil))
+            (let ((pairs (fe-bargs-no-spread p :handler-p t)) (handlers nil))
               (dolist (pair pairs)
                 (unless (and (typep pair 'expr-apply)
                              (typep (expr-apply-function pair) 'expr-symbol)
@@ -2675,7 +2726,9 @@ from a user-written bare primitive, including nested lowered children."
                                     (string= (expr-symbol-name
                                               (expr-apply-function a)) "list"))))
                     (emit-warning "lint.vector-on-list"
-                          "vector operation applied to a bracket list" line))
+                          (format nil "~A applied to a bracket literal"
+                                  (expr-symbol-name fn))
+                          line))
                   (when (and (typep fn 'expr-symbol)
                              (member (expr-symbol-name fn) '("car" "cdr" "first" "rest")
                                      :test #'string=)

@@ -533,6 +533,13 @@ session-owned :PERFORM service.  Missing services fail closed."
          (runtime-dynamic-call-handler handler arguments environment)))
       (effect (apply effect arguments))
       (service
+       (when (and (string= name "tree-observe")
+                  (fboundp 'runtime-observation-authorize-tree-effect)
+                  (not (runtime-observation-authorize-tree-effect
+                        (first arguments))))
+         (runtime-dynamic-error
+          "tree-observe: capability error: no read access"
+          "runtime.authority"))
        (funcall service (runtime-session-evaluator session) name arguments environment))
       (t (runtime-dynamic-error
           (format nil "unhandled effect: ~A" name) "runtime.effect")))))

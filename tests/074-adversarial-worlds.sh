@@ -37,8 +37,15 @@ edge_reason() {
 
 # The head set, straight from the surface table (single source).
 heads=$("$PP" --dump-surface-tables \
-        | awk '/Observation heads/,/with \{ \}/' \
-        | grep -oE '\$[a-z]+' | sed 's/\$//' | sort -u)
+        | awk '
+            /Observation heads/,/with \{ \}/ {
+              line = $0
+              while (match(line, /\$[a-z][a-z0-9-]*/)) {
+                print substr(line, RSTART + 1, RLENGTH - 1)
+                line = substr(line, RSTART + RLENGTH)
+              }
+            }
+          ' | sort -u)
 
 if [ -z "$heads" ]; then
   bad "enumerate-heads" "no heads parsed from --dump-surface-tables"

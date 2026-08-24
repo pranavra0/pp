@@ -569,6 +569,78 @@ callback that observes the scope cannot leak a host list shape."
       (t (runtime-evaluator-error
           (format nil "unhandled effect: ~A" name) "evaluator.effect")))))
 
+(defun runtime-evaluator-tail-scope-transition (state continuation)
+  "Collapse a dynamic scope when its body tail-calls a closure.
+
+The continuation already represents the scope's eventual restore.  Keep one
+marker and the active top frame while replacing repeated nested frames with a
+constant-size baseline chain.  This preserves dynamic lookup while avoiding
+linear continuation and scope growth in tail-recursive programs."
+  (let ((cursor continuation)
+        (located nil))
+    (loop while (and cursor
+                     (eq (runtime-evaluator-frame-kind (first cursor))
+                         :located))
+          do (push (first cursor) located)
+             (setf cursor (rest cursor)))
+    (let* ((scope-frame (first cursor))
+           (scope-kind (and scope-frame
+                            (runtime-evaluator-frame-kind scope-frame))))
+      (unless (member scope-kind '(:with-config :with-caps :with-handlers))
+        (return-from runtime-evaluator-tail-scope-transition
+          (values continuation nil)))
+      ;; Dropping location wrappers is safe at a tail boundary: the callee's
+      ;; own located expressions immediately install its source location.
+      (dolist (frame located)
+        (let ((data (runtime-evaluator-frame-data frame)))
+          (setf (runtime-evaluator-state-current-location state) (first data)
+                (runtime-evaluator-state-location-stack state)
+                (rest (runtime-evaluator-state-location-stack state)))))
+      (let* ((after (rest cursor))
+             (marker-kind
+               (ecase scope-kind
+                 (:with-config :tail-config)
+                 (:with-caps :tail-caps)
+                 (:with-handlers :tail-handlers)))
+             (marker (first after))
+             (same-marker
+               (and marker
+                    (eq (runtime-evaluator-frame-kind marker) marker-kind)))
+             (baseline (if same-marker
+                           (first (runtime-evaluator-frame-data marker))
+                           (first (runtime-evaluator-frame-data scope-frame))))
+             (current
+               (ecase scope-kind
+                 (:with-config
+                  (first (runtime-evaluator-state-config-stack state)))
+                 (:with-caps
+                  (runtime-evaluator-state-capabilities state))
+                 (:with-handlers
+                  (runtime-evaluator-state-handler-stack state))))
+             (new-stack
+               (if (eq scope-kind :with-config)
+                   (cons current baseline)
+                   nil)))
+        (ecase scope-kind
+          (:with-config
+           (setf (runtime-evaluator-state-config-stack state) new-stack)
+           (runtime-evaluator-notify-restore
+            (runtime-evaluator-state-with-config-function state)
+            state new-stack))
+          (:with-caps
+           (runtime-evaluator-notify-capabilities state current))
+          (:with-handlers
+           (setf (runtime-evaluator-state-handler-stack state)
+                 (cons current baseline))
+           (runtime-evaluator-notify-restore
+            (runtime-evaluator-state-with-handlers-function state)
+            state (runtime-evaluator-state-handler-stack state))))
+        (values (if same-marker
+                    after
+                    (cons (make-runtime-evaluator-frame
+                           marker-kind (list baseline))
+                          after))
+                t)))))
 (defun runtime-evaluator-cont (state tasks value continuation)
   (if (null continuation)
       (runtime-evaluator-schedule tasks :finish value)
@@ -631,34 +703,37 @@ callback that observes the scope cannot leak a host list shape."
                                       (reverse reversed))))
                (typecase function
                  (value-closure
-                  (let* ((closure (value-closure-closure function))
-                         (params (closure-params closure)))
-                    (unless (= (length params) (length arguments))
-                      (runtime-evaluator-error
-                       (format nil "~A expects ~D argument~:P, got ~D"
-                               (or (closure-fn-name closure) "#<fn>")
-                               (length params) (length arguments))
-                       "evaluator.arity"))
-                    (if (typep (closure-closure-kind closure)
-                               'closure-kind-node)
-                        (runtime-evaluator-schedule-continue
-                         tasks
-                         (make-vthunk
-                          (runtime-evaluator-make-thunk
-                           (closure-body closure)
+                  (multiple-value-bind (tail-rest ignored-tail)
+                      (runtime-evaluator-tail-scope-transition state rest)
+                    (declare (ignore ignored-tail))
+                    (let* ((closure (value-closure-closure function))
+                           (params (closure-params closure)))
+                      (unless (= (length params) (length arguments))
+                        (runtime-evaluator-error
+                         (format nil "~A expects ~D argument~:P, got ~D"
+                                 (or (closure-fn-name closure) "#<fn>")
+                                 (length params) (length arguments))
+                         "evaluator.arity"))
+                      (if (typep (closure-closure-kind closure)
+                                 'closure-kind-node)
+                          (runtime-evaluator-schedule-continue
+                           tasks
+                           (make-vthunk
+                            (runtime-evaluator-make-thunk
+                             (closure-body closure)
+                             (runtime-evaluator-env-extend-many
+                              (closure-env closure) params arguments)
+                             :name (closure-fn-name closure)
+                             :kind (make-persistent-thunk-kind
+                                    (copy-list
+                                     (runtime-evaluator-state-capabilities state))
+                                    (copy-list arguments))))
+                           tail-rest)
+                          (runtime-evaluator-schedule-eval
+                           tasks (closure-body closure)
                            (runtime-evaluator-env-extend-many
                             (closure-env closure) params arguments)
-                           :name (closure-fn-name closure)
-                           :kind (make-persistent-thunk-kind
-                                  (copy-list
-                                   (runtime-evaluator-state-capabilities state))
-                                  (copy-list arguments))))
-                         rest)
-                        (runtime-evaluator-schedule-eval
-                         tasks (closure-body closure)
-                         (runtime-evaluator-env-extend-many
-                          (closure-env closure) params arguments)
-                         rest))))
+                           tail-rest)))))
                  (value-builtin
                   (let ((name (value-builtin-name function)))
                     (cond
@@ -803,6 +878,18 @@ callback that observes the scope cannot leak a host list shape."
            (let ((saved (first data)))
              (runtime-evaluator-restore-config! state saved)
              (runtime-evaluator-schedule-continue tasks value rest)))
+          (:tail-handlers
+           (runtime-evaluator-restore-handlers!
+            state (first data))
+           (runtime-evaluator-schedule-continue tasks value rest))
+          (:tail-caps
+           (runtime-evaluator-restore-capabilities!
+            state (first data))
+           (runtime-evaluator-schedule-continue tasks value rest))
+          (:tail-config
+           (runtime-evaluator-restore-config!
+            state (first data))
+           (runtime-evaluator-schedule-continue tasks value rest))
           (:map-result
            (destructuring-bind (function remaining results environment) data
              (runtime-evaluator-schedule

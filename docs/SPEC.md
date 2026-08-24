@@ -1439,30 +1439,30 @@ desugar, `lint`, error messages) derives from those tables; nothing
 hand-copies the list. Generated block: do not edit between the markers.
 
 <!-- BEGIN GENERATED surface-tables -->
-#### Observation heads: `$KIND(args…)`
+#### Observation heads — `$KIND(args…)`
 
 | head | arity | qq | lowering | meaning |
 |---|---|---|---|---|
-| `$file` | 1 | yes | `(slurp $1)` | $file(path); read a file's contents (records a file: cell) |
-| `$env` | 1..2 | yes | `(if (nil? (env-get $1)) $2 (env-get $1))` | $env(name[, default]); read an environment variable (records an env: cell); the optional default is used when the variable is unset |
-| `$glob` | 1 | yes | `(perform tree-observe $1)` | $glob(path); observe a directory tree (records a tree: cell) |
-| `$probe` | 1 | yes | `(probe $1)` | $probe(name); read an observer-written volatile probe cell |
-| `$secret` | 1 | yes | `(slurp $1)` | $secret(path); read a sealed (confidential) file |
-| `$config` | 1..2 | yes | `(config $1 $2)` | $config(key[, default]); read a scoped config value (records a config: cell); the optional default is used when the key is unset |
+| `$file` | 1 | yes | `(slurp $1)` | $file(path) — read a file's contents (records a file: cell) |
+| `$env` | 1..2 | yes | `(if (nil? (env-get $1)) $2 (env-get $1))` | $env(name[, default]) — read an environment variable (records an env: cell); the optional default is used when the variable is unset |
+| `$glob` | 1 | yes | `(perform tree-observe $1)` | $glob(path) — observe a directory tree (records a tree: cell) |
+| `$probe` | 1 | yes | `(probe $1)` | $probe(name) — read an observer-written volatile probe cell |
+| `$secret` | 1 | yes | `(slurp $1)` | $secret(path) — read a sealed (confidential) file |
+| `$config` | 1..2 | yes | `(config $1 $2)` | $config(key[, default]) — read a scoped config value (records a config: cell); the optional default is used when the key is unset |
 
 #### `with { }` clauses
 
 | keyword | wrapper | meaning |
 |---|---|---|
-| `caps:` | `with-caps` | caps: C; run the body with capability set C |
-| `config:` | `with-config` | config: M; run the body with ambient config map M |
-| `handlers:` | `with-handler` | handlers: { :name -> fn, ... }; install a map of effect handlers |
+| `caps:` | `with-caps` | caps: C — run the body with capability set C |
+| `config:` | `with-config` | config: M — run the body with ambient config map M |
+| `handlers:` | `with-handler` | handlers: { :name -> fn, ... } — install a map of effect handlers |
 
 #### Grant-descriptor sugar (inside `needs`)
 
 | descriptor | lowering | meaning |
 |---|---|---|
-| `fs.read` | `(cap-restrict (current-capabilities) $1 :ro)` | fs.read(p); read-only fs grant for p |
-| `fs.write` | `(cap-restrict (current-capabilities) $1 :wo)` | fs.write(p); write-only fs grant for p |
-| `fs.rw` | `(cap-restrict (current-capabilities) $1 :rw)` | fs.rw(p); read-write fs grant for p |
+| `fs.read` | `(cap-restrict (current-capabilities) $1 :ro)` | fs.read(p) — read-only fs grant for p |
+| `fs.write` | `(cap-restrict (current-capabilities) $1 :wo)` | fs.write(p) — write-only fs grant for p |
+| `fs.rw` | `(cap-restrict (current-capabilities) $1 :rw)` | fs.rw(p) — read-write fs grant for p |
 <!-- END GENERATED surface-tables -->

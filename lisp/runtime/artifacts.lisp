@@ -419,6 +419,15 @@
         (runtime-artifact-tree-validate result)
         result))))
 (defun runtime-artifact-observe-value (root)
+  (when (and (runtime-dynamic-current nil)
+             (fboundp 'runtime-observation-authorize-tree-effect)
+             (not (runtime-observation-authorize-tree-effect root)))
+    (if (fboundp 'runtime-observation-error)
+        (runtime-observation-error
+         "tree-observe: capability error: no read access"
+         "runtime.authority")
+        (runtime-artifact-error
+         "tree-observe: capability error: no read access")))
   (let ((entries nil))
     (dolist (item (%a-current-tree root))
       (let ((path (car item))

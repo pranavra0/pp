@@ -31,11 +31,20 @@ done < "$MATRIX"
 
 actual_source="$ROOT/lisp/app/main.lisp"
 awk '
-  /runtime-session-register-callback/ { dispatch=1 }
+  /runtime-session-register-callback/ {
+    registration=1
+    dispatch=0
+  }
+  registration && /session[[:space:]]+:perform([[:space:]]|$)/ {
+    dispatch=1
+  }
   dispatch && /^[[:space:]]*\(\(string= name "/ {
     line=$0; sub(/.*string= name "/, "", line); sub(/".*/, "", line); print line
   }
-  dispatch && /^[[:space:]]*session\)\)/ { dispatch=0 }
+  registration && /^[[:space:]]*session\)\)\)/ {
+    registration=0
+    dispatch=0
+  }
 ' "$actual_source" | sort -u > "$TMP/actual-effects"
 awk -F '\t' '$1 ~ /^perform:/ { sub(/^perform:/, "", $1); print $1 }' \
   "$MATRIX" | sort -u > "$TMP/matrix-effects"
@@ -58,7 +67,9 @@ printf 'secret\n' > "$TMP/authority-input"
 printf 'perform read-file("%s")\n' "$TMP/authority-input" > "$TMP/authority.pp"
 "$PP" "$TMP/authority.pp" > "$TMP/authority.out" 2>&1
 status=$?
-if [ "$status" -eq 1 ] && grep -q "permission denied" "$TMP/authority.out"; then
+if [ "$status" -eq 1 ] &&
+   (grep -q "permission denied" "$TMP/authority.out" ||
+    grep -q "capability error" "$TMP/authority.out"); then
   ok effect-authority-gated
 else
   bad effect-authority-gated "status=$status: $(cat "$TMP/authority.out")"

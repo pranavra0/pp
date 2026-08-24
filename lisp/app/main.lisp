@@ -10,6 +10,35 @@
   +version+)
 
 (defvar *command-program-arguments* nil)
+;; The command boundary keeps the source currently being parsed so frontend
+;; diagnostics can explain removed surface forms whose lower-level parser
+;; failure has no token range.
+(defvar *language-source-context* nil)
+
+(defun %source-context-text ()
+  (and *language-source-context*
+       (not (string= *language-source-context* "<stdin>"))
+       (handler-case
+           (%read-source-file *language-source-context*)
+         (error () nil))))
+
+(defun %frontend-removed-surface-message (message &optional source-text)
+  (let ((text (or source-text (%source-context-text))))
+    (cond
+      ((and text
+            (or (search "@cache" text :test #'char-equal)
+                (search "@needs" text :test #'char-equal)
+                (search "@reads" text :test #'char-equal)
+                (search "@deprecated" text :test #'char-equal)))
+       "attributes are not part of the language")
+      ((and text
+            (or (search ")?" text :test #'char=)
+                (search "]?" text :test #'char=)))
+       "postfix '?' is not part of the language")
+      ((and text (search "handler " text :test #'char-equal)
+            (search ":" text :test #'char=))
+       "with clauses require one of caps:, config:, handlers:")
+      (t message))))
 
 (defun %command-split-program-arguments (arguments)
   (let ((command nil)
@@ -38,7 +67,6 @@
        (pp.kernel:make-eliteral
         (pp.kernel:make-vint (parse-integer spec :junk-allowed nil))))
       ((string= constructor "symbol") (pp.kernel:make-esymbol spec))
-      ((string= constructor "if") (pp.kernel:make-eif lit lit lit))
       ((string= constructor "let") (pp.kernel:make-elet (list (cons "x" lit)) lit))
       ((string= constructor "fn") (pp.kernel:make-efn (list "x") lit))
       ((string= constructor "apply") (pp.kernel:make-eapply sym (list lit)))
@@ -115,13 +143,9 @@
          (string= name suffix
                   :start1 (- (length name) suffix-length)
                   :end1 (length name)))))
-
 (defun %brace-source-path-p (path)
-  ;; This deliberately follows Reader_braces.file_uses_braces: the suffix,
-  ;; rather than a character in user text (which could be a sexpr comment),
-  ;; selects the brace reader at a file boundary.
-  (or (%suffix-p path ".pp") (%suffix-p path ".ppb")))
-
+  (or (%suffix-p path ".pp")
+      (%suffix-p path ".ppb")))
 (defun %frontend-token-text (range)
   (handler-case
       (let* ((source (source-range-source range))
@@ -145,8 +169,15 @@
     (error () nil)))
 
 (defun %frontend-error-message (condition)
-  (let ((message (frontend-error-message condition))
-        (range (frontend-error-range condition)))
+  (let* ((range (frontend-error-range condition))
+         (source-text
+           (and range
+                (handler-case
+                    (%read-source-file (source-range-source range))
+                  (error () nil))))
+         (message (%frontend-removed-surface-message
+                   (frontend-error-message condition)
+                   source-text)))
     (if (and range (string= message "expected ',' or ')'"))
         (let ((token (%frontend-token-text range)))
           (if token
@@ -303,6 +334,47 @@
           do (incf cursor))
     (and (> cursor start) cursor)))
 
+(defun %language-source-line-text (range)
+  (handler-case
+      (let ((text (%read-source-file (source-range-source range)))
+            (wanted (position-line (source-range-start range))))
+        (with-input-from-string (input text)
+          (loop for line-number from 1
+                for line = (cl:read-line input nil nil)
+                while line
+                when (= line-number wanted)
+                  return line)))
+    (error () nil)))
+
+(defun %language-normalize-error-message (message range)
+  (let ((expects (search " expects " message :test #'char=))
+        (argument (search " argument" message :test #'char=))
+        (got (search ", got " message :test #'char=)))
+    (cond
+      ;; Preserve the language-level arity contract independently of the
+      ;; evaluator's internal wording.
+      ((and expects argument got
+            (< expects argument got))
+       (let* ((name (subseq message 0 expects))
+              (expected-text (subseq message (+ expects 9) argument))
+              (got-text (subseq message (+ got 6))))
+         (handler-case
+             (format nil "arity mismatch calling ~A: expected ~D args, got ~D"
+                     name
+                     (parse-integer expected-text :junk-allowed nil)
+                     (parse-integer got-text :junk-allowed nil))
+           (error () message))))
+      ;; The command's read-file effect has a stable operation-facing
+      ;; diagnostic even though its implementation is named slurp.
+      ((and range
+            (search "slurp: permission denied for " message :test #'char=)
+            (search "read-file" (or (%language-source-line-text range) "")
+                    :test #'char-equal))
+       (format nil "read-file: capability error: no read access for ~A"
+               (subseq message
+                       (+ (search " for " message :test #'char=) 5))))
+      (t message))))
+
 (defun %language-location-prefix (message source)
   "Split a generated SOURCE:LINE:COLUMN diagnostic prefix from MESSAGE.
 
@@ -345,13 +417,13 @@ be decimal, so ordinary user messages are not rewritten accidentally."
                                (char= (char message cursor) #\:)
                                (char= (char message (1+ cursor)) #\Space))
                       (values (subseq message (+ cursor 2)) source line))))))))))))
-
 (defun %language-error-text (condition)
   (cond
     ((typep condition 'language-error)
-     (let* ((message (language-error-message condition))
+     (let* ((raw-message (language-error-message condition))
             (range (pp.runtime::language-error-range condition))
             (source (and range (source-range-source range)))
+            (message raw-message)
             (location-source nil)
             (location-line nil)
             (clean message))
@@ -367,6 +439,7 @@ be decimal, so ordinary user messages are not rewritten accidentally."
                      location-source nested-source
                      location-line nested-line)
                (return))))
+       (setf clean (%language-normalize-error-message clean range))
        (let ((display-source (or location-source source)))
          (if display-source
              (format nil "~A at ~A:~D"
@@ -1004,6 +1077,161 @@ Flatten only capability containers; no user value is accepted as authority."
      "runtime.authority"))
   t)
 
+ (defun %command-closed-map-field (value name required)
+  (let ((field (%command-map-field value name)))
+    (when (and required (null field))
+      (pp.runtime:language-fail
+       (format nil "run-closed!: requires :~A" name)
+       "runtime.closed"))
+    field))
+
+(defun %command-closed-vector-text (value name)
+  (let ((items
+          (cond
+            ((typep value 'pp.kernel:value-vector)
+             (coerce (pp.kernel:value-vector-values value) 'list))
+            ((pp.runtime:proper-value-list-p value)
+             (pp.runtime:proper-value-list value))
+            (t
+             (pp.runtime:language-fail
+              (format nil "run-closed!: :~A must be a vector or list" name)
+              "runtime.closed")))))
+    (mapcar
+     (lambda (item)
+       (%command-strict-text item (format nil "run-closed!: :~A" name)))
+     items)))
+
+(defun %command-closed-environment (value)
+  (unless (typep value 'pp.kernel:value-map)
+    (pp.runtime:language-fail
+     "run-closed!: :env must be a map" "runtime.closed"))
+  (mapcar
+   (lambda (entry)
+     (let ((name (car entry))
+           (value (cdr entry)))
+       (unless (typep name 'pp.kernel:value-string)
+         (pp.runtime:language-fail
+          "run-closed!: invalid environment name" "runtime.closed"))
+       (let ((name (pp.kernel:value-string-value name)))
+         (unless (and (plusp (length name))
+                      (not (find #\Null name))
+                      (not (find #\Newline name))
+                      (not (find #\Return name))
+                      (not (find #\= name)))
+           (pp.runtime:language-fail
+            "run-closed!: invalid environment name" "runtime.closed"))
+         (cons name
+               (%command-strict-text value "run-closed!: environment")))))
+   (pp.kernel:value-map-entries value)))
+
+ (defun %command-closed-tree (value label)
+  (handler-case
+      (pp.runtime:runtime-artifact-tree-from-value value)
+    (error (condition)
+      (pp.runtime:language-fail
+       (format nil "run-closed!: ~A: ~A" label condition)
+       "runtime.closed"))))
+
+ (defun %command-closed-request (value)
+  (%command-process-required)
+  (unless (typep value 'pp.kernel:value-map)
+    (pp.runtime:language-fail
+     "run-closed!: expects a request map" "runtime.closed"))
+  (let* ((tool (%command-closed-map-field value "tool" t))
+         (tool-path (%command-strict-text
+                     (%command-closed-map-field value "tool-path" t)
+                     "run-closed!: :tool-path"))
+         (arguments (%command-closed-vector-text
+                     (%command-closed-map-field value "args" t) "args"))
+         (inputs (%command-closed-map-field value "inputs" t))
+         (environment (%command-closed-environment
+                       (%command-closed-map-field value "env" t)))
+         (platform (%command-closed-map-field value "platform" t))
+         (policy (%command-map-field value "policy"))
+         (outputs (%command-closed-vector-text
+                   (%command-closed-map-field value "outputs" t) "outputs"))
+         (seen-outputs (make-hash-table :test #'equal)))
+    (unless (and (plusp (length tool-path))
+                 (not (find #\Null tool-path))
+                 (not (find #\Newline tool-path))
+                 (not (find #\Return tool-path)))
+      (pp.runtime:language-fail
+       "run-closed!: invalid tool path" "runtime.closed"))
+    (dolist (argument arguments)
+      (when (or (find #\Null argument)
+                (find #\Newline argument)
+                (find #\Return argument))
+        (pp.runtime:language-fail
+         "run-closed!: invalid argument" "runtime.closed")))
+    (%command-closed-tree tool "tool tree")
+    (%command-closed-tree inputs "input tree")
+    (dolist (path outputs)
+      (unless (pp.runtime:runtime-artifact-valid-path-p path)
+        (pp.runtime:language-fail
+         (format nil "run-closed!: rejects non-canonical output path: ~A" path)
+         "runtime.closed"))
+      (when (gethash path seen-outputs)
+        (pp.runtime:language-fail
+         (format nil "run-closed!: duplicate output path: ~A" path)
+         "runtime.closed"))
+      (setf (gethash path seen-outputs) t))
+    (unless (pp.runtime:runtime-executor-request-data-p platform)
+      (pp.runtime:language-fail
+       "run-closed!: :platform must be canonical data" "runtime.closed"))
+    (let ((platform-os
+            (%command-strict-text
+             (%command-closed-map-field platform "os" t)
+             "run-closed!: :platform")))
+      (unless (string= platform-os "linux")
+        (pp.runtime:language-fail
+         "run-closed!: requires :platform linux" "runtime.closed")))
+    (when (and policy
+               (not (pp.runtime:runtime-executor-request-data-p policy)))
+      (pp.runtime:language-fail
+       "run-closed!: expects :policy to be canonical data" "runtime.closed"))
+    (pp.runtime:make-runtime-executor-request
+     :tool tool :tool-path tool-path :arguments arguments :inputs inputs
+     :environment environment :platform platform :policy policy :outputs outputs)))
+
+ (defun %command-closed-result-value (result)
+  (pp.kernel:make-vmap
+   (list (cons (pp.kernel:make-vstring "exit")
+               (pp.kernel:make-vint
+                (pp.runtime:runtime-executor-result-exit-status result)))
+         (cons (pp.kernel:make-vstring "stdout")
+               (pp.kernel:make-vstring
+                (pp.runtime:runtime-executor-result-stdout result)))
+         (cons (pp.kernel:make-vstring "stderr")
+               (pp.kernel:make-vstring
+                (pp.runtime:runtime-executor-result-stderr result)))
+         (cons (pp.kernel:make-vstring "outputs")
+               (pp.runtime:runtime-artifact-tree-to-value
+                (pp.runtime:runtime-executor-result-outputs result)))
+         (cons (pp.kernel:make-vstring "evidence")
+               (pp.kernel:make-vmap
+                (mapcar (lambda (pair)
+                          (cons (pp.kernel:make-vstring (car pair))
+                                (pp.kernel:make-vstring (cdr pair))))
+                        (pp.runtime:runtime-executor-result-evidence result))))
+         (cons (pp.kernel:make-vstring "resources")
+               (pp.kernel:make-vmap
+                (mapcar (lambda (pair)
+                          (cons (pp.kernel:make-vstring (car pair))
+                                (pp.kernel:make-vstring (cdr pair))))
+                        (pp.runtime:runtime-executor-result-resources result)))))))
+
+ (defun %command-closed-executor ()
+  ;; The host provider deliberately reports its ambient clock/randomness and
+  ;; resource semantics as scripting-only.  A trusted Linux provider may be
+  ;; installed by an embedding application; the command image fails closed.
+  (pp.runtime:make-runtime-executor
+   :classify (lambda (request)
+               (declare (ignore request))
+               (pp.runtime:make-runtime-executor-scripting-only
+                "executor classifies this request as scripting-only"))
+   :execute (lambda (request)
+              (declare (ignore request))
+              (error "closed Linux runner unavailable"))))
 (defun %command-record-handler-observation (name)
   (let ((observed (pp.runtime:runtime-dynamic-observe-handler name)))
     (pp.runtime:runtime-observation-record
@@ -1274,11 +1502,12 @@ Flatten only capability containers; no user value is accepted as authority."
          (let ((cap (if (typep cap-value 'pp.kernel:value-capability)
                         (pp.kernel:value-capability-capability cap-value)
                         cap-value)))
-         (runtime-session-set-probe session name nil)
-         (runtime-session-register-probe
-          session name
-          (make-runtime-domain-entry :observe observe :cap cap))
-         (pp.kernel:make-vnil)))))
+           (unless (pp.runtime:runtime-session-find-probe session name)
+             (pp.runtime:runtime-session-set-probe session name nil))
+           (runtime-session-register-probe
+            session name
+            (make-runtime-domain-entry :observe observe :cap cap))
+           (pp.kernel:make-vnil)))))
 
       (pp.runtime:runtime-session-register-callback
        session :perform
@@ -1287,6 +1516,14 @@ Flatten only capability containers; no user value is accepted as authority."
          (%command-record-handler-observation name)
 
          (cond
+          ((string= name "run-closed!")
+           (unless (= (length arguments) 1)
+             (pp.runtime:language-fail
+              "run-closed! expects one request" "primitive.arity"))
+           (%command-closed-result-value
+            (pp.runtime:runtime-executor-run-in-session
+             session
+             (%command-closed-request (first arguments)))))
           ((string= name "log")
            (unless (member (length arguments) '(1 2))
              (pp.runtime:language-fail "log expects one or two arguments"
@@ -1451,8 +1688,6 @@ Flatten only capability containers; no user value is accepted as authority."
   (let ((policy (if (typep text 'distribution-policy)
                     text
                     (%command-parse-policy text))))
-    (when (eq (distribution-policy-kind policy) :remote)
-      (error "schedule: remote placement requires an explicit trusted transport service"))
     policy))
 
 (defun %command-runtime-manifest-schedule (session fallback override)
@@ -1659,7 +1894,8 @@ an explicit authority override and therefore bypasses the manifest."
   "Extract lifecycle options while preserving ordinary command operands."
   (let ((rest nil) (watch nil) (once nil) (stabilize nil) (supervise nil)
         (interval 1.0) (policy "serial") (policy-explicit nil)
-        (fenced :abort) (member-name nil))
+        (fenced :abort) (member-name nil) (pin-file nil) (dump-pins nil)
+        (publish-root nil))
     (loop while arguments do
       (let ((argument (pop arguments)))
         (cond
@@ -1681,6 +1917,15 @@ an explicit authority override and therefore bypasses the manifest."
           ((string= argument "--member-name")
            (unless arguments (error "--member-name requires a name"))
            (setf member-name (pop arguments)))
+          ((string= argument "--pin-file")
+           (unless arguments (error "--pin-file requires a path"))
+           (setf pin-file (pop arguments)))
+          ((string= argument "--dump-pins")
+           (unless arguments (error "--dump-pins requires a path"))
+           (setf dump-pins (pop arguments)))
+          ((string= argument "--publish-object")
+           (unless arguments (error "--publish-object requires a shared root"))
+           (setf publish-root (pop arguments)))
           (t (push argument rest)))))
     (when (and watch once)
       (error "--once cannot be combined with --watch"))
@@ -1690,7 +1935,9 @@ an explicit authority override and therefore bypasses the manifest."
             (list :watch watch :once once :stabilize stabilize
                   :supervise supervise :interval interval
                   :policy policy :policy-explicit policy-explicit
-                  :fenced fenced :member-name member-name))))
+                  :fenced fenced :member-name member-name
+                  :pin-file pin-file :dump-pins dump-pins
+                  :publish-root publish-root))))
 
 (defun %command-recover-fenced (session policy error-output)
   (let ((count (runtime-fenced-recover-unknown session policy)))
@@ -1789,7 +2036,7 @@ an explicit authority override and therefore bypasses the manifest."
     (finish-output output)
     desired))
 
- (defun %command-watch-trace-snapshot (session)
+(defun %command-watch-trace-snapshot (session &optional source-paths)
   (%command-dynamic-top-level
    session
    (lambda ()
@@ -1837,6 +2084,12 @@ an explicit authority override and therefore bypasses the manifest."
                               "dead"))
                     result))
             records)))
+       (dolist (path source-paths)
+         (let ((text (ignore-errors (%read-source-file path))))
+           (when text
+             (push (cons (format nil "source:~A" path)
+                         (pp.runtime:store-hash-content text))
+                   result))))
        (remove-duplicates result :test #'equal)))))
  (defun %run-watch-files
     (operands output error-output grants why no-cache check options)
@@ -1888,6 +2141,8 @@ an explicit authority override and therefore bypasses the manifest."
                                       :member-name (getf options :member-name)
                                       :check check
                                       :error-output error-output)))))
+    (when (getf options :pin-file)
+      (%command-load-pin-file session (getf options :pin-file)))
     (when (getf options :policy-explicit)
       (runtime-session-register-service
        session :schedule-override (lambda () t)))
@@ -1897,16 +2152,19 @@ an explicit authority override and therefore bypasses the manifest."
               (getf options :member-name))
       (%command-install-process-services session))
     (funcall pass)
+    (when (getf options :dump-pins)
+      (%command-dump-pins session (getf options :dump-pins)
+                          error-output))
     (if once
         0
-        (let ((snapshot (%command-watch-trace-snapshot session)))
+          (let ((snapshot (%command-watch-trace-snapshot session operands)))
           (loop
             (runtime-watch-call-sleep (getf options :interval))
-            (runtime-session-reset-pass-state session)
-            (let* ((current (%command-watch-trace-snapshot session))
+            (let* ((current (%command-watch-trace-snapshot session operands))
                    (changed (mapcar #'car
                                     (set-difference current snapshot
                                                     :test #'equal))))
+              (runtime-session-reset-pass-state session)
               (when changed
                 (format error-output "[watch] ~D cell(s) changed~%"
                         (length changed))
@@ -1914,18 +2172,217 @@ an explicit authority override and therefore bypasses the manifest."
                 (setf force-rerun t
                       session
                       (%make-command-session
-                       grants :why why :no-cache t :source-roots operands
+                       grants :why why :no-cache no-cache :source-roots operands
                        :check check :error-output error-output))
+                (when (getf options :pin-file)
+                  (%command-load-pin-file session (getf options :pin-file)))
+                (when (getf options :policy-explicit)
+                  (runtime-session-register-service
+                   session :schedule-override (lambda () t)))
+                (%command-schedule-node-force
+                 session policy :override (getf options :policy-explicit))
                 (runtime-session-begin-watch session)
                 (funcall pass)
                 (setf force-rerun nil)
-                (setf snapshot (%command-watch-trace-snapshot session)))))))
+                (setf snapshot (%command-watch-trace-snapshot session operands)))))))
 ))
+
+ (defun %command-pin-data-value (expression)
+  (let ((expression (%language-form-inner expression)))
+    (typecase expression
+      (pp.kernel:expr-literal
+       (pp.kernel:expr-literal-value expression))
+      (pp.kernel:expr-symbol
+       (pp.kernel:make-vsymbol (pp.kernel:expr-symbol-name expression)))
+      (pp.kernel:expr-apply
+       (let* ((function (pp.kernel:expr-apply-function expression))
+              (name (and (typep function 'pp.kernel:expr-symbol)
+                         (pp.kernel:expr-symbol-name function)))
+              (arguments (pp.kernel:expr-apply-arguments expression)))
+         (cond
+           ((and name (string= name "hash-map"))
+            (unless (evenp (length arguments))
+              (error "pin-probe hash-map has odd arity"))
+            (pp.kernel:make-vmap
+             (loop for (key value) on arguments by #'cddr
+                   collect (cons (%command-pin-data-value key)
+                                 (%command-pin-data-value value)))))
+           ((and name (string= name "vector"))
+            (pp.kernel:make-vvector-from-list
+             (mapcar #'%command-pin-data-value arguments)))
+           ((and name (string= name "hash-set"))
+            (pp.kernel:make-vset
+             (mapcar #'%command-pin-data-value arguments)))
+           (t (pp.runtime:runtime-quote-to-value expression)))))
+      (t (pp.runtime:runtime-quote-to-value expression)))))
+
+ (defun %command-pin-form (form path)
+  (let* ((inner (%language-form-inner form))
+         (function (and (typep inner 'pp.kernel:expr-apply)
+                        (pp.kernel:expr-apply-function inner)))
+         (name (and (typep function 'pp.kernel:expr-symbol)
+                    (pp.kernel:expr-symbol-name function)))
+         (arguments (and (typep inner 'pp.kernel:expr-apply)
+                         (pp.kernel:expr-apply-arguments inner))))
+    (unless (and name arguments)
+      (error "pin file ~A contains a malformed line" path))
+    (cond
+      ((string= name "pin")
+       (unless (= (length arguments) 2)
+         (error "pin expects cell and hash"))
+       (let* ((cell (%command-value-text
+                     (%command-pin-data-value (first arguments))
+                     "pin cell"))
+              (hash (%command-value-text
+                     (%command-pin-data-value (second arguments))
+                     "pin hash"))
+              (parsed (pp.kernel:cell-parse cell)))
+         (unless (pp.runtime:store-digest-p hash)
+           (error "pin hash is not canonical: ~A" hash))
+         (list :pin parsed cell hash)))
+      ((string= name "pin-probe")
+       (unless (= (length arguments) 2)
+         (error "pin-probe expects name and value"))
+       (let ((probe (%command-value-text
+                     (%command-pin-data-value (first arguments))
+                     "pin-probe name"))
+             (value (%command-pin-data-value (second arguments))))
+         (unless (pp.runtime:runtime-executor-request-data-p value)
+           (error "pin-probe value is not canonical data"))
+         (list :pin-probe probe value)))
+      (t (error "pin file ~A has unknown form: ~A" path name)))))
+
+ (defun %command-load-pin-file (session path)
+  (unless (and path (probe-file path))
+    (error "pin file is not readable: ~A" path))
+  (with-open-file (stream path :direction :input)
+    (loop for line = (cl:read-line stream nil nil)
+          while line
+          for text = (string-trim '(#\Space #\Tab #\Return #\Newline) line)
+          unless (or (string= text "")
+                     (char= (char text 0) #\;))
+            do (dolist (form (%read-language-forms text path :sexpr))
+                 (destructuring-bind (kind a &optional b c) (%command-pin-form form path)
+                   (ecase kind
+                     (:pin
+                      (pp.runtime:runtime-session-preseed-run-pin session a c)
+                      (pp.runtime:runtime-session-preseed-run-pin session b c))
+                     (:pin-probe
+                      (pp.runtime:runtime-session-preseed-probe session a b)))))))
+  session)
+
+ (defun %command-pin-render (name arguments)
+  (let ((form (pp.kernel:make-eapply
+               (pp.kernel:make-esymbol name)
+               (mapcar #'pp.runtime:runtime-value-to-expr arguments))))
+    (string-trim '(#\Return #\Newline)
+                 (pp.frontend:print-source (list form) :surface :sexpr))))
+
+ (defun %command-dump-pins (session path error-output)
+  (let ((lines (make-hash-table :test #'equal)))
+    (dolist (observation (pp.runtime:runtime-session-observations session))
+      (let* ((cell (car observation))
+             (hash (pp.runtime:store-identity-string (cdr observation)))
+             (text (pp.kernel:cell-serialize
+                    (if (typep cell 'pp.kernel:cell)
+                        cell
+                        (pp.kernel:cell-parse
+                         (pp.runtime:store-identity-string cell))))))
+        (setf (gethash (format nil "pin:~A" text) lines)
+              (%command-pin-render "pin"
+                                   (list (pp.kernel:make-vstring text)
+                                         (pp.kernel:make-vstring hash))))))
+    (pp.runtime:runtime-session-iter-probes
+     session
+     (lambda (name value)
+       (when (and value (pp.runtime:runtime-executor-request-data-p value))
+         (setf (gethash (format nil "pin-probe:~A" name) lines)
+               (%command-pin-render "pin-probe"
+                                    (list (pp.kernel:make-vstring name)
+                                          value))))
+       (when (and value
+                  (not (pp.runtime:runtime-executor-request-data-p value)))
+         (format error-output "[pins] skipping non-data probe ~A~%" name))))
+    (with-open-file (stream path :direction :output
+                            :if-exists :supersede :if-does-not-exist :create)
+      (let ((ordered nil))
+        (maphash (lambda (ignored line)
+                   (declare (ignore ignored))
+                   (push line ordered))
+                 lines)
+        (dolist (line (sort ordered #'string<))
+          (format stream "~A~%" line))))
+    path))
+
+ (defun %command-publish-copy-blobs (value source destination)
+  (labels ((walk (item)
+             (cond
+               ((typep item 'pp.kernel:value-map)
+                (handler-case
+                    (dolist (entry (pp.runtime:runtime-artifact-tree-from-value item))
+                      (let* ((hash (pp.runtime:runtime-artifact-entry-blob entry))
+                             (bytes (and hash
+                                         (pp.runtime:blob-repository-get source hash))))
+                        (when bytes
+                          (pp.runtime:blob-repository-put destination bytes))))
+                  (error () nil))
+                (dolist (entry (pp.kernel:value-map-entries item))
+                  (walk (cdr entry))))
+               ((typep item 'pp.kernel:value-vector)
+                (map nil #'walk (pp.kernel:value-vector-values item)))
+               ((typep item 'pp.kernel:value-pair)
+                (walk (pp.kernel:value-pair-car item))
+                (walk (pp.kernel:value-pair-cdr item))))))
+    (walk value)))
+
+ (defun %command-publish-value (session value shared-root output)
+  (let* ((layout (pp.runtime:make-store-layout shared-root))
+         (source (funcall (pp.runtime:runtime-session-find-service
+                           session :store-blobs)))
+         (objects nil)
+         (blobs nil))
+    (pp.runtime:store-layout-init layout)
+    (setf objects (pp.runtime:make-object-repository layout)
+          blobs (pp.runtime:make-blob-repository layout))
+    (%command-publish-copy-blobs value source blobs)
+    (let ((hash (pp.kernel:hash-value value)))
+      (pp.runtime:object-repository-put objects :key hash :value value)
+      (format output "~A~%" hash)
+      (finish-output output)
+      hash)))
+
+ (defun %run-expression-command (arguments output error-output)
+  (multiple-value-bind (operands options) (%command-runtime-options arguments)
+    (multiple-value-bind (operands grants why no-cache check ignored-keep ignored-grace)
+        (%parse-command-options operands)
+      (declare (ignore ignored-keep ignored-grace))
+      (let ((expression (remove "-e" operands :test #'string= :count 1)))
+        (unless (= (length expression) 1)
+          (error "-e requires exactly one expression"))
+        (let ((session (%make-command-session
+                        grants :why why :no-cache no-cache
+                        :check check :error-output error-output)))
+          (when (getf options :pin-file)
+            (%command-load-pin-file session (getf options :pin-file)))
+          (%command-schedule-node-force
+           session (%command-runtime-policy (getf options :policy))
+           :override (getf options :policy-explicit))
+          (let ((status
+                  (%run-language-text
+                   (first expression) "<?>"
+                   :brace output :all-values t :session session
+                   :grant-specs grants :why why :no-cache no-cache :check check
+                   :error-output error-output)))
+            (when (getf options :dump-pins)
+              (%command-dump-pins session (getf options :dump-pins)
+                                   error-output))
+            status))))))
 
 (defun %run-runtime-command (arguments output error-output)
   (multiple-value-bind (operands options) (%command-runtime-options arguments)
     (multiple-value-bind (files grants why no-cache check ignored-keep ignored-grace)
-        (%parse-command-options operands)
+        (%parse-command-options
+         (remove "run" operands :test #'string= :count 1))
       (declare (ignore ignored-keep ignored-grace))
       (let ((policy (%command-runtime-policy (getf options :policy))))
         (when (getf options :watch)
@@ -1935,13 +2392,36 @@ an explicit authority override and therefore bypasses the manifest."
         (let ((session (%make-command-session
                         grants :why why :no-cache no-cache :source-roots files
                         :check check :error-output error-output)))
-          (when (getf options :supervise)
-            (%command-install-process-services session))
+          (when (getf options :pin-file)
+            (%command-load-pin-file session (getf options :pin-file)))
           (when (getf options :policy-explicit)
             (runtime-session-register-service
              session :schedule-override (lambda () t)))
           (%command-schedule-node-force
            session policy :override (getf options :policy-explicit))
+          (when (getf options :publish-root)
+            (unless (= (length files) 1)
+              (error "--publish-object requires exactly one source file"))
+            (let ((value
+                    (%run-language-forms
+                     (%read-language-forms (%read-source-file (first files))
+                                           (first files)
+                                           (%source-surface (first files)))
+                     (first files) output :print-values nil :return-value t
+                     :session session :grant-specs grants :why why
+                     :no-cache no-cache :check check :error-output error-output)))
+              (%command-publish-value
+               session
+               (runtime-evaluator-force-deep
+                (runtime-session-evaluator session) value)
+               (getf options :publish-root)
+               output)
+              (when (getf options :dump-pins)
+                (%command-dump-pins session (getf options :dump-pins)
+                                    error-output))
+              (return-from %run-runtime-command 0)))
+          (when (getf options :supervise)
+            (%command-install-process-services session))
           (when (getf options :supervise)
             (unless (= (length files) 1)
               (error "--supervise requires exactly one source file"))
@@ -1965,11 +2445,17 @@ an explicit authority override and therefore bypasses the manifest."
                      output)))))
               (%command-report-runtime-events session output)
               (return-from %run-runtime-command 0)))
-          (%run-language-files files output :session session :grant-specs grants
-                               :why why :no-cache no-cache
-                               :member-name (getf options :member-name)
-                               :check check
-                               :error-output error-output))))))
+          (let ((status
+                  (%run-language-files files output :session session
+                                       :grant-specs grants :why why
+                                       :no-cache no-cache
+                                       :member-name (getf options :member-name)
+                                       :check check
+                                       :error-output error-output)))
+            (when (getf options :dump-pins)
+              (%command-dump-pins session (getf options :dump-pins)
+                                   error-output))
+            status))))))
 
 (defun %command-load-path-absolute-p (path)
   (and (plusp (length path))
@@ -2119,6 +2605,8 @@ an explicit authority override and therefore bypasses the manifest."
             :evaluator-state evaluator-state
             :store-root (%command-store-root)
             :capabilities capabilities)))
+    (pp.runtime:runtime-lifecycle-install-executor
+     session (%command-closed-executor))
     (runtime-session-register-service
      session :record-read
      (lambda (ignored-session cell-id hash)
@@ -2173,9 +2661,14 @@ an explicit authority override and therefore bypasses the manifest."
     (runtime-session-register-service
      session :diagnose
      (lambda (text)
-       (when (and why error-output)
-         (format error-output "[why] ~A~%" text)
-         (finish-output error-output))))
+       (let ((policy-service (runtime-session-find-service session :cache-policy)))
+         (when (and error-output
+                    (or why
+                        (and policy-service
+                             (runtime-cache-why-enabled-p
+                              (funcall policy-service)))))
+           (format error-output "[why] ~A~%" text)
+           (finish-output error-output)))))
     ;; runtime-dynamic-record-event already owns the session append.  The
     ;; store's default record-event callback would append a second copy.
     (runtime-session-unregister-service session :record-event)
@@ -2378,11 +2871,46 @@ environment, so leading loads must establish the initial environment first."
              (environment nil))
          (setf environment (runtime-evaluator-state-initial-env state))
          (labels
-             ((report (condition)
-                (format output "Error: ~A~%" (%language-error-text condition))
-                (finish-output output))
+             ((report (condition &optional input)
+                (let ((message (%language-error-text condition)))
+                  (when (and input
+                             (search "expected parameter list" message
+                                     :test #'char-equal)
+                             (search "def" input :test #'char-equal))
+                    (let ((marker "expected parameter list"))
+                      (setf message
+                            (concatenate 'string
+                                         "def requires a parameter list"
+                                         (subseq message (length marker))))))
+                  (when (and input
+                             (typep condition 'frontend-error)
+                             (null (frontend-error-range condition))
+                             (search "expected newline" message
+                                     :test #'char-equal))
+                    (let* ((trimmed
+                             (string-right-trim
+                              '(#\Space #\Tab #\Return #\Newline) input))
+                           (separator
+                             (position-if
+                              (lambda (character)
+                                (member character
+                                        '(#\Space #\Tab #\Return #\Newline)
+                                        :test #'char=))
+                              trimmed :from-end t))
+                           (token (subseq trimmed (if separator
+                                                     (1+ separator)
+                                                     0))))
+                      (setf message (format nil "~A, got ~A" message token))))
+                  (format output "Error: ~A~%" message)
+                  (finish-output output)))
               (evaluate (forms)
                 (dolist (form forms)
+                  ;; Each submitted form gets a fresh dynamic extent.  The
+                  ;; evaluator state and lexical environment persist, while
+                  ;; config and effect handlers cannot leak to the next form.
+                  (%command-dynamic-top-level
+                   session
+                   (lambda ()
                   (handler-case
                       (let* ((binding-p (%language-persistent-form-p form))
                              (binding-name (%language-binding-name form))
@@ -2462,7 +2990,7 @@ environment, so leading loads must establish the initial environment first."
                           ;; persistent REPL environment as definitions arrive.
                           (setf (runtime-evaluator-state-initial-env state)
                                 environment)))
-                    (error (condition) (report condition)))))
+                    (error (condition) (report condition)))))))
               (try-pending ()
                 (handler-case
                     (let ((parsed (%read-language-forms
@@ -2472,20 +3000,35 @@ environment, so leading loads must establish the initial environment first."
                   (frontend-error (condition)
                     (if (frontend-error-incomplete-p condition)
                         nil
-                        (progn
+                        (let ((input pending))
                           (setf pending "")
-                          (report condition))))
+                          (report condition input))))
                   (error (condition)
                     (setf pending "")
-                    (report condition)))))
+                    (report condition))))
+           )
            (loop for line = (cl:read-line input nil nil)
                  while line
-                 do (setf pending
-                          (if (string= pending "")
-                              line
-                              (concatenate 'string pending
-                                           (string #\Newline) line)))
-                    (try-pending))
+                 do (let ((trimmed
+                            (string-trim
+                             '(#\Space #\Tab #\Return #\Newline) line)))
+                      (if (and (string= pending "")
+                               (or (string= trimmed ":why on")
+                                   (string= trimmed ":why off")))
+                          (let ((policy-service
+                                  (runtime-session-find-service
+                                   session :cache-policy)))
+                            (when policy-service
+                              (runtime-cache-set-why
+                               (funcall policy-service)
+                               (string= trimmed ":why on"))))
+                          (progn
+                            (setf pending
+                                  (if (string= pending "")
+                                      line
+                                      (concatenate 'string pending
+                                                   (string #\Newline) line)))
+                            (try-pending)))))
            ;; EOF with an unterminated form is an ordinary REPL error, not a
            ;; command failure.  Preserve the frontend's structured message.
            (unless (string= (string-trim '(#\Space #\Tab #\Return #\Newline)
@@ -2496,9 +3039,10 @@ environment, so leading loads must establish the initial environment first."
                                 pending "<stdin>" :brace)))
                    (setf pending "")
                    (evaluate parsed))
-               (frontend-error (condition)
-                 (setf pending "")
-                 (report condition))
+              (frontend-error (condition)
+                (let ((input pending))
+                  (setf pending "")
+                  (report condition input)))
                (error (condition)
                  (setf pending "")
                  (report condition))))
@@ -2508,18 +3052,28 @@ environment, so leading loads must establish the initial environment first."
     (text source surface output &key (all-values nil) session grant-specs
                                   (why nil) (no-cache nil) (check nil)
                                   error-output)
-  (let ((session (or session
+  (let ((*language-source-context* source)
+        (session (or session
                      (%make-command-session
                       grant-specs :why why :no-cache no-cache
                       :check check :error-output error-output))))
-    (let ((result
-            (%run-language-forms
-             (%read-language-forms text source surface)
-             source output :all-values all-values :session session
-             :grant-specs grant-specs :why why :no-cache no-cache :check check
-             :error-output error-output)))
-      (%command-report-runtime-events session output)
-      result)))
+    (handler-case
+        (let ((result
+                (%run-language-forms
+                 (%read-language-forms text source surface)
+                 source output :all-values all-values :session session
+                 :grant-specs grant-specs :why why :no-cache no-cache :check check
+                 :error-output error-output)))
+          (%command-report-runtime-events session output)
+          result)
+      (frontend-error (condition)
+        ;; Normalize source-aware surface diagnostics while the source
+        ;; context is still dynamically bound.
+        (error 'frontend-error
+               :code (frontend-error-code condition)
+               :message (%frontend-error-message condition)
+               :range (frontend-error-range condition)
+               :incomplete-p (frontend-error-incomplete-p condition))))))
 
 (defun %command-member-desired (value member-name)
   (unless (typep value 'pp.kernel:value-map)
@@ -2560,15 +3114,28 @@ environment, so leading loads must establish the initial environment first."
                :check check :error-output error-output)))
         (last-value nil))
     (dolist (path paths)
-      (setf last-value
-            (%run-language-forms
-             (%read-language-forms
-              (%read-source-file path) path
-              (%source-surface path))
-             path output :print-values nil :session session
-             :return-value t
-             :grant-specs grant-specs :why why :no-cache no-cache :check check
-             :error-output error-output)))
+      (let ((*language-source-context* path))
+        (handler-case
+            (setf last-value
+                  (%run-language-forms
+                   (%read-language-forms
+                    (%read-source-file path) path
+                    (%source-surface path))
+                   path output :print-values nil :session session
+                   :return-value t
+                   :grant-specs grant-specs :why why :no-cache no-cache :check check
+                   :error-output error-output))
+          (frontend-error (condition)
+            (error 'frontend-error
+                   :code (frontend-error-code condition)
+                   :message (%frontend-removed-surface-message
+                             (frontend-error-message condition)
+                             (handler-case
+                                 (%read-source-file path)
+                               (error () nil)))
+                   :range (frontend-error-range condition)
+                   :incomplete-p (frontend-error-incomplete-p condition)))))
+      )
     ;; A program that registers write domains and returns a desired-state
     ;; map converges them after evaluation (no --reconcile flag needed).
     (let ((desired (and last-value
@@ -4028,15 +4595,28 @@ hash: ~A" old-pin)
     (let ((arguments command-arguments)
           (*command-program-arguments* program-arguments))
       (labels ((language-error (condition)
-             (format error-output "pp: error: ~A~%"
-                     (%language-error-text condition))
-             (finish-output error-output)
-             1)
-           (frontend-error (condition)
-             (format error-output "pp: error: ~A~%"
-                     (%frontend-error-text condition))
-             (finish-output error-output)
-             1)
+                 (format error-output "pp: error: ~A~%"
+                         (%language-error-text condition))
+                 (finish-output error-output)
+                 1)
+               (frontend-error (condition)
+                 (let* ((source (find-if #'%language-source-path-p arguments))
+                        (*language-source-context*
+                          (or source *language-source-context*))
+                        (raw (frontend-error-message condition))
+                        (message
+                          (%frontend-removed-surface-message
+                           raw
+                           (and source
+                                (handler-case
+                                    (%read-source-file source)
+                                  (error () nil))))))
+                   (format error-output "pp: error: ~A~%"
+                           (if (string= message raw)
+                               (%frontend-error-text condition)
+                               message))
+                   (finish-output error-output))
+                 1)
            (host-error (condition)
              ;; Keep ordinary host failures unchanged, but apply the same
              ;; typed-force normalization to non-REPL commands that escape
@@ -4144,10 +4724,37 @@ hash: ~A" old-pin)
             (if (string= (first arguments) "--transport-push") :push :pull)
             arguments output)
          (error (condition) (host-error condition))))
+      ((member "--reconcile" arguments :test #'string=)
+       (run-language
+        (lambda ()
+          (%run-reconcile-command
+           (remove "--reconcile" arguments :test #'string= :count 1)
+           output error-output))))
+      ((and (member "--grant" arguments :test #'string=)
+            (not (member "-e" arguments :test #'string=))
+            (not (some #'%language-source-path-p arguments)))
+       (run-language
+        (lambda ()
+          (multiple-value-bind
+                (operands grants why no-cache check ignored-keep ignored-grace)
+              (%parse-command-options arguments)
+            (declare (ignore ignored-keep ignored-grace))
+            (if operands
+                (%run-language-files
+                 operands output :grant-specs grants :why why
+                 :no-cache no-cache :check check :error-output error-output)
+                (%run-language-stdin
+                 input output :grant-specs grants :why why
+                 :no-cache no-cache :check check :error-output error-output))))))
       ((or (member "--watch" arguments :test #'string=)
            (member "--stabilize" arguments :test #'string=)
            (member "--schedule" arguments :test #'string=)
-           (member "--supervise" arguments :test #'string=))
+           (member "--supervise" arguments :test #'string=)
+           (member "--once" arguments :test #'string=)
+           (member "--publish-object" arguments :test #'string=)
+           (member "--pin-file" arguments :test #'string=)
+           (member "--dump-pins" arguments :test #'string=)
+           (member "run" arguments :test #'string=))
        (run-language
         (lambda ()
           (%run-runtime-command arguments output error-output))))
@@ -4164,25 +4771,10 @@ hash: ~A" old-pin)
              (%usage error-output)
              (finish-output error-output)
              1)))
-      ((member "--reconcile" arguments :test #'string=)
+      ((member "-e" arguments :test #'string=)
        (run-language
         (lambda ()
-          (%run-reconcile-command
-           (remove "--reconcile" arguments :test #'string= :count 1)
-           output error-output))))
-      ((string= (first arguments) "-e")
-       (run-language
-        (lambda ()
-          (multiple-value-bind (operands grants why no-cache check ignored-keep ignored-grace)
-              (%parse-command-options (rest arguments))
-            (declare (ignore ignored-keep ignored-grace))
-            (if (= (length operands) 1)
-                (%run-language-text (first operands) "<?>"
-                                    :brace output :all-values t
-                                    :grant-specs grants :why why
-                                    :no-cache no-cache :check check
-                                    :error-output error-output)
-                (error "-e requires exactly one expression"))))))
+          (%run-expression-command arguments output error-output))))
       ((string= (first arguments) "--reconcile")
        (run-language
         (lambda () (%run-reconcile-command (rest arguments) output error-output))))
