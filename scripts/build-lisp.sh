@@ -114,18 +114,9 @@ mv -f "$TEMP_IMAGE" "$IMAGE_OUTPUT"
 
 IMAGE_BASENAME=$(basename "$IMAGE_OUTPUT")
 cat > "$OUTPUT_ABS" <<EOF
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
-SELF="\${BASH_SOURCE[0]}"
-while [ -L "\$SELF" ]; do
-  SELF_DIR="\$(cd -P -- "\$(dirname -- "\$SELF")" && pwd)"
-  SELF_LINK="\$(readlink -- "\$SELF")"
-  case "\$SELF_LINK" in
-    /*) SELF="\$SELF_LINK" ;;
-    *) SELF="\$SELF_DIR/\$SELF_LINK" ;;
-  esac
-done
-SELF_DIR="\$(cd -P -- "\$(dirname -- "\$SELF")" && pwd)"
+SELF_DIR="\${BASH_SOURCE[0]%/*}"
 exec "\$SELF_DIR/$IMAGE_BASENAME" "\$@"
 EOF
 chmod 0755 "$OUTPUT_ABS"

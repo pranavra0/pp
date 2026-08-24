@@ -158,7 +158,7 @@
        (format nil "no such probe registered: ~A" name)))
     (let ((old (runtime-session-find-probe session name)))
       (if old
-          (hash-value old)
+          old
           (let ((domain (runtime-session-find-domain session name)))
             (unless domain
               (runtime-observation-error
@@ -174,14 +174,18 @@
                                 session observe nil
                                 (runtime-session-global-env session))))))
                 (let ((value (if (runtime-dynamic-current nil)
-                                 (runtime-dynamic-without-observations run)
-                                 (funcall run))))
+                                 (runtime-dynamic-without-observations
+                                  (lambda ()
+                                    (runtime-domain-with-domain
+                                     domain name run)))
+                                 (runtime-domain-with-domain
+                                  domain name run))))
                   (let ((hash (hash-value value)))
                     (runtime-session-set-probe session name value)
                     (when (runtime-dynamic-current-node)
                       (runtime-observation-record
                        (make-cell-probe name) hash))
-                    hash)))))))))
+                    value)))))))))
 (defun runtime-observe-domain (name sub)
   (let* ((session (runtime-observation-session))
          (domain (and session (runtime-session-find-domain session name))))
@@ -234,7 +238,9 @@
                   (runtime-configuration-lookup (cell-config-value cell))
                 (if p (hash-value v) "config-cell:absent")))
              (cell-handler (runtime-dynamic-observe-handler (cell-handler-value cell)))
-             (cell-probe (runtime-observation-probe (cell-probe-value cell)))
+             (cell-probe
+              (hash-value (runtime-observation-probe
+                           (cell-probe-value cell))))
              (cell-node (runtime-observe-node-trace (cell-node-value cell) seen))
              (cell-domain (runtime-observe-domain (cell-domain-name cell)
                                                   (cell-domain-sub cell)))

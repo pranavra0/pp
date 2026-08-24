@@ -1,7 +1,7 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+ROOT=$(CDPATH= cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P)
 IMAGE="$ROOT/lisp/pp"
 if [ ! -x "$IMAGE" ]; then
   printf 'pp: Lisp image is missing: %s\n' "$IMAGE" >&2

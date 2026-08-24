@@ -12,7 +12,11 @@
   ;; scratch space even though their saved PRNG state starts out identical.
   #+sbcl
   (let ((root (store-exclusive-directory
-               (or (sb-ext:posix-getenv "TMPDIR") "/tmp") prefix)))
+               (or (and (sb-ext:posix-getenv "TMPDIR")
+                        (plusp (length (sb-ext:posix-getenv "TMPDIR")))
+                        (sb-ext:posix-getenv "TMPDIR"))
+                   "/tmp")
+               prefix)))
     (make-runtime-sandbox (namestring (truename root))))
   #-sbcl
   (let* ((base (or (sb-ext:posix-getenv "TMPDIR") "/tmp"))

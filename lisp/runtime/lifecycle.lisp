@@ -29,22 +29,34 @@
   (runtime-domain-record-epoch session invocation
                                (runtime-domain-force session desired)))
 (defun runtime-lifecycle-run-pass (session invocation desired)
-  (runtime-session-begin-pass session)
-  (runtime-dynamic-with-top-level
-   session
-   (lambda ()
-     (runtime-domain-run-pass
-      session (runtime-lifecycle-prepare session invocation desired)))))
+  (let ((observations (runtime-session-observations session))
+        (fenced-actions (runtime-session-take-fenced-actions session)))
+    (runtime-session-begin-pass session)
+    (dolist (observation observations)
+      (runtime-session-add-observation session observation))
+    (dolist (action fenced-actions)
+      (runtime-session-add-fenced-action session action))
+    (runtime-dynamic-with-top-level
+     session
+     (lambda ()
+       (runtime-domain-run-pass
+        session (runtime-lifecycle-prepare session invocation desired))))))
 
 (defun runtime-lifecycle-reconcile (session invocation desired &key fenced)
-  (runtime-session-begin-pass session)
-  (runtime-dynamic-with-top-level
-   session
-   (lambda ()
-     (let ((pass (runtime-domain-run-pass
-                  session (runtime-lifecycle-prepare session invocation desired))))
-       (when fenced (runtime-fenced-drain session))
-       pass))))
+  (let ((observations (runtime-session-observations session))
+        (fenced-actions (runtime-session-take-fenced-actions session)))
+    (runtime-session-begin-pass session)
+    (dolist (observation observations)
+      (runtime-session-add-observation session observation))
+    (dolist (action fenced-actions)
+      (runtime-session-add-fenced-action session action))
+    (runtime-dynamic-with-top-level
+     session
+     (lambda ()
+       (let ((pass (runtime-domain-run-pass
+                    session (runtime-lifecycle-prepare session invocation desired))))
+         (when fenced (runtime-fenced-drain session))
+         pass)))))
 
 (defun runtime-lifecycle-fenced (session kind spec)
   (runtime-fenced-register session kind spec))

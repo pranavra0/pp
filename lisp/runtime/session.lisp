@@ -487,7 +487,7 @@ remain usable, while current images reset the actual catalog counter."
   session)
 
 (defun runtime-session-begin-watch (session)
-  (runtime-session--reset-wanted-nodes session)
+  (runtime-session-reset-pass-state session)
   (runtime-session--reset-gensym-state session)
   (let ((evaluation (runtime-session-evaluation session)))
     (runtime-session--clear-hash (runtime-evaluation-state-node-thunks evaluation))

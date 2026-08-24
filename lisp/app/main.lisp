@@ -196,7 +196,7 @@
         (first-subcommand
           (and arguments
                (find-if (lambda (candidate)
-                          (string= (first arguments) candidate))
+                          (member candidate arguments :test #'string=))
                         '("fmt" "lint" "graph" "gc" "island-pins" "cluster-init")))))
     (flet ((flag-mode (flag name)
              (when (member flag arguments :test #'string=) (push name modes))))
@@ -261,6 +261,9 @@
         (error "--supervise requires a source file"))
       (when (and (has-flag "--publish-object") (not (has-source)))
         (error "--publish-object requires a source file"))
+      (when (and (has-flag "--remote-node")
+                 (has-flag "cluster-init"))
+        (error "conflicting command modes: cluster-init, remote-node"))
       (when (and (has-flag "--remote-node") (not (has-source)))
         (error "--remote-node requires a source file")))))
 
@@ -836,6 +839,96 @@ Flatten only capability containers; no user value is accepted as authority."
                (pp.runtime:runtime-session-remove-run-pin session cell-id)))
          (error () nil))))))
 
+(defun %command-path-prefix-p (root path)
+  (let ((root (string-right-trim "/" root)))
+    (or (string= root path)
+        (and (> (length path) (length root))
+             (string= root path :end2 (length root))
+             (char= (char path (length root)) #\/)))))
+
+(defun %command-file-write-root (path)
+  (let ((roots
+          (mapcan
+           (lambda (capability)
+             (mapcar
+              (lambda (entry)
+                (cons (pp.kernel:canonical-path-to-string (car entry))
+                      (cdr entry)))
+              (pp.kernel:capability-list-fs-paths capability)))
+           (%command-current-capabilities))))
+    (car (sort
+          (remove-if-not
+           (lambda (entry)
+             (and (member (cdr entry) '(:write :read-write))
+                  (%command-path-prefix-p (car entry) path)))
+           roots)
+          #'> :key (lambda (entry) (length (car entry)))))))
+
+#+sbcl
+(defun %command-prune-empty-file-parents (path)
+  (let ((root (and (%command-file-write-root path)
+                   (car (%command-file-write-root path))))
+        (parent (directory-namestring (pathname path))))
+    (when root
+      (loop while (and (not (string= parent root))
+                       (%command-path-prefix-p root parent)
+                       (pp.runtime::store-secure-directory-p parent))
+            do (let ((entries
+                       (remove-duplicates
+                        (append (directory (merge-pathnames "*" parent))
+                                (directory (merge-pathnames "*.*" parent)))
+                        :test #'equal :key #'namestring)))
+                 (when entries (return))
+                 (sb-posix:rmdir parent)
+                 (setf parent
+                       (namestring
+                        (make-pathname
+                         :directory
+                         (butlast (pathname-directory (pathname parent)))
+                         :name nil :type nil))))))))
+
+#-sbcl
+(defun %command-prune-empty-file-parents (path)
+  (declare (ignore path)))
+
+(defun %command-remove-file-effect (arguments)
+  (unless (= (length arguments) 1)
+    (pp.runtime:language-fail
+     "remove-file expects a path string" "primitive.arity"))
+  (let* ((path (%command-strict-text (first arguments) "remove-file"))
+         (absolute (pp.runtime:store-absolute-path path)))
+    (when (%command-symlink-p absolute)
+      (pp.runtime:language-fail
+       (format nil "remove-file: capability denied for symlink path: ~A"
+               absolute)
+       "runtime.authority"))
+    (let ((canonical (pp.runtime:store-canonical-path absolute)))
+      (unless (some
+               (lambda (capability)
+                 (pp.kernel:capability-check-fs-write-p
+                  capability
+                  (pp.kernel:canonicalize-path
+                   canonical :realpath #'pp.runtime:store-canonical-path)))
+               (%command-current-capabilities))
+        (pp.runtime:language-fail
+         (format nil "remove-file: capability error: no write access for ~A"
+                 canonical)
+         "runtime.authority"))
+      #+sbcl
+      (when (probe-file canonical)
+        (unless (pp.runtime::store-secure-directory-p
+                 (directory-namestring (pathname canonical)))
+          (pp.runtime:language-fail
+           (format nil "remove-file: unsafe parent: ~A" canonical)
+           "runtime.authority"))
+        (sb-posix:unlink canonical))
+      #-sbcl (ignore-errors (delete-file canonical))
+      (%command-prune-empty-file-parents canonical)
+      (%command-invalidate-file-pins
+       (pp.runtime:runtime-observation-session) canonical)
+      (%command-record-event "remove-file" nil)
+      (pp.kernel:make-vnil))))
+
  (defun %command-write-file-effect (arguments)
   (unless (= (length arguments) 2)
     (pp.runtime:language-fail
@@ -867,7 +960,8 @@ Flatten only capability containers; no user value is accepted as authority."
        (pp.kernel:make-vnil))
       ((%command-symlink-p absolute)
        (pp.runtime:language-fail
-        (format nil "write-file: refusing symlink path: ~A" absolute)
+        (format nil "write-file: capability denied for symlink path: ~A"
+                absolute)
         "runtime.authority"))
       (t
        (let ((canonical (pp.runtime:store-canonical-path absolute)))
@@ -881,6 +975,10 @@ Flatten only capability containers; no user value is accepted as authority."
             (format nil "write-file: capability error: no write access for ~A"
                     canonical)
             "runtime.authority"))
+         ;; Materialization may introduce nested paths beneath an authorized
+         ;; root; create only after the canonical capability check.
+         (pp.runtime:store-ensure-directory
+          (directory-namestring (pathname canonical)))
          (handler-case
              (pp.runtime:store-atomic-replace canonical content)
            (error (condition)
@@ -965,7 +1063,12 @@ Flatten only capability containers; no user value is accepted as authority."
          (diff (funcall force (%command-map-field value "diff")))
          (apply-fn (funcall force (%command-map-field value "apply")))
          (cap (let ((entry (%command-map-field value "write-cap")))
-                (and entry (funcall force entry)))))
+                ;; Unwrap the pp value: the domain scope must push a kernel
+                ;; capability, or capability checks cannot see it.
+                (and entry (let ((forced (funcall force entry)))
+                             (if (typep forced 'pp.kernel:value-capability)
+                                 (pp.kernel:value-capability-capability forced)
+                                 forced))))))
     (unless (and observe diff apply-fn)
       (error "register-domain requires observe, diff, and apply"))
     (runtime-session-register-domain
@@ -973,6 +1076,68 @@ Flatten only capability containers; no user value is accepted as authority."
      (make-runtime-domain-entry
       :namespace namespace :observe observe :diff diff :apply apply-fn :cap cap))
     (pp.kernel:make-vnil)))
+(defun %command-http-prefix-p (prefix url)
+  (and (>= (length url) (length prefix))
+       (string= prefix url :end2 (length prefix))))
+
+(defun %command-http-target (url)
+  (unless (or (%command-http-prefix-p "http://" url)
+              (%command-http-prefix-p "https://" url))
+    (error "http URL must use http:// or https://"))
+  (let* ((authority-start (if (%command-http-prefix-p "https://" url) 8 7))
+         (authority-end (or (cl:position #\/ url :start authority-start)
+                            (length url)))
+         (authority (subseq url authority-start authority-end))
+         (colon (cl:position #\: authority :from-end t))
+         (host (if colon (subseq authority 0 colon) authority))
+         (port (if colon
+                   (parse-integer authority :start (1+ colon))
+                   (if (%command-http-prefix-p "https://" url) 443 80))))
+    (unless (plusp (length host))
+      (error "http URL has no host"))
+    (values host port)))
+
+(defun %command-http-effect (name arguments)
+  (let* ((url (%command-strict-text (first arguments) name))
+         (body (and (string= name "http-post")
+                    (%command-strict-text (second arguments) name))))
+    (multiple-value-bind (host port) (%command-http-target url)
+      (unless (some (lambda (capability)
+                      (pp.kernel:capability-check-network-p
+                       capability host port))
+                    (%command-current-capabilities))
+        (pp.runtime:language-fail
+         (format nil "~A: capability error for ~A:~D" name host port)
+         "runtime.authority"))
+      (let ((argv (append (list "curl" "-sS" "-w" "\\n%{http_code}")
+                          (if body (list "-X" "POST" "-d" body) nil)
+                          (list url))))
+        (let ((result
+                (ignore-errors
+                  (multiple-value-list
+                   (pp.runtime::runtime-process-exec argv)))))
+          (if (null result)
+              (pp.runtime:language-fail
+               "curl not found" "runtime.network")
+              (destructuring-bind (exit output stderr) result
+                (declare (ignore stderr))
+                (unless (zerop exit)
+                  (pp.runtime:language-fail
+                   (format nil "~A: curl exited ~D" name exit)
+                   "runtime.network"))
+                (let* ((split (cl:position #\Newline output :from-end t))
+                       (text (if split (subseq output 0 split) output))
+                       (status (if split
+                                   (parse-integer output :start (1+ split))
+                                   0)))
+                  (pp.kernel:make-vmap
+                   (list (cons (pp.kernel:make-vstring "status")
+                               (pp.kernel:make-vint status))
+                         (cons (pp.kernel:make-vstring "body")
+                               (pp.kernel:make-vstring text)))))))))
+
+)
+))
 (defun %command-install-observation-primitives (session error-output)
   "Install command-tier observations without changing the pure catalog."
   (let ((state (pp.runtime:runtime-session-evaluator session)))
@@ -1007,6 +1172,17 @@ Flatten only capability containers; no user value is accepted as authority."
            (pp.kernel:make-vstring
             (pp.runtime::runtime-artifact-blob-put
              (pp.kernel:value-string-value value))))))
+      (extend
+       "blob-get"
+       (lambda (args environment &key force &allow-other-keys)
+         (declare (ignore environment))
+         (unless (= (length args) 1)
+           (pp.runtime:language-fail "blob-get expects one argument"
+                                     "primitive.arity"))
+         (let ((hash (one-text args force "blob-get")))
+           (pp.kernel:make-vstring
+            (pp.runtime:store-octets-string
+             (pp.runtime:runtime-artifact-blob-get hash))))))
       (extend
        "unseal"
        (lambda (args environment &key force &allow-other-keys)
@@ -1083,18 +1259,23 @@ Flatten only capability containers; no user value is accepted as authority."
     (%command-install-primitive
      state "register-probe"
      (lambda (args environment &key force &allow-other-keys)
-       (declare (ignore environment))
+       (pp.runtime:runtime-dynamic-require-script-tier
+        "register-probe: may not be called inside a node body (scripting-tier only)")
        (unless (= (length args) 3)
          (pp.runtime:language-fail "register-probe expects name, observe, cap"
                                    "primitive.arity"))
        (let ((name (%command-strict-text
                     (funcall force (first args)) "register-probe name"))
              (observe (funcall force (second args)))
-             (cap (funcall force (third args))))
+             (cap-value (funcall force (third args))))
+         (let ((cap (if (typep cap-value 'pp.kernel:value-capability)
+                        (pp.kernel:value-capability-capability cap-value)
+                        cap-value)))
+         (runtime-session-set-probe session name nil)
          (runtime-session-register-probe
           session name
           (make-runtime-domain-entry :observe observe :cap cap))
-         (pp.kernel:make-vnil))))
+         (pp.kernel:make-vnil)))))
 
       (pp.runtime:runtime-session-register-callback
        session :perform
@@ -1127,6 +1308,20 @@ Flatten only capability containers; no user value is accepted as authority."
            (let* ((path (%command-value-text (first arguments) "read-file"))
                   (sealed (%command-file-sealed-p path)))
              (%command-read-file-value path sealed)))
+          ((string= name "http-get")
+           (unless (= (length arguments) 1)
+             (pp.runtime:language-fail
+              "http-get expects one URL" "primitive.arity"))
+           (pp.runtime:runtime-dynamic-require-script-tier
+            "http-get: may not appear inside node bodies")
+           (%command-http-effect name arguments))
+          ((string= name "http-post")
+           (unless (= (length arguments) 2)
+             (pp.runtime:language-fail
+              "http-post expects URL and body" "primitive.arity"))
+           (pp.runtime:runtime-dynamic-require-script-tier
+            "http-post: may not appear inside node bodies")
+           (%command-http-effect name arguments))
           ((string= name "tree-observe")
            (unless (= (length arguments) 1)
              (pp.runtime:language-fail "tree-observe expects one argument"
@@ -1149,14 +1344,87 @@ Flatten only capability containers; no user value is accepted as authority."
            (unless (= (length arguments) 1)
              (pp.runtime:language-fail "remove-file expects one argument"
                                        "primitive.arity"))
-           (let ((path (%command-strict-text (first arguments) "remove-file")))
-             (%command-write-file-effect
-              (list (pp.kernel:make-vstring path) (pp.kernel:make-vstring "")))
+           (%command-remove-file-effect arguments))
+          ((string= name "domain-state-get")
+           (unless (member (length arguments) '(1 2))
+             (pp.runtime:language-fail
+              "domain-state-get expects key or domain and key"
+              "primitive.arity"))
+           (let* ((domain (if (= (length arguments) 1)
+                              (pp.runtime:runtime-dynamic-current-domain)
+                              (%command-strict-text
+                               (first arguments)
+                               "domain-state-get domain")))
+                  (key (if (= (length arguments) 1)
+                           (%command-strict-text
+                            (first arguments)
+                            "domain-state-get key")
+                           (%command-strict-text
+                            (second arguments)
+                            "domain-state-get key"))))
+             (or (pp.runtime::runtime-domain-state-get session domain key)
+                 (pp.kernel:make-vnil))))
+          ((string= name "domain-state-put")
+           (unless (member (length arguments) '(2 3))
+             (pp.runtime:language-fail
+              "domain-state-put expects key, value, or domain, key, value"
+              "primitive.arity"))
+           (let* ((domain (if (= (length arguments) 2)
+                              (pp.runtime:runtime-dynamic-current-domain)
+                              (%command-strict-text
+                               (first arguments)
+                               "domain-state-put domain")))
+                  (key (if (= (length arguments) 2)
+                           (%command-strict-text
+                            (first arguments)
+                            "domain-state-put key")
+                           (%command-strict-text
+                            (second arguments)
+                            "domain-state-put key")))
+                  (value (if (= (length arguments) 2)
+                             (second arguments)
+                             (third arguments))))
+             (pp.runtime::runtime-domain-state-put session domain key value)
              (pp.kernel:make-vnil)))
           ((string= name "run")
            (%command-run-effect arguments))
           ((string= name "write-file")
            (%command-write-file-effect arguments))
+          ((string= name "proc-spawn")
+           (unless (= (length arguments) 1)
+             (pp.runtime:language-fail "proc-spawn expects a spec"
+                                       "primitive.arity"))
+           (%command-process-required)
+           (let* ((spec (first arguments))
+                  (service-name
+                    (%command-value-text
+                     (or (%command-process-spec-field spec "name")
+                         (pp.kernel:make-vstring "service"))
+                     "proc-spawn name"))
+                  (record (pp.runtime:runtime-process-start-service
+                           session service-name spec)))
+             (pp.kernel:make-vint
+              (pp.runtime:runtime-process-record-pid record))))
+          ((string= name "proc-alive?")
+           (unless (= (length arguments) 1)
+             (pp.runtime:language-fail "proc-alive? expects a pid"
+                                       "primitive.arity"))
+           (pp.kernel:make-vbool
+            (pp.runtime:runtime-process-alive-p
+             (pp.kernel:value-int-value (first arguments)))))
+          ((string= name "proc-stop")
+           (unless (= (length arguments) 2)
+             (pp.runtime:language-fail "proc-stop expects name and pid"
+                                       "primitive.arity"))
+           (%command-process-required)
+           (let* ((service-name (%command-value-text
+                                 (first arguments) "proc-stop name"))
+                  (record (pp.runtime::runtime-process-record
+                           session service-name)))
+             (when record
+               (pp.runtime:runtime-process-stop-service
+                session service-name record))
+             (pp.kernel:make-vnil)))
           ((string= name "proc-reap")
            (unless (null arguments)
              (pp.runtime:language-fail "proc-reap takes no arguments"
@@ -1388,7 +1656,7 @@ an explicit authority override and therefore bypasses the manifest."
   "Extract lifecycle options while preserving ordinary command operands."
   (let ((rest nil) (watch nil) (once nil) (stabilize nil) (supervise nil)
         (interval 1.0) (policy "serial") (policy-explicit nil)
-        (fenced :abort))
+        (fenced :abort) (member-name nil))
     (loop while arguments do
       (let ((argument (pop arguments)))
         (cond
@@ -1407,6 +1675,9 @@ an explicit authority override and therefore bypasses the manifest."
           ((string= argument "--fenced-policy")
            (unless arguments (error "--fenced-policy requires retry|abort|ask"))
            (setf fenced (%command-fenced-policy (pop arguments))))
+          ((string= argument "--member-name")
+           (unless arguments (error "--member-name requires a name"))
+           (setf member-name (pop arguments)))
           (t (push argument rest)))))
     (when (and watch once)
       (error "--once cannot be combined with --watch"))
@@ -1416,7 +1687,7 @@ an explicit authority override and therefore bypasses the manifest."
             (list :watch watch :once once :stabilize stabilize
                   :supervise supervise :interval interval
                   :policy policy :policy-explicit policy-explicit
-                  :fenced fenced))))
+                  :fenced fenced :member-name member-name))))
 
 (defun %command-recover-fenced (session policy error-output)
   (let ((count (runtime-fenced-recover-unknown session policy)))
@@ -1547,7 +1818,11 @@ an explicit authority override and therefore bypasses the manifest."
            (when current
              (push (cons cell-id (store-identity-string current))
                    result))))
-       (let ((records (runtime-session-find-service session :process-records)))
+       (let* ((service (runtime-session-find-service session :process-records))
+              (records (and service
+                            (if (functionp service)
+                                (funcall service)
+                                service))))
          (when (hash-table-p records)
            (maphash
             (lambda (name record)
@@ -1560,7 +1835,6 @@ an explicit authority override and therefore bypasses the manifest."
                     result))
             records)))
        (remove-duplicates result :test #'equal)))))
-
  (defun %run-watch-files
     (operands output error-output grants why no-cache check options)
   (unless operands (error "--watch requires a source file"))
@@ -1570,6 +1844,7 @@ an explicit authority override and therefore bypasses the manifest."
          (policy (%command-runtime-policy (getf options :policy)))
          (once (or (getf options :once) (not (getf options :watch))))
          (stabilize (getf options :stabilize))
+         (force-rerun nil)
          (pass
            (lambda ()
              (if (getf options :supervise)
@@ -1587,27 +1862,36 @@ an explicit authority override and therefore bypasses the manifest."
                              forms source output
                              :print-values nil :return-value t
                              :session session :grant-specs grants :why why
-                             :no-cache no-cache :check check
+                             :no-cache (or no-cache force-rerun) :check check
                              :error-output error-output)))
-                    (%command-dynamic-top-level
-                      session
-                      (lambda ()
-                        (%command-supervise-pass
-                         session
-                         (runtime-evaluator-force-deep
-                          (runtime-session-evaluator session) value)
-                         output)))
-                     value))
+                    (let ((desired
+                            (runtime-evaluator-force-deep
+                             (runtime-session-evaluator session) value)))
+                      (%command-dynamic-top-level
+                       session
+                       (lambda ()
+                         (%command-supervise-pass
+                          session
+                          (if (getf options :member-name)
+                              (%command-member-domain-desired
+                               desired (getf options :member-name) "proc")
+                              desired)
+                          output)))
+                      desired))
+                )
                  (%run-language-files operands output :session session
                                       :grant-specs grants :why why
-                                      :no-cache no-cache :check check
+                                      :no-cache (or no-cache force-rerun)
+                                      :member-name (getf options :member-name)
+                                      :check check
                                       :error-output error-output)))))
     (when (getf options :policy-explicit)
       (runtime-session-register-service
        session :schedule-override (lambda () t)))
     (%command-schedule-node-force
      session policy :override (getf options :policy-explicit))
-    (when (getf options :supervise)
+    (when (or (getf options :supervise)
+              (getf options :member-name))
       (%command-install-process-services session))
     (funcall pass)
     (if once
@@ -1615,15 +1899,25 @@ an explicit authority override and therefore bypasses the manifest."
         (let ((snapshot (%command-watch-trace-snapshot session)))
           (loop
             (runtime-watch-call-sleep (getf options :interval))
+            (runtime-session-reset-pass-state session)
             (let* ((current (%command-watch-trace-snapshot session))
                    (changed (mapcar #'car
                                     (set-difference current snapshot
                                                     :test #'equal))))
               (when changed
+                (format error-output "[watch] ~D cell(s) changed~%"
+                        (length changed))
                 (when stabilize (runtime-watch-stabilize session changed))
+                (setf force-rerun t
+                      session
+                      (%make-command-session
+                       grants :why why :no-cache t :source-roots operands
+                       :check check :error-output error-output))
                 (runtime-session-begin-watch session)
                 (funcall pass)
-                (setf snapshot (%command-watch-trace-snapshot session)))))))))
+                (setf force-rerun nil)
+                (setf snapshot (%command-watch-trace-snapshot session)))))))
+))
 
 (defun %run-runtime-command (arguments output error-output)
   (multiple-value-bind (operands options) (%command-runtime-options arguments)
@@ -1669,7 +1963,9 @@ an explicit authority override and therefore bypasses the manifest."
               (%command-report-runtime-events session output)
               (return-from %run-runtime-command 0)))
           (%run-language-files files output :session session :grant-specs grants
-                               :why why :no-cache no-cache :check check
+                               :why why :no-cache no-cache
+                               :member-name (getf options :member-name)
+                               :check check
                                :error-output error-output))))))
 
 (defun %command-load-path-absolute-p (path)
@@ -2006,6 +2302,12 @@ environment, so leading loads must establish the initial environment first."
                              (%make-command-session
                               grant-specs :why why :no-cache no-cache
                               :check check :error-output error-output))))
+            (let ((policy-service
+                    (runtime-session-find-service session :cache-policy)))
+              (when policy-service
+                (runtime-cache-configure
+                 (funcall policy-service)
+                 :no-cache no-cache :why why :check check)))
             (unless (runtime-session-find-service session :scheduler)
               (%command-schedule-node-force
                session (%command-runtime-policy "serial")))
@@ -2216,24 +2518,67 @@ environment, so leading loads must establish the initial environment first."
       (%command-report-runtime-events session output)
       result)))
 
+(defun %command-member-desired (value member-name)
+  (unless (typep value 'pp.kernel:value-map)
+    (error "--member-name requires a host-keyed desired map"))
+  (let ((entry
+          (find-if
+           (lambda (item)
+             (and (typep (car item) 'pp.kernel:value-string)
+                  (string= (pp.kernel:value-string-value (car item))
+                           member-name)))
+           (pp.kernel:value-map-entries value))))
+    (or (and entry (cdr entry))
+        (error "no such host key: ~A" member-name))))
+
+(defun %command-member-domain-desired (value member-name domain-name)
+  (let* ((slice (%command-member-desired value member-name))
+         (entry (and (typep slice 'pp.kernel:value-map)
+                     (find-if
+                      (lambda (item)
+                        (and (typep (car item) 'pp.kernel:value-string)
+                             (string= (pp.kernel:value-string-value
+                                       (car item))
+                                      domain-name)))
+                      (pp.kernel:value-map-entries slice)))))
+    (or (and entry (cdr entry))
+        (error "no such domain key for host ~A: ~A"
+               member-name domain-name))))
+
 (defun %run-language-files
     (paths output &key session grant-specs (why nil) (no-cache nil)
-                         (check nil) error-output)
+                         (check nil) error-output member-name)
   (unless paths
     (error "expected at least one .pp or .ppl source file"))
   (let ((session
           (or session
               (%make-command-session
                grant-specs :why why :no-cache no-cache :source-roots paths
-               :check check :error-output error-output))))
+               :check check :error-output error-output)))
+        (last-value nil))
     (dolist (path paths)
-      (%run-language-forms
-       (%read-language-forms
-        (%read-source-file path) path
-        (%source-surface path))
-       path output :print-values nil :session session
-       :grant-specs grant-specs :why why :no-cache no-cache :check check
-       :error-output error-output))
+      (setf last-value
+            (%run-language-forms
+             (%read-language-forms
+              (%read-source-file path) path
+              (%source-surface path))
+             path output :print-values nil :session session
+             :return-value t
+             :grant-specs grant-specs :why why :no-cache no-cache :check check
+             :error-output error-output)))
+    ;; A program that registers write domains and returns a desired-state
+    ;; map converges them after evaluation (no --reconcile flag needed).
+    (let ((desired (and last-value
+                        (if member-name
+                            (%command-member-desired last-value member-name)
+                            last-value))))
+      (when (and desired
+                 (pp.runtime:runtime-domain-any-write-domain-registered-p session))
+        (pp.runtime:runtime-lifecycle-reconcile
+         session nil desired :fenced t))
+      (unless (and desired
+                   (pp.runtime:runtime-domain-any-write-domain-registered-p session))
+        (pp.runtime:runtime-fenced-drain session)))
     (%command-report-runtime-events session output)
     0))
 ;;; ---- Islands: `pp --update` and `pp island-pins` ----
@@ -2388,11 +2733,11 @@ hash: ~A" old-pin)
 (defun %runtime-flag-p (argument)
   (member argument
           '("--watch" "--watch-interval" "--stabilize" "--schedule"
-            "--fenced-policy" "--supervise" "--member-name"
+            "--fenced-policy"
             "--desired-object" "--publish-object" "--remote-node"
             "--pin-file" "--dump-pins" "cluster-init" "--mint-token"
             "--transport-push" "--transport-pull" "--serve-hit" "--recv-hit"
-            "graph")
+          )
           :test #'string=))
 
 
@@ -2733,12 +3078,15 @@ hash: ~A" old-pin)
       (%run-reconcile-command-basic
        reconcile output error-output :runtime-options options))))
 (defun %run-graph-command (arguments output error-output)
-  (declare (ignore error-output))
-  (unless (= (length arguments) 2)
-    (error "graph requires exactly one source file"))
-  (let ((path (second arguments)))
-    (%run-language-files
-     (list path) output :error-output *error-output*)
+  (multiple-value-bind (operands grants why no-cache check ignored-keep ignored-grace)
+      (%parse-command-options (remove "graph" arguments :test #'string= :count 1))
+    (declare (ignore ignored-keep ignored-grace))
+    (unless (= (length operands) 1)
+      (error "graph requires exactly one source file"))
+    (let ((path (first operands)))
+      (%run-language-files
+       (list path) output :grant-specs grants :why why :no-cache no-cache
+       :check check :error-output error-output)
     (let* ((layout (make-store-layout (%command-store-root)))
            (traces (make-trace-repository layout))
            (nodes (trace-repository-keys traces))
@@ -2753,6 +3101,7 @@ hash: ~A" old-pin)
       (format output "~D node(s), ~D edge(s)~%" (length nodes) edges)
       (finish-output output)
       0)))
+)
 (defun %command-unix-time ()
   (- (get-universal-time) 2208988800))
 (defun %command-random-hex (octet-count)
@@ -3852,6 +4201,10 @@ hash: ~A" old-pin)
             ((or (string= (first arguments) "why")
                  (string= (first arguments) "--why"))
              (%run-why-command (rest arguments) output error-output))
+            ((member "graph" arguments :test #'string=)
+             (%run-graph-command arguments output error-output))
+            ((member "--member-name" arguments :test #'string=)
+             (%run-runtime-command arguments output error-output))
             (t
              (multiple-value-bind
                    (operands grants why no-cache check ignored-keep ignored-grace)
@@ -3907,6 +4260,12 @@ hash: ~A" old-pin)
             (%run-language-files
              operands output :grant-specs grants :why why
              :no-cache no-cache :check check :error-output error-output)))))
+      ((and (first arguments)
+            (char= (char (first arguments) 0) #\-))
+       (format error-output "pp: error: unrecognized option: ~A~%"
+               (first arguments))
+       (finish-output error-output)
+       1)
       ((%runtime-flag-p (first arguments))
        (format error-output
                "pp: error: ~A is unavailable: effect/distribution runtime services are not installed~%"
