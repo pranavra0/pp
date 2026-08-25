@@ -36,11 +36,20 @@ jobs:
     env:
       TEST_SHARD: "${{ matrix.shard }}/6"
     steps:
-      - uses: actions/checkout@v4
+      - name: Cache SBCL packages
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives/*.deb
+          key: apt-sbcl-${{ runner.os }}-${{ runner.arch }}-v1
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
+          # Cached debs resolve against the runner image's own package lists,
+          # so the index refresh only pays on a cold cache.
+          if [ "${{ steps.cache.outputs.cache-hit }}" != "true" ]; then
+            sudo apt-get update
+          fi
           sudo apt-get install -y --no-install-recommends sbcl libdigest-sha-perl
 
       - name: Build saved image
