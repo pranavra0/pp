@@ -583,14 +583,26 @@ names — mkdtemp semantics without a repeatable PRNG."
              (string= name ".tmp" :start1 (- length 4)))
         (search ".tmp." name)
         (search ".pp-tmp." name))))
+(defconstant +temp-reap-grace-seconds+ 60)
+
 (defun store-layout-clear-temp-files (directory)
+  ;; A .pp-store-*.tmp may belong to a live concurrent process's in-flight
+  ;; write; sweeping it breaks that writer's publication rename (observed as
+  ;; SB-POSIX:RENAME ENOENT when one process's startup raced another's write).
+  ;; Reap only temps old enough that no live writer can still own them;
+  ;; crashed-process leftovers are cleaned once they age out. Readers never
+  ;; trust temps (publication is atomic rename), so delay is always safe.
   (when (probe-file directory)
     #+sbcl
     (unless (store-secure-directory-p directory)
       (error "Store area is not a private directory: ~A" directory))
-    (dolist (path (store-directory-entries directory))
-      (when (and (probe-file path) (store-temp-file-p path))
-        (store-layout-remove path)))))
+    (let ((now (get-universal-time)))
+      (dolist (path (store-directory-entries directory))
+        (when (and (probe-file path)
+                   (store-temp-file-p path)
+                   (>= (- now (or (file-write-date path) now))
+                       +temp-reap-grace-seconds+))
+          (store-layout-remove path))))))
 
 (defun store-layout-read-store (layout area name)
   (store-read-octets (store-layout-path layout area name)))
