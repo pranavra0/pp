@@ -104,6 +104,19 @@ if [ -n "${TEST_SHARD:-}" ]; then
   jobs=("${filtered[@]}")
 fi
 
+# Within a shard, start the known multi-second suites first: with bounded
+# lanes, a heavy case discovered late extends the whole shard. Extend the
+# pattern when a new case joins the multi-second club.
+front=()
+back=()
+for j in "${jobs[@]}"; do
+  case "$j" in
+    *deep-recursion*|*tail-scopes*|*055-fmt*) front+=("$j") ;;
+    *) back+=("$j") ;;
+  esac
+done
+jobs=("${front[@]}" "${back[@]}")
+
 n=${#jobs[@]}
 
 RESULTS=$(mktemp -d)
