@@ -89,12 +89,12 @@ let (cfg = slurp("$TMP/cfg/env.txt")) {
 EOF
 
 # --- (a) no process grant ⇒ capability error ---
-timeout 60 "$PP" --supervise --grant "fs:$TMP/cfg:ro" "$TMP/supervise.pp" > "$TMP/out" 2>&1 || true
+timeout -k 5 60 "$PP" --supervise --grant "fs:$TMP/cfg:ro" "$TMP/supervise.pp" > "$TMP/out" 2>&1 || true
 assert "nogrant-denied" "capability error" present
 
 # --- (b) one-shot supervise starts both services ---
 rm -rf "$TMP/.pp"
-timeout 60 "$PP" --supervise --grant process --grant "fs:$TMP/cfg:ro" "$TMP/supervise.pp" > "$TMP/out" 2>&1
+timeout -k 5 60 "$PP" --supervise --grant process --grant "fs:$TMP/cfg:ro" "$TMP/supervise.pp" > "$TMP/out" 2>&1
 assert "oneshot-started" "started=" present
 wait_for 5 test -f "$TMP/pid-a" || { echo "FAIL oneshot-pid-a: pidfile missing"; fail=1; }
 wait_for 5 test -f "$TMP/pid-b" || { echo "FAIL oneshot-pid-b: pidfile missing"; fail=1; }
@@ -112,7 +112,7 @@ cleanup_services
 # --- (c) watch mode: kill -9 restarts within one interval ---
 rm -rf "$TMP/.pp"
 echo "v1" > "$TMP/cfg/env.txt"
-timeout 20 "$PP" --watch --supervise --grant process --grant "fs:$TMP/cfg:ro" \
+timeout -k 5 20 "$PP" --watch --supervise --grant process --grant "fs:$TMP/cfg:ro" \
   --watch-interval 0.3 "$TMP/supervise.pp" > "$TMP/watch-out" 2>&1 &
 WATCH_PID=$!
 wait_for 8 stable_pid "$TMP/pid-a" || { echo "FAIL watch-pid-a: pidfile missing"; fail=1; }
@@ -135,7 +135,7 @@ cleanup_services
 # --- (d) config edit restarts exactly the affected service ---
 rm -rf "$TMP/.pp"
 echo "v1" > "$TMP/cfg/env.txt"
-timeout 20 "$PP" --watch --supervise --grant process --grant "fs:$TMP/cfg:ro" \
+timeout -k 5 20 "$PP" --watch --supervise --grant process --grant "fs:$TMP/cfg:ro" \
   --watch-interval 0.3 "$TMP/supervise.pp" > "$TMP/watch-out2" 2>&1 &
 WATCH_PID=$!
 wait_for 8 stable_pid "$TMP/pid-a" || { echo "FAIL watch-pid-a: pidfile missing"; fail=1; }
@@ -174,14 +174,14 @@ fi
 
 # --- (f) removing a service from desired state stops it ---
 # Refresh state so both services are alive.
-timeout 60 "$PP" --supervise --grant process --grant "fs:$TMP/cfg:ro" "$TMP/supervise.pp" > "$TMP/out-refresh" 2>&1
+timeout -k 5 60 "$PP" --supervise --grant process --grant "fs:$TMP/cfg:ro" "$TMP/supervise.pp" > "$TMP/out-refresh" 2>&1
 wait_for 5 test -f "$TMP/pid-a" || { echo "FAIL stop-pid-a: pidfile missing"; fail=1; }
 PID_A=$(cat "$TMP/pid-a")
 # Shrink desired state to only svc-b.
 cat > "$TMP/supervise-stop.pp" <<EOF
 {"svc-b" -> {"cmd" -> "$TMP/svc/run.sh", "args" -> ["$TMP/pid-b"], "cwd" -> "$TMP", "env" -> {"MARKER" -> "stable"}}}
 EOF
-timeout 60 "$PP" --supervise --grant process "$TMP/supervise-stop.pp" > "$TMP/out-stop" 2>&1
+timeout -k 5 60 "$PP" --supervise --grant process "$TMP/supervise-stop.pp" > "$TMP/out-stop" 2>&1
 assert "stop-summary" "stopped=1" present "$TMP/out-stop"
 kill -0 "$PID_A" 2>/dev/null && { echo "FAIL stop-a: svc-a still alive"; fail=1; } \
   || echo "ok   stop-a"

@@ -6,7 +6,7 @@ set -uo pipefail
 
 run_limited() {
   if command -v timeout >/dev/null 2>&1; then
-    timeout 30 "$PP" "$1"
+    timeout -k 5 30 "$PP" "$1"
   else
     perl -e 'alarm 30; exec @ARGV' "$PP" "$1"
   fi

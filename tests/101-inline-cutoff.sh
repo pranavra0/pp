@@ -25,7 +25,7 @@ run_mode() {
   local label="$1" mode="$2" parent_count="$3" out="$TMP/$1.out"
   printf 'one\n' > "$TMP/input"
   rm -rf "$TMP/.pp"
-  timeout 20 "$PP" --watch $mode --watch-interval 0.2 \
+  timeout -k 5 20 "$PP" --watch $mode --watch-interval 0.2 \
     --grant "fs:$TMP:ro" "$TMP/inline.pp" > "$out" 2>&1 &
   local watch_pid=$!
   new_watch_pass "$label-cold-child" "CHILD" 1 "$out"

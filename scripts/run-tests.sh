@@ -32,7 +32,9 @@ if [ "${1:-}" = "--worker" ]; then
     local seconds="$1"
     shift
     if command -v timeout >/dev/null 2>&1; then
-      timeout "$seconds" "$@"
+      # -k backs TERM with SIGKILL: a process wedged in an uninterruptible
+      # syscall ignores TERM, and the watchdog must still fire.
+      timeout -k 5 "$seconds" "$@"
     elif command -v perl >/dev/null 2>&1; then
       perl -e 'alarm shift; exec @ARGV' "$seconds" "$@"
     else
