@@ -75,7 +75,7 @@ EOF
 mk_fs_prog A "$ROOT_A"
 mk_fs_prog B "$ROOT_B"
 
-HOME="$HOSTA_HOME" "$PP" --grant "fs:${ROOT_A}:rw" --member-name A "$TMP/prog-A.pp" \
+HOME="$HOSTA_HOME" timeout 60 "$PP" --grant "fs:${ROOT_A}:rw" --member-name A "$TMP/prog-A.pp" \
   > "$TMP/out-memberA" 2>&1
 grep -q "create=1" "$TMP/out-memberA" && ok "memberA-converges" \
   || bad "memberA-converges" "$(cat "$TMP/out-memberA")"
@@ -84,7 +84,7 @@ grep -q "create=1" "$TMP/out-memberA" && ok "memberA-converges" \
 [ -e "$ROOT_A/b.txt" ] && { echo "FAIL memberA-no-cross-host-write: b.txt leaked into A's root"; fail=1; } \
   || ok "memberA-no-cross-host-write"
 
-HOME="$HOSTB_HOME" "$PP" --grant "fs:${ROOT_B}:rw" --member-name B "$TMP/prog-B.pp" \
+HOME="$HOSTB_HOME" timeout 60 "$PP" --grant "fs:${ROOT_B}:rw" --member-name B "$TMP/prog-B.pp" \
   > "$TMP/out-memberB" 2>&1
 grep -q "create=1" "$TMP/out-memberB" && ok "memberB-converges" \
   || bad "memberB-converges" "$(cat "$TMP/out-memberB")"
@@ -95,7 +95,7 @@ grep -q "create=1" "$TMP/out-memberB" && ok "memberB-converges" \
 
 # --member-name naming a host absent from the map is a clear error, not a
 # silent no-op.
-HOME="$HOSTA_HOME" "$PP" --grant "fs:${ROOT_A}:rw" --member-name ZZZ "$TMP/prog-A.pp" \
+HOME="$HOSTA_HOME" timeout 60 "$PP" --grant "fs:${ROOT_A}:rw" --member-name ZZZ "$TMP/prog-A.pp" \
   > "$TMP/out-badmember" 2>&1
 CODE=$?
 if [ "$CODE" -ne 0 ] && grep -q "no such host key" "$TMP/out-badmember"; then
@@ -193,7 +193,7 @@ do {
   {"kv" -> {"flat-a" -> "1"}}
 }
 EOF
-"$PP" --grant "fs:${KV}:wo" "$TMP/flat.pp" > "$TMP/out-flat" 2>&1
+timeout 60 "$PP" --grant "fs:${KV}:wo" "$TMP/flat.pp" > "$TMP/out-flat" 2>&1
 [ -f "$KV/flat-a" ] && [ "$(cat "$KV/flat-a")" = "1" ] && ok "backcompat-flat-no-member-name" \
   || bad "backcompat-flat-no-member-name" "$(cat "$TMP/out-flat")"
 
