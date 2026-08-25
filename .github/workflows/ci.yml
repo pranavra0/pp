@@ -9,10 +9,14 @@ on:
 permissions:
   contents: read
 env:
-  # Deep-recursion is intentionally serial and exceeds the 120-second per-case
-  # default on GitHub-hosted runners; retain a bounded per-case watchdog.
+  # Deep-recursion exceeds the 120-second per-case default on GitHub-hosted
+  # runners; retain a bounded per-case watchdog.
   TEST_CASE_TIMEOUT: "600"
 
+# Superseded PR runs are cancelled; pushes to master always run to completion.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -21,16 +25,14 @@ jobs:
       matrix:
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
-    env:
-      TEST_JOBS: "1"
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y sbcl libdigest-sha-perl
+          sudo apt-get install -y --no-install-recommends sbcl libdigest-sha-perl
 
       - name: Build saved image
         run: scripts/build-lisp.sh --output lisp/pp
@@ -43,12 +45,13 @@ jobs:
 
   clean-export:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Install SBCL
         run: |
           sudo apt-get update
-          sudo apt-get install -y sbcl
+          sudo apt-get install -y --no-install-recommends sbcl
       - name: Clean exported-source gate
-        run: ./scripts/check-clean-export.sh
+        # The gate script defaults to serial; fan out across runner cores.
+        run: TEST_JOBS="$(nproc)" ./scripts/check-clean-export.sh
