@@ -38,21 +38,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache SBCL packages
-        id: cache
+      - name: Cache SBCL
+        id: sbcl-cache
         uses: actions/cache@v4
         with:
-          path: /var/cache/apt/archives/*.deb
-          key: apt-sbcl-${{ runner.os }}-${{ runner.arch }}-v1
+          path: |
+            /usr/bin/sbcl
+            /usr/lib/sbcl
+          key: sbcl-bin-${{ runner.os }}-${{ runner.arch }}-v2
 
       - name: Install dependencies
         run: |
-          # Cached debs resolve against the runner image's own package lists,
-          # so the index refresh only pays on a cold cache.
-          if [ "${{ steps.cache.outputs.cache-hit }}" != "true" ]; then
+          # A restored SBCL tree skips apt entirely; libdigest-sha-perl was a
+          # dead dependency (every digest uses sha256sum or python hashlib).
+          if [ ! -x /usr/bin/sbcl ]; then
             sudo apt-get update
+            sudo apt-get install -y --no-install-recommends sbcl
           fi
-          sudo apt-get install -y --no-install-recommends sbcl libdigest-sha-perl
 
       - name: Restore built image
         if: matrix.mode == 'build'
