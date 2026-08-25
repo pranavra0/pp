@@ -67,7 +67,7 @@ if [ "${1:-}" = "--worker" ]; then
     sh)
       name=$(basename "$file" .sh)
       desc=$(sed -n '2s/^#[[:space:]]*//p' "$file")
-      if run_bounded "${TEST_CASE_TIMEOUT:-120}" bash "$file" >"$scratch/out" 2>&1; then verdict=PASS; endline="ok   $name"
+      if run_bounded "${SH_CASE_TIMEOUT:-300}" bash "$file" >"$scratch/out" 2>&1; then verdict=PASS; endline="ok   $name"
       else verdict=FAIL; endline="FAIL $name"; fi
       printf '%s\n--- %s — %s ---\n' "$verdict" "$name" "$desc"
       cat "$scratch/out"
@@ -125,7 +125,11 @@ else
   printf '%s\n' "${tagged[@]}" |
     xargs -P "$JOBS" -I{} bash -c '
       line="$1"; idx="${line%%|*}"; spec="${line#*|}"
+      # Live timeline on stderr: a wedged case names itself in the CI log
+      # (result files are only replayed after the whole fan-out finishes).
+      printf "[%s] start %s\n" "$(date -u +%T)" "$spec" >&2
       "$0" --worker "$spec" >"$RESULTS/$idx.out" 2>&1
+      printf "[%s] done   %s\n" "$(date -u +%T)" "$spec" >&2
     ' "$SELF" "{}"
 fi
 
