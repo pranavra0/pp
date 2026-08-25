@@ -89,6 +89,19 @@ for f in tests/*.sh; do
   [ "$(basename "$f")" = "lib.sh" ] && continue
   jobs+=("sh|$f")
 done
+# ---- Optional static shard: TEST_SHARD="i/n" keeps only cases whose
+# enumeration index satisfies i' % n == i, so callers can spread the suite
+# across several runners while every case still runs exactly once. Round-robin
+# (not contiguous blocks) keeps each shard's mix of heavy and light cases even.
+if [ -n "${TEST_SHARD:-}" ]; then
+  IFS=/ read -r shard_index shard_count <<<"$TEST_SHARD"
+  filtered=()
+  for i in "${!jobs[@]}"; do
+    [ $(( i % shard_count )) -eq "$shard_index" ] && filtered+=("${jobs[$i]}")
+  done
+  jobs=("${filtered[@]}")
+fi
+
 n=${#jobs[@]}
 
 RESULTS=$(mktemp -d)

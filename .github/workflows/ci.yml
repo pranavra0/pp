@@ -19,13 +19,22 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  build:
+  # The suite shards round-robin across runners (TEST_SHARD in run-tests.sh):
+  # every case runs exactly once, and total wall time drops to roughly the
+  # slowest shard. Six shards spread the few multi-minute cases (deep
+  # recursion, fmt sweep, tail scopes) onto different runners; four would pile
+  # them onto one. The clean-export mode repeats the suite from a git archive
+  # so nothing can depend on uncommitted files.
+  test:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+        mode: [build, clean-export]
+        shard: [0, 1, 2, 3, 4, 5]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      TEST_SHARD: "${{ matrix.shard }}/6"
     steps:
       - uses: actions/checkout@v4
 
@@ -35,23 +44,18 @@ jobs:
           sudo apt-get install -y --no-install-recommends sbcl libdigest-sha-perl
 
       - name: Build saved image
+        if: matrix.mode == 'build'
         run: scripts/build-lisp.sh --output lisp/pp
 
       - name: Architecture gates
+        if: matrix.mode == 'build' && matrix.shard == 0
         run: scripts/check-architecture.sh
 
       - name: Test suite
+        if: matrix.mode == 'build'
         run: scripts/run-tests.sh bin/pp
 
-  clean-export:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install SBCL
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends sbcl
       - name: Clean exported-source gate
+        if: matrix.mode == 'clean-export'
         # The gate script defaults to serial; fan out across runner cores.
         run: TEST_JOBS="$(nproc)" ./scripts/check-clean-export.sh
