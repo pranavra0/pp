@@ -30,10 +30,10 @@ deny() {  # NAME  EXPR
   local name="$1" expr="$2"
   local out
   out=$("$PP" --grant "fs:$SB:ro" -e "$expr" 2>&1 || true)
-  if printf '%s' "$out" | grep -q "$SENTINEL"; then
+  if [ "$(printf '%s' "$out" | grep -c "$SENTINEL")" -gt 0 ]; then
     echo "FAIL $name: EXFILTRATED the outside file"; echo "     $out"; fail=1
-  elif printf '%s' "$out" \
-       | grep -qiE "permission denied|no read access|no read or write|symbolic links|error"; then
+  elif [ "$(printf '%s' "$out" \
+       | grep -ciE "permission denied|no read access|no read or write|symbolic links|error")" -gt 0 ]; then
     echo "ok   $name"
   else
     echo "FAIL $name: neither denied nor errored:"; echo "     $out"; fail=1
@@ -43,7 +43,7 @@ deny() {  # NAME  EXPR
 # Positive control: a genuine in-scope read still works, so the grant is not
 # vacuously denying everything.
 out=$("$PP" --grant "fs:$SB:ro" -e "print(\$file(\"$SB/ok.txt\"))" 2>&1 || true)
-printf '%s' "$out" | grep -q "inside-ok" || { echo "FAIL positive-control: $out"; fail=1; }
+[ "$(printf '%s' "$out" | grep -c "inside-ok")" -gt 0 ] || { echo "FAIL positive-control: $out"; fail=1; }
 echo "ok   positive-control"
 
 deny symlink-escape "print(\$file(\"$SB/link-out\"))"

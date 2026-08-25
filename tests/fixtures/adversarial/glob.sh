@@ -23,10 +23,10 @@ deny() {  # NAME  EXPR
   local name="$1" expr="$2"
   local out
   out=$("$PP" --grant "fs:$SB:ro" -e "$expr" 2>&1 || true)
-  if printf '%s' "$out" | grep -q "OUTSIDE-ENTRY"; then
+  if [ "$(printf '%s' "$out" | grep -c "OUTSIDE-ENTRY")" -gt 0 ]; then
     echo "FAIL $name: LISTED an out-of-scope directory"; echo "     $out"; fail=1
-  elif printf '%s' "$out" \
-       | grep -qiE "permission denied|no read access|no read or write|error"; then
+  elif [ "$(printf '%s' "$out" \
+       | grep -ciE "permission denied|no read access|no read or write|error")" -gt 0 ]; then
     echo "ok   $name"
   else
     echo "FAIL $name: neither denied nor errored:"; echo "     $out"; fail=1
@@ -34,7 +34,7 @@ deny() {  # NAME  EXPR
 }
 # Positive control: an in-scope tree observation works.
 out=$("$PP" --grant "fs:$SB:ro" -e "print(\$glob(\"$SB/sub\"))" 2>&1 || true)
-printf '%s' "$out" | grep -q "inside.txt" || { echo "FAIL positive-control: $out"; fail=1; }
+[ "$(printf '%s' "$out" | grep -c "inside.txt")" -gt 0 ] || { echo "FAIL positive-control: $out"; fail=1; }
 echo "ok   positive-control"
 
 deny dotdot-escape  "print(\$glob(\"$SB/../$OUT_BASE\"))"

@@ -24,10 +24,10 @@ deny() {  # NAME  EXPR
   local name="$1" expr="$2"
   local out
   out=$("$PP" --grant "secret:$SB" -e "$expr" 2>&1 || true)
-  if printf '%s' "$out" | grep -q "$PLAINTEXT"; then
+  if [ "$(printf '%s' "$out" | grep -c "$PLAINTEXT")" -gt 0 ]; then
     echo "FAIL $name: LEAKED plaintext of an out-of-scope secret"; echo "     $out"; fail=1
-  elif printf '%s' "$out" \
-       | grep -qiE "permission denied|no read access|no read or write|symbolic links|error"; then
+  elif [ "$(printf '%s' "$out" \
+       | grep -ciE "permission denied|no read access|no read or write|symbolic links|error")" -gt 0 ]; then
     echo "ok   $name"
   else
     echo "FAIL $name: neither denied nor errored:"; echo "     $out"; fail=1
@@ -37,9 +37,9 @@ deny() {  # NAME  EXPR
 # Positive control: an in-scope secret read succeeds but is REDACTED — the
 # plaintext must never appear even for a legitimately-granted read.
 out=$("$PP" --grant "secret:$SB" -e "print(\$secret(\"$SB/k.txt\"))" 2>&1 || true)
-if printf '%s' "$out" | grep -q "$PLAINTEXT"; then
+if [ "$(printf '%s' "$out" | grep -c "$PLAINTEXT")" -gt 0 ]; then
   echo "FAIL redaction: plaintext printed for a granted secret"; echo "     $out"; fail=1
-elif ! printf '%s' "$out" | grep -q "sealed"; then
+elif [ "$(printf '%s' "$out" | grep -c "sealed")" -eq 0 ]; then
   echo "FAIL redaction: expected a redacted #<sealed> value:"; echo "     $out"; fail=1
 else
   echo "ok   redaction (granted read is #<sealed>, not plaintext)"

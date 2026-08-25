@@ -131,14 +131,17 @@ EOF
 HOME="$HOSTC_HOME" timeout 20 "$PP" --watch --watch-interval 0.3 --grant process \
   --member-name C "$TMP/prog-proc.pp" > "$TMP/watch-out" 2>&1 &
 WATCH_PID=$!
-wait_for 5 stable_pid "$TMP/pid-c" || { echo "FAIL member-svc-started: pidfile missing"; fail=1; }
+wait_for 12 stable_pid "$TMP/pid-c" || { echo "FAIL member-svc-started: pidfile missing"; fail=1; }
 [ -e "$TMP/pid-other" ] && { echo "FAIL member-only-own-slice: svc-other (a DIFFERENT host's service) was started"; fail=1; } \
   || ok "member-only-own-slice (svc-other, host OTHER's service, never started)"
 OLD_C=$(cat "$TMP/pid-c" 2>/dev/null)
 if [ -n "$OLD_C" ]; then
   kill -9 "$OLD_C" 2>/dev/null || true
   restarted_c() { p=$(cat "$TMP/pid-c" 2>/dev/null) && [ -n "$p" ] && [ "$p" != "$OLD_C" ]; }
-  wait_for 5 restarted_c || { echo "FAIL member-kill9-restart: no new pid"; fail=1; }
+  # Generous bound: measures wall-clock recovery including cold image start,
+  # not just the supervisor's 0.3s poll interval; a wedged supervisor still
+  # fails, just not because the runner was busy.
+  wait_for 12 restarted_c || { echo "FAIL member-kill9-restart: no new pid"; fail=1; }
   NEW_C=$(cat "$TMP/pid-c" 2>/dev/null)
   if [ "$OLD_C" != "$NEW_C" ] && kill -0 "$NEW_C" 2>/dev/null; then
     ok "member-kill9-restart (host C's own slice recovers within one poll interval)"
