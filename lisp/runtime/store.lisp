@@ -1229,16 +1229,22 @@ names — mkdtemp semantics without a repeatable PRNG."
   (let ((kept 0) (deleted 0) (aborted nil) (now (get-universal-time))
         (snapshot-current (or snapshot-current (lambda () snapshot))))
     (dolist (name (store-layout-list-names layout kind))
+      ;; A .pp-store-*.tmp belongs to some process's in-flight atomic write,
+      ;; never to the canonical graph: leave it to the startup reaper. The
+      ;; writer can also publish a listed canonical file at any instant, so
+      ;; its write-date is read tolerantly.
       (let ((path (store-layout-path layout kind name)))
-        (if (gethash (concatenate 'string prefix name) live)
-            (incf kept)
-            (if (and (> grace-seconds 0)
-                     (< (- now (or (file-write-date path) now)) grace-seconds))
-                (incf kept)
-                (let ((before (funcall snapshot-current)))
-                  (if (equalp before snapshot)
-                      (progn (store-layout-remove path) (incf deleted))
-                      (setf aborted t)))))))
+        (unless (store-temp-file-p path)
+          (if (gethash (concatenate 'string prefix name) live)
+              (incf kept)
+              (let ((mtime (ignore-errors (file-write-date path))))
+                (if (and (> grace-seconds 0)
+                         (and mtime (< (- now mtime) grace-seconds)))
+                    (incf kept)
+                    (let ((before (funcall snapshot-current)))
+                      (if (equalp before snapshot)
+                          (progn (store-layout-remove path) (incf deleted))
+                          (setf aborted t)))))))))
     (values kept deleted aborted)))
 
 (defun store-gc-run (layout trace-repository object-repository
