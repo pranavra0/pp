@@ -89,12 +89,12 @@ let (cfg = slurp("$TMP/cfg/env.txt")) {
 EOF
 
 # --- (a) no process grant ⇒ capability error ---
-"$PP" --supervise --grant "fs:$TMP/cfg:ro" "$TMP/supervise.pp" > "$TMP/out" 2>&1 || true
+timeout 60 "$PP" --supervise --grant "fs:$TMP/cfg:ro" "$TMP/supervise.pp" > "$TMP/out" 2>&1 || true
 assert "nogrant-denied" "capability error" present
 
 # --- (b) one-shot supervise starts both services ---
 rm -rf "$TMP/.pp"
-"$PP" --supervise --grant process --grant "fs:$TMP/cfg:ro" "$TMP/supervise.pp" > "$TMP/out" 2>&1
+timeout 60 "$PP" --supervise --grant process --grant "fs:$TMP/cfg:ro" "$TMP/supervise.pp" > "$TMP/out" 2>&1
 assert "oneshot-started" "started=" present
 wait_for 5 test -f "$TMP/pid-a" || { echo "FAIL oneshot-pid-a: pidfile missing"; fail=1; }
 wait_for 5 test -f "$TMP/pid-b" || { echo "FAIL oneshot-pid-b: pidfile missing"; fail=1; }
@@ -174,14 +174,14 @@ fi
 
 # --- (f) removing a service from desired state stops it ---
 # Refresh state so both services are alive.
-"$PP" --supervise --grant process --grant "fs:$TMP/cfg:ro" "$TMP/supervise.pp" > "$TMP/out-refresh" 2>&1
+timeout 60 "$PP" --supervise --grant process --grant "fs:$TMP/cfg:ro" "$TMP/supervise.pp" > "$TMP/out-refresh" 2>&1
 wait_for 5 test -f "$TMP/pid-a" || { echo "FAIL stop-pid-a: pidfile missing"; fail=1; }
 PID_A=$(cat "$TMP/pid-a")
 # Shrink desired state to only svc-b.
 cat > "$TMP/supervise-stop.pp" <<EOF
 {"svc-b" -> {"cmd" -> "$TMP/svc/run.sh", "args" -> ["$TMP/pid-b"], "cwd" -> "$TMP", "env" -> {"MARKER" -> "stable"}}}
 EOF
-"$PP" --supervise --grant process "$TMP/supervise-stop.pp" > "$TMP/out-stop" 2>&1
+timeout 60 "$PP" --supervise --grant process "$TMP/supervise-stop.pp" > "$TMP/out-stop" 2>&1
 assert "stop-summary" "stopped=1" present "$TMP/out-stop"
 kill -0 "$PID_A" 2>/dev/null && { echo "FAIL stop-a: svc-a still alive"; fail=1; } \
   || echo "ok   stop-a"
