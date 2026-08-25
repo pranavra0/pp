@@ -598,11 +598,14 @@ names — mkdtemp semantics without a repeatable PRNG."
       (error "Store area is not a private directory: ~A" directory))
     (let ((now (get-universal-time)))
       (dolist (path (store-directory-entries directory))
-        (when (and (probe-file path)
-                   (store-temp-file-p path)
-                   (>= (- now (or (file-write-date path) now))
-                       +temp-reap-grace-seconds+))
-          (store-layout-remove path))))))
+        ;; The temp may be published (renamed away) by its writer at any
+        ;; instant; a vanished file has no age, so skip it. Removal races are
+        ;; equally benign: whoever gets there first wins, the loser no-ops.
+        (let ((mtime (ignore-errors (file-write-date path))))
+          (when (and mtime
+                     (store-temp-file-p path)
+                     (>= (- now mtime) +temp-reap-grace-seconds+))
+            (ignore-errors (store-layout-remove path))))))))
 
 (defun store-layout-read-store (layout area name)
   (store-read-octets (store-layout-path layout area name)))
