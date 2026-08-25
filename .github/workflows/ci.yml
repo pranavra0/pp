@@ -54,8 +54,16 @@ jobs:
           fi
           sudo apt-get install -y --no-install-recommends sbcl libdigest-sha-perl
 
-      - name: Build saved image
+      - name: Restore built image
         if: matrix.mode == 'build'
+        id: image-cache
+        uses: actions/cache@v4
+        with:
+          path: lisp
+          key: pp-image-${{ hashFiles('lisp/**/*.lisp', 'lisp/pp.asd', 'scripts/build-lisp.sh') }}
+
+      - name: Build saved image
+        if: matrix.mode == 'build' && steps.image-cache.outputs.cache-hit != 'true'
         run: scripts/build-lisp.sh --output lisp/pp
 
       - name: Architecture gates
