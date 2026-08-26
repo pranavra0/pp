@@ -162,10 +162,19 @@ understands none of those schemas.
 
 ## Extension rules
 
+
 Add a new AST form only with its reader, printer, quote conversion, identity,
 evaluator, property coverage, and fuzzer coverage. Add a new observation only
 with a cell representation and adversarial world coverage. Add a durable
 write only through the atomic replacement boundary.
+## Ownership rules
+
+The implementation's ownership table in `ARCHITECTURE.md` is normative for
+module boundaries. In particular, placement may wrap a Node Engine miss but
+must not create a key or decide trace validity; lifecycle may journal and
+verify reconciliation but must not persist node results; and host providers
+are injected through session operations/context rather than global registries.
+These rules keep identity, validity, authority, and placement independent.
 
 Keep comments local and factual. Do not use comments to record roadmap steps,
 old module names, or test history. Put stable reasons here and current facts

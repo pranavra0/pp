@@ -103,10 +103,12 @@ brace-to-s-expression mapping.
   (`pp --reconcile ROOT`; `tests/018`, `tests/023`) and the process domain as
   `{service-name → spec}` (`pp --supervise`; `tests/033`).
 - reconciler: an `observe`/`diff`/`apply` triple of pp functions running under
-  runtime-enforced discipline. The filesystem domain (`stdlib/domain-fs.pp`,
-  `pp --reconcile ROOT`) and process domain (`stdlib/domain-proc.pp`,
-  `pp --supervise`) converge by content hash and journal intent and done
-  (`tests/033`); desired state may not read itself (SPEC law 30). See
+  runtime-enforced discipline. The built-in filesystem domain
+  (`pp --reconcile ROOT`) and process domain (`pp --supervise`) converge by
+  content hash and journal intent and done (`tests/033`); equivalent pp-level
+  policies are packaged as `stdlib/domain-fs.pp` and `stdlib/domain-proc.pp`
+  for explicit registration. Desired state may not read itself (SPEC law 30).
+  See
   [ARCHITECTURE.md](ARCHITECTURE.md) for the orchestration mechanics, and
   the fenced effect entry below for crash recovery.
 - domain (real): a slice of external state under single ownership, such

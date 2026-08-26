@@ -38,20 +38,21 @@ tree is refused.
 The trusted mechanics touching the world are a few core primitives: atomic
 temp-file-plus-`rename`, `fork`/`exec`/reap, a per-domain key-value store
 (`tree-observe`, `materialize-file`, `remove-file`, `proc-spawn`, …).
-Everything else is pp library: the filesystem and process domains ship as
-`stdlib/domain-fs.pp` and `stdlib/domain-proc.pp`, real readable source
-holding all policy over the core-enforced protocol (create vs update, when to
-restart). No privileged reconciler engine hides in the runtime.
+Everything else is pp library too: `stdlib/domain-fs.pp` and
+`stdlib/domain-proc.pp` are real readable source packaging the filesystem and
+process policies for explicit registration over the core-enforced protocol
+(create vs update, when to restart). The built-in `--reconcile` and
+`--supervise` domains implement the same policy natively in the runtime.
 
 == Reconciling a filesystem
 
-`pp --reconcile ROOT prog.pp` auto-loads the fs domain with a write capability
-narrowed to `ROOT` and takes the program's final canonical tree value as the
-desired state. File entries carry mode and blob identity; directory entries
-make parents explicit. It diffs by content hash and materializes missing and
-changed files atomically; files under `ROOT` the map does not mention are
-deleted. An fs write grant over `ROOT` is required; without it nothing is
-written.
+`pp --reconcile ROOT prog.pp` registers the built-in fs domain with a write
+capability narrowed to `ROOT` and takes the program's final canonical tree
+value as the desired state. File entries carry mode and blob identity;
+directory entries make parents explicit. It diffs by content hash and
+materializes missing and changed files atomically; files under `ROOT` that
+the map does not mention are deleted. An fs write grant over `ROOT` is
+required; without it nothing is written.
 
 The transcript below reconciles two files into a fresh root, introduces drift
 by hand (one delete, one edit), and reconciles again: exactly one create and
