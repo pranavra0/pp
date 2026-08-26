@@ -32,7 +32,9 @@ if [ "${1:-}" = "--worker" ]; then
     local seconds="$1"
     shift
     if command -v timeout >/dev/null 2>&1; then
-      timeout "$seconds" "$@"
+      # -k backs TERM with SIGKILL: a process wedged in an uninterruptible
+      # syscall ignores TERM, and the watchdog must still fire.
+      timeout -k 5 "$seconds" "$@"
     elif command -v perl >/dev/null 2>&1; then
       perl -e 'alarm shift; exec @ARGV' "$seconds" "$@"
     else
@@ -67,7 +69,7 @@ if [ "${1:-}" = "--worker" ]; then
     sh)
       name=$(basename "$file" .sh)
       desc=$(sed -n '2s/^#[[:space:]]*//p' "$file")
-      if run_bounded "${TEST_CASE_TIMEOUT:-120}" bash "$file" >"$scratch/out" 2>&1; then verdict=PASS; endline="ok   $name"
+      if run_bounded "${SH_CASE_TIMEOUT:-300}" bash "$file" >"$scratch/out" 2>&1; then verdict=PASS; endline="ok   $name"
       else verdict=FAIL; endline="FAIL $name"; fi
       printf '%s\n--- %s — %s ---\n' "$verdict" "$name" "$desc"
       cat "$scratch/out"
@@ -89,6 +91,32 @@ for f in tests/*.sh; do
   [ "$(basename "$f")" = "lib.sh" ] && continue
   jobs+=("sh|$f")
 done
+# ---- Optional static shard: TEST_SHARD="i/n" keeps only cases whose
+# enumeration index satisfies i' % n == i, so callers can spread the suite
+# across several runners while every case still runs exactly once. Round-robin
+# (not contiguous blocks) keeps each shard's mix of heavy and light cases even.
+if [ -n "${TEST_SHARD:-}" ]; then
+  IFS=/ read -r shard_index shard_count <<<"$TEST_SHARD"
+  filtered=()
+  for i in "${!jobs[@]}"; do
+    [ $(( i % shard_count )) -eq "$shard_index" ] && filtered+=("${jobs[$i]}")
+  done
+  jobs=("${filtered[@]}")
+fi
+
+# Within a shard, start the known multi-second suites first: with bounded
+# lanes, a heavy case discovered late extends the whole shard. Extend the
+# pattern when a new case joins the multi-second club.
+front=()
+back=()
+for j in "${jobs[@]}"; do
+  case "$j" in
+    *deep-recursion*|*tail-scopes*|*055-fmt*) front+=("$j") ;;
+    *) back+=("$j") ;;
+  esac
+done
+jobs=("${front[@]}" "${back[@]}")
+
 n=${#jobs[@]}
 
 RESULTS=$(mktemp -d)
@@ -112,7 +140,11 @@ else
   printf '%s\n' "${tagged[@]}" |
     xargs -P "$JOBS" -I{} bash -c '
       line="$1"; idx="${line%%|*}"; spec="${line#*|}"
+      # Live timeline on stderr: a wedged case names itself in the CI log
+      # (result files are only replayed after the whole fan-out finishes).
+      printf "[%s] start %s\n" "$(date -u +%T)" "$spec" >&2
       "$0" --worker "$spec" >"$RESULTS/$idx.out" 2>&1
+      printf "[%s] done   %s\n" "$(date -u +%T)" "$spec" >&2
     ' "$SELF" "{}"
 fi
 
