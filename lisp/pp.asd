@@ -36,7 +36,9 @@
   ((:module "runtime"
     :serial t
     :components
-    ((:file "language")
+    ((:file "protocol")
+     (:file "language")
+     (:file "primitives")
      (:module "evaluator-support"
       :serial t
       :components ((:file "state")))
@@ -51,9 +53,6 @@
      (:file "cache")
      (:file "nodes")
      (:file "distribution")
-     (:module "thunks"
-      :serial t
-      :components ((:file "core")))
      (:module "lifecycle-support"
       :pathname "lifecycle"
       :serial t

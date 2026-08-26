@@ -1,12 +1,12 @@
 ;;;; Explicit continuation/work-queue evaluator.
 ;;;; No host EVAL, READ, or INTERN is used here. All user syntax is already a
 ;;;; pp.kernel expression and all execution proceeds through the machine below.
-(in-package #:pp.runtime)
+(in-package #:pp.rt.eval)
 
 ;;; ---------------------------------------------------------------------------
 ;;; Errors, macro services, and force machinery
 
-(defun runtime-evaluator-error
+(defmethod runtime-evaluator-error
     (message &optional (code "evaluator.error") range)
   ;; Keep the range separate from MESSAGE.  The app/CLI normalizer can then
   ;; select the innermost range once, rather than having nested evaluator
@@ -79,7 +79,7 @@
              ;; closure merely because its environment also contains caps;
              ;; follow the same free-variable boundary used by node keys.
              (let ((closure (value-closure-closure item)))
-               (dolist (name (runtime-free-variable-names
+               (dolist (name (free-variable-names
                               (closure-body closure)))
                  (let ((captured
                          (runtime-evaluator-env-lookup
@@ -103,46 +103,6 @@
              (dolist (entry (value-env-map-bindings item))
                (push (cdr entry) jobs)))))))
     nil))
-
-(defun runtime-evaluator-sync-dynamic-state! (state)
-  "Mirror the active dynamic extent into evaluator-owned callback state."
-  (when (and (fboundp 'runtime-dynamic-current)
-             (runtime-dynamic-current nil))
-    (setf (runtime-evaluator-state-capabilities state)
-          (copy-tree (runtime-dynamic-capabilities))
-          (runtime-evaluator-state-config-stack state)
-          (copy-tree (runtime-dynamic-config))
-          (runtime-evaluator-state-handler-stack state)
-          (copy-tree (runtime-dynamic-handlers))))
-  state)
-
-(defun runtime-evaluator-node-key (state thunk)
-  (runtime-evaluator-sync-dynamic-state! state)
-  (let ((expression (thunk-expression thunk))
-        (environment (thunk-environment thunk)))
-    (node-key
-     :code expression
-     :free-variables
-     (mapcar
-      (lambda (name)
-        (let* ((value (runtime-evaluator-env-lookup environment name))
-               (authority-kind
-                 (and value (runtime-evaluator-authority-value-p state value))))
-          (when authority-kind
-            (runtime-evaluator-error
-             (format nil
-                     "node: free variable '~A' may not be or contain ~A"
-                     name
-                     (cond ((eq authority-kind :sealed) "a sealed value")
-                           ((eq authority-kind :capability) "a capability")
-                           (t "authority")))
-             "evaluator.authority"))
-          (cons name (and value (runtime-evaluator-force state value)))))
-      (runtime-free-variable-names expression))
-     :argument-values
-     (if (typep (thunk-kind thunk) 'thunk-kind-persistent)
-         (thunk-kind-persistent-argument-values (thunk-kind thunk))
-         nil))))
 
 (defun runtime-evaluator-type-name (type-expression)
   (cond
@@ -211,7 +171,7 @@ instead of the language type error we owe the caller."
                    type-name (runtime-evaluator-value-description value))
            "evaluator.type" (thunk-location thunk)))))))
 
- (defun runtime-evaluator-force-thunk (state thunk)
+(defun runtime-evaluator-force-thunk (state thunk)
   (when (member thunk (runtime-evaluator-state-force-stack state) :test #'eq)
     (runtime-evaluator-force-cycle state thunk))
   (runtime-evaluator-depth-enter! state)
@@ -219,13 +179,9 @@ instead of the language type error we owe the caller."
   (incf (runtime-evaluator-state-force-count state))
   (unwind-protect
        (handler-case
-           (let* ((persistent (typep (thunk-kind thunk) 'thunk-kind-persistent))
-                  (key (and persistent (runtime-evaluator-node-key state thunk)))
-                  (key-string (and key (node-key-to-string key)))
-                  (cached (and key-string
-                               (gethash key-string
-                                        (runtime-evaluator-state-persistent-cache state))))
-                  (status (thunk-status thunk)))
+           (let ((status (thunk-status thunk))
+                 (persistent (typep (thunk-kind thunk)
+                                    'thunk-kind-persistent)))
              (cond
                ((typep status 'thunk-status-evaluating)
                 (runtime-evaluator-force-cycle state thunk))
@@ -233,38 +189,26 @@ instead of the language type error we owe the caller."
                 (let ((result (thunk-status-evaluated-value status)))
                   (runtime-evaluator-enforce-thunk-type thunk result)
                   result))
-               (cached
-                (runtime-evaluator-enforce-thunk-type thunk cached)
-                (setf (thunk-status thunk) (make-thunk-status-evaluated cached))
-                cached)
+               (persistent
+                (setf (thunk-status thunk)
+                      (make-thunk-status-evaluating))
+                (let* ((run (lambda ()
+                              (runtime-evaluator-run-expression
+                               state (thunk-expression thunk)
+                               (thunk-environment thunk))))
+                       (result (runtime-node-engine-force
+                                (runtime-dynamic-session) state thunk run)))
+                  (runtime-evaluator-enforce-thunk-type thunk result)
+                  result))
                (t
-                (setf (thunk-status thunk) (make-thunk-status-evaluating))
+                (setf (thunk-status thunk)
+                      (make-thunk-status-evaluating))
                 (handler-case
-                    (let* ((run (lambda ()
-                                  (runtime-evaluator-run-expression
-                                   state (thunk-expression thunk)
-                                   (thunk-environment thunk))))
-                           (result
-                             (cond
-                               ((not persistent) (funcall run))
-                               ((runtime-evaluator-state-node-force-function state)
-                                (funcall
-                                 (runtime-evaluator-state-node-force-function state)
-                                 state thunk key run))
-                               (t
-                                (runtime-evaluator-error
-                                 "persistent node forcing requires an explicit node backend"
-                                 "evaluator.node")))))
-                      (when (and persistent
-                                 (runtime-evaluator-authority-value-p state result))
-                        (runtime-evaluator-error
-                         "a node may not return a capability or sealed value"
-                         "evaluator.authority"))
+                    (let ((result
+                            (runtime-evaluator-run-expression
+                             state (thunk-expression thunk)
+                             (thunk-environment thunk))))
                       (runtime-evaluator-enforce-thunk-type thunk result)
-                      (when persistent
-                        (setf (gethash key-string
-                                       (runtime-evaluator-state-persistent-cache state))
-                              result))
                       (setf (thunk-status thunk)
                             (make-thunk-status-evaluated result))
                       result)
@@ -281,7 +225,7 @@ instead of the language type error we owe the caller."
     (setf (runtime-evaluator-state-force-stack state)
           (remove thunk (runtime-evaluator-state-force-stack state) :test #'eq))
     (runtime-evaluator-depth-leave! state)))
-(defun runtime-evaluator-force (state value)
+(defmethod runtime-evaluator-force (state value)
   "Force VALUE through the sole ephemeral/persistent thunk boundary."
   (let ((current value))
     (loop while (typep current 'value-thunk) do
@@ -412,12 +356,11 @@ instead of the language type error we owe the caller."
       (runtime-evaluator-error "expected a string, keyword, or symbol"
                                "evaluator.type")))
 
- (defun runtime-evaluator-config-lookup (state name)
-  (loop for config in (runtime-evaluator-state-config-stack state)
+(defun runtime-evaluator-config-lookup (state name)
+  (declare (ignore state))
+  (loop for config in (runtime-dynamic-config-frames)
         do (dolist (entry (value-map-entries config))
              (let ((key (runtime-string-like (car entry))))
-               ;; Config maps are heterogeneous values.  Only string-like
-               ;; keys participate in lookup; all other keys are ignored.
                (when (and key (string= name key))
                  (return-from runtime-evaluator-config-lookup
                    (values (cdr entry) t)))))
@@ -461,7 +404,7 @@ continuation machine as direct applications."
                (closure-body closure) extended
                :name (closure-fn-name closure)
                :kind (make-persistent-thunk-kind
-                      (copy-list (runtime-evaluator-state-capabilities state))
+                      (copy-list (runtime-dynamic-capabilities))
                       (copy-list arguments))))
              (if defer
                  (make-vthunk
@@ -506,36 +449,15 @@ continuation machine as direct applications."
         (format nil "not a function: ~A" (runtime-string-of-value function))
         "evaluator.type")))))
 
-(defun runtime-evaluator-notify-restore (callback state value)
-  (when callback
-    (funcall callback state value)))
-
-(defun runtime-evaluator-notify-capabilities (state value)
-  "Synchronize a capability transition with the dynamic scope callback.
-
-The evaluator stores a flat capability list, while the dynamic scope stores
-capability frames.  Keep both views aligned before and after a callback so a
-callback that observes the scope cannot leak a host list shape."
-  (let ((capabilities (if (typep value 'capability)
-                          (list value)
-                          (copy-list value))))
-    (when (fboundp 'runtime-dynamic-sync-capabilities!)
-      (runtime-dynamic-sync-capabilities! capabilities))
-    (runtime-evaluator-notify-restore
-     (runtime-evaluator-state-with-capabilities-function state)
-     state value)
-    (when (fboundp 'runtime-dynamic-sync-capabilities!)
-      (runtime-dynamic-sync-capabilities! capabilities)))
-  value)
 
 (defun runtime-evaluator-restore-capabilities! (state saved)
-  (setf (runtime-evaluator-state-capabilities state) (copy-list saved))
-  (runtime-evaluator-notify-capabilities state saved))
-
+  ;; The evaluator owns only its current capability frame; outer frames of
+  ;; the enclosing dynamic extent must survive every restore.
+  (declare (ignore state))
+  (runtime-dynamic-replace-top-capability-frame! saved))
  (defun runtime-evaluator-restore-handlers! (state saved)
-  (setf (runtime-evaluator-state-handler-stack state) saved)
-  (runtime-evaluator-notify-restore
-   (runtime-evaluator-state-with-handlers-function state) state saved))
+  (declare (ignore state))
+  (runtime-dynamic-set-handler-frames! saved))
 (defun runtime-evaluator-lazy-application-thunk
     (state function arguments environment)
   (declare (ignore state))
@@ -544,30 +466,14 @@ callback that observes the scope cannot leak a host list shape."
     (make-eapply (make-eliteral function)
                  (mapcar #'make-eliteral arguments))
     environment)))
+(defun runtime-evaluator-restore-config! (state saved)
+  (declare (ignore state))
+  (runtime-dynamic-set-config-frames! saved)
+)
 
-
- (defun runtime-evaluator-restore-config! (state saved)
-  (setf (runtime-evaluator-state-config-stack state) saved)
-  (runtime-evaluator-notify-restore
-   (runtime-evaluator-state-with-config-function state) state saved))
-
- (defun runtime-evaluator-perform (state name arguments environment)
-
-  (let ((handler (loop for handlers in (runtime-evaluator-state-handler-stack state)
-                       for entry = (assoc name handlers :test #'string=)
-                       when entry do (return (cdr entry)))))
-    (cond
-      (handler
-       (progn
-         (when (fboundp 'runtime-observation-record)
-           (runtime-observation-record
-            (make-cell-handler name) (hash-value handler)))
-         (runtime-evaluator-apply-value state handler arguments environment)))
-      ((runtime-evaluator-state-perform-function state)
-       (funcall (runtime-evaluator-state-perform-function state)
-                state name arguments environment))
-      (t (runtime-evaluator-error
-          (format nil "unhandled effect: ~A" name) "evaluator.effect")))))
+(defun runtime-evaluator-perform (state name arguments environment)
+  (declare (ignore state))
+  (runtime-dynamic-perform name arguments :environment environment))
 
 (defun runtime-evaluator-tail-scope-transition (state continuation)
   "Collapse a dynamic scope when its body tail-calls a closure.
@@ -600,7 +506,6 @@ linear continuation and scope growth in tail-recursive programs."
              (marker-kind
                (ecase scope-kind
                  (:with-config :tail-config)
-                 (:with-caps :tail-caps)
                  (:with-handlers :tail-handlers)))
              (marker (first after))
              (same-marker
@@ -612,29 +517,21 @@ linear continuation and scope growth in tail-recursive programs."
              (current
                (ecase scope-kind
                  (:with-config
-                  (first (runtime-evaluator-state-config-stack state)))
-                 (:with-caps
-                  (runtime-evaluator-state-capabilities state))
+                  (first (runtime-dynamic-config-frames)))
                  (:with-handlers
-                  (first (runtime-evaluator-state-handler-stack state)))))
+                  (first (runtime-dynamic-handler-frames)))))
              (new-stack
                (if (eq scope-kind :with-config)
                    (cons current baseline)
                    nil)))
+        ;; Capability scopes do not participate in tail collapsing; only
+        ;; config and handler frames are rewritten here.
         (ecase scope-kind
           (:with-config
-           (setf (runtime-evaluator-state-config-stack state) new-stack)
-           (runtime-evaluator-notify-restore
-            (runtime-evaluator-state-with-config-function state)
-            state new-stack))
-          (:with-caps
-           (runtime-evaluator-notify-capabilities state current))
+           (runtime-dynamic-set-config-frames! new-stack))
           (:with-handlers
-           (setf (runtime-evaluator-state-handler-stack state)
-                 (cons current baseline))
-           (runtime-evaluator-notify-restore
-            (runtime-evaluator-state-with-handlers-function state)
-            state (runtime-evaluator-state-handler-stack state))))
+           (runtime-dynamic-set-handler-frames!
+            (cons current baseline))))
         (values (if same-marker
                     after
                     (cons (make-runtime-evaluator-frame
@@ -725,8 +622,7 @@ linear continuation and scope growth in tail-recursive programs."
                               (closure-env closure) params arguments)
                              :name (closure-fn-name closure)
                              :kind (make-persistent-thunk-kind
-                                    (copy-list
-                                     (runtime-evaluator-state-capabilities state))
+                                    (copy-list (runtime-dynamic-capabilities))
                                     (copy-list arguments))))
                            tail-rest)
                           (runtime-evaluator-schedule-eval
@@ -813,10 +709,9 @@ linear continuation and scope growth in tail-recursive programs."
                (runtime-evaluator-error
                 "with-caps expects a capability value" "evaluator.capability"))
              (let ((requested (value-capability-capability capability))
-                   (saved (copy-list
-                           (runtime-evaluator-state-capabilities state))))
+                   (saved (copy-list (runtime-dynamic-capability-frame))))
                (unless (capability-subseteq-p
-                        requested (runtime-evaluator-state-capabilities state))
+                        requested (runtime-dynamic-capability-frame))
                  (runtime-evaluator-error
                   "with-caps cannot widen ambient capabilities"
                   "evaluator.capability"))
@@ -832,12 +727,9 @@ linear continuation and scope growth in tail-recursive programs."
              (unless (typep config 'value-map)
                (runtime-evaluator-error
                 "with-config expects a map" "evaluator.config"))
-             (let ((saved (runtime-evaluator-state-config-stack state)))
-               (when (runtime-evaluator-state-with-config-function state)
-                 (funcall (runtime-evaluator-state-with-config-function state)
-                          state config))
-               (setf (runtime-evaluator-state-config-stack state)
-                     (cons config saved))
+             (let ((saved (runtime-dynamic-config-frames)))
+               (runtime-dynamic-set-config-frames!
+                (cons config saved))
                (runtime-evaluator-schedule-eval
                 tasks (first data) (second data)
                 (cons (runtime-evaluator-frame :with-config saved) rest)))))
@@ -959,7 +851,7 @@ linear continuation and scope growth in tail-recursive programs."
              (let ((key (runtime-evaluator-string-like value)))
                (multiple-value-bind (configured present)
                    (runtime-evaluator-config-lookup state key)
-                 (runtime-observation-record
+                 (pp.rt.observation:runtime-observation-record
                   (make-cell-config key)
                   (if present (hash-value configured) "config-cell:absent"))
                  (cond
@@ -1097,7 +989,7 @@ linear continuation and scope growth in tail-recursive programs."
               (expr-node-expression expression) environment
               :kind
               (make-persistent-thunk-kind
-               (copy-list (runtime-evaluator-state-capabilities state))
+               (copy-list (runtime-dynamic-capabilities))
                nil)))
       continuation))
     ((typep expression 'expr-typed)
@@ -1249,71 +1141,11 @@ containment as a defensive fallback."
                          (source-range-end previous))
                         0))))))
 
-
-(defun runtime-evaluator-unwind-state!
-    (state capabilities handlers configs location
-     &optional (location-stack nil))
-  "Restore dynamic extents when the machine exits through a condition.
-
-The evaluator can have nested machine runs (for example, a primitive callback
-or a metaprogramming operation).  Only an unwind with a live location observed
-an error; retain the most specific location so outer cleanup cannot replace an
-innermost source range with its caller's range (or NIL)."
-  (unless (equal (runtime-evaluator-state-capabilities state) capabilities)
-    (setf (runtime-evaluator-state-capabilities state)
-          (copy-list capabilities))
-    (ignore-errors
-      (runtime-evaluator-notify-capabilities state capabilities)))
-  (unless (equal (runtime-evaluator-state-handler-stack state) handlers)
-    (setf (runtime-evaluator-state-handler-stack state) handlers)
-    (ignore-errors
-      (runtime-evaluator-notify-restore
-       (runtime-evaluator-state-with-handlers-function state)
-       state handlers)))
-  (unless (equal (runtime-evaluator-state-config-stack state) configs)
-    (setf (runtime-evaluator-state-config-stack state) configs)
-    (ignore-errors
-      (runtime-evaluator-notify-restore
-       (runtime-evaluator-state-with-config-function state)
-       state configs)))
-  (let* ((error-location (runtime-evaluator-state-current-location state))
-         (error-stack (runtime-evaluator-state-location-stack state))
-         (error-depth (length error-stack))
-         (previous (runtime-evaluator-state-last-error-location state))
-         (previous-depth
-           (runtime-evaluator-state-last-error-location-depth state)))
-    (when (and error-location
-               (or (null previous)
-                   (runtime-evaluator-more-inner-location-p
-                    error-location previous error-depth previous-depth)))
-      (setf (runtime-evaluator-state-last-error-location state)
-            error-location
-            (runtime-evaluator-state-last-error-location-depth state)
-            error-depth))
-    (setf (runtime-evaluator-state-current-location state) location
-          ;; Preserve the active error stack while conditions unwind through
-          ;; nested machine runs; successful runs restore their saved stack.
-          (runtime-evaluator-state-location-stack state)
-          (if (and error-location error-stack)
-              error-stack
-              location-stack))))
-
  (defun runtime-evaluator-run (state initial-tasks)
-  (runtime-evaluator-sync-dynamic-state! state)
-  (let ((tasks initial-tasks)
-        (result nil)
-        (finished nil)
-        (saved-capabilities (copy-tree
-                             (runtime-evaluator-state-capabilities state)))
-        (saved-handlers (copy-tree
-                         (runtime-evaluator-state-handler-stack state)))
-        (saved-configs (copy-tree
-                        (runtime-evaluator-state-config-stack state)))
-        (saved-location (runtime-evaluator-state-current-location state))
-        (saved-location-stack
-          (copy-tree (runtime-evaluator-state-location-stack state))))
-    (unwind-protect
-         (loop until finished do
+    (let ((tasks initial-tasks)
+          (result nil)
+          (finished nil))
+      (loop until finished do
       (unless tasks
         (runtime-evaluator-error "machine stopped without a result"
                                  "evaluator.machine"))
@@ -1340,11 +1172,7 @@ innermost source range with its caller's range (or NIL)."
           (:caps-enter
            (destructuring-bind (requested body environment saved continuation)
                data
-             (runtime-evaluator-notify-capabilities state requested)
-             (setf (runtime-evaluator-state-capabilities state)
-                   (list requested))
-             (when (fboundp 'runtime-dynamic-sync-capabilities!)
-               (runtime-dynamic-sync-capabilities! (list requested)))
+             (runtime-dynamic-replace-top-capability-frame! (list requested))
              (setf tasks
                    (runtime-evaluator-schedule-eval
                     tasks body environment
@@ -1359,13 +1187,10 @@ innermost source range with its caller's range (or NIL)."
                         (cons (runtime-evaluator-frame
                                :handler-one pending evaluated environment body)
                               continuation)))
-                 (let ((saved (runtime-evaluator-state-handler-stack state))
+                 (let ((saved (runtime-dynamic-handler-frames))
                        (handlers (nreverse evaluated)))
-                   (when (runtime-evaluator-state-with-handlers-function state)
-                     (funcall (runtime-evaluator-state-with-handlers-function state)
-                              state handlers))
-                   (setf (runtime-evaluator-state-handler-stack state)
-                         (cons handlers saved))
+                   (runtime-dynamic-set-handler-frames!
+                    (cons handlers saved))
                    (setf tasks
                          (runtime-evaluator-schedule-eval
                           tasks body environment
@@ -1565,24 +1390,9 @@ innermost source range with its caller's range (or NIL)."
             (format nil "unknown evaluator task ~A" kind)
             "evaluator.machine"))
              )
-      (let* ((scope (and (fboundp 'runtime-dynamic-current)
-                         (runtime-dynamic-current nil)))
-             (live-capabilities
-               (and scope
-                    (fboundp 'runtime-dynamic-capabilities)
-                    (runtime-dynamic-capabilities)))
-             ;; Preserve a live outer extent on normal nested return; errors
-             ;; restore the machine's entry ambient.
-             (capabilities
-               (if (and finished
-                        live-capabilities
-                        (not (equal live-capabilities saved-capabilities)))
-                   (copy-list live-capabilities)
-                   saved-capabilities)))
-         state capabilities saved-handlers saved-configs saved-location
-         saved-location-stack))
-    ))
-    result))
+          )
+        )
+      result))
 
 (defun runtime-evaluator-reraise-error (state condition)
   (let* ((condition-range
@@ -1619,10 +1429,17 @@ ENVIRONMENT defaults to the evaluator's initial environment."
   (handler-case
       (let ((*runtime-evaluator-forward-value-thunks*
               (make-hash-table :test #'eq)))
-        (runtime-evaluator-run-expression
-         state (if expand (runtime-evaluator-expand-expression state expression)
-                   expression)
-         (or environment (runtime-evaluator-state-initial-env state))))
+        ;; Every run starts from a fresh macro context: expansion publishes
+        ;; into the NIL binding, and that context stays visible for the rest
+        ;; of the run (metaprogramming primitives read it) without ever
+        ;; inheriting another invocation's context.
+        (runtime-macro-context-bind
+         nil
+         (lambda ()
+           (runtime-evaluator-run-expression
+            state (if expand (runtime-evaluator-expand-expression state expression)
+                      expression)
+            (or environment (runtime-evaluator-state-initial-env state))))))
     (language-error (condition)
       (runtime-evaluator-reraise-error state condition))
     (error (condition)
@@ -1644,13 +1461,16 @@ ENVIRONMENT defaults to the evaluator's initial environment."
   (handler-case
       (let ((*runtime-evaluator-forward-value-thunks*
               (make-hash-table :test #'eq)))
-        (let ((expanded (runtime-evaluator-expand-toplevel state expressions)))
-          (runtime-evaluator-run
-           state (list (make-runtime-evaluator-task
-                        :eval (list (make-edo expanded)
-                                    (or environment
-                                        (runtime-evaluator-state-initial-env state))
-                                    nil))))))
+        (runtime-macro-context-bind
+         nil
+         (lambda ()
+           (let ((expanded (runtime-evaluator-expand-toplevel state expressions)))
+             (runtime-evaluator-run
+              state (list (make-runtime-evaluator-task
+                           :eval (list (make-edo expanded)
+                                       (or environment
+                                           (runtime-evaluator-state-initial-env state))
+                                       nil))))))))
     (language-error (condition)
       (runtime-evaluator-reraise-error state condition))
     (error (condition)
@@ -1667,10 +1487,3 @@ intentionally the only host/runtime seams; absent effect and loader callbacks
 fail with normalized language errors."
   (apply #'runtime-evaluator-default-state arguments))
 
-;; Compatibility names for the later session/app owner.  They remain narrow
-;; aliases and do not introduce a second evaluator.
-(setf (symbol-function 'eval-expression) #'runtime-evaluator-eval)
-(setf (symbol-function 'eval-expressions) #'runtime-evaluator-eval-expressions)
-(setf (symbol-function 'force-value) #'runtime-evaluator-force)
-(setf (symbol-function 'force-deep-value) #'runtime-evaluator-force-deep)
-(setf (symbol-function 'apply-value) #'runtime-evaluator-apply-value)

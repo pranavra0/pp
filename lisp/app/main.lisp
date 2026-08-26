@@ -574,13 +574,8 @@ Flatten only capability containers; no user value is accepted as authority."
                ((typep value 'pp.kernel:capability) (list value))
                ((consp value) (mapcan #'flatten value))
                (t nil))))
-    (let* ((dynamic (ignore-errors (flatten (pp.runtime:runtime-dynamic-capabilities))))
-           (session (ignore-errors (pp.runtime:runtime-dynamic-session nil)))
-           (state (and session (pp.runtime:runtime-session-evaluator session)))
-           (saved (flatten
-                   (and state
-                        (pp.runtime:runtime-evaluator-state-capabilities state)))))
-      (if dynamic dynamic saved))))
+    (ignore-errors
+      (flatten (pp.runtime:runtime-dynamic-capabilities)))))
 
 (defun %command-capability-allows-file-p (capabilities path sealed &optional (want :read))
   (declare (ignore capabilities))
@@ -1808,13 +1803,20 @@ an explicit authority override and therefore bypasses the manifest."
 
 (defun %command-schedule-node-force (session policy &key override)
   "Install the distribution scheduler at the persistent-node boundary."
-  (let* ((state (runtime-session-evaluator session))
-         (base (and (fboundp 'runtime-evaluator-state-node-force-function)
-                    (runtime-evaluator-state-node-force-function state)))
+  (let* (
+         ;; One injection path: the scheduler replaces the session's
+         ;; :node-force service in front of the pinned pristine backend, so
+         ;; re-installation never wraps a previous scheduler wrapper.
+         (base (or (let ((pinned (runtime-session-find-service session :node-force-base)))
+                     (and pinned (funcall pinned)))
+                   (let ((current (runtime-session-find-service session :node-force)))
+                     (and current (lambda (state thunk key run observer)
+                                    (funcall current state thunk key run observer))))))
          (jobs (make-hash-table :test #'equal))
          (scheduler nil))
     (unless (functionp base)
       (error "schedule: persistent node backend is unavailable"))
+    (runtime-session-register-service session :node-force-base (lambda () base))
     (setf scheduler
           (make-distribution-scheduler
            :policy policy
@@ -1832,18 +1834,24 @@ an explicit authority override and therefore bypasses the manifest."
                                  run-state thunk node-key
                                  (lambda ()
                                    (runtime-sandbox-with-node
-                                    node-key run :persistent t)))
+                                    node-key run :persistent t))
+                                 nil)
                      (setf (runtime-session-schedule-locked-p session) old))))))))
     (runtime-session-register-service session :scheduler (lambda () scheduler))
     (runtime-session-register-callback
      session :node-force
-     (lambda (run-state thunk node-key run)
-       (if (runtime-session-schedule-locked-p session)
+     (lambda (run-state thunk node-key run observer)
+       (if (or (runtime-session-schedule-locked-p session)
+               ;; Observed forces (domain plan diffs) run inline: the
+               ;; disposition must be reported to the caller, which the
+               ;; job round-trip cannot carry.
+               observer)
            (funcall base
                     run-state thunk node-key
                     (lambda ()
                       (runtime-sandbox-with-node
-                       node-key run :persistent t)))
+                       node-key run :persistent t))
+                    observer)
            (let* ((key (pp.runtime::runtime-session-key node-key))
                   (closed (and (fboundp 'pp.runtime::runtime-node-data-closed-p)
                                (pp.runtime::runtime-node-data-closed-p run-state thunk)))
@@ -1989,8 +1997,10 @@ an explicit authority override and therefore bypasses the manifest."
       (finish-output error-output))
     count))
 
- (defun %command-install-process-services (session)
+(defun %command-install-process-services (session)
   (pp.runtime::runtime-process-records session)
+  (runtime-session-register-domain
+   session "proc" (pp.runtime::runtime-process-domain-entry session))
   session)
 
 (defun %command-process-spec-field (spec name)
@@ -2003,86 +2013,13 @@ an explicit authority override and therefore bypasses the manifest."
                      (pp.kernel:value-map-entries spec)))))
     (and entry (cdr entry))))
 
-(defun %command-supervise-pass (session desired output)
-  (unless (typep desired 'pp.kernel:value-map)
-    (error "supervise: desired value must be a process map"))
-  (%command-process-required)
-  (let ((records (pp.runtime::runtime-process-records session))
-        (seen (make-hash-table :test #'equal))
-        (actions nil) (started 0) (stopped 0) (restarted 0))
-    (dolist (entry (pp.kernel:value-map-entries desired))
-      (let* ((name (%command-value-text (car entry) "supervise service"))
-             (spec (cdr entry))
-             (hash (runtime-process-spec-hash spec))
-             (record (and (gethash name records)
-                          (runtime-process-reap
-                           (gethash name records))))
-             (alive (and record
-                         (runtime-process-alive-p
-                          (runtime-process-record-pid record)))))
-        (setf (gethash name seen) t)
-        (cond
-          ((and record
-                (or (not (string= hash
-                                  (runtime-process-record-spec-hash record)))
-                    (not alive)))
-           (push (list :restart name spec record) actions)
-           (incf stopped)
-           (incf restarted))
-          ((not record)
-           (push (list :start name spec nil) actions)
-           (incf started)))))
-    (maphash
-     (lambda (name record)
-       (unless (gethash name seen)
-         (push (list :stop name nil record) actions)
-         (incf stopped)))
-     records)
-    (setf actions (nreverse actions))
-    (let ((pass-hash
-            (pp.kernel:hash-concat
-             (list "domain-pass" "proc" (pp.kernel:hash-value desired)))))
-      (runtime-journal-append
-       session
-       (make-runtime-journal-domain-intent
-        pass-hash
-        (list (cons "started" (princ-to-string started))
-              (cons "restarted" (princ-to-string restarted))
-              (cons "stopped" (princ-to-string stopped)))))
-      (dolist (action actions)
-        (destructuring-bind (kind name spec record) action
-          (when (member kind '(:stop :restart))
-            (runtime-process-stop-service session name record)
-            (when (eq kind :stop)
-              (remhash name records)))
-          (unless (eq kind :stop)
-            (runtime-process-start-service session name spec))))
-      (runtime-journal-append
-       session (make-runtime-journal-domain-done pass-hash)))
-    (let ((names nil))
-      (maphash (lambda (name ignored)
-                 (declare (ignore ignored))
-                 (push name names))
-               records)
-      (setf names (sort names #'string<))
-      (labels ((value-list (items)
-                 (if (null items)
-                     (pp.kernel:make-vnil)
-                     (pp.kernel:make-vpair
-                      (pp.kernel:make-vstring (first items))
-                      (value-list (rest items))))))
-        (pp.runtime::runtime-process-state-put
-         session "proc" "known-services" (value-list names))))
-    (format output "supervise: started=~D stopped=~D restarted=~D~%"
-            started stopped restarted)
-    (finish-output output)
-    desired))
 
 (defun %command-watch-trace-snapshot (session &optional source-paths)
   (%command-dynamic-top-level
    session
    (lambda ()
-     (let ((pinned nil))
+     (let ((result nil))
+       (let ((pinned nil))
        (runtime-session-iter-run-pins
         session
         (lambda (cell ignored)
@@ -2090,8 +2027,7 @@ an explicit authority override and therefore bypasses the manifest."
           (push cell pinned)))
        (dolist (cell pinned)
          (runtime-session-remove-run-pin session cell)))
-     (let ((service (runtime-session-find-service session :store-traces))
-           (result nil))
+     (let ((service (runtime-session-find-service session :store-traces)))
        (when service
          (let ((traces (funcall service)))
            (dolist (key (trace-repository-keys traces))
@@ -2110,12 +2046,7 @@ an explicit authority override and therefore bypasses the manifest."
            (when current
              (push (cons cell-id (store-identity-string current))
                    result))))
-       (let* ((service (runtime-session-find-service session :process-records))
-              (records (and service
-                            (if (functionp service)
-                                (funcall service)
-                                service))))
-         (when (hash-table-p records)
+       (let ((records (pp.runtime::runtime-process-records session)))
            (maphash
             (lambda (name record)
               (runtime-process-reap record)
@@ -2164,19 +2095,19 @@ an explicit authority override and therefore bypasses the manifest."
                              :no-cache (or no-cache force-rerun) :check check
                              :retain-thunks stabilize
                              :error-output pass-error-output)))
-                    (let ((desired
-                            (runtime-evaluator-force-deep
-                             (runtime-session-evaluator session) value)))
-                      (%command-dynamic-top-level
-                       session
-                       (lambda ()
-                         (%command-supervise-pass
-                          session
-                          (if (getf options :member-name)
-                              (%command-member-domain-desired
-                               desired (getf options :member-name) "proc")
-                              desired)
-                              pass-error-output)))
+                    (%command-install-process-services session)
+                    (let* ((desired (runtime-evaluator-force-deep
+                                     (runtime-session-evaluator session) value))
+                           (target (if (getf options :member-name)
+                                       (%command-member-domain-desired
+                                        desired (getf options :member-name) "proc")
+                                       desired))
+                           (domains (pp.kernel:make-vmap
+                                     (list (cons (pp.kernel:make-vstring "proc")
+                                                 target)))))
+                      (let ((*error-output* pass-error-output))
+                        (runtime-lifecycle-reconcile
+                         session nil domains :fenced t))
                       desired))
                 )
                  (%run-language-files operands pass-output :session session
@@ -2230,17 +2161,7 @@ an explicit authority override and therefore bypasses the manifest."
                       (when stabilize
                         (runtime-watch-stabilize session changed))
                       (unless stabilize
-                        (setf force-rerun t
-                              session
-                              (%make-command-session
-                               grants :why why :no-cache no-cache
-                               :source-roots operands
-                               :check check :error-output error-output)))
-                      (when (getf options :pin-file)
-                        (%command-load-pin-file session (getf options :pin-file)))
-                      (when (getf options :policy-explicit)
-                        (runtime-session-register-service
-                         session :schedule-override (lambda () t)))
+                        (setf force-rerun t))
                       (%command-schedule-node-force
                        session policy :override (getf options :policy-explicit))
                       (unless stabilize
@@ -2500,17 +2421,15 @@ an explicit authority override and therefore bypasses the manifest."
                           (first files) output :print-values nil :return-value t
                           :session session :grant-specs grants :why why
                           :no-cache no-cache :check check :error-output error-output)))
-              (%command-dynamic-top-level
-               session
-               (lambda ()
-                 (runtime-dynamic-with-capabilities
-                  (%command-current-capabilities)
-                  (lambda ()
-                    (%command-supervise-pass
-                     session
-                     (runtime-evaluator-force-deep
-                      (runtime-session-evaluator session) value)
-                     output)))))
+              (%command-install-process-services session)
+              (let* ((desired (runtime-evaluator-force-deep
+                               (runtime-session-evaluator session) value))
+                     (domains (pp.kernel:make-vmap
+                               (list (cons (pp.kernel:make-vstring "proc")
+                                           desired)))))
+                (let ((*error-output* error-output))
+                  (runtime-lifecycle-reconcile
+                  session nil domains :fenced t)))
               (%command-report-runtime-events session output)
               (return-from %run-runtime-command 0)))
           (let ((status
@@ -2666,8 +2585,7 @@ an explicit authority override and therefore bypasses the manifest."
                      (pathname ".pp/")
                      (pathname (%command-home))))))
             :test #'equal))
-         (evaluator-state (runtime-evaluator-default-state
-                           :capabilities capabilities))
+         (evaluator-state (runtime-evaluator-default-state))
          (session
            (make-runtime-session
             :evaluator-state evaluator-state
@@ -2737,9 +2655,6 @@ an explicit authority override and therefore bypasses the manifest."
                               (funcall policy-service)))))
            (format error-output "[why] ~A~%" text)
            (finish-output error-output)))))
-    ;; runtime-dynamic-record-event already owns the session append.  The
-    ;; store's default record-event callback would append a second copy.
-    (runtime-session-unregister-service session :record-event)
     (%command-install-observation-primitives session error-output)
     (let ((policy-service (runtime-session-find-service session :cache-policy)))
       (when policy-service
@@ -4984,9 +4899,9 @@ hash: ~A" old-pin)
        (%usage error-output)
        (finish-output error-output)
        2))))))
-)
+  ;; SAVE-LISP-AND-DIE invokes this function in the resulting executable.
+  )
 
 (defun main ()
-  ;; SAVE-LISP-AND-DIE invokes this function in the resulting executable.
   ;; Keeping EXIT here (rather than in RUN) makes isolated checks composable.
   (sb-ext:exit :code (run)))

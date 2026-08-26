@@ -2,7 +2,7 @@
 ;;;;
 ;;;; The store accepts canonical kernel values and octets only.  It never
 ;;;; serializes host objects or follows links below the store root.
-(in-package #:pp.runtime)
+(in-package #:pp.rt.store)
 
 (deftype store-octets () '(vector (unsigned-byte 8)))
 
@@ -583,14 +583,29 @@ names — mkdtemp semantics without a repeatable PRNG."
              (string= name ".tmp" :start1 (- length 4)))
         (search ".tmp." name)
         (search ".pp-tmp." name))))
+(defconstant +temp-reap-grace-seconds+ 60)
+
 (defun store-layout-clear-temp-files (directory)
+  ;; A .pp-store-*.tmp may belong to a live concurrent process's in-flight
+  ;; write; sweeping it breaks that writer's publication rename (observed as
+  ;; SB-POSIX:RENAME ENOENT when one process's startup raced another's write).
+  ;; Reap only temps old enough that no live writer can still own them;
+  ;; crashed-process leftovers are cleaned once they age out. Readers never
+  ;; trust temps (publication is atomic rename), so delay is always safe.
   (when (probe-file directory)
     #+sbcl
     (unless (store-secure-directory-p directory)
       (error "Store area is not a private directory: ~A" directory))
-    (dolist (path (store-directory-entries directory))
-      (when (and (probe-file path) (store-temp-file-p path))
-        (store-layout-remove path)))))
+    (let ((now (get-universal-time)))
+      (dolist (path (store-directory-entries directory))
+        ;; The temp may be published (renamed away) by its writer at any
+        ;; instant; a vanished file has no age, so skip it. Removal races are
+        ;; equally benign: whoever gets there first wins, the loser no-ops.
+        (let ((mtime (ignore-errors (file-write-date path))))
+          (when (and mtime
+                     (store-temp-file-p path)
+                     (>= (- now mtime) +temp-reap-grace-seconds+))
+            (ignore-errors (store-layout-remove path))))))))
 
 (defun store-layout-read-store (layout area name)
   (store-read-octets (store-layout-path layout area name)))
@@ -1214,16 +1229,22 @@ names — mkdtemp semantics without a repeatable PRNG."
   (let ((kept 0) (deleted 0) (aborted nil) (now (get-universal-time))
         (snapshot-current (or snapshot-current (lambda () snapshot))))
     (dolist (name (store-layout-list-names layout kind))
+      ;; A .pp-store-*.tmp belongs to some process's in-flight atomic write,
+      ;; never to the canonical graph: leave it to the startup reaper. The
+      ;; writer can also publish a listed canonical file at any instant, so
+      ;; its write-date is read tolerantly.
       (let ((path (store-layout-path layout kind name)))
-        (if (gethash (concatenate 'string prefix name) live)
-            (incf kept)
-            (if (and (> grace-seconds 0)
-                     (< (- now (or (file-write-date path) now)) grace-seconds))
-                (incf kept)
-                (let ((before (funcall snapshot-current)))
-                  (if (equalp before snapshot)
-                      (progn (store-layout-remove path) (incf deleted))
-                      (setf aborted t)))))))
+        (unless (store-temp-file-p path)
+          (if (gethash (concatenate 'string prefix name) live)
+              (incf kept)
+              (let ((mtime (ignore-errors (file-write-date path))))
+                (if (and (> grace-seconds 0)
+                         (and mtime (< (- now mtime) grace-seconds)))
+                    (incf kept)
+                    (let ((before (funcall snapshot-current)))
+                      (if (equalp before snapshot)
+                          (progn (store-layout-remove path) (incf deleted))
+                          (setf aborted t)))))))))
     (values kept deleted aborted)))
 
 (defun store-gc-run (layout trace-repository object-repository

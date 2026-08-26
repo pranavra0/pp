@@ -1,6 +1,6 @@
 ;;;; Process-isolated scheduling and hash-checked artifact transport.
 
-(in-package #:pp.runtime)
+(in-package #:pp.rt.distribution)
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   #+sbcl (require :sb-posix))
@@ -808,23 +808,3 @@
                   :grace-seconds (or grace-seconds 2)
                   :snapshot-current snapshot-current)))
 
-(export '(distribution-error distribution-error-code distribution-error-detail
-          distribution-fail distribution-policy make-distribution-policy
-          distribution-policy-kind distribution-policy-width distribution-policy-member
-          distribution-job make-distribution-job distribution-job-key
-          distribution-job-width distribution-job-data-closed-p
-          distribution-job-descriptor distribution-job-wire
-          distribution-result make-distribution-result distribution-result-status
-          distribution-result-payload distribution-result-error distribution-result-artifacts
-          distribution-scheduler make-distribution-scheduler distribution-dispatch
-          distribution-run distribution-cancel
-          distribution-artifact make-distribution-artifact distribution-artifact-kind
-          distribution-artifact-hash distribution-artifact-size
-          distribution-wire-encode distribution-wire-decode
-          distribution-transport-push distribution-transport-pull
-          distribution-transport-move distribution-transport-encode-artifacts
-          distribution-remote-descriptor distribution-remote-dispatch
-          distribution-members-path distribution-load-members distribution-member-root
-          distribution-gc-root distribution-gc-root-from-descriptor distribution-gc-mark
-          distribution-gc-run)
-        (find-package '#:pp.runtime))

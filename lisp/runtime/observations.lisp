@@ -1,5 +1,5 @@
 ;;;; Observation cells, trace validation, and authority checks.
-(in-package #:pp.runtime)
+(in-package #:pp.rt.observation)
 
 (defun runtime-observation-error (message &optional (code "runtime.observation"))
   (if (fboundp 'language-fail) (language-fail message code) (error "~A" message)))
@@ -8,7 +8,7 @@
 (defun runtime-observation-service (name)
   (let ((scope (runtime-dynamic-current nil)))
     (or (and scope (runtime-dynamic-find-service name))
-        (and scope (runtime-session-find-service (runtime-dynamic-scope-session scope) name)))))
+        (and scope (pp.rt.protocol:runtime-session-find-service (runtime-dynamic-scope-session scope) name)))))
 (defun runtime-observation-call (name &rest args)
   (let ((fn (runtime-observation-service name)))
     (and fn (apply fn args))))
@@ -70,8 +70,8 @@
          (session (runtime-observation-session))
          (cell (runtime-observation-cell-id
                 (if sealed (make-cell-sealed canonical) (make-cell-file canonical))))
-         (pin (and session (if sealed (runtime-session-find-sealed-pin session cell)
-                                  (runtime-session-find-run-pin session cell))))
+         (pin (and session (if sealed (pp.rt.session:runtime-session-find-sealed-pin session cell)
+                                  (pp.rt.session:runtime-session-find-run-pin session cell))))
          (service (runtime-observation-service (if sealed :observe-sealed :observe-file))))
     (or (and pin
              (if sealed
@@ -156,43 +156,37 @@
     (unless session
       (runtime-observation-error
        (format nil "no such probe registered: ~A" name)))
-    (let ((old (runtime-session-find-probe session name)))
+    (let ((old (pp.rt.session:runtime-session-find-probe session name)))
       (if old
           old
-          (let ((domain (runtime-session-find-domain session name)))
+          (let ((domain (pp.rt.session:runtime-session-find-domain session name)))
             (unless domain
               (runtime-observation-error
                (format nil "no such probe registered: ~A" name)))
-            (let ((observe (runtime-domain-entry-observe domain)))
+            (let ((observe (pp.rt.domain:runtime-domain-entry-observe domain)))
               (unless observe
                 (runtime-observation-error
                  (format nil "probe has no observer: ~A" name)))
               (let ((run (lambda ()
                            (if (functionp observe)
                                (funcall observe)
-                               (runtime-session-call
+                               (pp.rt.session:runtime-session-call
                                 session observe nil
-                                (runtime-session-global-env session))))))
-                (let ((value (if (runtime-dynamic-current nil)
-                                 (runtime-dynamic-without-observations
-                                  (lambda ()
-                                    (runtime-domain-with-domain
-                                     domain name run)))
-                                 (runtime-domain-with-domain
-                                  domain name run))))
-                  (let ((hash (hash-value value)))
-                    (runtime-session-set-probe session name value)
-                    (runtime-observation-record
-                     (make-cell-probe name) hash)
-                    value)))))))))
+                                (pp.rt.session:runtime-session-global-env session))))))
+              (let ((value (pp.rt.domain:runtime-domain-with-domain domain name run)))
+                (let ((hash (hash-value value)))
+                  (pp.rt.session:runtime-session-set-probe session name value)
+                  (runtime-observation-record
+                   (make-cell-probe name) hash)
+                  value)))))))))
 (defun runtime-observe-domain (name sub)
   (let* ((session (runtime-observation-session))
-         (domain (and session (runtime-session-find-domain session name))))
-    (when (and domain (runtime-domain-entry-observe-cell domain))
-      (let* ((fn (runtime-domain-entry-observe-cell domain))
+         (domain (and session (pp.rt.session:runtime-session-find-domain session name))))
+    (when (and domain (pp.rt.domain:runtime-domain-entry-observe-cell domain))
+      (let* ((fn (pp.rt.domain:runtime-domain-entry-observe-cell domain))
              (value (if (functionp fn) (funcall fn sub)
-                        (runtime-session-call session fn (list (make-vstring sub))
-                                               (runtime-session-global-env session)))))
+                        (pp.rt.session:runtime-session-call session fn (list (make-vstring sub))
+                                               (pp.rt.session:runtime-session-global-env session)))))
         (cond ((typep value 'value-nil) nil)
               ((typep value 'value-string) (value-string-value value))
               (t (hash-value value)))))))
@@ -230,14 +224,10 @@
                       (store-trace-result-hash trace)))))
          +runtime-observation-node-stale+)))))
 (defun runtime-observation-handler-hash (name)
-  (let* ((session (runtime-observation-session))
-         (state (and session (runtime-session-evaluator session)))
-         (handler
-           (and state
-                (loop for handlers in
-                      (runtime-evaluator-state-handler-stack state)
-                      for entry = (assoc name handlers :test #'string=)
-                      when entry do (return (cdr entry))))))
+  (let ((handler
+          (loop for handlers in (runtime-dynamic-handlers)
+                for entry = (assoc name handlers :test #'string=)
+                when entry do (return (cdr entry)))))
     (if handler
         (hash-value handler)
         "handler-cell:builtin")))
@@ -345,11 +335,11 @@ write capability; ordinary callers still require read authority."
             (cell-domain
              (let* ((session (runtime-observation-session))
                     (domain (and session
-                                 (runtime-session-find-domain
+                                 (pp.rt.session:runtime-session-find-domain
                                   session (cell-domain-name cell)))))
                (and domain
                     (capability-subseteq
-                     (runtime-domain-entry-cap domain) capabilities))))
+                     (pp.rt.domain:runtime-domain-entry-cap domain) capabilities))))
             (cell-node
              (let* ((name (store-identity-string (cell-node-value cell)))
                     (traces (runtime-observation-repository :store-traces))

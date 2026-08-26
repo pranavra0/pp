@@ -17,7 +17,7 @@
 ;;;; hard error naming the fix: eval stays pure and hermetic; the only
 ;;;; impure step lives in `pp --update`.
 
-(in-package #:pp.runtime)
+(in-package #:pp.rt.island)
 
 (defvar *island-fetch-enabled* nil)
 (defvar *island-update-mode* nil)
@@ -282,7 +282,7 @@ The root itself yields nothing; directories are recursed into."
                           (plusp (length (sb-ext:posix-getenv "TMPDIR")))
                           (sb-ext:posix-getenv "TMPDIR"))
                      "/tmp"))
-         (tmp (store-exclusive-directory tmpdir "pp-island")))
+         (tmp (pp.rt.store:store-exclusive-directory tmpdir "pp-island")))
     (unwind-protect
          (progn
            (island-run-git "clone" "--quiet" "--template=" url tmp)
@@ -303,7 +303,7 @@ The root itself yields nothing; directories are recursed into."
                           (plusp (length (sb-ext:posix-getenv "TMPDIR")))
                           (sb-ext:posix-getenv "TMPDIR"))
                      "/tmp"))
-         (err (store-exclusive-temp-name tmpdir "pp-git-" ".err"))
+         (err (pp.rt.store:store-exclusive-temp-name tmpdir "pp-git-" ".err"))
          (process (progn
                     (sb-posix:unlink err)
                     (sb-ext:run-program "git" arguments

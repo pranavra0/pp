@@ -1,5 +1,5 @@
 ;;;; Session-owned lifecycle orchestration.
-(in-package #:pp.runtime)
+(in-package #:pp.rt.lifecycle)
 
 (defstruct (runtime-lifecycle
             (:constructor make-runtime-lifecycle
@@ -82,12 +82,3 @@
   (error "lifecycle service ~A is unavailable~@[ (~A)~]"
          service message))
 
-;; Concise compatibility names for app and focused fixtures.
-(setf (symbol-function 'lifecycle-prepare-pass) #'runtime-lifecycle-prepare)
-(setf (symbol-function 'lifecycle-run-pass) #'runtime-lifecycle-run-pass)
-(setf (symbol-function 'lifecycle-reconcile) #'runtime-lifecycle-reconcile)
-(setf (symbol-function 'lifecycle-observe) #'runtime-lifecycle-observe)
-(setf (symbol-function 'lifecycle-diff) #'runtime-lifecycle-diff)
-(setf (symbol-function 'lifecycle-apply) #'runtime-lifecycle-apply)
-(setf (symbol-function 'lifecycle-verify) #'runtime-lifecycle-verify)
-(setf (symbol-function 'lifecycle-epoch) #'runtime-lifecycle-epoch)

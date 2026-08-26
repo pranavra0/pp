@@ -1,5 +1,5 @@
 ;;;; Per-node scratch boundary.
-(in-package #:pp.runtime)
+(in-package #:pp.rt.sandbox)
 
 (defstruct (runtime-sandbox
             (:constructor make-runtime-sandbox (root &key (owned t))))
@@ -11,7 +11,7 @@
   ;; guarantee rather than a probability — and two pp processes cannot share
   ;; scratch space even though their saved PRNG state starts out identical.
   #+sbcl
-  (let ((root (store-exclusive-directory
+  (let ((root (pp.rt.store:store-exclusive-directory
                (or (and (sb-ext:posix-getenv "TMPDIR")
                         (plusp (length (sb-ext:posix-getenv "TMPDIR")))
                         (sb-ext:posix-getenv "TMPDIR"))
@@ -45,7 +45,7 @@
       (error "sandbox path must be relative and confined"))
     (let* ((root-path (pathname (ensure-directories-exist root)))
            (candidate (merge-pathnames path root-path))
-           (parent (store-directory-pathname candidate)))
+           (parent (pp.rt.store:store-directory-pathname candidate)))
       (when create (ensure-directories-exist parent))
       (let ((directory (ignore-errors (truename parent)))
             (root-real (ignore-errors (truename root-path))))
@@ -61,9 +61,9 @@
 (defun runtime-sandbox-current (&optional (required nil))
   (let ((node (and (fboundp 'runtime-dynamic-current-node)
                    (runtime-dynamic-current-node))))
-    (cond ((and node (runtime-node-frame-p node)
-                (runtime-node-frame-sandbox node))
-           (runtime-node-frame-sandbox node))
+    (cond ((and node (pp.rt.protocol:runtime-node-frame-p node)
+                (pp.rt.protocol:runtime-node-frame-sandbox node))
+           (pp.rt.protocol:runtime-node-frame-sandbox node))
           (required (error "sandbox service is unavailable"))
           (t nil))))
 
@@ -76,14 +76,14 @@
   (when (probe-file path)
     (dolist (entry (remove-duplicates
                     (append (directory (merge-pathnames "*"
-                                                        (store-directory-pathname path)))
+                                                        (pp.rt.store:store-directory-pathname path)))
                             (directory (merge-pathnames "*.*"
-                                                        (store-directory-pathname path))))
+                                                        (pp.rt.store:store-directory-pathname path))))
                     :test #'equal :key #'namestring))
-      (if (probe-file (store-directory-pathname entry))
+      (if (probe-file (pp.rt.store:store-directory-pathname entry))
           (runtime-sandbox-delete-tree entry)
           (ignore-errors (delete-file entry))))
-    #+sbcl (ignore-errors (sb-posix:rmdir (store-absolute-path path)))
+    #+sbcl (ignore-errors (sb-posix:rmdir (pp.rt.store:store-absolute-path path)))
     #-sbcl (ignore-errors (delete-file path))))
 
 (defun runtime-sandbox-with (sandbox thunk)
@@ -93,8 +93,8 @@
 
 (defun runtime-sandbox-with-node (key thunk &key persistent)
   (let* ((sandbox (runtime-sandbox-create))
-         (frame (make-runtime-node-frame :key key :persistent persistent
-                                          :sandbox sandbox)))
+         (frame (pp.rt.protocol:make-runtime-node-frame :key key :persistent persistent
+                                                         :sandbox sandbox)))
     (unwind-protect
          (if (fboundp 'runtime-dynamic-with-node)
              (runtime-dynamic-with-node frame thunk)
@@ -102,4 +102,3 @@
       (when (runtime-sandbox-owned sandbox)
         (runtime-sandbox-delete-tree (runtime-sandbox-root sandbox))))))
 
-(setf (symbol-function 'sandbox-resolve) #'runtime-sandbox-resolve)

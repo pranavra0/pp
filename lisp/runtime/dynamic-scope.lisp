@@ -5,8 +5,10 @@
 ;;;; explicit session, and all brackets restore state on normal or exceptional
 ;;;; exit.
 
-(in-package #:pp.runtime)
+(in-package #:pp.rt.protocol)
 
+;;; Shared frame vocabulary lives in PP.RT.PROTOCOL so scope, effects, and
+;;; node code can all name these structures without a package cycle.
 (defstruct (runtime-effect-frame
             (:constructor make-runtime-effect-frame (name function)))
   name function)
@@ -20,6 +22,8 @@
                 (&key key persistent sandbox)))
   key persistent sandbox)
 
+(in-package #:pp.rt.scope)
+
 (defstruct (runtime-dynamic-scope
             (:constructor %make-runtime-dynamic-scope))
   session invocation
@@ -29,7 +33,6 @@
   (handlers nil)
   (nodes nil)
   (domains nil)
-  (observations nil)
   (services nil)
   (in-node nil)
   sandbox)
@@ -63,7 +66,7 @@
 (defun runtime-dynamic-set-state-slot (state accessor value)
   (let* ((symbol (if (symbolp accessor)
                      accessor
-                     (intern accessor (find-package '#:pp.runtime))))
+                     (intern accessor (find-package '#:pp.rt.scope))))
          (setf-name (list 'setf symbol)))
     (when (and state (fboundp symbol) (fboundp setf-name))
       (funcall (fdefinition setf-name) value state)))
@@ -72,11 +75,9 @@
 (defun runtime-dynamic-initial-capabilities (session capabilities)
   (if capabilities
       (copy-list capabilities)
-      (let ((state (and session (runtime-session-evaluator session))))
-        (copy-list
-         (or (runtime-dynamic-state-slot
-              state 'runtime-evaluator-state-capabilities)
-             nil)))))
+      (copy-list
+       (and session
+            (pp.rt.protocol:runtime-session-ambient-capabilities session)))))
  
 (defun runtime-dynamic-capability-frames (scope)
   "Return SCOPE's capability stack in canonical frame form.
@@ -97,21 +98,10 @@ boundary so a callback cannot expose a host list-shape/type condition."
        (copy-list (first stack)))
       (t (copy-list stack)))))
 
-(defun runtime-dynamic-sync-capabilities! (capabilities)
-  "Replace the current scope's ambient capability frame.
-
-CAPABILITIES is the evaluator's flat capability list.  This operation is
-idempotent and deliberately updates only the current dynamic extent."
-  (let ((scope (runtime-dynamic-current nil))
-        (capabilities (copy-list capabilities)))
-    (when scope
-      (setf (runtime-dynamic-scope-capabilities scope)
-            (list capabilities)))
-    capabilities))
 
 (defun runtime-dynamic-scope-new (session &key invocation capabilities
                                             (reset nil) configs handlers
-                                            effects nodes domains observations
+                                            effects nodes domains
                                             sandbox services in-node)
   "Build a scope record.  RESET starts a top-level extent; otherwise current
 stacks are copied, so nested scopes cannot mutate their parent by accident."
@@ -132,37 +122,12 @@ stacks are copied, so nested scopes cannot mutate their parent by accident."
      :handlers (copy-list (or handlers (and parent (runtime-dynamic-scope-handlers parent))))
      :nodes (copy-list (or nodes (and parent (runtime-dynamic-scope-nodes parent))))
      :domains (copy-list (or domains (and parent (runtime-dynamic-scope-domains parent))))
-     :observations
-     (if observations
-         (list t)
-         (if parent
-             (copy-list (runtime-dynamic-scope-observations parent))
-             (list t)))
      :services (copy-list (or services (and parent (runtime-dynamic-scope-services parent))))
      :in-node (if in-node t (and parent (runtime-dynamic-scope-in-node parent)))
      :sandbox sandbox)))
 
 (defun runtime-dynamic-call (thunk &optional argument argument-p)
   (if argument-p (funcall thunk argument) (funcall thunk)))
-
-(defun runtime-dynamic-with-scope (scope thunk &key argument (argument-p nil))
-  (let ((*runtime-dynamic-scope* scope))
-    (runtime-dynamic-call thunk argument argument-p)))
-
-(defun runtime-dynamic-install-perform-callback (session thunk)
-  "Temporarily connect evaluator PERFORM to this scope."
-  (let ((state (and session (runtime-session-evaluator session))))
-    (if (and state (fboundp 'runtime-evaluator-state-perform-function))
-        (let ((old (runtime-evaluator-state-perform-function state)))
-          (unless old
-            (setf (runtime-evaluator-state-perform-function state) thunk))
-          old)
-        nil)))
-
-(defun runtime-dynamic-restore-perform-callback (session old)
-  (let ((state (and session (runtime-session-evaluator session))))
-    (when (and state (fboundp 'runtime-evaluator-state-perform-function))
-      (setf (runtime-evaluator-state-perform-function state) old))))
 
 (defun runtime-dynamic-with-top-level (session thunk &key invocation capabilities argument)
   "Run THUNK with fresh top-level stacks for SESSION.
@@ -172,38 +137,12 @@ The extent is exception-safe and restores an outer dynamic scope."
                            "runtime.session"))
   (let* ((scope (runtime-dynamic-scope-new
                  session :invocation invocation :capabilities capabilities
-                 :reset t))
-         (state (runtime-session-evaluator session))
-         (old-capabilities
-           (runtime-dynamic-state-slot state 'runtime-evaluator-state-capabilities))
-         (old-config
-           (runtime-dynamic-state-slot state 'runtime-evaluator-state-config-stack))
-         (old-handlers
-           (runtime-dynamic-state-slot state 'runtime-evaluator-state-handler-stack))
-         (old-perform
-           (runtime-dynamic-install-perform-callback
-            session
-            (lambda (ignored-state name arguments environment)
-              (declare (ignore ignored-state))
-              (runtime-dynamic-perform name arguments
-                                       :environment environment)))))
-    (runtime-dynamic-set-state-slot
-     state 'runtime-evaluator-state-capabilities
-     (copy-list (or (first (runtime-dynamic-scope-capabilities scope)) nil)))
-    (runtime-dynamic-set-state-slot state 'runtime-evaluator-state-config-stack nil)
-    (runtime-dynamic-set-state-slot state 'runtime-evaluator-state-handler-stack nil)
-    (unwind-protect
-         (let ((*runtime-dynamic-scope* scope))
-           (if (null argument)
-               (funcall thunk)
-               (funcall thunk argument)))
-      (runtime-dynamic-set-state-slot
-       state 'runtime-evaluator-state-capabilities old-capabilities)
-      (runtime-dynamic-set-state-slot
-       state 'runtime-evaluator-state-config-stack old-config)
-      (runtime-dynamic-set-state-slot
-       state 'runtime-evaluator-state-handler-stack old-handlers)
-      (runtime-dynamic-restore-perform-callback session old-perform))))
+                 :reset t)))
+    ;; The scope is dynamic extent only; it never becomes session state.
+    (let ((*runtime-dynamic-scope* scope))
+      (if (null argument)
+          (funcall thunk)
+          (funcall thunk argument)))))
 
 (defun runtime-dynamic-with-session (session thunk &rest arguments)
   "Compatibility spelling for a fresh top-level dynamic extent."
@@ -214,7 +153,7 @@ The extent is exception-safe and restores an outer dynamic scope."
 
 (defun runtime-dynamic-slot-symbol (accessor)
   (intern (format nil "RUNTIME-DYNAMIC-SCOPE-~A" accessor)
-          (find-package '#:pp.runtime)))
+          (find-package '#:pp.rt.scope)))
 
 (defun runtime-dynamic-slot-value (scope accessor)
   (funcall (runtime-dynamic-slot-symbol accessor) scope))
@@ -265,12 +204,7 @@ The extent is exception-safe and restores an outer dynamic scope."
          (frames (runtime-dynamic-capability-frames scope)))
     (setf (runtime-dynamic-scope-capabilities scope)
           (cons capabilities frames))
-    (let ((state (runtime-session-evaluator (runtime-dynamic-session nil))))
-      (when (and state (fboundp 'runtime-evaluator-state-capabilities))
-        (runtime-dynamic-set-state-slot
-         state 'runtime-evaluator-state-capabilities capabilities)))
     capabilities))
-
 (defun runtime-dynamic-pop-capabilities ()
   (let* ((scope (runtime-dynamic-current))
          (frames (runtime-dynamic-capability-frames scope)))
@@ -278,57 +212,29 @@ The extent is exception-safe and restores an outer dynamic scope."
       (runtime-dynamic-error
        "dynamic capabilities stack underflow" "runtime.scope"))
     (setf (runtime-dynamic-scope-capabilities scope) (rest frames))
-    (let ((state (runtime-session-evaluator (runtime-dynamic-session nil))))
-      (when (and state (fboundp 'runtime-evaluator-state-capabilities))
-        (runtime-dynamic-set-state-slot
-         state 'runtime-evaluator-state-capabilities
-         (copy-list (or (first (rest frames)) nil)))))
     (first frames)))
 (defun runtime-dynamic-push-config (config)
   (runtime-dynamic-push 'configs config)
-  (let ((state (runtime-session-evaluator (runtime-dynamic-session nil))))
-    (when (and state (fboundp 'runtime-evaluator-state-config-stack))
-      (runtime-dynamic-set-state-slot
-       state 'runtime-evaluator-state-config-stack
-       (cons config (runtime-dynamic-state-slot
-                     state 'runtime-evaluator-state-config-stack)))))
   config)
 (defun runtime-dynamic-pop-config ()
-  (let* ((value (runtime-dynamic-pop 'configs))
-         (state (runtime-session-evaluator (runtime-dynamic-session nil))))
-    (when (and state (fboundp 'runtime-evaluator-state-config-stack))
-      (runtime-dynamic-set-state-slot
-       state 'runtime-evaluator-state-config-stack
-       (rest (runtime-dynamic-state-slot
-              state 'runtime-evaluator-state-config-stack))))
-    value))
+  (runtime-dynamic-pop 'configs))
 (defun runtime-dynamic-push-handlers (handlers)
   (runtime-dynamic-push 'handlers handlers)
-  (let ((state (runtime-session-evaluator (runtime-dynamic-session nil))))
-    (when (and state (fboundp 'runtime-evaluator-state-handler-stack))
-      (runtime-dynamic-set-state-slot
-       state 'runtime-evaluator-state-handler-stack
-       (cons handlers (runtime-dynamic-state-slot
-                       state 'runtime-evaluator-state-handler-stack)))))
   handlers)
 (defun runtime-dynamic-pop-handlers ()
-  (let* ((value (runtime-dynamic-pop 'handlers))
-         (state (runtime-session-evaluator (runtime-dynamic-session nil))))
-    (when (and state (fboundp 'runtime-evaluator-state-handler-stack))
-      (runtime-dynamic-set-state-slot
-       state 'runtime-evaluator-state-handler-stack
-       (rest (runtime-dynamic-state-slot
-              state 'runtime-evaluator-state-handler-stack))))
-    value))
+  (runtime-dynamic-pop 'handlers))
 (defun runtime-dynamic-push-node (node) (runtime-dynamic-push 'nodes node))
 (defun runtime-dynamic-pop-node () (runtime-dynamic-pop 'nodes))
 (defun runtime-dynamic-push-domain (domain) (runtime-dynamic-push 'domains domain))
+ (defun runtime-dynamic-set-config-frames! (frames)
+  (let ((scope (runtime-dynamic-current)))
+    (setf (runtime-dynamic-scope-configs scope) frames)
+    frames))
+ (defun runtime-dynamic-set-handler-frames! (frames)
+  (let ((scope (runtime-dynamic-current)))
+    (setf (runtime-dynamic-scope-handlers scope) frames)
+    frames))
 (defun runtime-dynamic-pop-domain () (runtime-dynamic-pop 'domains))
-(defun runtime-dynamic-push-observation-collection (enabled)
-  (runtime-dynamic-push 'observations (not (null enabled))))
-(defun runtime-dynamic-pop-observation-collection ()
-  (runtime-dynamic-pop 'observations))
-
 (defun runtime-dynamic-with-effects (effects thunk)
   (runtime-dynamic-with-stack 'effects effects thunk))
 (defun runtime-dynamic-with-capabilities (capabilities thunk)
@@ -351,10 +257,18 @@ The extent is exception-safe and restores an outer dynamic scope."
 (defun runtime-dynamic-with-domain (domain thunk)
   (runtime-dynamic-push-domain domain)
   (unwind-protect (funcall thunk) (runtime-dynamic-pop-domain)))
-(defun runtime-dynamic-with-observation-collection (enabled thunk)
-  (runtime-dynamic-push-observation-collection enabled)
-  (unwind-protect (funcall thunk)
-    (runtime-dynamic-pop-observation-collection)))
+
+(defun runtime-dynamic-replace-top-capability-frame! (capabilities)
+  "Replace only the innermost capability frame, preserving outer frames.
+
+The evaluator owns only its current frame; brackets own push/pop. Nothing
+replaces an entire capability stack at runtime: outer frames of the
+enclosing dynamic extent always survive."
+  (let ((scope (runtime-dynamic-current)))
+    (setf (runtime-dynamic-scope-capabilities scope)
+          (cons (copy-list capabilities)
+                (rest (runtime-dynamic-capability-frames scope))))
+    capabilities))
 
 ;;; Tail brackets pass an idempotent leave callback and remain safe for
 ;;; ordinary zero-argument callbacks.
@@ -394,6 +308,12 @@ The extent is exception-safe and restores an outer dynamic scope."
                  (runtime-dynamic-current))))
     (copy-list (or (first frames) nil))))
 
+(defun runtime-dynamic-capability-frame ()
+  (first (runtime-dynamic-capability-frames (runtime-dynamic-current))))
+(defun runtime-dynamic-config-frames ()
+  (runtime-dynamic-scope-configs (runtime-dynamic-current)))
+(defun runtime-dynamic-handler-frames ()
+  (runtime-dynamic-scope-handlers (runtime-dynamic-current)))
 (defun runtime-dynamic-config ()
   (copy-list (runtime-dynamic-scope-configs (runtime-dynamic-current))))
 
@@ -405,10 +325,6 @@ The extent is exception-safe and restores an outer dynamic scope."
 
 (defun runtime-dynamic-domains ()
   (copy-list (runtime-dynamic-scope-domains (runtime-dynamic-current))))
-
-(defun runtime-dynamic-observation-collection-p ()
-  (not (null (first (runtime-dynamic-scope-observations
-                     (runtime-dynamic-current))))))
 
 (defun runtime-dynamic-in-node-p ()
   (not (null (runtime-dynamic-scope-in-node (runtime-dynamic-current)))))
@@ -504,8 +420,8 @@ The extent is exception-safe and restores an outer dynamic scope."
   (cond
     ((functionp handler) (apply handler arguments))
     ((and (runtime-dynamic-session nil)
-          (runtime-session-core-operations (runtime-dynamic-session nil)))
-     (runtime-session-call (runtime-dynamic-session nil) handler arguments environment))
+          (pp.rt.protocol:runtime-session-core-operations (runtime-dynamic-session nil)))
+     (pp.rt.protocol:runtime-session-call (runtime-dynamic-session nil) handler arguments environment))
     (t (runtime-dynamic-error "handler service is unavailable"
                              "runtime.handler"))))
 
@@ -519,28 +435,20 @@ The extent is exception-safe and restores an outer dynamic scope."
               (runtime-dynamic-scope-session scope) name)))))
 
 (defun runtime-dynamic-perform (name arguments &key environment)
-  "Dispatch an effect through dynamic handlers/effect frames, then the
-session-owned :PERFORM service.  Missing services fail closed."
+  "Single effect entry: handlers, dynamic effects, then the :perform service."
   (let* ((handler (runtime-dynamic-find-handler name))
          (effect (runtime-dynamic-find-effect name))
-         (session (runtime-dynamic-session))
          (service (runtime-dynamic-find-service :perform)))
     (cond
       (handler
        (progn
-         (when (fboundp 'runtime-observation-record-handler)
-           (runtime-observation-record-handler name))
+         (when (fboundp 'pp.rt.observation:runtime-observation-record-handler)
+           (pp.rt.observation:runtime-observation-record-handler name))
          (runtime-dynamic-call-handler handler arguments environment)))
       (effect (apply effect arguments))
       (service
-       (when (and (string= name "tree-observe")
-                  (fboundp 'runtime-observation-authorize-tree-effect)
-                  (not (runtime-observation-authorize-tree-effect
-                        (first arguments))))
-         (runtime-dynamic-error
-          "tree-observe: capability error: no read access"
-          "runtime.authority"))
-       (funcall service (runtime-session-evaluator session) name arguments environment))
+       (funcall service (pp.rt.protocol:runtime-session-evaluator (runtime-dynamic-session))
+                name arguments environment))
       (t (runtime-dynamic-error
           (format nil "unhandled effect: ~A" name) "runtime.effect")))))
 
@@ -548,34 +456,22 @@ session-owned :PERFORM service.  Missing services fail closed."
 ;;; Observation/event/node records and service registration
 
 (defun runtime-dynamic-record-read (cell-id observed-hash)
-  (let ((session (runtime-dynamic-session))
-        (service (runtime-dynamic-find-service :record-read)))
-    (when (runtime-dynamic-observation-collection-p)
-      (runtime-session-add-observation session (cons cell-id observed-hash)))
-    (when service (funcall service session cell-id observed-hash))
+  (let ((service (runtime-dynamic-find-service :record-read)))
+    (when service
+      (funcall service (runtime-dynamic-session) cell-id observed-hash))
     nil))
 
 (defun runtime-dynamic-record-event (event)
-  (let ((session (runtime-dynamic-session))
-        (service (runtime-dynamic-find-service :record-event)))
-    (runtime-session-add-event session event)
-    (when service (funcall service session event))
+  (let ((service (runtime-dynamic-find-service :record-event)))
+    (when service
+      (funcall service (runtime-dynamic-session) event))
     nil))
-
-(defun runtime-dynamic-record-node-force (id)
-  (let ((session (runtime-dynamic-session))
-        (service (runtime-dynamic-find-service :record-node-force)))
-    (let ((key (runtime-session-node-key-by-id session id)))
-      (when key (runtime-session-add-wanted-node session key)))
-    (when service (funcall service session id))
-    nil))
-
 
 (defun runtime-dynamic-register-service (name function)
   (runtime-session-register-service (runtime-dynamic-session) name function))
 
 (defun runtime-dynamic-call-service (name &rest arguments)
-  (apply #'runtime-session-call-service (runtime-dynamic-session) name arguments))
+  (apply #'pp.rt.protocol:runtime-session-call-service (runtime-dynamic-session) name arguments))
 
 (defun runtime-dynamic-with-service (name function thunk)
   (let ((scope (runtime-dynamic-current))
@@ -599,7 +495,7 @@ session-owned :PERFORM service.  Missing services fail closed."
     (if present
         (if (and (fboundp 'hash-value)
                  (runtime-dynamic-session nil))
-            (hash-value (runtime-session-force (runtime-dynamic-session nil) value))
+            (hash-value (pp.rt.protocol:runtime-session-force (runtime-dynamic-session nil) value))
             (format nil "config:~A" value))
         "config-cell:absent")))
 
@@ -623,9 +519,6 @@ session-owned :PERFORM service.  Missing services fail closed."
     (runtime-dynamic-error message "runtime.tier"))
   t)
 
-(defun runtime-dynamic-without-observations (thunk)
-  (runtime-dynamic-with-observation-collection nil thunk))
-
 (defun runtime-dynamic-tail-capabilities-at (depth)
   (let ((stack (runtime-dynamic-capability-frames
                 (runtime-dynamic-current))))
@@ -642,16 +535,3 @@ session-owned :PERFORM service.  Missing services fail closed."
 
 (defun runtime-dynamic-tail-lookup-handler (name)
   (runtime-dynamic-find-handler name))
-
-;;; Narrow compatibility spellings used by later runtime clients.
-(setf (symbol-function 'current-capabilities) #'runtime-dynamic-capabilities)
-(setf (symbol-function 'current-config) #'runtime-dynamic-config)
-(setf (symbol-function 'current-handlers) #'runtime-dynamic-handlers)
-(setf (symbol-function 'with-top-level) #'runtime-dynamic-with-top-level)
-
-(setf (symbol-function 'runtime-with-top-level) #'runtime-dynamic-with-top-level)
-(setf (symbol-function 'runtime-with-capabilities) #'runtime-dynamic-with-capabilities)
-(setf (symbol-function 'runtime-with-config) #'runtime-dynamic-with-config)
-(setf (symbol-function 'runtime-with-handlers) #'runtime-dynamic-with-handlers)
-(setf (symbol-function 'runtime-with-node) #'runtime-dynamic-with-node)
-(setf (symbol-function 'runtime-with-domain) #'runtime-dynamic-with-domain)

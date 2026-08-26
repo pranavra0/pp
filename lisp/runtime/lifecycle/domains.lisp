@@ -1,5 +1,5 @@
 ;;;; Generic observe/diff/apply/verify lifecycle.
-(in-package #:pp.runtime)
+(in-package #:pp.rt.domain)
 
 (defstruct (runtime-domain-target
             (:constructor make-runtime-domain-target (name entry desired)))
@@ -33,10 +33,31 @@
       (value-map-entries value)
       (error "domain value must be a map, got ~A" value)))
 
+(defun runtime-domain-service-value (session name)
+  (let ((service (runtime-session-find-service session name)))
+    (and service
+         (if (functionp service) (funcall service) service))))
 (defun runtime-domain-find (entries name)
   (find-if (lambda (entry)
              (let ((key (runtime-domain-string (car entry))))
                (and key (string= key name)))) entries))
+
+;; Plan policy travels with the registered domain value, not with global
+;; generic methods: installing a domain affects exactly one session.  NIL
+;; closures fall back to fail-closed defaults — an opaque plan is
+;; unrecognized (refused before apply) and unconverged (refuses verify).
+(defun runtime-domain-plan-recognized-p (entry plan)
+  (let ((valid (runtime-domain-entry-plan-valid-p entry)))
+    (if valid (funcall valid plan)
+        (typep plan 'pp.kernel:value-map))))
+
+(defun runtime-domain-plan-converged-p (session entry plan)
+  (let ((converged (runtime-domain-entry-converged-p entry)))
+    (cond (converged (funcall converged session plan))
+          ((typep plan 'pp.kernel:value-map)
+           (runtime-domain-plan-items-empty-p session plan))
+          (t (error "reconcile: no convergence check for plan of type ~A"
+                    (type-of plan))))))
 
 (defun runtime-domain-plan-items-empty-p (session plan)
   (let ((items (cdr (runtime-domain-find (runtime-domain-map
@@ -72,6 +93,8 @@
       (t (error "domain diff: summary entry is not a pair")))))
 
 (defun runtime-domain-plan-summary (session plan)
+  (unless (typep plan 'pp.kernel:value-map)
+    (return-from runtime-domain-plan-summary nil))
   (let ((entry (runtime-domain-find
                 (runtime-domain-map (runtime-domain-force session plan)) "summary")))
     (unless entry (return-from runtime-domain-plan-summary nil))
@@ -104,55 +127,22 @@
          (pp.kernel:hash-value observed)
          (pp.kernel:hash-value desired))))
 
-(defun runtime-domain-service-value (session name)
-  (let ((service (runtime-session-find-service session name)))
-    (and service (if (functionp service) (funcall service) service))))
 
 (defun runtime-domain-cache-plan (session name diff observed desired)
-  (declare (ignore name))
   (if (functionp diff)
-      (runtime-dynamic-with-capabilities
-       nil (lambda ()
-             (runtime-domain-call session diff (list observed desired))))
-      (let* ((key-text (runtime-domain-plan-cache-key diff observed desired))
-             (policy (runtime-domain-service-value session :cache-policy))
-             (traces (runtime-domain-service-value session :store-traces))
-             (objects (runtime-domain-service-value session :store-objects))
-             (blobs (runtime-domain-service-value session :store-blobs)))
-        (when (and policy traces objects blobs (fboundp 'runtime-cache-lookup))
-          (let* ((key (cache-key-of-string key-text))
-                 (hit (runtime-cache-lookup
-                       :policy policy :traces traces :objects objects
-                       :blobs blobs
-                       :key key :observe-id (lambda (id)
-                                              (declare (ignore id)) nil)
-                       :replay (lambda (&rest ignored)
-                                 (declare (ignore ignored)) nil)
-                       :authorized (lambda (ignored)
-                                     (declare (ignore ignored)) t))))
-            (when (and (fboundp 'runtime-cache-hit-ok-p)
-                       (funcall (symbol-function 'runtime-cache-hit-ok-p)
-                                hit))
-              (format *error-output* "domain ~A: plan ~A: hit~%"
-                      name key-text)
-              (finish-output *error-output*)
-              (return-from runtime-domain-cache-plan
-                (runtime-cache-result-value hit)))))
-        (let* ((plan
-                 (runtime-dynamic-with-capabilities
-                  nil (lambda ()
-                        (runtime-session-call session diff
-                                              (list observed desired)
-                                              (runtime-session-global-env session)))))
-               (plan (runtime-domain-force session plan))
-               (result-hash (pp.kernel:hash-value plan)))
-          (when (and objects traces
-                     (fboundp 'object-repository-put)
-                     (fboundp 'trace-repository-put))
-            (object-repository-put objects :key result-hash :value plan)
-            (trace-repository-put traces :key key-text :outcome :ok
-                                  :result-hash result-hash :reads nil))
-          plan))))
+      (runtime-domain-call session diff (list observed desired))
+      ;; The diff is a pp closure: force it as a persistent node so the
+      ;; plan is cached on (diff code, observed, desired).  Diffs are pure:
+      ;; the thunk captures an EMPTY capability set.
+      (let ((key-text (runtime-domain-plan-cache-key diff observed desired)))
+        (runtime-node-call
+         session diff (list observed desired)
+         :observer
+         (lambda (disposition)
+           (when (eq disposition :hit)
+             (format *error-output* "domain ~A: plan ~A: hit~%"
+                     name key-text)
+             (finish-output *error-output*)))))))
 
 (defun runtime-domain-call (session function arguments)
   (cond ((functionp function) (apply function arguments))
@@ -196,61 +186,67 @@
          (entry (runtime-domain-target-entry target))
          (callback (runtime-domain-entry-diff entry)))
     (unless callback (error "domain has no diff callback"))
-    (let ((plan (runtime-domain-cache-plan
-                 session (runtime-domain-target-name target) callback
-                 (runtime-domain-observed-state observed)
-                 (runtime-domain-target-desired target))))
-      (make-runtime-domain-planned
-       observed plan (runtime-domain-plan-summary session plan)))))
+    (let* ((plan (runtime-domain-cache-plan
+                  session (runtime-domain-target-name target) callback
+                  (runtime-domain-observed-state observed)
+                  (runtime-domain-target-desired target)))
+           (planned (make-runtime-domain-planned
+                     observed plan (runtime-domain-plan-summary session plan))))
+      ;; Fail closed BEFORE apply mutates the world.
+      (unless (runtime-domain-plan-recognized-p entry plan)
+        (error "reconcile: domain '~A' produced a plan of unrecognized type ~A"
+               (runtime-domain-target-name target) (type-of plan)))
+      planned)))
 
 (defun runtime-domain-apply (session planned)
   (let* ((observed (runtime-domain-planned-observed planned))
          (target (runtime-domain-observed-target observed))
          (entry (runtime-domain-target-entry target))
          (callback (runtime-domain-entry-apply entry))
+         (summary (or (runtime-domain-planned-summary planned)
+                      (list (cons "result" "opaque"))))
          (hash (pp.kernel:hash-concat
                 (list "domain-pass" (runtime-domain-target-name target)
                       (pp.kernel:hash-value
                        (runtime-domain-target-desired target))))))
     (unless callback (error "domain has no apply callback"))
     (runtime-journal-append
-     session (make-runtime-journal-domain-intent
-              hash (runtime-domain-planned-summary planned)))
+     session (make-runtime-journal-domain-intent hash summary))
     (runtime-domain-with-domain
      entry (runtime-domain-target-name target)
      (lambda ()
        (runtime-domain-call-uncached session entry
-                                      (runtime-domain-target-name target)
-                                      callback
-                                      (list (runtime-domain-planned-plan planned)))))
+                                     (runtime-domain-target-name target)
+                                     callback
+                                     (list (runtime-domain-planned-plan planned)))))
     (runtime-journal-append session (make-runtime-journal-domain-done hash))
     (format *error-output* "[reconcile:~A] ~{~A~^ ~}~%"
             (runtime-domain-target-name target)
             (mapcar (lambda (pair)
                       (format nil "~A=~A" (car pair) (cdr pair)))
-                    (runtime-domain-planned-summary planned)))
+                    summary))
     (finish-output *error-output*)
     planned))
 
 (defun runtime-domain-verify (session planned)
-  (let* ((target (runtime-domain-observed-target
+  (let* (
+         (target (runtime-domain-observed-target
                   (runtime-domain-planned-observed planned)))
-         (second (runtime-domain-diff session
-                                      (runtime-domain-observe session target))))
-    (unless (runtime-domain-plan-items-empty-p
-             session (runtime-domain-planned-plan second))
+         (entry (runtime-domain-target-entry target))
+         (second (runtime-domain-diff
+                  session (runtime-domain-observe session target))))
+    (unless (runtime-domain-plan-converged-p
+             session entry (runtime-domain-planned-plan second))
       (error "reconcile: verify-after-write failed for domain ~A"
              (runtime-domain-target-name target)))
     t))
 
 (defun runtime-domain-run-target (session target)
-  (runtime-dynamic-with-observation-collection
-   nil (lambda ()
-         (let ((planned (runtime-domain-diff session
-                                             (runtime-domain-observe session target))))
-           (runtime-domain-apply session planned)
-           (runtime-domain-verify session planned)
-           planned))))
+  (let ((planned (runtime-domain-diff session
+                                      (runtime-domain-observe session target))))
+    (runtime-domain-apply session planned)
+    (runtime-domain-verify session planned)
+    planned))
 
 (defun runtime-domain-prefix-p (prefix value)
   (and (stringp prefix) (stringp value)
@@ -322,5 +318,3 @@
                              (runtime-domain-entry-apply entry))))
    nil))
 
-(setf (symbol-function 'domains-prepare-pass) #'runtime-domain-prepare-pass)
-(setf (symbol-function 'domains-run-pass) #'runtime-domain-run-pass)
