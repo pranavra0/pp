@@ -99,9 +99,43 @@
   #+sbcl (sb-kernel:make-double-float -1048576 0)
   #-sbcl (- (float-positive-infinity)))
 
+(defun durable-value-p (value)
+  "Return true only for values accepted by the canonical durable codec."
+  (labels ((walk (item seen)
+             (typecase item
+               ((or value-nil value-bool value-int value-float
+                    value-string value-keyword value-symbol)
+                t)
+               (value-pair
+                (unless (member item seen :test #'eq)
+                  (let ((seen (cons item seen)))
+                    (and (walk (value-pair-car item) seen)
+                         (walk (value-pair-cdr item) seen)))))
+               (value-vector
+                (unless (member item seen :test #'eq)
+                  (let ((seen (cons item seen)))
+                    (every (lambda (child) (walk child seen))
+                           (coerce (value-vector-values item) 'list)))))
+               (value-map
+                (unless (member item seen :test #'eq)
+                  (let ((seen (cons item seen)))
+                    (every (lambda (entry)
+                             (and (walk (car entry) seen)
+                                  (walk (cdr entry) seen)))
+                           (value-map-entries item)))))
+               (value-set
+                (unless (member item seen :test #'eq)
+                  (let ((seen (cons item seen)))
+                    (every (lambda (child) (walk child seen))
+                           (value-set-values item)))))
+               (t nil))))
+    (walk value nil)))
+
 (defun codec-wrap (tag parts)
   (if parts (format nil "(~A ~{~A~^ ~})" tag parts) (format nil "(~A)" tag)))
 (defun encode-value (value)
+  (unless (durable-value-p value)
+    (return-from encode-value nil))
   (labels ((enc (v)
              (typecase v
                (value-nil "nil")

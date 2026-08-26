@@ -64,78 +64,141 @@
 
 (defun free-variable-names (expression)
   (labels ((block-binders (forms)
-             (remove nil (mapcar (lambda (e)
-                                   (typecase e
-                                     (expr-def (expr-def-name e))
-                                     (expr-defnode (expr-defnode-name e))
-                                     (expr-defvalue (expr-defvalue-name e))
-                                     (expr-located (block-binders (list (expr-located-expression e))))
-                                     (t nil))) forms)))
+             (remove nil
+                     (mapcar (lambda (form)
+                               (typecase form
+                                 (expr-def (expr-def-name form))
+                                 (expr-defnode (expr-defnode-name form))
+                                 (expr-defvalue (expr-defvalue-name form))
+                                 (expr-located
+                                  (block-binders
+                                   (list (expr-located-expression form))))
+                                 (t nil)))
+                             forms)))
            (fv (bound e)
-             (typecase e
-               (expr-literal nil) (expr-quote nil) (expr-load nil)
-               (expr-loadmodule nil) (expr-island nil)
-               (expr-symbol (if (name-member-p (expr-symbol-name e) bound)
-                                nil (list (expr-symbol-name e))))
-               (expr-if (name-union (fv bound (expr-if-condition e))
-                                    (name-union (fv bound (expr-if-then e))
-                                                (fv bound (expr-if-else e)))))
-               (expr-let
-                (let* ((bindings (expr-let-bindings e))
-                       (names (mapcar #'car bindings))
-                       (bound2 (name-union bound names)))
-                  (reduce (lambda (out b) (name-union out (fv bound2 (cdr b))))
-                          bindings :initial-value (fv bound2 (expr-let-body e)))))
-               (expr-letstar
-                (labels ((walk (bs current)
-                           (if (null bs) (fv current (expr-letstar-body e))
-                               (name-union (fv current (cdar bs))
-                                           (walk (cdr bs) (cons (caar bs) current))))))
-                  (walk (expr-letstar-bindings e) bound)))
-               (expr-fn (fv (name-union bound (expr-fn-params e)) (expr-fn-body e)))
-               (expr-apply (reduce (lambda (out x) (name-union out (fv bound x)))
-                                   (expr-apply-arguments e)
-                                   :initial-value (fv bound (expr-apply-function e))))
-               (expr-quote nil)
-               (expr-force (fv bound (expr-force-expression e)))
-               (expr-with-caps (name-union (fv bound (expr-with-caps-caps e))
-                                           (fv bound (expr-with-caps-body e))))
-               (expr-perform (reduce (lambda (out x) (name-union out (fv bound x)))
-                                     (expr-perform-arguments e) :initial-value nil))
-               (expr-with-handler
-                (reduce (lambda (out h) (name-union out (fv bound (cdr h))))
-                        (expr-with-handler-handlers e)
-                        :initial-value (fv bound (expr-with-handler-body e))))
-               (expr-delay (fv bound (expr-delay-expression e)))
-               (expr-node (fv bound (expr-node-expression e)))
-               ((or expr-def expr-defnode)
-                (let ((name (if (typep e 'expr-def) (expr-def-name e) (expr-defnode-name e)))
-                      (params (if (typep e 'expr-def) (expr-def-params e) (expr-defnode-params e)))
-                      (body (if (typep e 'expr-def) (expr-def-body e) (expr-defnode-body e))))
-                  (fv (name-union (cons name bound) params) body)))
-               (expr-defvalue (fv bound (expr-defvalue-expression e)))
-               ((or expr-do expr-module)
-                (let* ((forms (if (typep e 'expr-do) (expr-do-expressions e)
-                                  (expr-module-expressions e)))
+             (cond
+               ((typep e 'expr-located)
+                (fv bound (expr-located-expression e)))
+               ((typep e 'expr-do)
+                (let* ((forms (expr-do-expressions e))
                        (bound2 (name-union bound (block-binders forms))))
-                  (reduce (lambda (out x) (name-union out (fv bound2 x))) forms
-                          :initial-value nil)))
-               (expr-import (fv bound (expr-import-expression e)))
-               (expr-with-config (name-union (fv bound (expr-with-config-map-expression e))
-                                             (fv bound (expr-with-config-body e))))
-               (expr-config (name-union (fv bound (expr-config-key-expression e))
-                                        (if (expr-config-default e)
-                                            (fv bound (expr-config-default e)) nil)))
-               (expr-located (fv bound (expr-located-expression e)))
-               (expr-match
-                (name-union (fv bound (expr-match-scrutinee e))
-                            (reduce (lambda (out arm)
-                                      (destructuring-bind (pattern guard body) arm
-                                        (let ((b (name-union bound (pattern-bound-names pattern))))
-                                          (name-union out (name-union (if guard (fv b guard) nil)
-                                                                        (fv b body))))))
-                                    (expr-match-arms e) :initial-value nil)))
-               (t nil))))
+                  (reduce (lambda (out form)
+                            (name-union out (fv bound2 form)))
+                          forms :initial-value nil)))
+               (t
+                (typecase e
+                  ((or expr-literal expr-quote expr-load expr-loadmodule
+                       expr-island)
+                   nil)
+                  (expr-symbol
+                   (if (name-member-p (expr-symbol-name e) bound)
+                       nil
+                       (list (expr-symbol-name e))))
+                  (expr-if
+                   (name-union (fv bound (expr-if-condition e))
+                               (name-union (fv bound (expr-if-then e))
+                                           (fv bound (expr-if-else e)))))
+                  (expr-let
+                   (let* ((bindings (expr-let-bindings e))
+                          (names (mapcar #'car bindings))
+                          (bound2 (name-union bound names)))
+                     (reduce (lambda (out binding)
+                               (name-union out (fv bound2 (cdr binding))))
+                             bindings
+                             :initial-value (fv bound2 (expr-let-body e)))))
+                  (expr-letstar
+                   (labels ((walk (bindings current)
+                              (if (null bindings)
+                                  (fv current (expr-letstar-body e))
+                                  (name-union
+                                   (fv current (cdar bindings))
+                                   (walk (cdr bindings)
+                                         (cons (caar bindings) current))))))
+                     (walk (expr-letstar-bindings e) bound)))
+                  (expr-fn
+                   (fv (name-union bound (expr-fn-params e))
+                       (expr-fn-body e)))
+                  (expr-apply
+                   ;; needs-value is an internal closure marker and is not an
+                   ;; input dependency; it must not leak into a node key.
+                   (if (and (typep (expr-apply-function e) 'expr-symbol)
+                            (string= (expr-symbol-name (expr-apply-function e))
+                                     (format nil "~Cneeds-value" #\Null)))
+                       nil
+                       (reduce (lambda (out argument)
+                                 (name-union out (fv bound argument)))
+                               (expr-apply-arguments e)
+                               :initial-value
+                               (fv bound (expr-apply-function e)))))
+                  (expr-force (fv bound (expr-force-expression e)))
+                  (expr-with-caps
+                   (name-union (fv bound (expr-with-caps-caps e))
+                               (fv bound (expr-with-caps-body e))))
+                  (expr-perform
+                   (reduce (lambda (out argument)
+                             (name-union out (fv bound argument)))
+                           (expr-perform-arguments e)
+                           :initial-value nil))
+                  (expr-with-handler
+                   (reduce (lambda (out handler)
+                             (name-union out (fv bound (cdr handler))))
+                           (expr-with-handler-handlers e)
+                           :initial-value
+                           (fv bound (expr-with-handler-body e))))
+                  (expr-delay
+                   (fv bound (expr-delay-expression e)))
+                  (expr-node
+                   (fv bound (expr-node-expression e)))
+                  ((or expr-def expr-defnode)
+                   (let ((name (if (typep e 'expr-def)
+                                   (expr-def-name e)
+                                   (expr-defnode-name e)))
+                         (params (if (typep e 'expr-def)
+                                     (expr-def-params e)
+                                     (expr-defnode-params e)))
+                         (body (if (typep e 'expr-def)
+                                   (expr-def-body e)
+                                   (expr-defnode-body e))))
+                     (fv (name-union (cons name bound) params) body)))
+                  (expr-defvalue
+                   (fv bound (expr-defvalue-expression e)))
+                  (expr-module
+                   (let* ((forms (expr-module-expressions e))
+                          (bound2 (name-union bound (block-binders forms))))
+                     (reduce (lambda (out form)
+                               (name-union out (fv bound2 form)))
+                             forms :initial-value nil)))
+                  (expr-import
+                   (fv bound (expr-import-expression e)))
+                  (expr-with-config
+                   (name-union
+                    (fv bound (expr-with-config-map-expression e))
+                    (fv bound (expr-with-config-body e))))
+                  (expr-config
+                   (name-union
+                    (fv bound (expr-config-key-expression e))
+                    (if (expr-config-default e)
+                        (fv bound (expr-config-default e))
+                        nil)))
+                  (expr-typed
+                   (fv bound (expr-typed-expression e)))
+                  (expr-match
+                   (name-union
+                    (fv bound (expr-match-scrutinee e))
+                    (reduce
+                     (lambda (out arm)
+                       (destructuring-bind (pattern guard body) arm
+                         (let ((arm-bound
+                                 (name-union
+                                  bound (pattern-bound-names pattern))))
+                           (name-union
+                            out
+                            (name-union
+                             (if guard (fv arm-bound guard) nil)
+                             (fv arm-bound body))))))
+                     (expr-match-arms e)
+                     :initial-value nil)))
+                  (t nil))))))
     (sort (copy-seq (fv nil expression)) #'string<)))
 
 (defun hash-expr (expression)
@@ -300,8 +363,9 @@
                                                      (thunk-kind-persistent-argument-values (thunk-kind thunk))))
                                        (list "ephemeral"))))
                   (hash-concat (append (list "thunk" (hash-expr (thunk-expression thunk)) type-part location-part
-                                             (thunk-config-hash thunk) (capture-hash active (thunk-expression thunk)
-                                                                                  (thunk-environment thunk)))
+                                             (or (thunk-config-hash thunk) "no-config")
+                                             (capture-hash active (thunk-expression thunk)
+                                                            (thunk-environment thunk)))
                                        kind-parts))))
                (value-env-map (hash-concat
                                (cons "envmap"
