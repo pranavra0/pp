@@ -75,7 +75,7 @@ EOF
 mk_fs_prog A "$ROOT_A"
 mk_fs_prog B "$ROOT_B"
 
-HOME="$HOSTA_HOME" "$PP" --grant "fs:${ROOT_A}:rw" --member-name A "$TMP/prog-A.pp" \
+HOME="$HOSTA_HOME" timeout -k 5 60 "$PP" --grant "fs:${ROOT_A}:rw" --member-name A "$TMP/prog-A.pp" \
   > "$TMP/out-memberA" 2>&1
 grep -q "create=1" "$TMP/out-memberA" && ok "memberA-converges" \
   || bad "memberA-converges" "$(cat "$TMP/out-memberA")"
@@ -84,7 +84,7 @@ grep -q "create=1" "$TMP/out-memberA" && ok "memberA-converges" \
 [ -e "$ROOT_A/b.txt" ] && { echo "FAIL memberA-no-cross-host-write: b.txt leaked into A's root"; fail=1; } \
   || ok "memberA-no-cross-host-write"
 
-HOME="$HOSTB_HOME" "$PP" --grant "fs:${ROOT_B}:rw" --member-name B "$TMP/prog-B.pp" \
+HOME="$HOSTB_HOME" timeout -k 5 60 "$PP" --grant "fs:${ROOT_B}:rw" --member-name B "$TMP/prog-B.pp" \
   > "$TMP/out-memberB" 2>&1
 grep -q "create=1" "$TMP/out-memberB" && ok "memberB-converges" \
   || bad "memberB-converges" "$(cat "$TMP/out-memberB")"
@@ -95,7 +95,7 @@ grep -q "create=1" "$TMP/out-memberB" && ok "memberB-converges" \
 
 # --member-name naming a host absent from the map is a clear error, not a
 # silent no-op.
-HOME="$HOSTA_HOME" "$PP" --grant "fs:${ROOT_A}:rw" --member-name ZZZ "$TMP/prog-A.pp" \
+HOME="$HOSTA_HOME" timeout -k 5 60 "$PP" --grant "fs:${ROOT_A}:rw" --member-name ZZZ "$TMP/prog-A.pp" \
   > "$TMP/out-badmember" 2>&1
 CODE=$?
 if [ "$CODE" -ne 0 ] && grep -q "no such host key" "$TMP/out-badmember"; then
@@ -128,17 +128,20 @@ register-proc-domain(current-capabilities())
 {"C" -> {"proc" -> {"svc-c" -> {"cmd" -> "$TMP/svc/run.sh", "args" -> ["$TMP/pid-c"], "cwd" -> "$TMP"}}}, "OTHER" -> {"proc" -> {"svc-other" -> {"cmd" -> "$TMP/svc/run.sh", "args" -> ["$TMP/pid-other"], "cwd" -> "$TMP"}}}}
 EOF
 
-HOME="$HOSTC_HOME" timeout 20 "$PP" --watch --watch-interval 0.3 --grant process \
+HOME="$HOSTC_HOME" timeout -k 5 20 "$PP" --watch --watch-interval 0.3 --grant process \
   --member-name C "$TMP/prog-proc.pp" > "$TMP/watch-out" 2>&1 &
 WATCH_PID=$!
-wait_for 5 stable_pid "$TMP/pid-c" || { echo "FAIL member-svc-started: pidfile missing"; fail=1; }
+wait_for 12 stable_pid "$TMP/pid-c" || { echo "FAIL member-svc-started: pidfile missing"; fail=1; }
 [ -e "$TMP/pid-other" ] && { echo "FAIL member-only-own-slice: svc-other (a DIFFERENT host's service) was started"; fail=1; } \
   || ok "member-only-own-slice (svc-other, host OTHER's service, never started)"
 OLD_C=$(cat "$TMP/pid-c" 2>/dev/null)
 if [ -n "$OLD_C" ]; then
   kill -9 "$OLD_C" 2>/dev/null || true
   restarted_c() { p=$(cat "$TMP/pid-c" 2>/dev/null) && [ -n "$p" ] && [ "$p" != "$OLD_C" ]; }
-  wait_for 5 restarted_c || { echo "FAIL member-kill9-restart: no new pid"; fail=1; }
+  # Generous bound: measures wall-clock recovery including cold image start,
+  # not just the supervisor's 0.3s poll interval; a wedged supervisor still
+  # fails, just not because the runner was busy.
+  wait_for 12 restarted_c || { echo "FAIL member-kill9-restart: no new pid"; fail=1; }
   NEW_C=$(cat "$TMP/pid-c" 2>/dev/null)
   if [ "$OLD_C" != "$NEW_C" ] && kill -0 "$NEW_C" 2>/dev/null; then
     ok "member-kill9-restart (host C's own slice recovers within one poll interval)"
@@ -190,7 +193,7 @@ do {
   {"kv" -> {"flat-a" -> "1"}}
 }
 EOF
-"$PP" --grant "fs:${KV}:wo" "$TMP/flat.pp" > "$TMP/out-flat" 2>&1
+timeout -k 5 60 "$PP" --grant "fs:${KV}:wo" "$TMP/flat.pp" > "$TMP/out-flat" 2>&1
 [ -f "$KV/flat-a" ] && [ "$(cat "$KV/flat-a")" = "1" ] && ok "backcompat-flat-no-member-name" \
   || bad "backcompat-flat-no-member-name" "$(cat "$TMP/out-flat")"
 

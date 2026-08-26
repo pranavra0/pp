@@ -56,7 +56,10 @@ holds_ids=$(printf '%s\n' "$law_status" | awk '$2=="holds"{print $1}')
 pinned=$(grep -rhE '^#[[:space:]]*pins:' "$TESTS" \
            | grep -oE 'LAW-[0-9]+[a-z]?' | sed 's/LAW-//' | sort -u)
 
-has() { printf '%s\n' "$2" | grep -qx "$1"; }
+# Count matches rather than testing the pipeline's exit status: under
+# `set -o pipefail`, grep exiting early on a match can SIGPIPE the writer and
+# flip the verdict nondeterministically under load.
+has() { [ "$(printf '%s\n' "$2" | grep -cx -- "$1")" -gt 0 ]; }
 
 # ---- 3. Every "holds" law must be pinned or explicitly PENDING. ------------
 for id in $holds_ids; do
