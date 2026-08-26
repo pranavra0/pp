@@ -208,47 +208,84 @@ fi
 sweep_fail=0
 sweep_count=0
 sweep_comments=0
+sweep_files=()
 for f in "$ROOT"/tests/[0-9]*.pp \
          "$ROOT"/tests/mutate-cproject.pp "$ROOT"/stdlib/*.pp \
          "$ROOT"/build.pp "$ROOT"/demo/volatile-deploy.pp "$ROOT"/examples/*.pp \
          "$ROOT"/docs/manual/*.pp "$ROOT"/docs/manual/examples/*.pp; do
-  [ -f "$f" ] || continue
-  sweep_count=$((sweep_count + 1))
-  work="$TMP/sweep-work-$sweep_count.pp"
-  backup="$TMP/sweep-orig-$sweep_count.pp"
-  cp "$f" "$work"; cp "$f" "$backup"
-  # dune's sandboxed source_tree deps are read-only; cp carries that mode onto
-  # the work copy, so make it writable for the in-place round-trip below.
-  chmod u+w "$work"
-  c_before=$(comment_texts brace "$work")
-  # count every comment, including delimiter-only lines whose content is
-  # empty after stripping (`#` separators) — those still must survive
-  n_before=$("$PP" --list-comments brace "$work" 2>/dev/null | wc -l | tr -d ' ')
-  if ! "$PP" fmt --to-sexpr "$work" -i 2>"$TMP/sweep.err"; then
-    bad "sweep-to-sexpr ($f)" "$(cat "$TMP/sweep.err")"; sweep_fail=1; continue
-  fi
-  c_mid=$(comment_texts sexpr "$work")
-  if ! "$PP" fmt --to-braces "$work" -i 2>"$TMP/sweep.err"; then
-    bad "sweep-to-braces ($f)" "$(cat "$TMP/sweep.err")"; sweep_fail=1; continue
-  fi
-  # brace-output quality gates: no line ends in whitespace (also where a
-  # trailing '; ' would appear), no stacked '# ;' delimiter
-  if grep -qE '[[:blank:]]$' "$work"; then
-    bad "sweep-noise ($f)" "$(grep -nE '[[:blank:]]$' "$work" | head -2)"; sweep_fail=1
-  fi
-  if grep -qE '^# ;|^#;;' "$work"; then
-    bad "sweep-stacked-delimiter ($f)" "$(grep -nE '^# ;|^#;;' "$work" | head -2)"; sweep_fail=1
-  fi
-  c_after=$(comment_texts brace "$work")
-  if [ "$c_before" != "$c_mid" ] || [ "$c_before" != "$c_after" ]; then
-    bad "sweep-comments ($f)" \
-      "before ($n_before):" "$c_before" "braces:" "$c_mid" "after:" "$c_after"
-    sweep_fail=1
-  fi
-  sweep_comments=$((sweep_comments + n_before))
-  if ! "$PP" --compare-hash "$work" "$backup" >"$TMP/sweep.err" 2>&1; then
-    bad "sweep-hash ($f)" "$(cat "$TMP/sweep.err")"; sweep_fail=1
-  fi
+  [ -f "$f" ] && sweep_files+=("$f")
+done
+
+# Each file is round-tripped independently, so the sweep fans out across
+# lanes; each lane buffers its verdicts and replays them when joined.
+sweep_lanes="${FMT_SWEEP_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
+sweep_lane_out=()
+sweep_lane_pids=()
+for lane in $(seq 0 $((sweep_lanes - 1))); do
+  sweep_lane_out+=("$TMP/sweep-lane-$lane.out")
+  : > "${sweep_lane_out[$lane]}"
+done
+for i in "${!sweep_files[@]}"; do
+  lane=$(( i % sweep_lanes ))
+  printf '%s\n' "${sweep_files[$i]}" >> "${sweep_lane_out[$lane]}.list"
+done
+for lane in $(seq 0 $((sweep_lanes - 1))); do
+  (
+    lane_fail=0
+    lane_count=0
+    lane_comments=0
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      work="$TMP/sweep-work-$lane-$((lane_count + 1)).pp"
+      backup="$TMP/sweep-orig-$lane-$((lane_count + 1)).pp"
+      cp "$f" "$work"; cp "$f" "$backup"
+      # dune's sandboxed source_tree deps are read-only; cp carries that mode
+      # onto the work copy, so make it writable for the round-trip below.
+      chmod u+w "$work"
+      c_before=$(comment_texts brace "$work")
+      # count every comment, including delimiter-only lines whose content is
+      # empty after stripping (`#` separators) — those still must survive
+      n_before=$("$PP" --list-comments brace "$work" 2>/dev/null | wc -l | tr -d ' ')
+      if ! "$PP" fmt --to-sexpr "$work" -i 2>"$TMP/sweep-err-$lane.txt"; then
+        bad "sweep-to-sexpr ($f)" "$(cat "$TMP/sweep-err-$lane.txt")"; lane_fail=1; continue
+      fi
+      c_mid=$(comment_texts sexpr "$work")
+      if ! "$PP" fmt --to-braces "$work" -i 2>"$TMP/sweep-err-$lane.txt"; then
+        bad "sweep-to-braces ($f)" "$(cat "$TMP/sweep-err-$lane.txt")"; lane_fail=1; continue
+      fi
+      # brace-output quality gates: no line ends in whitespace (also where a
+      # trailing '; ' would appear), no stacked '# ;' delimiter
+      if grep -qE '[[:blank:]]$' "$work"; then
+        bad "sweep-noise ($f)" "$(grep -nE '[[:blank:]]$' "$work" | head -2)"; lane_fail=1
+      fi
+      if grep -qE '^# ;|^#;;' "$work"; then
+        bad "sweep-stacked-delimiter ($f)" "$(grep -nE '^# ;|^#;;' "$work" | head -2)"; lane_fail=1
+      fi
+      c_after=$(comment_texts brace "$work")
+      if [ "$c_before" != "$c_mid" ] || [ "$c_before" != "$c_after" ]; then
+        bad "sweep-comments ($f)" \
+          "before ($n_before):" "$c_before" "braces:" "$c_mid" "after:" "$c_after"
+        lane_fail=1
+      fi
+      lane_comments=$((lane_comments + n_before))
+      if ! "$PP" --compare-hash "$work" "$backup" >"$TMP/sweep-err-$lane.txt" 2>&1; then
+        bad "sweep-hash ($f)" "$(cat "$TMP/sweep-err-$lane.txt")"; lane_fail=1
+      fi
+      lane_count=$((lane_count + 1))
+    done < "${sweep_lane_out[$lane]}.list"
+    printf 'LANETOTAL %d %d %d\n' "$lane_fail" "$lane_count" "$lane_comments"
+  ) > "${sweep_lane_out[$lane]}" &
+  sweep_lane_pids+=($!)
+done
+for pid in "${sweep_lane_pids[@]}"; do wait "$pid"; done
+for lane in $(seq 0 $((sweep_lanes - 1))); do
+  total=$(sed -n 's/^LANETOTAL //p' "${sweep_lane_out[$lane]}")
+  sed '/^LANETOTAL /d' "${sweep_lane_out[$lane]}"
+  rm -f "${sweep_lane_out[$lane]}" "${sweep_lane_out[$lane]}.list"
+  lane_fail=${total%% *}; rest=${total#* }
+  [ "$lane_fail" = "1" ] && sweep_fail=1
+  sweep_count=$((sweep_count + ${rest%% *}))
+  sweep_comments=$((sweep_comments + ${rest##* }))
 done
 [ "$sweep_fail" = 0 ] && ok "whole-tree-fmt-roundtrip ($sweep_count files, $sweep_comments comments)"
 

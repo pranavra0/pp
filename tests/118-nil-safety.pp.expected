@@ -1,0 +1,16 @@
+"=== config outside any with-config: default and nil ==="
+"fallback"
+nil
+""
+"=== closure created at top level captures no config frames ==="
+42
+""
+"=== macro expansion with fresh expansion state ==="
+42
+""
+"=== with-config still scopes reads ==="
+"v"
+"outer-default"
+""
+"=== ALL NIL-SAFETY CHECKS PASSED ==="
+# exit: 0

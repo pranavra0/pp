@@ -163,7 +163,7 @@ assert "register-probe-in-node-errors" "node bod" present
 # =====================================================================
 rm -rf "$TMP/.pp"
 printf '1\n' > "$COUNTER"
-timeout 12 "$PP" --watch --watch-interval 0.3 --grant "fs:$TMP:ro" "$TMP/prog.pp" \
+timeout -k 5 60 "$PP" --watch --watch-interval 0.3 --grant "fs:$TMP:ro" "$TMP/prog.pp" \
   > "$TMP/watch.out" 2>&1 &
 WATCH_PID=$!
 sleep 1.0

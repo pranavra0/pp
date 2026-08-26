@@ -71,7 +71,7 @@ run_test() {
   rm -rf "$TMP/.pp"
 
   # Start watch with stabilize in background
-  timeout 35 "$PP" --watch $mode --watch-interval 0.3 --grant "fs:$TMP:ro" \
+  timeout -k 5 35 "$PP" --watch $mode --watch-interval 0.3 --grant "fs:$TMP:ro" \
     "$TMP/stab.pp" > "$out" 2>&1 &
   local WATCH_PID=$!
 

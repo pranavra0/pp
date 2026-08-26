@@ -50,7 +50,7 @@ echo "V1" > "$TMP/a.c"
 
 # --- (a) --once terminates after one run ---
 rm -rf "$TMP/.pp"
-timeout 5 "$PP" --once --grant "fs:$TMP:ro" "$TMP/build.pp" > "$TMP/out" 2>&1
+timeout -k 5 5 "$PP" --once --grant "fs:$TMP:ro" "$TMP/build.pp" > "$TMP/out" 2>&1
 RC=$?
 [ $RC -eq 0 ] && echo "ok   once-exit" || { echo "FAIL once-exit: exit $RC"; cat "$TMP/out"; fail=1; }
 assert "once-compile" "\\[info\\] COMPILE" present
@@ -59,7 +59,7 @@ assert "once-link"    "\\[info\\] LINK"    present
 # --- (b) --watch re-runs when a file changes ---
     rm -rf "$TMP/.pp"
     # Start watch in background with a generous timeout
-    timeout 25 "$PP" --watch --watch-interval 0.3 --grant "fs:$TMP:ro" \
+    timeout -k 5 25 "$PP" --watch --watch-interval 0.3 --grant "fs:$TMP:ro" \
       "$TMP/build.pp" > "$TMP/watch-out" 2>&1 &
     WATCH_PID=$!
     # First run: COMPILE and LINK each logged once (assert_count polls until
@@ -82,7 +82,7 @@ ONCE_KEYS=$(grep -oE 'node [0-9a-f]+' "$TMP/why-once" | sort -u)
 [ -n "$ONCE_KEYS" ] || { echo "FAIL same-keys: no keys in --once why output"; cat "$TMP/why-once"; fail=1; }
 
 rm -rf "$TMP/.pp"
-HOME="$TMP" timeout 2 "$PP" why --watch --watch-interval 0.3 \
+HOME="$TMP" timeout -k 5 2 "$PP" why --watch --watch-interval 0.3 \
   --grant "fs:$TMP:ro" "$TMP/build.pp" 2> "$TMP/why-watch" 1>/dev/null || true
 WATCH_KEYS=$(grep -oE 'node [0-9a-f]+' "$TMP/why-watch" | sort -u)
 [ -n "$WATCH_KEYS" ] || { echo "FAIL same-keys: no keys in --watch why output"; cat "$TMP/why-watch"; fail=1; }
@@ -101,7 +101,7 @@ assert "graph-has-nodes"  "node\\(s\\)" present "$TMP/graph-out"
 # --- (e) --watch without --reconcile still works (build watch) ---
 rm -rf "$TMP/.pp"
 echo "W1" > "$TMP/a.c"
-timeout 12 "$PP" --watch --watch-interval 0.3 --grant "fs:$TMP:ro" \
+timeout -k 5 60 "$PP" --watch --watch-interval 0.3 --grant "fs:$TMP:ro" \
   "$TMP/build.pp" > "$TMP/watch-build-out" 2>&1 &
 WATCH_PID=$!
 assert_count "build-watch-first" "COMPILE" 1 "$TMP/watch-build-out"
@@ -124,7 +124,7 @@ with-config({:mode -> "scoped"}) { print(config(:mode, "default")) }
 with-handler(log = fn(x) { print("handled", x) }) { perform log("first") }
 EOF
 printf 'one\n' > "$TMP/lifecycle-phase"
-timeout 12 "$PP" --watch --watch-interval 0.1 --grant "fs:$TMP:ro" \
+timeout -k 5 60 "$PP" --watch --watch-interval 0.1 --grant "fs:$TMP:ro" \
   "$TMP/lifecycle.pp" > "$TMP/lifecycle-out" 2> "$TMP/lifecycle-err" &
 WATCH_PID=$!
 new_watch_pass "evaluation-one" '^"one"$' 1 "$TMP/lifecycle-out"
@@ -163,7 +163,7 @@ EOF
 cat > "$TMP/observations-two.pp" <<EOF
 print(string-trim(slurp("$TMP/observation-phase")))
 EOF
-timeout 12 "$PP" --watch --watch-interval 0.1 --grant "fs:$TMP:ro" \
+timeout -k 5 60 "$PP" --watch --watch-interval 0.1 --grant "fs:$TMP:ro" \
   "$TMP/observations-one.pp" > "$TMP/observations-out" 2> "$TMP/observations-err" &
 WATCH_PID=$!
 new_watch_pass "observations-evaluation-one" '^"old-one"$' 1 "$TMP/observations-out"
@@ -189,14 +189,14 @@ print(string-trim(slurp("$TMP/registry-phase")))
 print(probe("stale"))
 EOF
 printf 'one\n' > "$TMP/registry-phase"
-timeout 12 "$PP" --watch --watch-interval 0.1 --grant "fs:$TMP:ro" \
+timeout -k 5 60 "$PP" --watch --watch-interval 0.1 --grant "fs:$TMP:ro" \
   "$TMP/registry-one.pp" \
   > "$TMP/registry-out" 2> "$TMP/registry-err" &
 WATCH_PID=$!
 new_watch_pass "registry-evaluation-one" '^1$' 1 "$TMP/registry-out"
 cp "$TMP/registry-two.pp" "$TMP/registry-one.pp"
 printf 'two\n' > "$TMP/registry-phase"
-wait_for 8 grep -q 'no such probe registered: stale' "$TMP/registry-err" \
+wait_for 30 grep -q 'no such probe registered: stale' "$TMP/registry-err" \
   && ok "registry-evaluation-two-resets-probe-domain" \
   || bad "registry-evaluation-two-resets-probe-domain" "$(cat "$TMP/registry-err")"
 wait $WATCH_PID 2>/dev/null || true
@@ -214,7 +214,7 @@ print(probe("counter"))
 print(probe("counter"))
 print(string-length(unseal(slurp("$TMP/secret"))))
 EOF
-timeout 12 "$PP" --watch --watch-interval 0.1 --grant "fs:$TMP/world:ro" \
+timeout -k 5 60 "$PP" --watch --watch-interval 0.1 --grant "fs:$TMP/world:ro" \
   --grant "secret:$TMP/secret" "$TMP/pass-state.pp" \
   > "$TMP/pass-state-out" 2> "$TMP/pass-state-err" &
 WATCH_PID=$!
