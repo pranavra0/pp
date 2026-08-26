@@ -9,46 +9,74 @@ on:
 permissions:
   contents: read
 env:
-  # Deep-recursion is intentionally serial and exceeds the 120-second per-case
-  # default on GitHub-hosted runners; retain a bounded per-case watchdog.
+  # Deep-recursion exceeds the 120-second per-case default on GitHub-hosted
+  # runners; retain a bounded per-case watchdog.
   TEST_CASE_TIMEOUT: "600"
 
+# Superseded PR runs are cancelled; pushes to master always run to completion.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  build:
+  # The suite shards round-robin across runners (TEST_SHARD in run-tests.sh):
+  # every case runs exactly once, and total wall time drops to roughly the
+  # slowest shard. Six shards spread the few multi-minute cases (deep
+  # recursion, fmt sweep, tail scopes) onto different runners; four would pile
+  # them onto one. The clean-export mode repeats the suite from a git archive
+  # so nothing can depend on uncommitted files.
+  test:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+        mode: [build, clean-export]
+        shard: [0, 1, 2, 3, 4, 5]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
-      TEST_JOBS: "1"
+      TEST_SHARD: "${{ matrix.shard }}/6"
     steps:
       - uses: actions/checkout@v4
+
+      - name: Cache SBCL
+        id: sbcl-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/bin/sbcl
+            /usr/lib/sbcl
+          key: sbcl-bin-${{ runner.os }}-${{ runner.arch }}-v2
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y sbcl libdigest-sha-perl
+          # A restored SBCL tree skips apt entirely; libdigest-sha-perl was a
+          # dead dependency (every digest uses sha256sum or python hashlib).
+          if [ ! -x /usr/bin/sbcl ]; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends sbcl
+          fi
+
+      - name: Restore built image
+        if: matrix.mode == 'build'
+        id: image-cache
+        uses: actions/cache@v4
+        with:
+          path: lisp
+          key: pp-image-${{ hashFiles('lisp/**/*.lisp', 'lisp/pp.asd', 'scripts/build-lisp.sh') }}
 
       - name: Build saved image
+        if: matrix.mode == 'build' && steps.image-cache.outputs.cache-hit != 'true'
         run: scripts/build-lisp.sh --output lisp/pp
 
       - name: Architecture gates
+        if: matrix.mode == 'build' && matrix.shard == 0
         run: scripts/check-architecture.sh
 
       - name: Test suite
+        if: matrix.mode == 'build'
         run: scripts/run-tests.sh bin/pp
 
-  clean-export:
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install SBCL
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y sbcl
       - name: Clean exported-source gate
-        run: ./scripts/check-clean-export.sh
+        if: matrix.mode == 'clean-export'
+        # The gate script defaults to serial; fan out across runner cores.
+        run: TEST_JOBS="$(nproc)" ./scripts/check-clean-export.sh
