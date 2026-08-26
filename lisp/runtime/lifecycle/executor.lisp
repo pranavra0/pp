@@ -1,5 +1,5 @@
 ;;;; Closed execution boundary. Providers are trusted only through classification.
-(in-package #:pp.runtime)
+(in-package #:pp.rt.executor)
 
 (defstruct (runtime-executor-request
             (:constructor make-runtime-executor-request
@@ -85,8 +85,8 @@
     (error "run-closed!: executor returned non-string output"))
   (runtime-executor-sorted-pairs
    (runtime-executor-result-evidence result) "evidence")
-  (let ((validator (and (fboundp 'runtime-artifact-tree-validate)
-                        (symbol-function 'runtime-artifact-tree-validate))))
+    (let ((validator (and (fboundp 'pp.rt.artifacts:runtime-artifact-tree-validate)
+                        (symbol-function 'pp.rt.artifacts:runtime-artifact-tree-validate))))
     (unless validator (error "run-closed!: artifact tree validator is unavailable"))
     (funcall validator (runtime-executor-result-outputs result)))
   result)
@@ -133,4 +133,3 @@
      :in-node (and (runtime-dynamic-current nil)
                    (runtime-dynamic-in-node-p)))))
 
-(setf (symbol-function 'executor-run) #'runtime-executor-run)

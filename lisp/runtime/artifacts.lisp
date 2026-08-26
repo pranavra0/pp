@@ -1,5 +1,5 @@
 ;;;; Canonical artifact trees and filesystem reconciliation.
-(in-package #:pp.runtime)
+(in-package #:pp.rt.artifacts)
 
 (defstruct (runtime-artifact-entry
             (:constructor %make-artifact (kind path mode blob target)))
@@ -425,10 +425,10 @@
         result))))
 (defun runtime-artifact-observe-value (root)
   (when (and (runtime-dynamic-current nil)
-             (fboundp 'runtime-observation-authorize-tree-effect)
-             (not (runtime-observation-authorize-tree-effect root)))
-    (if (fboundp 'runtime-observation-error)
-        (runtime-observation-error
+             (fboundp 'pp.rt.observation:runtime-observation-authorize-tree-effect)
+             (not (pp.rt.observation:runtime-observation-authorize-tree-effect root)))
+    (if (fboundp 'pp.rt.observation:runtime-observation-error)
+        (pp.rt.observation:runtime-observation-error
          "tree-observe: capability error: no read access"
          "runtime.authority")
         (runtime-artifact-error

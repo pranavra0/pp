@@ -1,5 +1,5 @@
 ;;;; Explicit evaluator state and machine records.
-(in-package #:pp.runtime)
+(in-package #:pp.rt.eval)
 
 (defstruct (runtime-evaluator-state
             (:constructor %make-runtime-evaluator-state))
@@ -10,23 +10,13 @@
   (depth 0 :type integer)
   (force-stack nil)
   (force-count 0 :type integer)
-  (persistent-cache (make-hash-table :test #'equal))
-  (capabilities nil)
-  (config-stack nil)
-  (handler-stack nil)
   (current-location nil)
   (last-error-location nil)
   (last-error-location-depth 0 :type integer)
   (location-stack nil)
-  perform-function
-  with-capabilities-function
-  with-handlers-function
-  with-config-function
   load-function
   load-module-function
-  island-function
-  node-force-function)
-
+  island-function)
 (defstruct (runtime-evaluator-frame (:constructor make-runtime-evaluator-frame (kind data)))
   kind data)
 
@@ -58,10 +48,8 @@ giving session boundaries one stable hook."
   (setf (runtime-evaluator-state-depth state) 0
         (runtime-evaluator-state-force-stack state) nil
         (runtime-evaluator-state-force-count state) 0
-        (runtime-evaluator-state-config-stack state) nil
         (runtime-evaluator-state-current-location state) nil
         (runtime-evaluator-state-last-error-location state) nil
-        (runtime-evaluator-state-last-error-location-depth state) 0
         (runtime-evaluator-state-location-stack state) nil)
   (runtime-evaluator-reset-catalog!
    (runtime-evaluator-state-catalog state))
@@ -71,15 +59,9 @@ giving session boundaries one stable hook."
   (&key catalog initial-env
         (max-depth 10000)
         macro-state
-        capabilities
-        perform-function
-        with-capabilities-function
-        with-handlers-function
-        with-config-function
         load-function
         load-module-function
-        island-function
-        node-force-function)
+        island-function)
   (let* ((catalog (or catalog (runtime-install-pure-primitives)))
          (initial-env (or initial-env (runtime-primitive-initial-env catalog))))
     (unless (and (integerp max-depth) (plusp max-depth))
@@ -88,15 +70,9 @@ giving session boundaries one stable hook."
      :catalog catalog :initial-env initial-env
      :macro-state (or macro-state (make-runtime-macro-state))
      :max-depth max-depth
-     :capabilities (copy-list capabilities)
-     :perform-function perform-function
-     :with-capabilities-function with-capabilities-function
-     :with-handlers-function with-handlers-function
-     :with-config-function with-config-function
      :load-function load-function
      :load-module-function load-module-function
-     :island-function island-function
-     :node-force-function node-force-function)))
+     :island-function island-function)))
 
 
 
@@ -112,37 +88,8 @@ giving session boundaries one stable hook."
   (when (plusp (runtime-evaluator-state-depth state))
     (decf (runtime-evaluator-state-depth state))))
 
-(defun runtime-evaluator-hash-value (value)
-  "Hash an environment value without letting malformed thunk capture
-  analysis escape as a host condition.
 
-The kernel's capture walker currently assumes every delayed expression child
-is a sequence.  Runtime environments still need a deterministic hash for
-those thunks, so use their code/environment boundary when that narrow kernel
-hash path rejects the value."
-  (handler-case
-      (hash-value value)
-    (error (condition)
-      (cond
-        ((typep value 'value-thunk)
-         (let* ((thunk (value-thunk-thunk value))
-                (expression (thunk-expression thunk))
-                (type-ann (thunk-type-ann thunk)))
-           (hash-concat
-            (list "runtime-thunk"
-                  (hash-expr expression)
-                  (env-env-hash (thunk-environment thunk))
-                  (if type-ann (hash-expr type-ann) "untyped")))))
-        ((typep value 'value-closure)
-         (let ((closure (value-closure-closure value)))
-           (hash-concat
-            (list "runtime-closure"
-                  (or (closure-fn-name closure) "")
-                  (hash-expr (closure-body closure))
-                  (env-env-hash (closure-env closure))))))
-        (t (error condition))))))
-
-(defun runtime-evaluator-env-lookup (environment name)
+(defmethod runtime-evaluator-env-lookup (environment name)
   (let ((entry (find name (env-bindings environment) :key #'car :test #'string=)))
     (and entry (cdr entry))))
 
@@ -150,7 +97,7 @@ hash path rejects the value."
   (make-env (cons (cons name value) (env-bindings environment))
             :env-id (1+ (env-env-id environment))
             :env-hash (hash-concat (list "env" (env-env-hash environment)
-                                         name (runtime-evaluator-hash-value value)))))
+                                         name (hash-value value)))))
 
 (defun runtime-evaluator-env-extend-many (environment names values)
   (unless (= (length names) (length values))

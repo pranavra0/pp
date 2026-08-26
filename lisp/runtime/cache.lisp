@@ -1,5 +1,5 @@
 ;;;; Verified cache lookup and trace decisions.
-(in-package #:pp.runtime)
+(in-package #:pp.rt.cache)
 
 (defstruct (runtime-cache-policy (:constructor %make-runtime-cache-policy))
   (no-cache nil) (why nil) (check nil) (volatile-count 0))
@@ -32,8 +32,8 @@
   (let ((s (runtime-cache-key-string key)))
     (if (> (length s) 12) (subseq s 0 12) s)))
 (defun runtime-cache-event (kind key reason)
-  (when (fboundp 'runtime-dynamic-record-event)
-    (runtime-dynamic-record-event
+  (when (fboundp 'pp.rt.scope:runtime-dynamic-record-event)
+    (pp.rt.scope:runtime-dynamic-record-event
      (make-vmap (list (cons (make-vkeyword "kind") (make-vkeyword kind))
                       (cons (make-vkeyword "node") (make-vstring (runtime-cache-short-key key)))
                       (cons (make-vkeyword "reason") (make-vkeyword reason)))))))
@@ -180,7 +180,3 @@
                       (make-runtime-cache-result :miss nil nil))))))))
     )
     )
-(defun cache-policy-create () (runtime-cache-policy-create))
-(defun cache-policy-configure (policy &rest args) (apply #'runtime-cache-configure policy args))
-(defun cache-policy-lookup (&rest args) (apply #'runtime-cache-lookup args))
-(defun cache-policy-note-volatile (policy) (runtime-cache-note-volatile policy))

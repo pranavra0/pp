@@ -1,5 +1,5 @@
 ;;;; Watch polling and push stabilization.
-(in-package #:pp.runtime)
+(in-package #:pp.rt.watch)
 
 (defstruct (runtime-watch-state
             (:constructor make-runtime-watch-state (&key session interval stabilize once)))
@@ -31,18 +31,11 @@
         (list durable))))
 
 (defun runtime-watch-reset-dirty (session keys)
-  (let ((state (runtime-session-evaluator session)))
-    (when keys
-      (clrhash (runtime-evaluator-state-persistent-cache state)))
-    (dolist (key keys)
-      (let ((thunk (runtime-session-find-node-thunk session key)))
-        (when thunk
-          (setf (thunk-status thunk) (make-thunk-status-unevaluated)))))
-    keys))
+  (pp.rt.protocol:runtime-node-engine-invalidate session keys))
 
 (defun runtime-watch-observation-hash (cell)
-  (and (fboundp 'runtime-observe-id)
-       (runtime-observe-id cell)))
+  (and (fboundp 'pp.rt.observation:runtime-observe-id)
+       (pp.rt.observation:runtime-observe-id cell)))
 
 (defun runtime-watch-evaluated-dependencies-changed-p (session key result)
   (let* ((traces (runtime-domain-service-value session :store-traces))
@@ -53,10 +46,11 @@
                       (trace-repository-load traces :key cache-key))))
     (and traces
          (some (lambda (trace)
-                 (and (store-trace-outcome-ok-p (store-trace-outcome trace))
+                 (and (pp.rt.store:store-trace-outcome-ok-p
+                       (pp.rt.store:store-trace-outcome trace))
                       (string= (store-identity-string result-hash)
                                (store-identity-string
-                                (store-trace-result-hash trace)))
+                                (pp.rt.store:store-trace-result-hash trace)))
                       (not (every
                             (lambda (read)
                               (let ((cell (store-identity-string (car read)))
@@ -70,12 +64,12 @@
                                            (string= (store-identity-string current)
                                                     expected)))
                                     t)))
-                            (store-trace-reads trace))))) traces))))
+                            (pp.rt.store:store-trace-reads trace))))) traces))))
 
 (defun runtime-watch-build-reverse-index (session)
-  (let ((reverse (if (fboundp 'store-index-reverse)
+  (let ((reverse (if (fboundp 'pp.rt.store:store-index-reverse)
                      (let ((traces (runtime-domain-service-value session :store-traces)))
-                       (if traces (store-index-reverse traces)
+                       (if traces (pp.rt.store:store-index-reverse traces)
                            (make-hash-table :test #'equal)))
                      (make-hash-table :test #'equal))))
     (runtime-watch-runtime-edges session reverse)
@@ -93,27 +87,7 @@
                              (copy-list (gethash cell reverse)))
                            external-cells)
                    :test #'equal))
-         (child-snapshots nil)
-         (parent-snapshots nil))
-    ;; Dirty only direct external trace readers.  During the next force,
-    ;; recursive cache validation refreshes child traces before deciding
-    ;; whether a dependent parent can still hit.
-    (dolist (key initial)
-      (let ((thunk (runtime-session-find-node-thunk session key)))
-        (when thunk
-          (let ((status (thunk-status thunk)))
-            (when (typep status 'thunk-status-evaluated)
-              (push (list key thunk (thunk-status-evaluated-value status))
-                    child-snapshots)))
-          (dolist (parent
-                    (gethash (cell-serialize (make-cell-node key)) reverse))
-            (let ((parent-thunk
-                    (runtime-session-find-node-thunk session parent)))
-              (when (and parent-thunk
-                         (typep (thunk-status parent-thunk)
-                                'thunk-status-evaluated))
-                (push (list key parent-thunk (thunk-status parent-thunk))
-                      parent-snapshots)))))))
+         )
     (runtime-watch-reset-dirty session initial)
     (dolist (key initial)
       (let ((thunk (runtime-session-find-node-thunk session key)))
@@ -121,28 +95,6 @@
           (runtime-evaluator-force
            (runtime-session-evaluator session)
            thunk))))
-    (dolist (child child-snapshots)
-      (let* ((key (first child))
-             (thunk (second child))
-             (old-value (third child))
-             (status (thunk-status thunk)))
-        (when (and (typep status 'thunk-status-evaluated)
-                   (equal-value old-value
-                                (thunk-status-evaluated-value status)))
-          (dolist (parent parent-snapshots)
-            (when (string= key (first parent))
-              (let* ((parent-thunk (second parent))
-                     (parent-status (third parent)))
-                (setf (thunk-status parent-thunk) parent-status)
-                (when (typep parent-status 'thunk-status-evaluated)
-                  (setf (gethash
-                         (node-key-to-string
-                          (runtime-evaluator-node-key
-                           (runtime-session-evaluator session)
-                           parent-thunk))
-                         (runtime-evaluator-state-persistent-cache
-                          (runtime-session-evaluator session)))
-                        (thunk-status-evaluated-value parent-status)))))))))
 
     initial))
 (defun runtime-watch-snapshot (session)
@@ -184,7 +136,3 @@
   (make-runtime-watch-state :session session :interval interval
                             :stabilize stabilize :once once))
 
-(setf (symbol-function 'stabilize-register-node-key)
-      #'runtime-watch-register-node-key)
-(setf (symbol-function 'stabilize-reset-dirty) #'runtime-watch-reset-dirty)
-(setf (symbol-function 'stabilize-dirty) #'runtime-watch-stabilize)

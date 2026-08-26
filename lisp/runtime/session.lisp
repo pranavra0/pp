@@ -4,7 +4,7 @@
 ;;;; uses a process-global registry: callbacks, services, memo tables, and
 ;;;; pass data are all reachable from an explicit RUNTIME-SESSION value.
 
-(in-package #:pp.runtime)
+(in-package #:pp.rt.session)
 
 ;;; ---------------------------------------------------------------------------
 ;;; Operation views
@@ -38,12 +38,15 @@
 
 (defstruct (runtime-domain-entry
             (:constructor make-runtime-domain-entry
-                (&key namespace observe diff apply cap observe-cell)))
-  namespace observe diff apply cap observe-cell)
+                (&key namespace observe diff apply cap observe-cell
+                      plan-valid-p converged-p)))
+  namespace observe diff apply cap observe-cell
+  ;; Session-installed plan policy.  NIL falls back to the reconciler's
+  ;; fail-closed defaults: opaque plans are unrecognized and unconverged.
+  plan-valid-p converged-p)
 
 (defstruct (runtime-evaluation-state
             (:constructor %make-runtime-evaluation-state))
-  (thunks (make-hash-table :test #'equal))
   (macros (make-hash-table :test #'equal))
   (gensym 0 :type integer)
   global-env
@@ -87,8 +90,9 @@
 
 (defstruct (runtime-session
             (:constructor %make-runtime-session))
-  operations node-runtime runtime-context store-layout evaluator-state
+  operations node-runtime default-capabilities store-layout evaluator-state
   evaluation domains run fenced
+  (process-records (make-hash-table :test #'equal))
   (services (make-hash-table :test #'equal)))
 
 
@@ -124,12 +128,7 @@ objects as durable keys. Ordinary string keys remain valid for local callers."
              (runtime-evaluator-apply-value state function arguments environment))))
         (node
           (%make-runtime-node-operations
-           (if (fboundp 'runtime-evaluator-node-key)
-               (lambda (thunk) (runtime-evaluator-node-key state thunk))
-               (lambda (thunk)
-                 (declare (ignore thunk))
-                 (runtime-session-error "node key service is unavailable"
-                                        "runtime.node")))
+           (lambda (thunk) (runtime-node-key-of-state state thunk))
            ;; The default node operation fails closed until a service is
            ;; installed in the session.
            (lambda (key run thunk)
@@ -187,23 +186,16 @@ objects as durable keys. Ordinary string keys remain valid for local callers."
      (lambda (ignored-session event)
        (declare (ignore ignored-session))
        (runtime-session-add-event session event))))
+  ;; Wanted-node tracking for lifecycle reconciliation lives in
+  ;; runtime-dynamic-record-node-force; node forcing is injected solely
+  ;; through the session's :node-force service.
   (runtime-session-register-service session :store-layout (lambda () layout))
-  ;; Track top-level persistent forces for lifecycle reconciliation.  Ordinary
-  ;; commands keep this set in memory and do not publish a root.
-  (let ((old (runtime-evaluator-state-node-force-function
-              (runtime-session-evaluator session))))
-    (when old
-      (runtime-session-register-callback
-       session :node-force
-       (lambda (callback-state thunk key run)
-         (runtime-session-add-wanted-node session key)
-         (funcall old callback-state thunk key run)))))
   session)
 
 (defun make-runtime-session (&key operations core-operations node-operations
                                   evaluator-state evaluator-arguments
                                   scheduler executor remote-dispatch
-                                  (schedule-locked nil) runtime-context
+                                  (schedule-locked nil)
                                   store-layout store-root
                                   (initialize-store t) capabilities
                                   services)
@@ -233,17 +225,14 @@ install the store-backed node/effect callbacks before returning."
                                   :scheduler scheduler :executor executor
                                   :remote-dispatch remote-dispatch
                                   :schedule-locked schedule-locked)
-                   :runtime-context runtime-context
                    :store-layout store-layout
                    :evaluator-state state
                    :evaluation evaluation
                    :domains (%make-runtime-domain-state)
                    :run (%make-runtime-run-state)
                    :fenced (%make-runtime-fenced-state))))
-    (when (and capabilities
-               (fboundp 'runtime-evaluator-state-capabilities))
-      (setf (runtime-evaluator-state-capabilities state)
-            (copy-tree capabilities)))
+    (setf (runtime-session-default-capabilities session)
+          (copy-list capabilities))
     (dolist (entry services)
       (destructuring-bind (name . function) entry
         (runtime-session-register-service session name function)))
@@ -255,13 +244,13 @@ install the store-backed node/effect callbacks before returning."
 ;;; accessors make the ownership boundary pleasant for callers and tests.
 
 
-(defun runtime-session-evaluator (session)
+(defmethod pp.rt.protocol:runtime-session-evaluator (session)
   (runtime-session-evaluator-state session))
 
 (defun runtime-session-operations-view (session)
   (runtime-session-operations session))
 
-(defun runtime-session-core-operations (session)
+(defmethod pp.rt.protocol:runtime-session-core-operations (session)
   (runtime-operations-core (runtime-session-operations session)))
 
 (defun runtime-session-node-operations (session)
@@ -284,18 +273,18 @@ install the store-backed node/effect callbacks before returning."
          (runtime-session-node-runtime session))
         (not (null value))))
 
-(defun runtime-session-force (session value)
+(defmethod pp.rt.protocol:runtime-session-force (session value)
   (funcall (runtime-core-operations-force (runtime-session-core-operations session))
            value))
 
-(defun runtime-session-call (session function arguments environment)
+(defmethod pp.rt.protocol:runtime-session-call (session function arguments environment)
   (funcall (runtime-core-operations-apply (runtime-session-core-operations session))
            function arguments environment))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Session callback/service registration
 
-(defun runtime-session-register-service (session name function)
+(defmethod runtime-session-register-service (session name function)
   "Install FUNCTION in SESSION.  This is deliberately session-local."
   (unless (functionp function)
     (runtime-session-error "runtime service must be a function" "runtime.service"))
@@ -306,12 +295,9 @@ install the store-backed node/effect callbacks before returning."
 (defun runtime-session-unregister-service (session name)
   (remhash name (runtime-session-services session)))
 
-(defun runtime-session-find-service (session name)
+(defmethod runtime-session-find-service (session name)
   (let ((entry (gethash name (runtime-session-services session))))
-    (and entry
-         (if (eq name :process-records)
-             (funcall (runtime-service-function entry))
-             (runtime-service-function entry)))))
+    (and entry (runtime-service-function entry))))
 
 (defun runtime-session-service (session name)
   (or (runtime-session-find-service session name)
@@ -319,7 +305,7 @@ install the store-backed node/effect callbacks before returning."
        (format nil "runtime service is unavailable: ~A" name)
        "runtime.service")))
 
-(defun runtime-session-call-service (session name &rest arguments)
+(defmethod pp.rt.protocol:runtime-session-call-service (session name &rest arguments)
   (apply (runtime-session-service session name) arguments))
 
 (defun runtime-session-register-callback (session name function)
@@ -329,18 +315,6 @@ outside the session."
   (runtime-session-register-service session name function)
   (let ((state (runtime-session-evaluator session)))
     (cond
-      ((and (eq name :perform)
-            (fboundp 'runtime-evaluator-state-perform-function))
-       (setf (runtime-evaluator-state-perform-function state) function))
-      ((and (eq name :with-capabilities)
-            (fboundp 'runtime-evaluator-state-with-capabilities-function))
-       (setf (runtime-evaluator-state-with-capabilities-function state) function))
-      ((and (eq name :with-handlers)
-            (fboundp 'runtime-evaluator-state-with-handlers-function))
-       (setf (runtime-evaluator-state-with-handlers-function state) function))
-      ((and (eq name :with-config)
-            (fboundp 'runtime-evaluator-state-with-config-function))
-       (setf (runtime-evaluator-state-with-config-function state) function))
       ((and (eq name :load)
             (fboundp 'runtime-evaluator-state-load-function))
        (setf (runtime-evaluator-state-load-function state) function))
@@ -349,11 +323,8 @@ outside the session."
        (setf (runtime-evaluator-state-load-module-function state) function))
       ((and (eq name :island)
             (fboundp 'runtime-evaluator-state-island-function))
-       (setf (runtime-evaluator-state-island-function state) function))
-      ((and (eq name :node-force)
-            (fboundp 'runtime-evaluator-state-node-force-function))
-       (setf (runtime-evaluator-state-node-force-function state) function)))
-  function))
+       (setf (runtime-evaluator-state-island-function state) function))))
+  function)
 
 (defun runtime-session-register-callbacks (session callbacks)
   (dolist (entry callbacks session)
@@ -437,9 +408,6 @@ remain usable, while current images reset the actual catalog counter."
   ;; expression-local machine state and dynamic frames are fresh.
   (runtime-session--set-evaluator-slot state 'runtime-evaluator-state-depth 0)
   (runtime-session--set-evaluator-slot state 'runtime-evaluator-state-force-stack nil)
-  (runtime-session--set-evaluator-slot state 'runtime-evaluator-state-force-count 0)
-  (runtime-session--set-evaluator-slot state 'runtime-evaluator-state-config-stack nil)
-  (runtime-session--set-evaluator-slot state 'runtime-evaluator-state-handler-stack nil)
   (let ((macro-state
           (runtime-session--evaluator-slot state
                                            'runtime-evaluator-state-macro-state)))
@@ -466,7 +434,6 @@ remain usable, while current images reset the actual catalog counter."
          (fenced (runtime-session-fenced session))
          (state (runtime-session-evaluator session)))
     (unless retain-thunks
-      (runtime-session--clear-hash (runtime-evaluation-state-thunks evaluation))
       (runtime-session--clear-hash (runtime-evaluation-state-node-thunks evaluation))
       (runtime-session--clear-hash (runtime-evaluation-state-node-keys evaluation))
       (runtime-session--clear-hash
@@ -505,13 +472,6 @@ remain usable, while current images reset the actual catalog counter."
 (defun (setf runtime-session-global-env) (value session)
   (setf (runtime-evaluation-state-global-env (runtime-session-evaluation session))
         value))
-
-(defun runtime-session-find-thunk (session name)
-  (gethash name (runtime-evaluation-state-thunks (runtime-session-evaluation session))))
-
-(defun runtime-session-add-thunk (session name thunk)
-  (setf (gethash name (runtime-evaluation-state-thunks
-                        (runtime-session-evaluation session))) thunk))
 
 (defun runtime-session-find-macro (session name)
   (gethash name (runtime-evaluation-state-macros (runtime-session-evaluation session))))
@@ -586,7 +546,7 @@ remain usable, while current images reset the actual catalog counter."
 (defun runtime-session-runtime-manifest (session)
   (runtime-run-state-runtime-manifest (runtime-session-run session)))
 
-(defun runtime-session-add-wanted-node (session key)
+(defmethod runtime-session-add-wanted-node (session key)
   (setf (gethash (runtime-session-key key)
                  (runtime-run-state-wanted-nodes (runtime-session-run session))) t))
 
@@ -621,7 +581,7 @@ remain usable, while current images reset the actual catalog counter."
 (defun runtime-session-iter-run-pins (session function)
   (maphash function (runtime-run-state-run-pins (runtime-session-run session))))
 
-(defun runtime-session-set-node-thunk (session key thunk)
+(defmethod runtime-session-set-node-thunk (session key thunk)
   (let ((evaluation (runtime-session-evaluation session)))
     (setf (gethash (runtime-session-key key)
                    (runtime-evaluation-state-node-thunks evaluation)) thunk)
@@ -629,7 +589,7 @@ remain usable, while current images reset the actual catalog counter."
       (setf (gethash (thunk-hash thunk)
                      (runtime-evaluation-state-node-keys evaluation)) key))))
 
-(defun runtime-session-find-node-thunk (session key)
+(defmethod runtime-session-find-node-thunk (session key)
   (gethash (runtime-session-key key)
            (runtime-evaluation-state-node-thunks (runtime-session-evaluation session))))
 
@@ -641,7 +601,7 @@ remain usable, while current images reset the actual catalog counter."
 (defun runtime-session-node-key-by-id (session id)
   (gethash id (runtime-evaluation-state-node-keys (runtime-session-evaluation session))))
 
-(defun runtime-session-add-node-dependent (session id key)
+(defmethod runtime-session-add-node-dependent (session id key)
   (let* ((table (runtime-evaluation-state-node-dependents
                  (runtime-session-evaluation session)))
          (key (runtime-session-key key))
@@ -684,12 +644,7 @@ remain usable, while current images reset the actual catalog counter."
 (defun runtime-session-next-fenced-epoch-nonce (session)
   (incf (runtime-fenced-state-fenced-epoch-nonce (runtime-session-fenced session))))
 
-;;; Narrow compatibility spellings used by the evaluator/app integration.
-(setf (symbol-function 'session-begin-evaluation) #'runtime-session-begin-evaluation)
-(setf (symbol-function 'session-begin-pass) #'runtime-session-begin-pass)
-(setf (symbol-function 'session-begin-watch) #'runtime-session-begin-watch)
-(setf (symbol-function 'session-force) #'runtime-session-force)
-(setf (symbol-function 'runtime-session-create) #'make-runtime-session)
-(setf (symbol-function 'create-runtime-session) #'make-runtime-session)
-(setf (symbol-function 'session-create) #'make-runtime-session)
-(setf (symbol-function 'session-begin-evaluation) #'runtime-session-begin-evaluation)
+
+(defmethod pp.rt.protocol:runtime-session-ambient-capabilities (session)
+  (runtime-session-default-capabilities session))
+

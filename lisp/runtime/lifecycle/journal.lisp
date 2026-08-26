@@ -1,5 +1,5 @@
 ;;;; Durable append-only lifecycle journal.
-(in-package #:pp.runtime)
+(in-package #:pp.rt.journal)
 
 (defstruct (runtime-journal-exec (:constructor make-runtime-journal-exec (argv))) argv)
 (defstruct (runtime-journal-domain-intent
@@ -171,10 +171,8 @@
     (error () nil)))
 
 (defun runtime-journal-layout (session)
-  (or (and (fboundp 'runtime-session-store-layout)
-           (runtime-session-store-layout session))
-      (let ((service (and session (runtime-session-find-service session :store-layout))))
-        (and service (funcall service)))))
+  (and (fboundp 'pp.rt.session:runtime-session-store-layout)
+       (pp.rt.session:runtime-session-store-layout session)))
 (defun runtime-journal-path (session)
   (let ((layout (runtime-journal-layout session)))
     (unless layout (error "lifecycle journal store is unavailable"))
@@ -264,11 +262,3 @@
               (string= key (runtime-journal-fenced-done-key entry))) t state))
    nil))
 
-(setf (symbol-function 'journal-append) #'runtime-journal-append)
-(setf (symbol-function 'journal-fold) #'runtime-journal-fold)
-(setf (symbol-function 'journal-parse-line) #'runtime-journal-parse-line)
-(setf (symbol-function 'journal-entry-line) #'runtime-journal-entry-line)
-(setf (symbol-function 'journal-pending-fenced-actions)
-      #'runtime-journal-pending-fenced-actions)
-(setf (symbol-function 'journal-has-fenced-done-p)
-      #'runtime-journal-has-fenced-done-p)

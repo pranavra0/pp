@@ -1,5 +1,5 @@
 ;;;; Fenced intent/done actions and crash recovery.
-(in-package #:pp.runtime)
+(in-package #:pp.rt.fenced)
 
 (defconstant +runtime-fenced-retry+ :retry)
 (defconstant +runtime-fenced-abort+ :abort)
@@ -17,7 +17,7 @@
          (epoch (pp.kernel:hash-concat
                  (list "fenced-epoch" (princ-to-string stamp)
                        (princ-to-string pid) (princ-to-string nonce)))))
-    (runtime-session-start-fenced-epoch session epoch)
+    (pp.rt.session:runtime-session-start-fenced-epoch session epoch)
     epoch))
 
 (defun runtime-fenced-ensure-epoch (session)
@@ -92,7 +92,7 @@
                        (t (error "fenced: run must be a list, vector, or string")))))
           (unless (consp argv) (error "fenced: run argv is empty"))
           (multiple-value-bind (exit stdout stderr)
-              (runtime-process-exec argv)
+              (pp.rt.lifecycle.process:runtime-process-exec argv)
             (make-vmap
              (list (cons (make-vstring "exit") (make-vint exit))
                    (cons (make-vstring "out") (make-vstring stdout))
@@ -124,8 +124,8 @@
          (objects (runtime-domain-service-value session :store-objects)))
     (unless (runtime-journal-has-fenced-done-p session key)
       (when objects
-        (object-repository-put-fenced objects :hash spec-hash
-                                      :value (runtime-fenced-force session spec)))
+        (pp.rt.store:object-repository-put-fenced objects :hash spec-hash
+                                                  :value (runtime-fenced-force session spec)))
       (runtime-journal-append
        session (make-runtime-journal-fenced-intent key epoch kind spec-hash))
       (let ((result (runtime-fenced-run-command session spec)))
@@ -139,15 +139,15 @@
    (list (cons (make-vstring "aborted") (make-vbool t))
          (cons (make-vstring "reason") (make-vstring reason))
          (cons (make-vstring "kind")
-               (make-vstring (runtime-journal-fenced-intent-kind entry)))
+               (make-vstring (pp.rt.journal:runtime-journal-fenced-intent-kind entry)))
          (cons (make-vstring "spec-hash")
-               (make-vstring (runtime-journal-fenced-intent-spec-hash entry))))))
+               (make-vstring (pp.rt.journal:runtime-journal-fenced-intent-spec-hash entry))))))
 
 (defun runtime-fenced-recover-entry (session entry decision)
-  (let* ((key (runtime-journal-fenced-intent-key entry))
-         (epoch (runtime-journal-fenced-intent-epoch entry))
-         (kind (runtime-journal-fenced-intent-kind entry))
-         (spec-hash (runtime-journal-fenced-intent-spec-hash entry))
+  (let* ((key (pp.rt.journal:runtime-journal-fenced-intent-key entry))
+         (epoch (pp.rt.journal:runtime-journal-fenced-intent-epoch entry))
+         (kind (pp.rt.journal:runtime-journal-fenced-intent-kind entry))
+         (spec-hash (pp.rt.journal:runtime-journal-fenced-intent-spec-hash entry))
          (expected (runtime-fenced-action-key epoch kind spec-hash))
          (result nil))
     (if (not (string= key expected))
@@ -155,7 +155,7 @@
         (let ((objects (runtime-domain-service-value session :store-objects))
               (spec nil))
           (setf spec (and objects
-                          (object-repository-get-fenced objects :hash spec-hash)))
+                          (pp.rt.store:object-repository-get-fenced objects :hash spec-hash)))
           (if (null spec)
               (setf result (runtime-fenced-aborted-value entry "spec missing from store"))
               (setf result
@@ -167,7 +167,7 @@
      session (make-runtime-journal-fenced-done
               key (runtime-fenced-result-hash result)))
     (when (string= key expected)
-      (runtime-session-resume-fenced-epoch session epoch))
+      (pp.rt.session:runtime-session-resume-fenced-epoch session epoch))
     (string= key expected)))
 
 (defun runtime-fenced-recover-unknown (session decision)
@@ -182,6 +182,3 @@
   (runtime-session-clear-fenced-epoch session)
   t)
 
-(setf (symbol-function 'fenced-register) #'runtime-fenced-register)
-(setf (symbol-function 'fenced-drain) #'runtime-fenced-drain)
-(setf (symbol-function 'fenced-recover-unknown) #'runtime-fenced-recover-unknown)

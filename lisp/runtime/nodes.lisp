@@ -1,5 +1,7 @@
 ;;;; Persistent node execution, trace capture, and store callbacks.
-(in-package #:pp.runtime)
+(in-package #:pp.rt.node)
+
+
 
 (defun runtime-node-error (message &optional (code "runtime.node"))
   (if (fboundp 'language-fail) (language-fail message code) (error "~A" message)))
@@ -77,18 +79,6 @@
               (and item (runtime-node-authority-kind item seen))))
           (free-variable-names (closure-body closure)))))
       (t nil))))
-(defun runtime-node-persistent-value-p (value &optional (seen nil))
-  (when (member value seen :test #'eq) (return-from runtime-node-persistent-value-p t))
-  (let ((seen (cons value seen)))
-    (cond ((or (typep value 'value-capability) (typep value 'value-sealed)
-               (typep value 'value-closure) (typep value 'value-builtin)
-               (typep value 'value-thunk)) nil)
-          ((typep value 'value-pair) (and (runtime-node-persistent-value-p (value-pair-car value) seen) (runtime-node-persistent-value-p (value-pair-cdr value) seen)))
-          ((typep value 'value-vector) (every (lambda (x) (runtime-node-persistent-value-p x seen)) (coerce (value-vector-values value) 'list)))
-          ((typep value 'value-map) (every (lambda (e) (and (runtime-node-persistent-value-p (car e) seen) (runtime-node-persistent-value-p (cdr e) seen))) (value-map-entries value)))
-          ((typep value 'value-set) (every (lambda (x) (runtime-node-persistent-value-p x seen)) (value-set-values value)))
-          ((typep value 'value-env-map) (every (lambda (e) (runtime-node-persistent-value-p (cdr e) seen)) (value-env-map-bindings value)))
-          (t t))))
 
 (defun runtime-node-forced-free-variables (state thunk)
   (let ((env (thunk-environment thunk)) (out nil))
@@ -100,7 +90,7 @@
                             (runtime-evaluator-force state value)
                           (language-error () (runtime-evaluator-error "free variable could not be forced" "evaluator.node")))
                         nil)) out)))))
-(defun runtime-node-key-of (state thunk)
+(defmethod runtime-node-key-of-state (state thunk)
   (let ((free (runtime-node-forced-free-variables state thunk)))
     (dolist (entry free)
       (let ((kind (and (cdr entry)
@@ -108,17 +98,20 @@
         (when kind
           (runtime-node-error
            (format nil
-                   (if (eq kind :sealed)
-                       "node: free variable '~A' may not be or contain a sealed value"
-                       "node: free variable '~A' may not be or contain authority")
+                   (cond ((eq kind :sealed)
+                          "node: free variable '~A' may not be or contain a sealed value")
+                         ((eq kind :capability)
+                          "node: free variable '~A' may not be or contain a capability")
+                         (t
+                          "node: free variable '~A' may not be or contain authority"))
                    (car entry))
            "runtime.authority"))))
     (node-key :code (thunk-expression thunk) :free-variables free
               :argument-values (if (typep (thunk-kind thunk) 'thunk-kind-persistent)
                                    (thunk-kind-persistent-argument-values (thunk-kind thunk)) nil))))
-(defun runtime-node-key (state thunk) (runtime-node-key-of state thunk))
+(defun runtime-node-key (state thunk) (runtime-node-key-of-state state thunk))
 (defun runtime-node-data-closed-p (state thunk)
-  (every (lambda (entry) (or (null (cdr entry)) (runtime-node-persistent-value-p (cdr entry))))
+  (every (lambda (entry) (or (null (cdr entry)) (durable-value-p (cdr entry))))
          (runtime-node-forced-free-variables state thunk)))
 
 (defun runtime-node-record-child (session child-key value)
@@ -139,6 +132,32 @@
              session (or (thunk-hash child-thunk)
                          (store-identity-string child-key))
              (runtime-node-frame-key parent))))))))
+(defmethod runtime-node-engine-force (session state thunk run &key observer)
+  "Canonical persistent-node entry used by the evaluator.
+
+OBSERVER, when supplied, receives :hit or :rebuilt for THIS force.
+Disposition is an explicit result argument, never ambient hook state."
+  (unless session
+    (runtime-node-error "persistent node requires a runtime session"
+                        "runtime.node"))
+  (let* ((key (runtime-node-key-of-state state thunk))
+         ;; One injection path: the session's :node-force service (which
+         ;; placement/scheduling may replace) in front of the canonical
+         ;; engine.  The evaluator never sees a mutable callback.
+         (service (runtime-session-find-service session :node-force))
+         (result (if service
+                     (funcall service state thunk key run observer)
+                     (runtime-node-force-with-session
+                      session state thunk key run observer))))
+    (setf (thunk-status thunk) (make-thunk-status-evaluated result))
+    result))
+(defmethod runtime-node-engine-invalidate (session keys)
+  "Invalidate in-memory node memo state; durable traces remain authoritative."
+  (dolist (key keys)
+    (let ((thunk (runtime-session-find-node-thunk session key)))
+      (when thunk
+        (setf (thunk-status thunk) (make-thunk-status-unevaluated)))))
+  keys)
 (defun runtime-node-serve-hit (thunk result &optional key session)
   (cond ((runtime-cache-hit-ok-p result)
          (let ((value (runtime-cache-result-value result)))
@@ -164,7 +183,7 @@
     ;; capabilities, not that forcing may recapture the caller's scope.
     (copy-list (thunk-kind-persistent-captured-caps kind))))
 (defun runtime-node-persist (session key value outcome reads)
-  (unless (runtime-node-persistent-value-p value)
+  (unless (durable-value-p value)
     (runtime-node-error "persistent node result contains authority or code"
                         "runtime.authority"))
   (let ((objects (runtime-node-repository session :store-objects))
@@ -189,7 +208,7 @@
 
 (defun runtime-node-check-determinism (policy key captured-capabilities run value)
   (when (and (runtime-cache-check-enabled-p policy)
-             (runtime-node-persistent-value-p value))
+             (durable-value-p value))
     (let* ((second-reads nil)
            (second-collector
             (lambda (ignored-session cell-id hash)
@@ -223,7 +242,7 @@
                    "node ~A: volatile — an identical run produced a different result hash"
                    (runtime-cache-short-key key))))))))
 
-(defun runtime-node-force-in-scope (session state thunk key run)
+(defun runtime-node-force-in-scope (session state thunk key run observer)
   (declare (ignore state))
   (let* ((key (runtime-node-key-object key))
          (captured-capabilities (runtime-node-captured-capabilities thunk))
@@ -246,8 +265,9 @@
                :key key :observe-id #'runtime-node-observed-cell-id
                :replay #'runtime-observation-replay :authorized authorized)))
     (when (runtime-cache-result-hit-p hit)
-      (return-from runtime-node-force-in-scope
-        (runtime-node-serve-hit thunk hit key session)))
+      (let ((served (runtime-node-serve-hit thunk hit key session)))
+        (when (and served observer) (funcall observer :hit))
+        (return-from runtime-node-force-in-scope served)))
     (setf (thunk-status thunk) (make-thunk-status-evaluating))
     (let* ((reads nil)
            (collector
@@ -264,8 +284,7 @@
                    (push pair reads))))))
       (handler-case
           (let* ((caller-caps
-                   (copy-list
-                    (runtime-evaluator-state-capabilities state)))
+                   (copy-list (runtime-dynamic-capabilities)))
                  (value
                    (runtime-dynamic-with-capabilities
                     captured-capabilities
@@ -276,8 +295,7 @@
                          (runtime-dynamic-with-node
                           (make-runtime-node-frame :key key :persistent t)
                           run)))))))
-            (setf (runtime-evaluator-state-capabilities state) caller-caps)
-            (runtime-evaluator-notify-capabilities state caller-caps)
+            (runtime-dynamic-replace-top-capability-frame! caller-caps)
             (let ((authority-kind (runtime-node-authority-kind value)))
               (when authority-kind
                 (runtime-node-error
@@ -287,14 +305,15 @@
                  "runtime.authority")))
             ;; Executable results are process-local.  Return them to the
             ;; caller, but do not publish an object or trace for them.
-            (when (runtime-node-persistent-value-p value)
+            (when (durable-value-p value)
               (when parent (runtime-node-record-child session key value))
               (runtime-node-persist session key value :ok (nreverse reads))
               (setf (thunk-status thunk) (make-thunk-status-evaluated value))
               (runtime-node-check-determinism
                policy key captured-capabilities run value))
-            (unless (runtime-node-persistent-value-p value)
+            (unless (durable-value-p value)
               (setf (thunk-status thunk) (make-thunk-status-evaluated value)))
+            (when observer (funcall observer :rebuilt))
             value)
         (language-error (condition)
           (setf (thunk-status thunk) (make-thunk-status-unevaluated))
@@ -303,24 +322,52 @@
               (let ((failure (make-vstring message)))
                 (when parent (runtime-node-record-child session key failure))
                 (runtime-node-persist session key failure :failed
-                                       (nreverse reads)))))
-          (error condition))
+                                      (nreverse reads))))
+            (error condition)))
         (error (condition)
           (setf (thunk-status thunk) (make-thunk-status-unevaluated))
           (error condition)))))))
 
-(defun runtime-node-force-with-session (session state thunk key run)
+(defun runtime-node-force-with-session (session state thunk key run observer)
   (if (runtime-dynamic-current nil)
-      (runtime-node-force-in-scope session state thunk key run)
-      (runtime-dynamic-with-top-level session (lambda () (runtime-node-force-in-scope session state thunk key run)))))
-(defun runtime-node-force-callback (session state thunk key run)
-  (runtime-node-force-with-session session state thunk key run))
-(defun runtime-node-force (session state thunk key run)
-  (runtime-node-force-with-session session state thunk key run))
+      (runtime-node-force-in-scope session state thunk key run observer)
+      (runtime-dynamic-with-top-level
+       session
+       (lambda () (runtime-node-force-in-scope
+                   session state thunk key run observer)))))
 
-(defun runtime-node-install-session (session layout)
-  (when (fboundp 'runtime-effects-install-session)
-    (runtime-effects-install-session session))
+(defun runtime-node-call (session function arguments &key observer)
+  "Run FUNCTION over ARGUMENTS as one persistent node.
+
+The Node Engine owns every mechanic here: AST application, thunk
+manufacture, cache lookup, execution, and durable persistence.  Reconcile
+supplies only the pure computation and an optional disposition OBSERVER
+receiving :hit or :rebuilt for THIS force."
+  (runtime-dynamic-with-capabilities
+   nil
+   (lambda ()
+     (let* ((state (runtime-session-evaluator session))
+            (environment (runtime-session-global-env session))
+            (expression
+              (make-eapply
+               (make-eliteral function)
+               (mapcar #'make-eliteral arguments)))
+            (thunk
+              (runtime-evaluator-make-thunk
+               expression environment
+               :kind (make-persistent-thunk-kind nil arguments)))
+            (run
+              (lambda ()
+                ;; Deep-force before the node boundary persists/wraps the
+                ;; result: a lazy body may return unevaluated thunks.
+                (runtime-evaluator-force-deep
+                 (runtime-session-evaluator session)
+                 (runtime-evaluator-run-expression
+                  state expression environment)))))
+       (runtime-node-engine-force session state thunk run
+                                  :observer observer)))))
+
+(defmethod runtime-node-install-session (session layout)
   (runtime-store-with-repositories
    layout
    (lambda (layout objects blobs traces cells)
@@ -331,12 +378,11 @@
      (runtime-session-register-service session :store-cells (lambda () cells))
      (let ((policy (runtime-cache-policy-create)))
        (runtime-session-register-service session :cache-policy (lambda () policy)))
-     (runtime-session-register-callback
+     (runtime-session-register-service
       session :node-force
-      (lambda (state thunk key run) (runtime-node-force-callback session state thunk key run))
-      )
+      (lambda (state thunk key run observer)
+        ;; Track every forced node as a GC root.  The scheduler pins this
+        ;; service as its base, so recording survives placement replacement.
+        (when key (runtime-session-add-wanted-node session key))
+        (runtime-node-force-with-session session state thunk key run observer)))
      session)))
-(defun node-key-of (state thunk) (runtime-node-key-of state thunk))
-(defun node-force-persistent (session state thunk key run)
-  (runtime-node-force session state thunk key run))
-(defun node-serve-hit (thunk result) (runtime-node-serve-hit thunk result))

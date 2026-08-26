@@ -1,5 +1,5 @@
 ;;;; Process-domain primitives and process-isolation records.
-(in-package #:pp.runtime)
+(in-package #:pp.rt.lifecycle.process)
 
 (defstruct (runtime-process-record
             (:constructor make-runtime-process-record
@@ -18,8 +18,8 @@
 
 (defun runtime-process-require-capability ()
   (unless (runtime-process-capability-p)
-    (if (fboundp 'runtime-effects-error)
-        (runtime-effects-error "capability error: no process authority"
+    (if (fboundp 'pp.rt.effects:runtime-effects-error)
+        (pp.rt.effects:runtime-effects-error "capability error: no process authority"
                                "runtime.capability")
         (error "capability error: no process authority")))
   t)
@@ -44,10 +44,6 @@
                                                (pathname (format nil "~A/" directory)))
               when (probe-file candidate)
                 do (return (namestring (truename candidate)))))))
-
-(defun runtime-process-resolve-cmd (command)
-  (runtime-process-resolve-command command))
-
 (defun runtime-process-read-file (path)
   (if (probe-file path)
       (with-open-file (stream path :direction :input :element-type 'character)
@@ -251,12 +247,11 @@
        :error-path (runtime-process-io-path session name "err")))))
 
 (defun runtime-process-records (session)
-  (let ((table (or (runtime-session-find-service session :process-records)
-                   (let ((new (make-hash-table :test #'equal)))
-                     (runtime-session-register-service
-                      session :process-records (lambda () new))
-                     new))))
-    ;; The index is durable, while the table is intentionally session-local.
+  ;; Pure loader over the durable index plus session table: no host or OS
+  ;; observation happens here. The single alive probe per record lives in
+  ;; runtime-process-domain-observe, which freezes it into a snapshot;
+  ;; diff consumes snapshots only.
+  (let ((table (runtime-session-process-records session)))
     (dolist (name (%runtime-process-state-names
                    (runtime-process-state-get session "proc" "known-services")))
       (unless (gethash name table)
@@ -265,10 +260,6 @@
           (when state
             (setf (gethash name table)
                   (%runtime-process-record-from-state session name state))))))
-    (maphash (lambda (name record)
-               (declare (ignore name))
-               (runtime-process-reap record))
-             table)
     table))
 
 (defun runtime-process-save-record (session record)
@@ -312,21 +303,21 @@
             record)))))
 
 (defun runtime-process-state-path (session domain key)
-  (let* ((layout (runtime-session-store-layout session))
+  (let* ((layout (pp.rt.session:runtime-session-store-layout session))
          (directory (merge-pathnames
                      (format nil "domain-state/~A/" domain)
-                     (store-directory-pathname
-                      (store-layout-root layout)))))
-    (store-ensure-directory directory)
+                     (pp.rt.store:store-directory-pathname
+                      (pp.rt.store:store-layout-root layout)))))
+    (pp.rt.store:store-ensure-directory directory)
     (namestring
      (merge-pathnames (pp.kernel:hash-string key) directory))))
 
 (defun runtime-process-io-path (session name extension)
-  (let* ((layout (runtime-session-store-layout session))
+  (let* ((layout (pp.rt.session:runtime-session-store-layout session))
          (directory (merge-pathnames "domain-state/proc-io/"
-                                     (store-directory-pathname
-                                      (store-layout-root layout)))))
-    (store-ensure-directory directory)
+                                     (pp.rt.store:store-directory-pathname
+                                      (pp.rt.store:store-layout-root layout)))))
+    (pp.rt.store:store-ensure-directory directory)
     (namestring
      (merge-pathnames
       (format nil "svc-~A.~A" (pp.kernel:hash-string name) extension)
@@ -334,10 +325,10 @@
 
 (defun runtime-process-state-get (session domain key)
   (let* ((path (runtime-process-state-path session domain key))
-         (bytes (store-read-octets path)))
+         (bytes (pp.rt.store:store-read-octets path)))
     (when bytes
       (let ((value (ignore-errors
-                     (pp.kernel:decode-value (store-octets-string bytes)))))
+                     (pp.kernel:decode-value (pp.rt.store:store-octets-string bytes)))))
         (or value
             (error "corrupt durable process state: ~A" key))))))
 
@@ -354,8 +345,8 @@
   (let ((path (runtime-process-state-path session domain key)))
     (if (typep value 'pp.kernel:value-nil)
         (ignore-errors (delete-file path))
-        (store-atomic-replace path
-                              (pp.kernel:encode-value value)))))
+        (pp.rt.store:store-atomic-replace path
+                                          (pp.kernel:encode-value value)))))
 
 (defun runtime-process-start (session name spec)
   (runtime-process-require-capability)
@@ -426,7 +417,8 @@
   (runtime-process-require-capability)
   (let ((record (or record (runtime-process-record session name))))
     (when record
-      (runtime-journal-append session (make-runtime-journal-proc-stop-intent name))
+      (runtime-journal-append
+       session (make-runtime-journal-proc-stop-intent name))
       #+sbcl
       (unless (%runtime-process-wait-exit
                (runtime-process-record-pid record) 0)
@@ -439,7 +431,8 @@
           ;; Reap a child after SIGKILL without waiting indefinitely.
           (%runtime-process-wait-exit
            (runtime-process-record-pid record) 0.25)))
-      (runtime-journal-append session (make-runtime-journal-proc-stop-done name))
+      (runtime-journal-append
+       session (make-runtime-journal-proc-stop-done name))
       (runtime-process-state-put
        session "proc" (format nil "svc:~A" name)
        (pp.kernel:make-vnil))
@@ -460,6 +453,116 @@
   (let ((provider (runtime-session-find-service session :process-stop)))
     (if provider (funcall provider session name record)
         (runtime-process-stop session name record))))
+(defstruct (runtime-process-plan
+            (:constructor make-runtime-process-plan
+                (actions started stopped restarted)))
+  actions started stopped restarted)
 
-(setf (symbol-function 'process-resolve-cmd) #'runtime-process-resolve-command)
-(setf (symbol-function 'process-exec) #'runtime-process-exec)
+(defstruct (runtime-process-snapshot
+            (:constructor make-runtime-process-snapshot
+                (&key name pid alive spec-hash spec status)))
+  name pid alive spec-hash spec status)
+
+(defun runtime-process-domain-observe (session)
+  ;; The domain's single OS observation point: one alive probe (reap) per
+  ;; record, frozen into an immutable per-service snapshot. Everything
+  ;; downstream, diff in particular, is a pure function of these snapshots.
+  (let ((snapshots (make-hash-table :test #'equal)))
+    (maphash
+     (lambda (name record)
+       (let ((record (runtime-process-reap record)))
+         (setf (gethash name snapshots)
+               (make-runtime-process-snapshot
+                :name name
+                :pid (runtime-process-record-pid record)
+                :alive (eq (runtime-process-record-status record) :running)
+                :spec-hash (runtime-process-record-spec-hash record)
+                :spec (runtime-process-record-spec record)
+                :status (runtime-process-record-status record)))))
+     (runtime-process-records session))
+    snapshots))
+(defun runtime-process-domain-diff (session observed desired)
+  ;; Pure over the observation snapshot: no capability authority, no process
+  ;; table access, no OS probes. Authority is enforced at mutation time by
+  ;; runtime-process-start/-stop; plan actions carry a name and desired
+  ;; spec, never mutable records or stale pids.
+  (declare (ignore session))
+  (let ((seen (make-hash-table :test #'equal))
+        (actions nil) (started 0) (stopped 0) (restarted 0))
+    (dolist (entry (value-map-entries desired))
+      (let* ((name (runtime-process-text (car entry) "supervise service"))
+             (spec (cdr entry))
+             (hash (runtime-process-spec-hash spec))
+             (snapshot (gethash name observed)))
+        (setf (gethash name seen) t)
+        (cond
+          ((and snapshot
+                (or (not (string= hash
+                                  (runtime-process-snapshot-spec-hash snapshot)))
+                    (not (runtime-process-snapshot-alive snapshot))))
+           (push (list :restart name spec) actions)
+           (incf stopped) (incf restarted))
+          ((not snapshot)
+           (push (list :start name spec) actions)
+           (incf started)))))
+    (maphash (lambda (name snapshot)
+               (unless (gethash name seen)
+                 (push (list :stop name nil) actions)
+                 (incf stopped)))
+             observed)
+    (make-runtime-process-plan
+     (nreverse actions) started stopped restarted)))
+(defun runtime-process-domain-save-known-services (session)
+  (let ((names nil))
+    (maphash (lambda (name ignored)
+               (declare (ignore ignored))
+               (push name names))
+             (runtime-process-records session))
+    (labels ((value-list (items)
+               (if (null items)
+                   (pp.kernel:make-vnil)
+                   (pp.kernel:make-vpair
+                    (pp.kernel:make-vstring (first items))
+                    (value-list (rest items))))))
+      (runtime-process-state-put
+       session "proc" "known-services"
+       (value-list (sort names #'string<))))))
+(defun runtime-process-domain-apply (session plan)
+  (unless (typep plan 'runtime-process-plan)
+    (error "supervise: invalid process plan"))
+  (dolist (action (runtime-process-plan-actions plan))
+    (destructuring-bind (kind name spec) action
+      (when (member kind '(:stop :restart))
+        ;; Resolve the CURRENT record at mutation time; the pid carried in
+        ;; the plan is an identifier, never the mutation target.
+        (let ((record (runtime-process-record session name)))
+          (runtime-process-stop-service session name record))
+        (when (eq kind :stop)
+          (remhash name (runtime-process-records session))))
+      (unless (eq kind :stop)
+        (runtime-process-start-service session name spec))))
+  (runtime-process-domain-save-known-services session)
+  (format *error-output* "supervise: started=~D stopped=~D restarted=~D~%"
+          (runtime-process-plan-started plan)
+          (runtime-process-plan-stopped plan)
+          (runtime-process-plan-restarted plan))
+  (finish-output *error-output*)
+  plan)
+
+(defun runtime-process-plan-converged-p (session plan)
+  (declare (ignore session))
+  (and (null (runtime-process-plan-actions plan))
+       (zerop (runtime-process-plan-started plan))
+       (zerop (runtime-process-plan-stopped plan))
+       (zerop (runtime-process-plan-restarted plan))))
+
+(defun runtime-process-domain-entry (session)
+  (make-runtime-domain-entry
+   :namespace '("process")
+   :observe (lambda () (runtime-process-domain-observe session))
+   :diff (lambda (observed desired)
+           (runtime-process-domain-diff session observed desired))
+   :apply (lambda (plan) (runtime-process-domain-apply session plan))
+   :plan-valid-p
+   (lambda (plan) (typep plan 'runtime-process-plan))
+   :converged-p #'runtime-process-plan-converged-p))

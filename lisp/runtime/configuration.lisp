@@ -1,37 +1,14 @@
 ;;;; Ambient configuration snapshots and reads.
-(in-package #:pp.runtime)
+(in-package #:pp.rt.config)
 
 (defun runtime-configuration-error (message &optional (code "runtime.configuration"))
   (if (fboundp 'language-fail) (language-fail message code) (error "~A" message)))
 
-(defun runtime-configuration-value-durable-p (value &optional (seen nil))
-  "True when VALUE contains only persistent data, not authority or executable code."
-  (when (member value seen :test #'eq) (return-from runtime-configuration-value-durable-p t))
-  (let ((seen (cons value seen)))
-    (cond ((or (typep value 'value-capability) (typep value 'value-sealed)
-               (typep value 'value-closure) (typep value 'value-builtin)
-               (typep value 'value-thunk)) nil)
-          ((typep value 'value-pair)
-           (and (runtime-configuration-value-durable-p (value-pair-car value) seen)
-                (runtime-configuration-value-durable-p (value-pair-cdr value) seen)))
-          ((typep value 'value-vector)
-           (every (lambda (x) (runtime-configuration-value-durable-p x seen))
-                  (coerce (value-vector-values value) 'list)))
-          ((typep value 'value-map)
-           (every (lambda (e) (and (runtime-configuration-value-durable-p (car e) seen)
-                                   (runtime-configuration-value-durable-p (cdr e) seen)))
-                  (value-map-entries value)))
-          ((typep value 'value-set)
-           (every (lambda (x) (runtime-configuration-value-durable-p x seen)) (value-set-values value)))
-          ((typep value 'value-env-map)
-           (every (lambda (e) (runtime-configuration-value-durable-p (cdr e) seen))
-                  (value-env-map-bindings value)))
-          (t t))))
 
 (defun runtime-configuration-normalize (config)
   (unless (typep config 'value-map)
     (runtime-configuration-error "configuration must be a map"))
-  (unless (runtime-configuration-value-durable-p config)
+  (unless (durable-value-p config)
     (runtime-configuration-error "configuration may not contain authority or code" "runtime.authority"))
   (make-vmap (canonical-map-entries (value-map-entries config))))
 
@@ -39,11 +16,9 @@
   (hash-concat (cons "cfg" (mapcar #'hash-value configs))))
 
 (defun runtime-configuration-current ()
-  (if (runtime-dynamic-current nil)
-      (runtime-dynamic-config)
-      (let ((session (runtime-dynamic-session nil)))
-        (and session (runtime-session-evaluator session)
-             (runtime-evaluator-state-config-stack (runtime-session-evaluator session))))))
+  ;; Configurations are dynamic extent: outside a scope there are none.
+  (when (runtime-dynamic-current nil)
+    (runtime-dynamic-config)))
 
 (defun runtime-configuration-snapshot (&optional (configs (runtime-configuration-current)))
   (copy-list configs))
@@ -71,8 +46,8 @@
                           ((typep key 'value-keyword) (value-keyword-value key))
                           (t (runtime-configuration-error
                               "configuration key must be text")))))
-      (when (fboundp 'runtime-observation-record)
-        (runtime-observation-record (make-cell-config cell-key) hash))
+      (when (fboundp 'pp.rt.observation:runtime-observation-record)
+        (pp.rt.observation:runtime-observation-record (make-cell-config cell-key) hash))
       (values value present))))
 
 (defun runtime-configuration-with (config thunk)
