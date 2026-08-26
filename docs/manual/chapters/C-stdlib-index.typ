@@ -267,11 +267,12 @@ scheduler's fan-out point.
 
 == Domains
 
-The domain policies are pp libraries that `pp` auto-loads for you:
-`stdlib/domain-fs.pp` under `--reconcile`, `stdlib/domain-proc.pp` under
-`--supervise` (each after `list.pp`, `map.pp`, and `string.pp`). The trusted
-mechanics they call — `tree-observe`, `materialize-file`, `proc-spawn`, and so
-on — are runtime providers reached only through `perform`.
+The built-in `--reconcile`/`--supervise` domains register their policy
+natively. `stdlib/domain-fs.pp` and `stdlib/domain-proc.pp` package the same
+policies as ordinary pp libraries for explicit registration through
+`register-fs-domain(root, write-cap)` and `register-proc-domain(write-cap)`.
+The trusted mechanics they call — `tree-observe`, `materialize-file`,
+`proc-spawn`, and so on — are runtime providers reached only through `perform`.
 You normally interact with a domain through the registration entry point; the
 rest is its internal policy, listed here for readers of the source.
 

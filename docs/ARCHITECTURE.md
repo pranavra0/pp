@@ -107,10 +107,10 @@ operations. `session.lisp` owns operation views and mutable state grouped by
 lifetime. `begin-evaluation`, `begin-pass`, and `begin-watch` are reset
 boundaries; callers do not mutate evaluator records directly.
 
-`dynamic-scope.lisp` brackets effects for capabilities, configuration,
-handlers, trace frames, nodes, domains, and observations. It owns only the
-corresponding dynamic stacks. Missing services fail closed rather than falling
-back to ambient access.
+`dynamic-scope.lisp` brackets capabilities, configuration, handlers,
+effects, nodes, and domains. It owns only the corresponding dynamic
+stacks. Missing services fail closed rather than falling back to ambient
+access.
 
 ## Effects and authority
 
@@ -208,6 +208,51 @@ reconciliation, scheduling, transport, and lifecycle command boundaries.
 
 Run `bin/pp --help` for the current command list. Do not duplicate flag rows
 in this document.
+
+## Final ownership map
+
+The implementation has one owner for each semantic responsibility:
+
+| Responsibility | Owner | Forbidden second owner |
+|---|---|---|
+| AST constructors and semantic dependencies | `pp.kernel` (`core-model.lisp`, `identity.lisp`) | frontend/runtime free-variable walkers |
+| Value identity and node-key composition | `pp.kernel` (`identity.lisp`, `hasher.lisp`) | evaluator, lifecycle, distribution, or app key builders |
+| Durable language-value policy and encoding | `pp.kernel` (`codec.lisp`) | node/config predicates with broad acceptance |
+| Continuation evaluation and ephemeral delays | `runtime/evaluator.lisp`, `evaluator-support/state.lisp` | host evaluation or provider evaluators |
+| Dynamic runtime context and brackets | `runtime/dynamic-scope.lisp`, session-owned context | evaluator field mirrors or process-global registries |
+| Effect dispatch and observation cells | `dynamic-scope.lisp`, `effects.lisp`, `observations.lisp` | application effect dispatch loops |
+| Persistent nodes, cache, traces, authority, and persistence | `runtime/nodes.lisp`, `cache.lisp`, `store.lisp` | evaluator or watch cache/persistence paths |
+| Placement | `distribution.lisp` | semantic identity, trace, or authority decisions |
+| Reconciliation and fencing | `lifecycle/domains.lisp`, `watch.lisp`, `fenced.lisp`, `journal.lisp` | application reconciliation loops |
+| Concrete host providers and CLI | `lisp/app/`, lifecycle provider modules | kernel/frontend/runtime host access |
+
+The dependency direction is:
+
+```text
+frontend -> kernel
+runtime -> frontend -> kernel
+app -> runtime -> frontend -> kernel
+providers -> runtime operation/context boundaries
+distribution -> node miss boundary (placement only)
+lifecycle -> node/context/store boundaries
+```
+
+Reverse dependencies are forbidden: kernel cannot depend on runtime or app;
+frontend cannot depend on app; runtime cannot import app; distribution cannot
+construct semantic keys or validate traces; lifecycle planning cannot write
+node objects/traces; and application code cannot reimplement evaluator, node,
+or reconciliation semantics.
+
+## Distinction table
+
+| Distinction | First concept | Second concept | Boundary |
+|---|---|---|---|
+| Identity vs validity vs authority | node key | trace verification | hit-time capability check |
+| Node vs delay | persistent reusable computation | ephemeral in-memory thunk | Node Engine vs evaluator force |
+| Durable vs wire | canonical pp value | process-boundary descriptor | codec vs distribution validator |
+| Handler vs scheduler | semantic effect precedence | execution placement | dynamic dispatcher vs distribution |
+| Reconciliation vs fenced action | convergent observe/diff/apply/verify | non-repeatable intent/done action | lifecycle domains vs fenced journal |
+| Observation vs effect | recorded world fact/cell | operation that may read or mutate | observation recorder and effect dispatcher |
 
 ## Verification map
 

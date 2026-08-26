@@ -659,10 +659,12 @@ materialize/remove, process launch/reap, and per-domain state persistence)
 live in runtime providers (`tree-observe`, `materialize-file`, `remove-file`,
 `proc-spawn`, `proc-alive?`, `proc-stop`, `proc-reap`, and domain-state
 operations), while all policy (the tree-walk diff and start/stop/restart
-decision) lives in `stdlib/domain-fs.pp` and `stdlib/domain-proc.pp`.
+decision) lives in the built-in domain implementations, with equivalent
+pp-level policies packaged as `stdlib/domain-fs.pp` and
+`stdlib/domain-proc.pp` for explicit registration.
 
-`pp --reconcile ROOT prog.pp` auto-loads `stdlib/domain-fs.pp` and registers
-it with a write capability restricted to ROOT, taking the program's final
+`pp --reconcile ROOT prog.pp` registers the built-in native fs domain with a
+write capability restricted to ROOT, taking the program's final
 canonical tree value as the filesystem domain's desired state. It diffs file
 entries against observed reality by blob identity, applies atomically,
 deletes unmanaged files (single writer), journals, requires a filesystem
@@ -681,8 +683,12 @@ Push stabilize: `pp --watch --stabilize prog.pp` uses the reverse-edge index
 from stored traces to reset only dirty thunks, so clean nodes skip repository
 lookup entirely (`tests/032`).
 
-The process domain: `pp --supervise prog.pp` auto-loads
-`stdlib/domain-proc.pp` and registers it. The program's final value is a map
+The process domain: `pp --supervise prog.pp` registers the built-in
+native process domain (`runtime-process-domain-entry`), which implements
+the same start/stop/restart-on-spec-change policy that
+`stdlib/domain-proc.pp` packages for explicit third-party registration
+through `register-proc-domain` (`tests/049`); `--supervise` itself loads
+no pp library. The program's final value is a map
 of service name to spec, kept in sync with observed reality: starts missing
 services, stops removed ones, restarts on spec change (specs compared
 structurally via `hash-value`, which canonicalises map-key order like the

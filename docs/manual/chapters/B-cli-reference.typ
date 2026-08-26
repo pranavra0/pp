@@ -93,8 +93,8 @@ flags inspect, bypass, audit, and reclaim that store.
 
 These turn a program's value into managed state in the world. `--reconcile`
 materializes a `{relpath → content}` map as a file tree; `--supervise` drives a
-`{name → spec}` map of long-running processes. Both auto-load their domain
-policy from the stdlib and both are effectful, so both need grants.
+`{name → spec}` map of long-running processes. Both use their built-in domain
+and both are effectful, so both need grants.
 
 #table(
   columns: (auto, 1fr),
@@ -102,8 +102,8 @@ policy from the stdlib and both are effectful, so both need grants.
   align: (left, left),
   stroke: (x: none, y: 0.5pt + luma(220)),
   table.header([*Flag*], [*Meaning*]),
-  [`--reconcile <root> <file.pp>`], [Materialize the program's map value as a file tree under `<root>`, creating/updating/deleting by content hash. Auto-loads `stdlib/domain-fs.pp`. Needs `fs:<root>:wo` (or `:rw`).],
-  [`--supervise <file.pp>`], [Converge the program's process map: start/restart/stop services to match it. Auto-loads `stdlib/domain-proc.pp`. Needs `process`. Pair with `--watch` to keep services alive.],
+  [`--reconcile <root> <file.pp>`], [Materialize the program's map value as a file tree under `<root>`, creating/updating/deleting by content hash. Uses the built-in fs domain. Needs `fs:<root>:wo` (or `:rw`).],
+  [`--supervise <file.pp>`], [Converge the program's process map: start/restart/stop services to match it. Uses the built-in process domain. Needs `process`. Pair with `--watch` to keep services alive.],
   [`--watch <file.pp>`], [Run, then poll the observed cells and re-evaluate whenever one changes. Combines with `--reconcile`/`--supervise` to re-converge on drift.],
   [`--stabilize`], [With `--watch`: propagate changes by dirtying only the affected nodes (push stabilization) rather than re-running cold.],
   [`--watch-interval <s>`], [Poll interval for `--watch`, in seconds (default 1.0).],

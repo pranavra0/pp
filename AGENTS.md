@@ -29,11 +29,23 @@ source during an ordinary invocation.
 
 ## Commits
 
-Use Conventional Commits: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`,
-`perf:`, or `chore:`, followed by one terse lowercase sentence. Do not add
-trailers. Before release, never use `!` or `BREAKING CHANGE`. Done work
-lives in git history, not in docs, so delete finished plan items rather
-than marking them done.
+Use Scoped Commits (https://scopedcommits.com/): `<scope>: <description>`.
+The scope names the subsystem the commit touches; the description is one
+terse lowercase sentence. Valid scopes:
+
+- `kernel`, `frontend`, `app`
+- `runtime` and its packages: `rt.lang`, `rt.eval`, `rt.scope`,
+  `rt.effects`, `rt.config`, `rt.store`, `rt.cache`, `rt.node`,
+  `rt.session`, `rt.observation`, `rt.artifacts`, `rt.distribution`,
+  `rt.protocol`, `rt.primitives`
+- `lifecycle`, `lifecycle.process`, `lifecycle.domain`, `rt.fenced`,
+  `rt.watch`, `rt.executor`, `rt.sandbox`, `rt.island`, `rt.journal`
+- `packages` (package/system definitions), `tests`, `docs`, `ci`,
+  `scripts`, `build`, `treewide`
+
+Multi-area commits use a comma-separated scope list or `treewide`. Do not
+add trailers. Done work lives in git history, not in docs, so delete
+finished plan items rather than marking them done.
 
 ## Read only when the task needs it
 
