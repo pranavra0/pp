@@ -119,7 +119,7 @@ Facts, not decoration:
   cache soundness. User extension goes one level up: `register-probe`/
   `register-domain` mint new observations read through `$probe(...)`. The
   head set is one typed table over `Cell.t` (`surface_tables`); readers,
-  quasiquote grammar, lint, fuzzer, and the SPEC appendix derive from it.
+  quasiquote grammar, lint, property suites, and the SPEC appendix derive from it.
 
 `reads` clauses on nodes use the same forms, as declared intent:
 
@@ -373,8 +373,9 @@ chain, or `match` on the scrutinised value with guards. Map patterns may
 be added later as a new pattern kind; they will not add a new form.
 
 The engine must agree on every pattern kind, and this is exercised by the
-fuzzer. The lowering uses unshadowable internal primitives, so user code
-shadowing `car` or `=` cannot change match semantics.
+kernel property checks and focused match suites. The lowering uses unshadowable
+internal primitives, so user code shadowing `car` or `=` cannot change match
+semantics.
 
 ---
 
@@ -453,11 +454,10 @@ defmacro unless(test, body) {
 
 Hygiene is manual, using `gensym()`; templates are surface syntax. The
 normative rule: every surface form parses identically inside
-`quasiquote {}` (same lowering, same collection defaults) or is
-explicitly listed as an exclusion in SPEC.md's quasiquote section. CI
-enforces this: any new reader form must ship
-with its quasiquote counterpart, or an entry in that exclusion list, and
-the fuzzer round-trips generated forms through `quasiquote { unquote(...) }`.
+`quasiquote {}` (same lowering, same collection defaults) or is explicitly
+listed as an exclusion in SPEC.md's quasiquote section. The quasiquote parity
+suite covers the corresponding reader/printer behavior, including generated
+forms through `quasiquote { unquote(...) }`.
 
 ---
 

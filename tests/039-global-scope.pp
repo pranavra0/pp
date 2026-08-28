@@ -3,13 +3,13 @@
 # a fresh closure so sibling defs resolve like letrec*.
 #
 # (a) a bare top-level `do { def x ... ... }` must keep its defs
-# BLOCK-LOCAL — visible inside the `do`, gone once it closes
-# (evaluator.ml EDo threads a local env_ref that is never merged back
-# into the caller).
+# BLOCK-LOCAL — visible inside the `do`, gone once it closes. The runtime
+# evaluator gives the block a local environment that is not merged back into
+# its caller.
 # (b) module-body expressions (including value defs) must see EARLIER
 # siblings defined in the SAME module body — a function def, a value
 # def, and a bare statement may all reference names bound earlier in
-# the module (evaluator.ml EModule folds env_acc left-to-right).
+# the module. The module evaluator extends its environment left-to-right.
 #
 # This file is checked against its expected-output oracle by
 # scripts/run-tests.sh.

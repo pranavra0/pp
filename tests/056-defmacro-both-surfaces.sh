@@ -5,8 +5,8 @@
 # same macros, same call sites, same expected values — one transliterated
 # from the other. This script verifies both files agree with EACH OTHER,
 # proving the brace surface's quasiquote{} lowers to the exact same AST
-# shapes the sexpr reader's quasiquote has always built (src/runtime/macro.ml,
-# the expander, and hash_expr never changed).
+# shapes the sexpr reader has always built (the shared macro expansion path in
+# `lisp/runtime/language.lisp`, and the kernel identity functions).
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 BRACE=tests/041-defmacro.pp

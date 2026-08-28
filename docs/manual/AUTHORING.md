@@ -77,7 +77,8 @@ rendering helpers:
 scripts/build-manual.sh
 ```
 
-It refreshes the ignored `docs/manual/captured/` directory, then writes the
-tracked `docs/manual/site/index.html`, `manual.html`, and `pp-manual.pdf`. Do not hand-edit
-captured output or rendered files. A broken example or Typst error fails the
-build.
+It refreshes the ignored `docs/manual/captured/` directory and writes the
+ignored generated site and PDF under `docs/manual/site/`. The Typst files and
+examples are the reviewable source; do not hand-edit captured output or
+rendered files. CI runs this build before publishing the site. A broken
+example or Typst error fails the build.

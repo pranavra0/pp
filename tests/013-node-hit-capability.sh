@@ -15,7 +15,8 @@
 # authority is not identity or validity (SPEC law 15) — so a later authorized
 # run still hits.
 #
-# Tree-walker only, isolated HOME. "SECRET" leaking to stdout is the failure.
+# The single runtime evaluator, isolated HOME. "SECRET" leaking to stdout is
+# the failure.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 mkdir -p "$TMP/secret" "$TMP/other"

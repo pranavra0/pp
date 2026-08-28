@@ -33,11 +33,14 @@ question: does this exact request account for every semantic input? A trusted
 provider answers cacheable or scripting-only. pp rejects scripting-only work
 before the provider executes it.
 
-The bundled Linux provider denies undeclared filesystem, environment, loader,
-and network access. It still exposes clock, randomness, CPU/kernel behavior,
-and resource limits, so it honestly classifies every request scripting-only.
-This makes it useful for portable release actions without making their results
-silently cacheable.
+The bundled Linux provider materializes the declared tool and input trees in a
+private working directory and supplies only the request's explicit environment
+to its direct child. This is not OS namespace isolation: absolute filesystem
+access, the ELF interpreter and shared-library loader, network access,
+subprocess creation, and other kernel interfaces remain host-mediated. It
+still exposes clock, randomness, CPU/kernel behavior, and resource limits, so
+it honestly classifies every request as scripting-only. This makes it useful for
+portable release actions without making their results silently cacheable.
 
 == Policy belongs to libraries and providers
 

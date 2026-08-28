@@ -6,6 +6,31 @@ source files are the implementation source of truth. See [SPEC.md](SPEC.md)
 for language laws and verified limits, and [DESIGN.md](DESIGN.md) for design
 reasons.
 
+## Repository layout
+
+The repository keeps implementation, interfaces, tests, and generated
+artefacts in separate owners:
+
+| Path | Ownership |
+|---|---|
+| `lisp/` | Common Lisp source, ASDF systems, package declarations, and the local saved-image build output |
+| `bin/` | Stable launcher used by developers and the test runner |
+| `stdlib/` | pp libraries, including the filesystem, process, and external-build adapters |
+| `scripts/` | Build, test, architecture, crash-recovery, and manual-site tooling |
+| `tests/` | Active expected-output programs, shell scenarios, and committed fixtures |
+| `examples/`, `demo/` | User-facing programs and demonstrations |
+| `docs/` | Normative language/design documents and Typst manual source |
+| `docs/manual/site/` | CI-owned generated manual site and PDF; rebuilt by `scripts/build-manual.sh` and not hand-edited |
+
+The source tree has no second implementation under a native build directory.
+Legacy native-build paths and metadata are rejected by
+`tests/089-state-inventory.sh` and `tests/092-dependency-boundaries.sh`.
+
+The manual's source is `docs/manual/`; its rendered site is a deployment
+artefact. The GitHub Pages workflow builds the saved image, runs the manual
+examples, renders the site, and publishes that directory, so generated output
+does not need to be committed or reviewed as source.
+
 ## Data flow
 
 ```text
@@ -198,6 +223,69 @@ hash-checked artifacts, never host object graphs.
 process domain policies. `stdlib/dune.pp` is an ordinary library adapter for
 external Dune builds; Dune-specific policy remains in that library and is not
 part of the evaluator.
+
+## Self-build boundary
+
+The initial saved-image build is itself described by `build/pp.pp`. That
+definition uses `run-closed!` to invoke the selected SBCL runtime directly;
+`build/bootstrap.lisp` loads the ASDF system and saves the executable image.
+Run it explicitly as `pp build pp`.
+
+At this initial scope the build graph is deliberately coarse:
+
+```text
+source tree + SBCL toolchain
+            -> one build node
+            -> pp artifact
+```
+
+ASDF remains responsible for the ordering of the Lisp sources loaded by that
+node. This is an executable-image bootstrap, not compiler self-hosting;
+self-hosting is a separate concern and is not a goal of this build path. The
+graph describes scope and provenance only, not cache reuse.
+
+
+The build definition's `source-tree` input is a source-only artifact tree:
+it includes the intended Lisp/ASDF sources and the two build-definition
+inputs, preserves directory parents, and excludes scripts, README files,
+generated images/FASLs, build outputs, and symlinks. `sbcl-toolchain()` probes
+the selected SBCL launcher, then snapshots its runtime, core, and `SBCL_HOME`
+as immutable content-addressed file artifacts. The request's provider policy
+also carries an explicit versioned capability/namespace contract. The
+resulting build-id records the request, source tree, build definition, and
+toolchain tree identities.
+
+The current local closed-action provider is classified **scripting-only**.
+This is provenance and diagnostics, not a hermetic or reproducible self-build
+claim: the provider materializes immutable request artifacts and uses a
+private working directory, but local host behavior remains semantic input and
+does not permit cache or remote reuse.
+
+### Closed-action cacheability contract
+
+A provider **may** return `cacheable` only when its closure accounts for all
+of the following: declared input and output trees; toolchain and loader
+dependencies; `env`, locale, `TZ`, `HOME`, and `cwd`; network access; clocks
+and randomness; platform, kernel, and resource-limit assumptions; and all
+visible filesystem state. If any item is undeclared, ambient, or
+unreproducible, the result is **scripting-only** and must not be reused from
+cache or remotely.
+
+The local provider now advertises its capability and namespace contract
+explicitly: workspace-materialized filesystem, explicit-only environment,
+ambient network, and a direct child process. Its loader, clock, randomness,
+kernel, and resource namespaces remain ambient, so both ordinary closed actions
+and the direct-SBCL self-build are intentionally scripting-only.
+
+The direct SBCL artifact closes the selected runtime/core/`SBCL_HOME` bytes,
+but it does not yet include or attest the ELF interpreter's complete shared
+library closure. The executor also does not enforce an OS filesystem/network
+namespace or resource, platform, clock, and randomness controls. A cacheable
+provider must close and attest those remaining inputs; until then the
+executor rejects unsupported or incomplete contracts and never returns
+`cacheable`.
+
+
 
 ## Application and commands
 

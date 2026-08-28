@@ -3,9 +3,9 @@
 # level, {host -> {domain -> desired}}.
 #
 #   `--member-name <n>` (explicit, never inferred from hostname or value
-#   shape — the least-magic rule) makes main.ml index desired[<n>]'s slice
-#   and hand it to the UNCHANGED Domains.run_all. Without --member-name,
-#   main.ml's [all_desired] passes through completely untouched — this is
+#   shape — the least-magic rule) makes the application select desired[<n>]'s
+#   slice and pass it through the lifecycle domain runner. Without
+#   --member-name, the complete desired map passes through untouched — this is
 #   the whole back-compat proof; tests/018/033/046 (which never pass
 #   --member-name) are the existing, unchanged-byte-for-byte evidence for
 #   that half, exercised every run of this suite. This file adds the NEW

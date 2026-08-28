@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # tests/053-pin-observations.sh — the observation-pinning seam: a
 # standalone --pin-file/--dump-pins pair that generalizes the existing
-# --remote-node pin machinery (src/runtime/remote.ml's preseed_pins_from_file /
-# parse_pin_line) used for forked workers, plus a new `(pin-probe "NAME"
+# --remote-node pin machinery (the runtime session's preseed/load-pin path)
+# used for forked workers, plus a new `(pin-probe "NAME"
 # <codec-value>)` line kind that pins a register-probe's OWN value
 # directly into the session's probe cache, short-circuiting its observe-fn
-# entirely (Primitives.probe_value_for consults probe_values FIRST,
-# unconditionally, before ever calling a registered probe's fn).
+# entirely (the runtime probe lookup consults preseeded values first,
+# unconditionally, before calling a registered probe's function).
 #
 # demo/volatile-deploy.pp folds `(probe "replica-count")` directly into its
 # returned desired-state value, so the published hash tracks

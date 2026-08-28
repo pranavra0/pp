@@ -230,7 +230,7 @@
           (and arguments
                (find-if (lambda (candidate)
                           (member candidate arguments :test #'string=))
-                        '("fmt" "lint" "graph" "gc" "island-pins" "cluster-init")))))
+                        '("build" "fmt" "lint" "graph" "gc" "island-pins" "cluster-init")))))
     (flet ((flag-mode (flag name)
              (when (member flag arguments :test #'string=) (push name modes))))
       (dolist (pair '(("--help" "--help") ("--version" "--version")
@@ -247,7 +247,8 @@
                       ("--roundtrip-braces" "--roundtrip-braces")
                       ("--compare-hash" "--compare-hash")
                       ("--list-comments" "--list-comments")
-                      ("gc" "gc") ("graph" "graph") ("lint" "lint")))
+                      ("gc" "gc") ("graph" "graph") ("lint" "lint")
+                      ("build" "build")))
         (flag-mode (first pair) (second pair)))
       (when first-subcommand (push first-subcommand modes))
       ;; The evaluation mode: a program source, `run`, `-e`, or one of the
@@ -294,11 +295,15 @@
         (error "--supervise requires a source file"))
       (when (and (has-flag "--publish-object") (not (has-source)))
         (error "--publish-object requires a source file"))
-      (when (and (has-flag "--remote-node")
-                 (has-flag "cluster-init"))
+      (when (and (has-flag "--remote-node") (has-flag "cluster-init"))
         (error "conflicting command modes: cluster-init, remote-node"))
       (when (and (has-flag "--remote-node") (not (has-source)))
-        (error "--remote-node requires a source file")))))
+        (error "--remote-node requires a source file"))
+      (when (has-flag "--repro-check")
+        (unless (and first-subcommand
+                     (string= first-subcommand "build")
+                     (member "pp" arguments :test #'string=))
+          (error "--repro-check requires pp build pp"))))))
 
 (defun %source-surface (path)
   (let ((name (string-downcase path)))
@@ -1175,6 +1180,11 @@ Flatten only capability containers; no user value is accepted as authority."
                  (not (find #\Return tool-path)))
       (pp.runtime:language-fail
        "run-closed!: invalid tool path" "runtime.closed"))
+    (unless (pp.runtime:runtime-artifact-valid-path-p tool-path)
+      (pp.runtime:language-fail
+       (format nil "run-closed!: rejects non-canonical tool path: ~A"
+               tool-path)
+       "runtime.closed"))
     (dolist (argument arguments)
       (when (or (find #\Null argument)
                 (find #\Newline argument)
@@ -1238,18 +1248,240 @@ Flatten only capability containers; no user value is accepted as authority."
                                 (pp.kernel:make-vstring (cdr pair))))
                         (pp.runtime:runtime-executor-result-resources result)))))))
 
- (defun %command-closed-executor ()
-  ;; The host provider deliberately reports its ambient clock/randomness and
-  ;; resource semantics as scripting-only.  A trusted Linux provider may be
-  ;; installed by an embedding application; the command image fails closed.
+(defun %command-closed-request-value (request)
+  (flet ((vkey (name) (pp.kernel:make-vkeyword name))
+         (vtext (text) (pp.kernel:make-vstring text)))
+    (pp.kernel:make-vmap
+     (list
+      (cons (vkey "tool")
+            (pp.runtime:runtime-executor-request-tool request))
+      (cons (vkey "tool-path")
+            (vtext (pp.runtime:runtime-executor-request-tool-path request)))
+      (cons (vkey "args")
+            (pp.kernel:make-vvector-from-list
+             (mapcar #'vtext
+                     (pp.runtime:runtime-executor-request-arguments request))))
+      (cons (vkey "inputs")
+            (pp.runtime:runtime-executor-request-inputs request))
+      (cons (vkey "env")
+            (pp.kernel:make-vmap
+             (mapcar (lambda (pair)
+                       (cons (vtext (car pair)) (vtext (cdr pair))))
+                     (pp.runtime:runtime-executor-request-environment request))))
+      (cons (vkey "platform")
+            (pp.runtime:runtime-executor-request-platform request))
+      (cons (vkey "policy")
+            (or (pp.runtime:runtime-executor-request-policy request)
+                (pp.kernel:make-vnil)))
+      (cons (vkey "outputs")
+            (pp.kernel:make-vvector-from-list
+             (mapcar #'vtext
+                     (pp.runtime:runtime-executor-request-outputs request))))))))
+
+(defun %command-closed-policy-field (request name)
+  (let ((policy (pp.runtime:runtime-executor-request-policy request)))
+    (pp.runtime:runtime-executor-policy-field policy name)))
+
+(defun %command-closed-local-provider-request-p (request)
+  (let ((provider
+          (%command-closed-policy-field request "provider")))
+    (and (typep provider 'pp.kernel:value-string)
+         (string= (pp.kernel:value-string-value provider)
+                  "local-materialized-workspace"))))
+
+(defun %command-closed-direct-sbcl-request-p (request)
+  (let ((mode (%command-closed-policy-field request "mode")))
+    (and (typep mode 'pp.kernel:value-string)
+         (string= (pp.kernel:value-string-value mode)
+                  "direct-sbcl"))))
+
+(defun %command-closed-provider-contract ()
+  (pp.runtime:make-runtime-executor-provider-contract
+   :name "local-materialized-workspace"
+   :version "v1"
+   :capabilities
+   '("direct-process" "explicit-environment" "workspace-filesystem")
+   :namespaces
+   '(("clock" . "ambient")
+     ("environment" . "explicit-only")
+     ("filesystem" . "workspace-materialized")
+     ("kernel" . "ambient")
+     ("loader" . "ambient")
+     ("network" . "ambient")
+     ("randomness" . "ambient")
+     ("resources" . "ambient"))))
+
+(defun %command-closed-environment-value (request name)
+  (cdr (assoc name
+              (pp.runtime:runtime-executor-request-environment request)
+              :test #'string=)))
+
+(defun %command-closed-direct-write-outputs (workspace request)
+  (let ((outputs (pp.runtime:runtime-executor-request-outputs request)))
+    (unless (equal outputs
+                   '("build/pp" "build/pp.sbcl-image"
+                     "build/pp.sbcl-image.build-id"))
+      (error "direct SBCL provider requires the canonical pp output set"))
+    (let* ((image-path (merge-pathnames
+                        (pathname "build/pp.sbcl-image")
+                        (pathname workspace)))
+           (launcher-path (merge-pathnames
+                           (pathname "build/pp")
+                           (pathname workspace)))
+           (identity-path (merge-pathnames
+                           (pathname "build/pp.sbcl-image.build-id")
+                           (pathname workspace)))
+           (request-hash
+             (pp.kernel:hash-value (%command-closed-request-value request)))
+           (input-tree (pp.runtime:runtime-artifact-tree-from-value
+                        (pp.runtime:runtime-executor-request-inputs request)))
+           (tool-tree (pp.runtime:runtime-artifact-tree-from-value
+                       (pp.runtime:runtime-executor-request-tool request)
+                       :require-parents nil))
+           (definition
+             (find "build/pp.pp" input-tree
+                   :key #'pp.runtime:runtime-artifact-entry-path
+                   :test #'string=))
+           (definition-hash
+             (and definition
+                  (pp.runtime:store-hash-octets
+                   (pp.runtime:runtime-artifact-blob-get
+                    (pp.runtime:runtime-artifact-entry-blob definition))))))
+      (unless (and (string= (or (%command-closed-environment-value
+                                 request "PP_TEMP_IMAGE")
+                                "")
+                            "build/pp.sbcl-image")
+                   (probe-file image-path))
+        (error "direct SBCL provider did not produce build/pp.sbcl-image"))
+      #+sbcl
+      (sb-posix:chmod (pp.runtime:store-absolute-path image-path) #o755)
+      (with-open-file (stream launcher-path :direction :output
+                              :if-exists :supersede
+                              :if-does-not-exist :create)
+        (write-string "#!/bin/sh" stream)
+        (terpri stream)
+        (write-string "set -eu" stream)
+        (terpri stream)
+        (write-string
+         "SELF_DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd -P)"
+         stream)
+        (terpri stream)
+        (write-string "exec \"$SELF_DIR/pp.sbcl-image\" \"$@\"" stream)
+        (terpri stream)
+        (finish-output stream))
+      #+sbcl
+      (sb-posix:chmod (pp.runtime:store-absolute-path launcher-path) #o755)
+      (with-open-file (stream identity-path :direction :output
+                              :if-exists :supersede
+                              :if-does-not-exist :create)
+        (format stream "format=pp-sbcl-image-v4~%")
+        (format stream "provider=local-materialized-workspace/v1~%")
+        (format stream "cacheability=scripting-only~%")
+        (format stream "request-sha256=~A~%" request-hash)
+        (format stream "source-tree-sha256=~A~%"
+                (pp.kernel:hash-value
+                 (pp.runtime:runtime-artifact-tree-to-value input-tree)))
+        (format stream "toolchain-tree-sha256=~A~%"
+                (pp.kernel:hash-value
+                 (pp.runtime:runtime-artifact-tree-to-value tool-tree)))
+        (format stream "build-definition-sha256=~A~%"
+                (or definition-hash "unavailable"))
+        (format stream "loader-closure=ambient~%")
+        (finish-output stream))
+      #+sbcl
+      (sb-posix:chmod (pp.runtime:store-absolute-path identity-path) #o644)
+      t)))
+
+(defun %command-closed-execute (session request)
+  "Execute a request in a private materialized workspace.
+
+The workspace and declared artifacts are closed, but this provider does not
+mediate the host loader, kernel, clock, randomness, or resource limits."
+  (declare (ignore session))
+  (unless (%command-closed-local-provider-request-p request)
+    (error "closed Linux runner unavailable"))
+  (let* ((tmpdir (or (and (sb-ext:posix-getenv "TMPDIR")
+                          (plusp (length (sb-ext:posix-getenv "TMPDIR")))
+                          (sb-ext:posix-getenv "TMPDIR"))
+                     "/tmp"))
+         (workspace (pp.runtime:store-exclusive-directory
+                     tmpdir "pp-closed"))
+         (tool (pp.runtime:runtime-artifact-tree-from-value
+                (pp.runtime:runtime-executor-request-tool request)
+                :require-parents nil))
+         (inputs (pp.runtime:runtime-artifact-tree-from-value
+                  (pp.runtime:runtime-executor-request-inputs request)
+                  :require-parents t))
+         (tool-path
+           (namestring
+            (merge-pathnames
+             (pathname (pp.runtime:runtime-executor-request-tool-path request))
+             (pathname workspace))))
+         (stdout (make-string-output-stream))
+         (stderr (make-string-output-stream))
+         (process nil))
+    (unwind-protect
+         (progn
+           (pp.runtime:runtime-artifact-materialize
+            workspace inputs :read-current nil)
+           (pp.runtime:runtime-artifact-materialize
+            workspace tool :read-current nil)
+           (setf process
+                 (sb-ext:run-program
+                  tool-path
+                  (pp.runtime:runtime-executor-request-arguments request)
+                  :search nil :wait t :input nil
+                  :output stdout :error stderr :directory workspace
+                  :environment
+                  (mapcar (lambda (pair)
+                            (format nil "~A=~A" (car pair) (cdr pair)))
+                          (pp.runtime:runtime-executor-request-environment
+                           request))))
+           (let ((status (or (sb-ext:process-exit-code process) 128))
+                 (direct (%command-closed-direct-sbcl-request-p request)))
+             (when (and direct (zerop status))
+               (%command-closed-direct-write-outputs workspace request))
+             (pp.runtime:make-runtime-executor-result
+              :exit-status status
+              :stdout (get-output-stream-string stdout)
+              :stderr (get-output-stream-string stderr)
+              :outputs
+              (if (zerop status)
+                  (pp.runtime:runtime-artifact-snapshot
+                   workspace
+                   (pp.runtime:runtime-executor-request-outputs request))
+                  nil)
+              :evidence
+              (list (cons "cacheability" "scripting-only")
+                    (cons "provider" "local-materialized-workspace")
+                    (cons "provider-contract"
+                          "local-materialized-workspace/v1")
+                    (cons "provider-capabilities"
+                          "direct-process,explicit-environment,workspace-filesystem")
+                    (cons "provider-namespaces"
+                          "clock=ambient,environment=explicit-only,filesystem=workspace-materialized,kernel=ambient,loader=ambient,network=ambient,randomness=ambient,resources=ambient")
+                    (cons "request-sha256"
+                          (pp.kernel:hash-value
+                           (%command-closed-request-value request))))
+              :resources nil)))
+      (ignore-errors (pp.runtime:runtime-sandbox-delete-tree workspace))))
+  #-sbcl
+  (declare (ignore session request))
+  #-sbcl
+  (error "closed execution provider is unavailable on this Lisp"))
+
+
+(defun %command-closed-executor (session)
+  ;; This provider's namespace contract is explicit even though its
+  ;; classification remains scripting-only for the ambient portions.
   (pp.runtime:make-runtime-executor
+   :provider-contract (%command-closed-provider-contract)
    :classify (lambda (request)
                (declare (ignore request))
                (pp.runtime:make-runtime-executor-scripting-only
-                "executor classifies this request as scripting-only"))
+                "provider namespace contract leaves loader, clock, randomness, kernel, and resources ambient"))
    :execute (lambda (request)
-              (declare (ignore request))
-              (error "closed Linux runner unavailable"))))
+              (%command-closed-execute session request))))
 (defun %command-record-handler-observation (name)
   (let ((observed (pp.runtime:runtime-dynamic-observe-handler name)))
     (pp.runtime:runtime-observation-record
@@ -1374,6 +1606,7 @@ Flatten only capability containers; no user value is accepted as authority."
                 (let* ((split (cl:position #\Newline output :from-end t))
                        (text (if split (subseq output 0 split) output))
                        (status (if split
+
                                    (parse-integer output :start (1+ split))
                                    0)))
                   (pp.kernel:make-vmap
@@ -1384,6 +1617,147 @@ Flatten only capability containers; no user value is accepted as authority."
 
 )
 ))
+(defun %command-sbcl-toolchain-relative (path)
+  (let ((text (namestring (truename path))))
+    (string-right-trim
+     "/"
+     (if (and (plusp (length text))
+              (char= (char text 0) #\/))
+         (subseq text 1)
+         text))))
+
+(defun %command-sbcl-toolchain ()
+  "Snapshot the selected SBCL implementation as immutable store artifacts.
+
+The selected launcher is queried for its exact runtime and core paths, then
+those files and SBCL_HOME are copied into the content-addressed artifact
+store.  The provider contract still records the host loader and kernel as
+ambient."
+  #+sbcl
+  (let* ((requested (or (sb-ext:posix-getenv "SBCL_BIN")
+                        (sb-ext:posix-getenv "SBCL")
+                        "sbcl"))
+         (stdout (make-string-output-stream))
+         (stderr (make-string-output-stream))
+         (process
+           (handler-case
+               (sb-ext:run-program
+                requested
+                '("--no-userinit" "--no-sysinit" "--non-interactive"
+                  "--eval"
+                  "(format t \"PP-RUNTIME=~A~%PP-CORE=~A~%PP-VERSION=~A~%\" (namestring sb-ext:*runtime-pathname*) (namestring sb-ext:*core-pathname*) (lisp-implementation-version))"
+                  "--quit")
+                :search t :wait t :input nil
+                :output stdout :error stderr)
+             (error (condition)
+               (pp.runtime:language-fail
+                (format nil "sbcl-toolchain: cannot execute ~A: ~A"
+                        requested condition)
+                "runtime.closed"))))
+         (status (or (sb-ext:process-exit-code process) 128))
+         (output (get-output-stream-string stdout))
+         (error-output (get-output-stream-string stderr)))
+    (unless (zerop status)
+      (pp.runtime:language-fail
+       (format nil "sbcl-toolchain: selected SBCL failed (~D): ~A"
+               status error-output)
+       "runtime.closed"))
+    (labels ((field (marker)
+               (let* ((start (search marker output))
+                      (start (and start (+ start (length marker))))
+                      (end (and start
+                                (or (cl:position #\Newline output :start start)
+                                    (length output)))))
+                 (and start end (subseq output start end)))))
+      (let* ((runtime-text (field "PP-RUNTIME="))
+             (core-text (field "PP-CORE="))
+             (version (field "PP-VERSION=")))
+        (unless (and runtime-text core-text version
+                     (plusp (length runtime-text))
+                     (plusp (length core-text))
+                     (plusp (length version)))
+          (pp.runtime:language-fail
+           "sbcl-toolchain: selected SBCL did not report runtime and core"
+           "runtime.closed"))
+        (let* ((runtime (truename runtime-text))
+               (core (truename core-text))
+               (home (truename
+                      (make-pathname :name nil :type nil :defaults core))))
+          (dolist (path (list runtime home))
+            (unless (%command-capability-allows-file-p
+                     nil (namestring path) nil :read)
+              (pp.runtime:language-fail
+               (format nil "sbcl-toolchain: permission denied for ~A" path)
+               "runtime.authority")))
+          (let* ((runtime-relative
+                   (%command-sbcl-toolchain-relative runtime))
+                 (core-relative (%command-sbcl-toolchain-relative core))
+                 (home-relative (%command-sbcl-toolchain-relative home))
+                 (entries
+                   (let ((pp.rt.artifacts::*runtime-artifact-session*
+                           (runtime-dynamic-session nil)))
+                     (pp.runtime:runtime-artifact-snapshot
+                      "/" (list runtime-relative core-relative home-relative))))
+                 (tree (pp.runtime:runtime-artifact-tree-to-value entries))
+                 (manifest
+                   (pp.kernel:make-vmap
+                    (list
+                     (cons (pp.kernel:make-vkeyword "format")
+                           (pp.kernel:make-vstring
+                            "pp-sbcl-toolchain-v1"))
+                     (cons (pp.kernel:make-vkeyword "launcher")
+                           (pp.kernel:make-vstring requested))
+                     (cons (pp.kernel:make-vkeyword "version")
+                           (pp.kernel:make-vstring version))
+                     (cons (pp.kernel:make-vkeyword "runtime")
+                           (pp.kernel:make-vstring runtime-relative))
+                     (cons (pp.kernel:make-vkeyword "core")
+                           (pp.kernel:make-vstring core-relative))
+                     (cons (pp.kernel:make-vkeyword "home")
+                           (pp.kernel:make-vstring home-relative))
+                     (cons (pp.kernel:make-vkeyword "loader")
+                           (pp.kernel:make-vstring "ambient"))))))
+            (dolist (path (list runtime home))
+              (pp.runtime:runtime-observation-record
+               (pp.kernel:make-cell-tree (namestring path))
+               (pp.kernel:hash-value tree)))
+            (pp.kernel:make-vmap
+             (list
+              (cons (pp.kernel:make-vkeyword "tree") tree)
+              (cons (pp.kernel:make-vkeyword "tool-path")
+                    (pp.kernel:make-vstring runtime-relative))
+              (cons (pp.kernel:make-vkeyword "sbcl-home")
+                    (pp.kernel:make-vstring home-relative))
+              (cons (pp.kernel:make-vkeyword "manifest") manifest))))))))
+  #-sbcl
+  (pp.runtime:language-fail
+   "sbcl-toolchain: SBCL provider unavailable on this Lisp"
+   "runtime.closed"))
+(defun %command-source-tree-path-p (path)
+  (or (and (or (string= path "lisp")
+               (and (> (length path) 5)
+                    (string= "lisp/" path :end2 5)))
+           (or (and (>= (length path) 5)
+                    (string= ".lisp" path :start1 0 :start2 (- (length path) 5)))
+               (and (>= (length path) 4)
+                    (string= ".asd" path :start1 0 :start2 (- (length path) 4)))))
+      (string= path "scripts/build-lisp.sh")
+      (string= path "scripts")
+      (string= path "build")
+      (string= path "build/bootstrap.lisp")
+      (string= path "build/pp.pp")))
+
+(defun %command-source-tree (root selected)
+  (let ((entries (pp.runtime:runtime-artifact-snapshot root selected)))
+    (pp.runtime:runtime-artifact-tree-to-value
+     (remove-if-not
+      (lambda (entry)
+        (or (eq (pp.runtime:runtime-artifact-entry-kind entry) :directory)
+            (and (eq (pp.runtime:runtime-artifact-entry-kind entry) :file)
+                 (%command-source-tree-path-p
+                  (pp.runtime:runtime-artifact-entry-path entry)))))
+      entries))))
+
 (defun %command-install-observation-primitives (session error-output)
   "Install command-tier observations without changing the pure catalog."
   (let ((state (pp.runtime:runtime-session-evaluator session)))
@@ -1486,6 +1860,68 @@ Flatten only capability containers; no user value is accepted as authority."
                  (if (= (length args) 2)
                      (%command-force-argument (second args) force)
                      (pp.kernel:make-vnil)))))))
+    (extend
+     "closed-tree"
+     (lambda (args environment &key force &allow-other-keys)
+       (declare (ignore environment))
+       (unless (plusp (length args))
+         (pp.runtime:language-fail
+          "closed-tree expects a root and optional relative paths"
+          "primitive.arity"))
+       (let* ((paths (mapcar (lambda (arg)
+                               (%command-value-text
+                                (funcall force arg) "closed-tree path"))
+                             args))
+              (path (first paths))
+              (selected (rest paths)))
+         (unless (%command-capability-allows-file-p nil path nil :read)
+           (pp.runtime:language-fail
+            (format nil "closed-tree: permission denied for ~A" path)
+            "runtime.authority"))
+         (let* ((canonical (pp.runtime:store-canonical-path path))
+                (tree (pp.runtime:runtime-artifact-tree-to-value
+                       (pp.runtime:runtime-artifact-snapshot
+                        canonical selected))))
+           (pp.runtime:runtime-observation-record
+            (pp.kernel:make-cell-tree canonical)
+            (pp.kernel:hash-value tree))
+           tree))))
+    (extend
+     "source-tree"
+     (lambda (args environment &key force &allow-other-keys)
+       (declare (ignore environment))
+       (unless (plusp (length args))
+         (pp.runtime:language-fail
+          "source-tree expects a root and optional relative paths"
+          "primitive.arity"))
+       (let* ((paths (mapcar (lambda (arg)
+                               (%command-value-text
+                                (funcall force arg) "source-tree path"))
+                             args))
+              (path (first paths))
+              (selected (rest paths)))
+         (unless (%command-capability-allows-file-p nil path nil :read)
+           (pp.runtime:language-fail
+            (format nil "source-tree: permission denied for ~A" path)
+            "runtime.authority"))
+         (let* ((canonical (pp.runtime:store-canonical-path path))
+                (tree (%command-source-tree canonical selected)))
+           (pp.runtime:runtime-observation-record
+            (pp.kernel:make-cell-tree canonical)
+            (pp.kernel:hash-value tree))
+           tree))))
+
+    (%command-install-primitive
+     state "sbcl-toolchain"
+     (lambda (args environment &key force &allow-other-keys)
+       (declare (ignore environment force))
+       (%command-process-required)
+       (pp.runtime:runtime-dynamic-require-script-tier
+        "sbcl-toolchain: host toolchain observation is scripting-tier only")
+       (unless (null args)
+         (pp.runtime:language-fail "sbcl-toolchain expects no arguments"
+                                   "primitive.arity"))
+       (%command-sbcl-toolchain)))
 
     (%command-install-primitive
      state "fenced"
@@ -2591,7 +3027,7 @@ an explicit authority override and therefore bypasses the manifest."
             :store-root (%command-store-root)
             :capabilities capabilities)))
     (pp.runtime:runtime-lifecycle-install-executor
-     session (%command-closed-executor))
+     session (%command-closed-executor session))
     (runtime-session-register-service
      session :record-read
      (lambda (ignored-session cell-id hash)
@@ -2701,7 +3137,7 @@ an explicit authority override and therefore bypasses the manifest."
   "Remove command-owned grants and cache flags, retaining source operands."
   (%reject-runtime-flags arguments)
   (let ((rest nil) (grants nil) (why nil) (no-cache nil) (check nil)
-        (keep-epochs 5) (grace-seconds 2.0))
+        (repro-check nil) (keep-epochs 5) (grace-seconds 2.0))
     (loop while arguments do
       (let ((argument (pop arguments)))
         (cond
@@ -2711,7 +3147,7 @@ an explicit authority override and therefore bypasses the manifest."
           ((or (string= argument "why") (string= argument "--why"))
            (setf why t))
           ((string= argument "--no-cache") (setf no-cache t))
-          ((string= argument "--check") (setf check t))
+          ((string= argument "--repro-check") (setf repro-check t))
           ((string= argument "--gc-keep-epochs")
            (unless arguments (error "--gc-keep-epochs requires an integer"))
            (setf keep-epochs
@@ -2722,7 +3158,7 @@ an explicit authority override and therefore bypasses the manifest."
            (setf grace-seconds (%parse-decimal (pop arguments))))
           (t (push argument rest)))))
     (values (nreverse rest) (nreverse grants) why no-cache check
-            keep-epochs grace-seconds)))
+            keep-epochs grace-seconds repro-check)))
 
 (defun %language-leading-load-info (form)
   (let ((inner (%language-form-inner form)))
@@ -3033,7 +3469,8 @@ environment, so leading loads must establish the initial environment first."
            (%command-report-runtime-events session output)
            0)))))))
 (defun %run-language-text
-    (text source surface output &key (all-values nil) session grant-specs
+    (text source surface output &key (all-values nil) (print-values t)
+                                  (return-value nil) session grant-specs
                                   (why nil) (no-cache nil) (check nil)
                                   error-output)
   (let ((*language-source-context* source)
@@ -3045,11 +3482,12 @@ environment, so leading loads must establish the initial environment first."
         (let ((result
                 (%run-language-forms
                  (%read-language-forms text source surface)
-                 source output :all-values all-values :session session
+                 source output :all-values all-values :print-values print-values
+                 :session session :return-value return-value
                  :grant-specs grant-specs :why why :no-cache no-cache :check check
                  :error-output error-output)))
           (%command-report-runtime-events session output)
-          result)
+          (if return-value result 0))
       (frontend-error (condition)
         ;; Normalize source-aware surface diagnostics while the source
         ;; context is still dynamically bound.
@@ -4562,9 +5000,141 @@ hash: ~A" old-pin)
               (finish-output output)
               0))))))
 
+(defun %command-build-result-outputs (result)
+  (let ((exit (%command-map-field result "exit"))
+        (stderr (%command-map-field result "stderr"))
+        (outputs (%command-map-field result "outputs")))
+    (unless (typep exit 'pp.kernel:value-int)
+      (error "pp build provider returned an invalid result"))
+    (unless (zerop (pp.kernel:value-int-value exit))
+      (error "pp build failed: ~A"
+             (if (typep stderr 'pp.kernel:value-string)
+                 (pp.kernel:value-string-value stderr)
+                 "provider failed")))
+    (unless outputs
+      (error "pp build provider returned no outputs"))
+    outputs))
+
+(defun %command-build-output-files (session outputs)
+  (let ((entries (pp.runtime:runtime-artifact-tree-from-value outputs)))
+    (let ((pp.rt.artifacts::*runtime-artifact-session* session))
+      (loop for entry in entries
+            when (eq (pp.runtime:runtime-artifact-entry-kind entry) :file)
+            collect
+            (list (pp.runtime:runtime-artifact-entry-path entry)
+                  (pp.runtime:runtime-artifact-entry-blob entry)
+                  (pp.runtime:runtime-artifact-blob-get
+                   (pp.runtime:runtime-artifact-entry-blob entry)))))))
+
+(defun %command-build-output-identities (files)
+  (if files
+      (format nil "~{~A~^,~}"
+              (mapcar (lambda (file)
+                        (format nil "~A:~A" (first file) (second file)))
+                      files))
+      "unavailable"))
+
+(defun %command-build-provenance-identity (files)
+  (let ((file (find "build/pp.sbcl-image.build-id" files
+                    :key #'first :test #'string=)))
+    (if file (second file) "unavailable")))
+
+(defun %command-build-result-evidence (result name)
+  (let* ((evidence (%command-map-field result "evidence"))
+         (value (%command-map-field evidence name)))
+    (if (typep value 'pp.kernel:value-string)
+        (pp.kernel:value-string-value value)
+        "unavailable")))
+
+(defun %command-build-differing-files (first-files second-files)
+  (let ((paths
+          (sort (remove-duplicates
+                 (append (mapcar #'first first-files)
+                         (mapcar #'first second-files))
+                 :test #'string=)
+                #'string<)))
+    (loop for path in paths
+          for first-file = (find path first-files :key #'first :test #'string=)
+          for second-file = (find path second-files :key #'first :test #'string=)
+          unless (and first-file second-file
+                      (equalp (third first-file) (third second-file)))
+            collect
+            (if (and first-file second-file)
+                (format nil "~A(bytes differ)" path)
+                (format nil "~A(file missing)" path)))))
+
+(defun %run-build-command (arguments output error-output)
+  (multiple-value-bind
+      (operands grants why no-cache check ignored-keep ignored-grace repro-check)
+      (%parse-command-options (rest arguments))
+    (declare (ignore ignored-keep ignored-grace))
+    (unless (equal operands '("pp"))
+      (error "pp build currently supports exactly one target: pp"))
+    (let ((build-path
+            (pp.kernel:canonicalize-path
+             "build" :realpath #'pp.runtime:store-canonical-path)))
+      (unless (some (lambda (capability)
+                      (pp.kernel:capability-check-fs-write-p
+                       capability build-path))
+                    (%command-capabilities grants))
+        (error "pp build requires write capability for build/")))
+    (let* ((source (%read-source-file "build/pp.pp"))
+           (run-no-cache (or no-cache repro-check)))
+      (labels ((run-once ()
+                 (let ((session (%make-command-session
+                                 grants :why why :no-cache run-no-cache
+                                 :check check :error-output error-output)))
+                   (values
+                    session
+                    (%run-language-text
+                     source "build/pp.pp" :brace output
+                     :print-values nil :return-value t :session session
+                     :grant-specs grants :why why
+                     :no-cache run-no-cache :check check
+                     :error-output error-output)))))
+        (multiple-value-bind (session result) (run-once)
+          (let* ((outputs (%command-build-result-outputs result))
+                 (files (%command-build-output-files session outputs))
+                 (second-session nil)
+                 (second-result nil)
+                 (second-outputs nil)
+                 (second-files nil))
+            (when repro-check
+              (multiple-value-setq (second-session second-result) (run-once))
+              (setf second-outputs
+                    (%command-build-result-outputs second-result)
+                    second-files
+                    (%command-build-output-files second-session second-outputs))
+              (let ((differences
+                      (%command-build-differing-files files second-files)))
+                (format output
+                        "pp build pp repro-check: cache=empty; request-sha256=~A/~A; provenance=~A/~A; artifacts-first=~A; artifacts-second=~A; byte-compare=~A~%"
+                        (%command-build-result-evidence result "request-sha256")
+                        (%command-build-result-evidence second-result "request-sha256")
+                        (%command-build-provenance-identity files)
+                        (%command-build-provenance-identity second-files)
+                        (%command-build-output-identities files)
+                        (%command-build-output-identities second-files)
+                        (if differences
+                            (format nil "DIFFERENT; differing-files=~{~A~^,~}"
+                                    differences)
+                            (if files
+                                (format nil "identical (byte-compared ~D files)"
+                                        (length files))
+                                "unavailable (no file blobs)")))))
+            (let ((pp.rt.artifacts::*runtime-artifact-session* session))
+              (pp.runtime:runtime-artifact-materialize
+               "." (pp.runtime:runtime-artifact-tree-from-value outputs)
+               :read-current nil))
+            (format output
+                    "pp build pp: provider=scripting-only; provenance=build/pp.sbcl-image.build-id~%")
+            (finish-output output)
+            0))))))
+
+
 (defun %usage (stream)
   (format stream
-          "pp v~A~%Usage: pp --version | pp --help | pp -e EXPR | pp [--once] FILE.pp|FILE.ppl | pp fmt --to-braces FILE [-i]~%~%"
+          "pp v~A~%Usage: pp --version | pp --help | pp -e EXPR | pp [--once] FILE.pp|FILE.ppl | pp build pp [--repro-check]~%~%"
           +version+)
   (format stream
           "Language commands:~%  pp -e '<brace expression>'~%  pp [--once] <file.pp|file.ppl>~%  pp run <file.pp|file.ppl>~%  pp (stdin/REPL reads brace forms)~%~%")
@@ -4656,12 +5226,13 @@ hash: ~A" old-pin)
                  (pp.runtime:language-exit-status condition))
                (language-error (condition) (language-error condition))
                (error (condition) (host-error condition))))))
-    (or (when arguments
-          (let ((status (run-language
-                         (lambda ()
-                           (%validate-command-modes arguments)
-                           0))))
-            (and (/= status 0) status)))
+    (when arguments
+      (let ((status (run-language
+                     (lambda ()
+                       (%validate-command-modes arguments)
+                       0))))
+        (when (/= status 0)
+          (return-from run status))))
     (cond
       ((null arguments)
        (run-language
@@ -4693,6 +5264,10 @@ hash: ~A" old-pin)
        (handler-case
            (%run-kernel-props arguments output)
          (error (condition) (host-error condition))))
+      ((string= (first arguments) "build")
+       (run-language
+        (lambda ()
+          (%run-build-command arguments output error-output))))
       ((string= (first arguments) "--update")
        (run-language
         (lambda ()
@@ -4898,7 +5473,6 @@ hash: ~A" old-pin)
        (finish-output error-output)
        2))))))
   ;; SAVE-LISP-AND-DIE invokes this function in the resulting executable.
-  )
 
 (defun main ()
   ;; Keeping EXIT here (rather than in RUN) makes isolated checks composable.

@@ -1,13 +1,10 @@
 # Regression: local-slot reuse across a lazily-forced thunk.
 #
-# The evaluator frame is a single mutable array shared with every thunk/closure
-# that captures it. The compiler used to truncate the compile-time frame when a
-# scope exited, letting a later binding REUSE a slot index. A nested `let`
-# inside a `let*` binding RHS is compiled into a thunk; when that thunk was
-# forced later, its STORE_LOCAL wrote into the slot the sibling binding had
-# reused, clobbering it — returning the inner let's value instead of
-# the sibling's. Fixed by reserving slots for a frame's whole lifetime
-# (compiler.ml extend_cenv: mark-dead, not truncate).
+# The evaluator uses explicit heap state for frames and continuations. A
+# nested `let` inside a `let*` binding RHS is evaluated through a thunk; when
+# that thunk is forced later, its local state must not overwrite the sibling
+# binding captured by the closure. The regression protects the evaluator's
+# environment-extension and continuation state implementation.
 
 print("=== nested let in let* binding, captured by a closure ===")
 # x2's RHS contains a nested let; x2 is then captured by fn(x3) { x2 }.

@@ -3,17 +3,17 @@
 # differently, so each recomputes instead of wrongly serving the other's
 # cached result.
 #
-# hash_concat frames every part as `<len>:<bytes>` (src/kernel/core_model.ml), so two
-# distinct part LISTS can never share a pre-hash string just because a part
-# contains ':' or matches an absent-marker. Two observation encodings that
-# collided under the old `String.concat ":"` join are the surface-reachable
-# witnesses; each must now RECOMPUTE across the two world-states rather than
-# serve the other's cached result, and each must still re-HIT on return to the
-# original state (the framing is deterministic, not merely different):
+# `hash-concat` frames every part as `<len>:<bytes>` (`lisp/kernel/hasher.lisp`),
+# so two distinct part lists can never share a pre-hash string just because a
+# part contains ':' or matches an absent-marker. Two observation encodings that
+# collided under the old delimiter join are the surface-reachable witnesses;
+# each must now RECOMPUTE across the two world-states rather than serve the
+# other's cached result, and each must still re-HIT on return to the original
+# state (the framing is deterministic, not merely different):
 #
 #   (a) env-absent vs value "absent": a variable whose value is literally
 #       "absent" once hashed identically to an unset variable
-#       (`hash_string ("env:"^s)` == `hash_string "env:absent"`).
+#       (`hash-string("env:" + s)` versus `hash-string("env:absent")`).
 #   (b) argv ["a","b"] vs ["a:b"]: the ':' join made "argv:a:b" ambiguous.
 #
 # COMPUTE in output = the node body ran (miss); a hit does not replay it

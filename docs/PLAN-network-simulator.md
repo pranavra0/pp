@@ -691,7 +691,7 @@ are a separate security milestone, not implicit v1 behavior.
 
 ### 12.2 Semantic parity
 
-For the complete existing language corpus and metamorphic fuzzer:
+For the complete existing language corpus and deterministic property coverage:
 
 - instrumentation off versus semantic events versus evaluation events yields
   identical stdout/stderr contract, exit status, result hashes, desired-state
@@ -749,10 +749,10 @@ fixtures rather than building private browser-only worlds.
   temporary sandboxes, sockets, and store growth.
 
 After changes to evaluator, core types, or store code, run the repository's
-required full fuzzer and suite. Each milestone also runs architecture gates
-and the smallest relevant existing tests, especially `009` and `010`–`024`
-for identity/store/trace changes and `038`, `045`, `047`–`052` for scheduling,
-network, cluster, and reconciliation behavior.
+kernel/capability property suites and normal suite. Each milestone also runs
+architecture gates and the smallest relevant existing tests, especially `009`
+and `010`–`024` for identity/store/trace changes and `038`, `045`, `047`–`052`
+for scheduling, network, cluster, and reconciliation behavior.
 
 ## 13. Delivery sequence and exit gates
 
@@ -825,7 +825,7 @@ the exported run bundle can become a headless regression fixture.
 - remove prototypes, compatibility adapters, completed plan material, and
   obsolete observability paths.
 
-Exit: clean build, architecture gates, 2,000-case full fuzzer, full suite,
+Exit: clean build, architecture gates, kernel property sweeps, full suite,
 browser suite, loopback stress smoke, and deployment smoke all pass.
 
 ### Milestone 7: post-v1 remote transport and stress

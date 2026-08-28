@@ -11,13 +11,13 @@
 # pins: LAW-29
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
-# assert_err NAME FILE PATTERN — tree-walker fails, stderr matches PATTERN.
+# assert_err NAME FILE PATTERN — the runtime evaluator fails, stderr matches.
 assert_err() {
   local name="$1" file="$2" pat="$3"
   local ec=0
   "$PP" "$file" >"$TMP/o1" 2>"$TMP/e1" || ec=$?
   if [ "$ec" -eq 0 ]; then
-    bad "$name" "expected tree-walker to fail"
+    bad "$name" "expected evaluator to fail"
     return
   fi
   if ! grep -qE "$pat" "$TMP/e1"; then
@@ -76,7 +76,7 @@ if [ "$ec" -eq 1 ] && grep -q '^pp: error: ' "$TMP/e1" && ! grep -q "Fatal error
 else bad "clean-error-line" "exit=$ec" "stderr: $(cat "$TMP/e1")"; fi
 
 # ---- (g) an error inside a `load`ed file cites THAT file's line, not the
-# loading form's — tree-walker ----
+# loading form's — runtime evaluator ----
 cat > "$TMP/g-inner.pp" <<'EOF'
 print("inner-before")
 car(5)

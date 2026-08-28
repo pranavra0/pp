@@ -45,7 +45,7 @@ jobs:
           path: |
             /usr/bin/sbcl
             /usr/lib/sbcl
-          key: sbcl-bin-${{ runner.os }}-${{ runner.arch }}-v2
+          key: sbcl-bin-${{ runner.os }}-${{ runner.arch }}-v3
 
       - name: Install dependencies
         run: |
@@ -56,13 +56,16 @@ jobs:
             sudo apt-get install -y --no-install-recommends sbcl
           fi
 
+      - name: Record SBCL toolchain provenance
+        run: scripts/build-lisp.sh --print-toolchain-id > .pp-sbcl-toolchain-id
+
       - name: Restore built image
         if: matrix.mode == 'build'
         id: image-cache
         uses: actions/cache@v4
         with:
           path: lisp
-          key: pp-image-${{ hashFiles('lisp/**/*.lisp', 'lisp/pp.asd', 'scripts/build-lisp.sh') }}
+          key: pp-image-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('lisp/**/*.lisp', 'lisp/pp.asd', 'build/**/*.lisp', 'build/**/*.pp', 'scripts/build-lisp.sh') }}-${{ hashFiles('.pp-sbcl-toolchain-id') }}
 
       - name: Build saved image
         if: matrix.mode == 'build' && steps.image-cache.outputs.cache-hit != 'true'

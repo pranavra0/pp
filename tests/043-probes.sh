@@ -158,8 +158,8 @@ assert "register-probe-in-node-errors" "node bod" present
 # (6) --watch: the SAME probe cell change, detected live by one
 #     long-running `pp --watch` process on a timer, with no special-cased
 #     wiring — a probe read is an ordinary cell observation, so the
-#     existing generic watch-loop polling (session observations ->
-#     Observation.observe) already covers `probe:` cells for free.
+#     existing generic watch-loop polling (session observations and the
+#     runtime observation service) already covers `probe:` cells for free.
 # =====================================================================
 rm -rf "$TMP/.pp"
 printf '1\n' > "$COUNTER"

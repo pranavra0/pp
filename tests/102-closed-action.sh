@@ -53,6 +53,42 @@ run --grant process "$TMP/output-traversal.pp"
 if grep -q "rejects non-canonical output path" "$TMP/out"; then ok "closed-output-traversal"
 else bad "closed-output-traversal" "$(cat "$TMP/out")"; fi
 
+cat >"$TMP/tool-path-traversal.pp" <<'EOF'
+perform run-closed!({
+  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob("not-a-tool")}}},
+  :tool-path -> "../escape",
+  :args -> [],
+  :inputs -> {:tree -> {}},
+  :env -> {},
+  :platform -> {"os" -> "linux"},
+  :outputs -> []
+})
+EOF
+run --grant process "$TMP/tool-path-traversal.pp"
+if grep -q "rejects non-canonical tool path" "$TMP/out"; then
+  ok "closed-tool-path-traversal"
+else
+  bad "closed-tool-path-traversal" "$(cat "$TMP/out")"
+fi
+cat >"$TMP/tool-path-absolute.pp" <<'EOF'
+perform run-closed!({
+  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob("not-a-tool")}}},
+  :tool-path -> "/escape",
+  :args -> [],
+  :inputs -> {:tree -> {}},
+  :env -> {},
+  :platform -> {"os" -> "linux"},
+  :outputs -> []
+})
+EOF
+run --grant process "$TMP/tool-path-absolute.pp"
+if grep -q "rejects non-canonical tool path" "$TMP/out"; then
+  ok "closed-tool-path-absolute"
+else
+  bad "closed-tool-path-absolute" "$(cat "$TMP/out")"
+fi
+
+
 cat >"$TMP/platform.pp" <<'EOF'
 perform run-closed!({
   :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob("not-a-tool")}}},
@@ -102,6 +138,35 @@ else
   bad "closed-policy-canonical" "$(cat "$TMP/out")"
 fi
 
+cat >"$TMP/provider-contract.pp" <<'EOF'
+perform run-closed!({
+  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob("not-a-tool")}}},
+  :tool-path -> "tool",
+  :args -> [],
+  :inputs -> {:tree -> {}},
+  :env -> {},
+  :platform -> {"os" -> "linux"},
+  :policy -> {:provider -> "local-materialized-workspace"},
+  :outputs -> []
+})
+EOF
+run --grant process "$TMP/provider-contract.pp"
+if grep -q "provider capability/namespace contract is required" "$TMP/out"; then
+  ok "closed-provider-contract-required"
+else
+  bad "closed-provider-contract-required" "$(cat "$TMP/out")"
+fi
+
+cat >"$TMP/toolchain-no-cap.pp" <<'EOF'
+sbcl-toolchain()
+EOF
+run "$TMP/toolchain-no-cap.pp"
+if grep -q "no process authority" "$TMP/out"; then
+  ok "closed-toolchain-no-cap"
+else
+  bad "closed-toolchain-no-cap" "$(cat "$TMP/out")"
+fi
+
 cat >"$TMP/node.pp" <<'EOF'
 force(node {
   perform run-closed!({
@@ -122,10 +187,77 @@ else
   bad "closed-node-denied" "$(cat "$TMP/out")"
 fi
 
-tool=
-for candidate in /usr/bin/cosign-linux-amd64 /usr/bin/init.lxc.static; do
-  if [ -x "$candidate" ]; then tool="$candidate"; break; fi
+static_limit=$((16 * 1024 * 1024))
+small_tool=
+for candidate in /usr/bin/true /bin/true; do
+  if [ -x "$candidate" ]; then
+    candidate_size=$(stat -c '%s' -- "$candidate" 2>/dev/null || printf '%s' "$((static_limit + 1))")
+    if [ "$candidate_size" -le "$static_limit" ]; then
+      [ -n "$small_tool" ] || small_tool="$candidate"
+    else
+      ok "closed-cacheability-tool-skipped-$(basename "$candidate")-oversized"
+    fi
+  fi
 done
+if [ -n "$small_tool" ]; then
+
+  cat >"$TMP/cacheability.pp" <<EOF
+let result = perform run-closed!({
+  :tool -> {:tree -> {"tool" -> {:kind -> :file, :mode -> 493, :blob -> blob(slurp("$small_tool"))}}},
+  :tool-path -> "tool",
+  :args -> [],
+  :inputs -> {:tree -> {}},
+  :env -> {},
+  :platform -> {"os" -> "linux"},
+  :policy -> {
+    :provider -> "local-materialized-workspace",
+    :contract -> {
+      :version -> "v1",
+      :capabilities -> vec["direct-process", "explicit-environment",
+                            "workspace-filesystem"],
+      :namespaces -> {
+        "clock" -> "ambient",
+        "environment" -> "explicit-only",
+        "filesystem" -> "workspace-materialized",
+        "kernel" -> "ambient",
+        "loader" -> "ambient",
+        "network" -> "ambient",
+        "randomness" -> "ambient",
+        "resources" -> "ambient"
+      }
+    }
+  },
+  :outputs -> []
+})
+print(hash-map-get(hash-map-get(result, "evidence"), "cacheability"))
+print(hash-map-get(hash-map-get(result, "evidence"), "provider-contract"))
+print(hash-map-get(hash-map-get(result, "evidence"), "provider-namespaces"))
+EOF
+  run --grant process --grant "fs:$small_tool:ro" "$TMP/cacheability.pp"
+  if grep -q '^"scripting-only"$' "$TMP/out" &&
+     grep -q '^"local-materialized-workspace/v1"$' "$TMP/out" &&
+     grep -q 'loader=ambient' "$TMP/out"; then
+    ok "closed-cacheability-never-claimed"
+  else
+    bad "closed-cacheability-never-claimed" "$(cat "$TMP/out")"
+  fi
+else
+  ok "closed-cacheability-tool-unavailable"
+fi
+
+
+tool=
+for candidate in /usr/bin/init.lxc.static /usr/bin/cosign-linux-amd64; do
+  if [ -x "$candidate" ]; then
+    candidate_size=$(stat -c '%s' -- "$candidate" 2>/dev/null || printf '%s' "$((static_limit + 1))")
+    if [ "$candidate_size" -le "$static_limit" ]; then
+      [ -n "$tool" ] || tool="$candidate"
+    else
+      ok "closed-static-tool-skipped-$(basename "$candidate")-oversized"
+    fi
+  fi
+done
+
 
 if [ -n "$tool" ]; then
   cat >"$TMP/execute.pp" <<EOF
@@ -178,7 +310,7 @@ EOF
     ok "closed-hostile-runner-unavailable"
   else
     for fact in filesystem-denied=true environment-cleared=true \
-        environment-explicit=yes network-denied=true child-ok \
+        environment-explicit=yes network-attempted=true child-ok \
         subprocess-confined=true loader-denied=true randomness-available=true \
         clock-available=true; do
       if grep -q "$fact" "$TMP/out"; then ok "closed-hostile-$fact"

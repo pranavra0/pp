@@ -1166,23 +1166,40 @@ names — mkdtemp semantics without a repeatable PRNG."
     (hv nil value)))
 
 (defun store-default-reachable-blobs (value)
+  "Return blob identities from canonical blob fields only.
+
+Content digests are ordinary strings in observed directory values (for
+example, a tree observation maps each path to its content hash).  Treating
+every digest-looking string as a store blob makes those observations
+unreplayable once cache lookup verifies blob reachability.  Blob references
+are explicit artifact fields, so traverse values while collecting only
+values under a `:blob` key."
   (let ((found nil))
     (labels ((walk (item)
                (typecase item
-                 (pp.kernel:value-string
-                  (let ((text (pp.kernel:value-string-value item)))
-                    (when (store-digest-p text)
-                      (pushnew text found :test #'string=))))
-                 (pp.kernel:value-pair (walk (pp.kernel:value-pair-car item))
-                                       (walk (pp.kernel:value-pair-cdr item)))
+                 (pp.kernel:value-pair
+                  (walk (pp.kernel:value-pair-car item))
+                  (walk (pp.kernel:value-pair-cdr item)))
                  (pp.kernel:value-vector
                   (loop for child across (pp.kernel:value-vector-values item)
                         do (walk child)))
                  (pp.kernel:value-map
                   (dolist (entry (pp.kernel:value-map-entries item))
-                    (walk (car entry)) (walk (cdr entry))))
+                    (let ((key (car entry))
+                          (child (cdr entry)))
+                      (when (and (typep key 'pp.kernel:value-keyword)
+                                 (string= (pp.kernel:value-keyword-value key)
+                                          "blob")
+                                 (typep child 'pp.kernel:value-string)
+                                 (store-digest-p
+                                  (pp.kernel:value-string-value child)))
+                        (pushnew (pp.kernel:value-string-value child)
+                                 found :test #'string=))
+                      (walk key)
+                      (walk child))))
                  (pp.kernel:value-set
-                  (dolist (child (pp.kernel:value-set-values item)) (walk child))))))
+                  (dolist (child (pp.kernel:value-set-values item))
+                    (walk child))))))
       (walk value))
     found))
 

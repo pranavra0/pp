@@ -289,13 +289,15 @@ cannot produce a complete trace. `run-closed!` accepts an immutable request
 through a session-owned executor. Tools, inputs, and selected outputs use the
 canonical ordinary tree value; every file is backed by a hash-verified blob.
 Evidence and resource maps are canonicalized independently of provider ordering.
-The Linux provider denies undeclared filesystem, environment, network, and
-loader access, confines subprocesses to the same sandbox, and reports signals
-as exit status. It explicitly reports clocks, randomness, CPU/kernel behavior,
-and resource limits as ambient, so it classifies every request as
-scripting-only. The runtime rejects such a request inside a node before
-execution. The executor interface can instead classify a request cacheable,
-which is the trusted guarantee that every semantic input is accounted for;
+The bundled Linux provider materializes the declared tool and input trees in a
+private working directory and supplies only the request's explicit environment
+to its direct child. This is not OS namespace isolation: absolute filesystem
+access, the ELF interpreter and shared-library loader, network access,
+subprocess creation, and other kernel interfaces remain host-mediated. It
+reports clocks, randomness, CPU/kernel behavior, and resource limits as
+ambient, so it classifies every request as scripting-only. The runtime rejects
+such a request inside a node before execution.
+The executor interface can instead classify a request cacheable, which is the trusted guarantee that every semantic input is accounted for;
 the runtime then permits it in a node. The optional `:policy` field is
 canonical ordinary pp data; the runtime preserves it but interprets none of it
 (`lifecycle_unit`, `tests/102`). Thus no cacheable foreign process runs without
@@ -713,10 +715,9 @@ killed mid-apply action is recovered without silent double-execution
 (`tests/034`).
 
 Host-qualified domain distribution: the desired map generalises one level,
-to `{host -> {domain -> desired}}`. An explicit `--member-name <n>` flag,
-never inferred, makes `main.ml` index that one host's `{domain -> desired}`
-slice and hand it to the unchanged `Domains.run_all`/`run_domain` above,
-which never learn host-keying exists. Without the flag, the desired value
+never inferred, makes the application select that one host's `{domain -> desired}`
+slice and hand it to the lifecycle domain runner above, which never learns
+host-keying exists. Without the flag, the desired value
 passes through untouched, so every pre-existing program and flag combination
 (this law's own `tests/018`/`tests/033`/`tests/046`) is byte-identical to
 before. A member's recovery from `kill -9` is this law's existing
@@ -823,7 +824,7 @@ A future extension adds cluster membership's write-domain half: the desired
 map generalises to `{host -> {domain -> desired}}`, indexed by the same kind
 of ambient identifier this law uses for `remote:<member>` plus an explicit
 `--member-name <n>` flag, never `--grant`, so the negative half stays intact.
-It hands the unchanged `Domains.run_all` (LAW 30) only that host's slice; a
+It hands the lifecycle domain runner (LAW 30) only that host's slice; a
 member is simply `pp --watch [--supervise] --member-name <n>`, the local
 supervisor's existing per-machine story verbatim. Explicit store GC (`pp gc`,
 never automatic) is orthogonal to placement: it runs only as its own command,
@@ -1135,11 +1136,11 @@ Notes, each load-bearing for hash preservation:
 ### B.3 Lowering table
 
 Each row gives the s-expression text a brace form reads as; both readers
-must then agree at the `Core_model.expr` level. Where the sexpr reader applies a
-reader-level desugar (`and`/`or` → `if`, `assert`, per-parameter type
-checks, the block rule), that desugar is a shared post-pass run identically
-downstream of both parsers, never duplicated. ⟦stmts⟧ denotes the block
-rule (`reader.ml block_body`): one statement becomes the statement itself;
+must then agree at the `pp.kernel` expression level. Where the frontend
+reader applies a reader-level desugar (`and`/`or` → `if`, `assert`,
+per-parameter type checks, the block rule), that desugar is a shared post-pass
+run identically downstream of both parsers, never duplicated. ⟦stmts⟧ denotes
+the frontend block-lowering rule: one statement becomes the statement itself;
 several become `(do stmts…)`; zero become `(do)`, including the block's
 duplicate-definition check (LAW 4).
 

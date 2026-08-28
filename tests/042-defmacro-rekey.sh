@@ -3,17 +3,16 @@
 # must re-key the node whose body came from that macro's expansion (a store
 # MISS + recompute, proven via `pp why` and the journal), and reverting the
 # definition must hit again (SPEC law 20). This is possible only because
-# expansion happens BEFORE hash_expr ever sees the node's body (macro.ml is
-# the one shared expansion point): hash_expr operates on
-# the EXPANDED form, so a macro-only edit is not invisible to the store the
-# way it would be if the code hash were computed before/independent of
-# expansion.
+# expansion happens BEFORE hash_expr sees the node's body (the shared
+# `runtime-expand-expression` path in `lisp/runtime/language.lisp`): hash_expr
+# operates on the EXPANDED form, so a macro-only edit is not invisible to the
+# store the way it would be if the code hash were computed before/independent
+# of expansion.
 #
 # Also pins the macro-in-node-body rule: a `defmacro` textually inside a
 # `(node ...)` body is never specially recognized — only a TRUE top-level
-# form registers a macro (macro.ml's documented decision) — so it reaches
-# eval/compile as an ordinary application of the unbound symbol "defmacro",
-# identically in tree-walker.
+# form registers a macro (`runtime-expand-toplevel`) — so it reaches the
+# evaluator as an ordinary application of the unbound symbol "defmacro".
 #
 # Runs under an isolated HOME.
 set -uo pipefail
@@ -46,8 +45,8 @@ EOF
 
 # The SAME rekey battery, authored in the OTHER surface (.ppl, sexpr) —
 # same macro, same call site, same edit, proving the rekey property (SPEC
-# law 20) is a property of the AST macro.ml expands, not of which reader
-# produced it: every existing macro test passes authored in either
+# law 20) is a property of the AST expanded by the shared runtime path, not of
+# which reader produced it: every existing macro test passes authored in either
 # surface.
 cat > "$TMP/v1.ppl" <<'EOF'
 (defmacro (build-step) '(do (perform log "COMPUTE") 1))

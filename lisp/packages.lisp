@@ -250,7 +250,7 @@
    #:store-inventory-entry #:store-inventory-entry-p #:make-store-inventory-entry #:store-inventory-entry-id #:store-inventory-entry-modified #:store-inventory-entry-size
    #:store-inventory-area #:store-inventory-entries #:store-inventory-remove #:store-index-reverse #:store-index-dirty-keys #:store-gc-root
    #:store-gc-root-p #:make-store-gc-root #:store-gc-root-hash #:store-gc-root-nodes #:gc-roots-path #:gc-roots-root-value
-   #:gc-root-field #:gc-roots-value-root #:gc-roots-read-all #:gc-roots-record #:store-gc-mark-graph #:store-gc-sweep
+   #:gc-root-field #:gc-roots-value-root #:gc-roots-read-all #:gc-roots-record #:store-default-reachable-blobs #:store-gc-mark-graph #:store-gc-sweep
    #:store-gc-run #:runtime-store-with-repositories #:runtime-store-put-node-result #:runtime-store-load-node-traces))
 
 (defpackage #:pp.rt.scope
@@ -438,8 +438,9 @@
    #:runtime-executor-request-inputs #:runtime-executor-request-environment #:runtime-executor-request-platform #:runtime-executor-request-policy #:runtime-executor-request-outputs #:runtime-executor-result
    #:runtime-executor-result-p #:make-runtime-executor-result #:runtime-executor-result-exit-status #:runtime-executor-result-stdout #:runtime-executor-result-stderr #:runtime-executor-result-outputs
    #:runtime-executor-result-evidence #:runtime-executor-result-resources #:runtime-executor-cacheable #:runtime-executor-cacheable-p #:make-runtime-executor-cacheable #:runtime-executor-scripting-only
-   #:runtime-executor-scripting-only-p #:make-runtime-executor-scripting-only #:runtime-executor-scripting-only-reason #:runtime-executor #:runtime-executor-p #:make-runtime-executor
-   #:runtime-executor-classify #:runtime-executor-classification-cacheable-p #:runtime-executor-classification-scripting-only-p #:runtime-executor-classification-reason #:runtime-executor-request-data-p #:runtime-executor-sorted-pairs
+   #:runtime-executor-scripting-only-p #:make-runtime-executor-scripting-only #:runtime-executor-scripting-only-reason #:runtime-executor-provider-contract #:runtime-executor-provider-contract-p #:make-runtime-executor-provider-contract
+   #:runtime-executor-provider-contract-name #:runtime-executor-provider-contract-version #:runtime-executor-provider-contract-capabilities #:runtime-executor-provider-contract-namespaces #:runtime-executor #:runtime-executor-p #:make-runtime-executor
+   #:runtime-executor-classify #:runtime-executor-classification-cacheable-p #:runtime-executor-classification-scripting-only-p #:runtime-executor-classification-reason #:runtime-executor-request-data-p #:runtime-executor-sorted-pairs #:runtime-executor-policy-field #:runtime-executor-provider-contract-valid-p
    #:runtime-executor-validate-result #:runtime-executor-classify-request #:runtime-executor-run #:runtime-executor-service #:runtime-executor-run-in-session #:runtime-executor-execute))
 
 (defpackage #:pp.rt.sandbox
@@ -538,7 +539,7 @@
    #:runtime-dynamic-require-script-tier #:runtime-dynamic-tail-capabilities-at #:runtime-dynamic-tail-capability-depth #:runtime-dynamic-tail-handler-identities #:runtime-dynamic-tail-lookup-handler #:store-octets
    #:store-copy-octets #:store-string-octets #:store-octets-string #:store-content-octets #:store-hash-octets #:store-hash-content
    #:store-digest-p #:store-identity-string #:store-atomic-write-octets #:store-atomic-replace #:store-read-octets #:store-read-text
-   #:store-absolute-path #:store-directory-pathname #:store-canonical-path #:store-ensure-directory #:store-valid-name-p #:+
+   #:store-absolute-path #:store-directory-pathname #:store-exclusive-directory #:store-exclusive-temp-name #:store-canonical-path #:store-ensure-directory #:store-valid-name-p #+
    #:store-layout #:store-layout-p #:make-store-layout #:store-layout-of-root #:store-layout-root #:store-split-lines
    #:store-layout-area-name #:store-layout-area #:store-layout-path #:store-layout-ensure-area #:store-layout-list #:store-layout-list-names
    #:store-layout-remove #:store-layout-clear-dir #:store-layout-read-store #:store-layout-init #:store-lock-fd #:store-with-lock
@@ -625,8 +626,9 @@
    #:runtime-executor-request-inputs #:runtime-executor-request-environment #:runtime-executor-request-platform #:runtime-executor-request-policy #:runtime-executor-request-outputs #:runtime-executor-result
    #:runtime-executor-result-p #:make-runtime-executor-result #:runtime-executor-result-exit-status #:runtime-executor-result-stdout #:runtime-executor-result-stderr #:runtime-executor-result-outputs
    #:runtime-executor-result-evidence #:runtime-executor-result-resources #:runtime-executor-cacheable #:runtime-executor-cacheable-p #:make-runtime-executor-cacheable #:runtime-executor-scripting-only
-   #:runtime-executor-scripting-only-p #:make-runtime-executor-scripting-only #:runtime-executor-scripting-only-reason #:runtime-executor #:runtime-executor-p #:make-runtime-executor
-   #:runtime-executor-classify #:runtime-executor-classification-cacheable-p #:runtime-executor-classification-scripting-only-p #:runtime-executor-classification-reason #:runtime-executor-request-data-p #:runtime-executor-sorted-pairs
+   #:runtime-executor-scripting-only-p #:make-runtime-executor-scripting-only #:runtime-executor-scripting-only-reason #:runtime-executor-provider-contract #:runtime-executor-provider-contract-p #:make-runtime-executor-provider-contract
+   #:runtime-executor-provider-contract-name #:runtime-executor-provider-contract-version #:runtime-executor-provider-contract-capabilities #:runtime-executor-provider-contract-namespaces #:runtime-executor #:runtime-executor-p #:make-runtime-executor
+   #:runtime-executor-classify #:runtime-executor-classification-cacheable-p #:runtime-executor-classification-scripting-only-p #:runtime-executor-classification-reason #:runtime-executor-request-data-p #:runtime-executor-sorted-pairs #:runtime-executor-policy-field #:runtime-executor-provider-contract-valid-p
    #:runtime-executor-validate-result #:runtime-executor-classify-request #:runtime-executor-run #:runtime-executor-service #:runtime-executor-run-in-session #:runtime-process-record
    #:runtime-process-record-p #:make-runtime-process-record #:runtime-process-record-name #:runtime-process-record-spec-hash #:runtime-process-record-pid #:runtime-process-record-argv
    #:runtime-process-record-cwd #:runtime-process-record-environment #:runtime-process-record-status #:runtime-process-capability-p #:runtime-process-require-capability #:runtime-process-split-path

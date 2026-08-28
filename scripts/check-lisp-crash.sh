@@ -2,7 +2,7 @@
 set -uo pipefail
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
-FIXTURE="$ROOT/lisp/tests/store/crash/build.pp"
+FIXTURE="$ROOT/tests/fixtures/store-crash/build.pp"
 BINARY=""
 TIMEOUT_SECONDS=30
 MAX_WRITES=256
@@ -89,7 +89,7 @@ with open(output, "wb") as out, open(error, "wb") as err:
         [
             executable,
             "--grant",
-            f"fs:{root}/lisp/tests/store/crash:ro",
+            f"fs:{root}/tests/fixtures/store-crash:ro",
             fixture,
         ],
         cwd=root,
