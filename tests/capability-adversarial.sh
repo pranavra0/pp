@@ -4,7 +4,7 @@
 # --grant (filesystem/network/process are not user-code constructors any
 # more), and in-language attenuation (cap-restrict/cap-compose/with-caps) can
 # only narrow what's already held, never widen or invent authority.
-# Runs the tree-walker on every case.
+# Runs every case through the runtime evaluator.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 trap 'rm -rf "$TMP"' EXIT

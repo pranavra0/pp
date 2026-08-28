@@ -3,10 +3,10 @@
 # (SPEC law 21).
 #
 # Two facts about the persistent node cache (~/.pp/store) motivated this:
-#   1. it was tree-walker-only (no store of its own existed), and
+#   1. persistence is explicit in the runtime store, not an evaluator-local
+#      implementation detail, and
 #   2. it served STALE results: `(node (slurp path))` returned the old file
-#      contents after the file changed, because the node key hashes the path
-#      STRING, not what was read.
+#      STRING, not what was read, because the key identifies code and inputs
 #
 # The fix records each world-read as a (cell-id, observed-hash) pair in the
 # node's trace and re-verifies every pair on a cache hit. This is pp's dynamic

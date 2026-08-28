@@ -5,8 +5,8 @@
 # Also pins two match soundness fixes:
 #   - matching a list/tagged pattern against a non-pair scalar falls through
 #     instead of crashing;
-#   - a match nested in another match's scrutinee no longer collides on the
-#     compiler's scrutinee temp (unique per instance now).
+#   - a nested match's scrutinee no longer collides on evaluator-local state
+#     (each match instance has its own state).
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 run_both() {

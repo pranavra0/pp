@@ -14,7 +14,16 @@ for path in \
   [ -f "$ROOT/$path" ] || { echo "FAIL missing Lisp source: $path" >&2; exit 1; }
 done
 [ ! -e "$ROOT/dune" ] || { echo 'FAIL obsolete build file remains' >&2; exit 1; }
+[ ! -e "$ROOT/dune-project" ] || { echo 'FAIL obsolete build project remains' >&2; exit 1; }
 [ ! -e "$ROOT/pp.opam" ] || { echo 'FAIL obsolete package file remains' >&2; exit 1; }
+
+# The old native implementation tree and untracked Lisp probe tree must not
+# quietly return. Keep these paths explicit so a partial migration fails at
+# the inventory gate.
+for path in src lib test lisp/tests; do
+  [ ! -e "$ROOT/$path" ] ||
+    { echo "FAIL obsolete source tree remains: $path" >&2; exit 1; }
+done
 
 for package in pp.kernel pp.frontend pp.runtime pp.app; do
   grep -q "(defpackage #:$package" "$ROOT/lisp/packages.lisp" ||

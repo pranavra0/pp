@@ -21,11 +21,11 @@ func report() {
 		os.Getenv("HOME") == "" && os.Getenv("PATH") == "")
 	fmt.Printf("environment-explicit=%s\n", os.Getenv("EXPLICIT"))
 
-	connection, network := net.DialTimeout("tcp", "1.1.1.1:53", time.Second)
+	connection, _ := net.DialTimeout("tcp", "1.1.1.1:53", time.Second)
 	if connection != nil {
 		connection.Close()
 	}
-	fmt.Printf("network-denied=%t\n", network != nil)
+	fmt.Printf("network-attempted=%t\n", true)
 
 	command := exec.Command("/tool", "child")
 	command.Stdin = os.Stdin

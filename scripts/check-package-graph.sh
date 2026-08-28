@@ -78,24 +78,14 @@ configuration.lisp|pp.rt.observation
 dynamic-scope.lisp|pp.rt.observation
 evaluator.lisp|pp.rt.observation
 executor.lisp|pp.rt.artifacts
-fenced.lisp|pp.rt.journal
-fenced.lisp|pp.rt.lifecycle.process
-fenced.lisp|pp.rt.session
 fenced.lisp|pp.rt.store
-island.lisp|pp.rt.store
 journal.lisp|pp.rt.session
 observations.lisp|pp.rt.domain
 observations.lisp|pp.rt.protocol
 observations.lisp|pp.rt.session
-primitives.lisp|pp.rt.observation
-process.lisp|pp.rt.effects
-process.lisp|pp.rt.session
-process.lisp|pp.rt.store
+fenced.lisp|pp.rt.lifecycle.process
 sandbox.lisp|pp.rt.protocol
-sandbox.lisp|pp.rt.store
-watch.lisp|pp.rt.observation
 watch.lisp|pp.rt.protocol
-watch.lisp|pp.rt.store
 EOF
 )
 

@@ -30,9 +30,8 @@ print("=== caller-name hygiene ===")
 # `gensym("tmp")` produces a fresh, unwritable name (e.g. "tmp~3"), so the
 # caller's `tmp` (bound to 7) is what `unquote(a)` refers to, not the
 # macro's own temporary. This is the same computed-binding-name shape
-# quasiquote{} needs `unquote(...)` in a name slot for
-# (src/frontend/reader_braces.ml's parse_qq_name_slot) — `unquote(g)` names the
-# binding itself, not just its value.
+# quasiquote{} needs `unquote(...)` in a name slot for the shared frontend
+# quasiquote parser — `unquote(g)` names the binding itself, not just its value.
 defmacro first-truthy(a, b) {
   let* (g = gensym("tmp")) {
     quasiquote {

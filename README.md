@@ -18,11 +18,16 @@ separate mechanisms.
 
 ```sh
 scripts/build-lisp.sh --output lisp/pp
+bin/pp build pp
 bin/pp file.pp
 ```
 
-The build requires SBCL and creates a saved executable image. Ordinary
-invocations run that image; pp never asks the host reader to parse source.
+The first command is the shell-level bootstrap: it requires SBCL and builds the
+saved image that `bin/pp` runs. `bin/pp build pp` then exercises pp's canonical
+bootstrap request, materializing `build/pp` and its image through
+`run-closed!`.
+There is no `he bootstrap` command in this repository; these are the supported
+shell-level and pp-level bootstrap stages, not a hermeticity claim.
 
 Run `scripts/run-tests.sh bin/pp` for the test suite, or `bin/pp --help`
 for all flags.
@@ -121,13 +126,17 @@ Source comes in two spellings: `.pp`, braces and infix notation, and
 `.ppl`, the same AST written as s-expressions so macros can manipulate it.
 `pp fmt` converts between them.
 
-Foreign execution is provider-owned. The bundled Linux executor closes the
-filesystem, environment, loader, and network but reports its remaining ambient
-inputs, so it is scripting-only. A trusted provider may classify an immutable
-request as cacheable when it can guarantee that the request accounts for every
-semantic input. Toolchain and execution-policy schemas remain ordinary pp
-libraries; the optional `:policy` field is canonical pp data that only the
-provider interprets.
+Foreign execution is provider-owned. The bundled Linux executor materializes
+declared tool and input trees in a private working directory and supplies only
+the request's explicit environment to its direct child. This is not OS
+namespace isolation: absolute filesystem access, the ELF interpreter and
+shared-library loader, network access, subprocess creation, and other kernel
+interfaces remain host-mediated. Clock, randomness, CPU/kernel behavior, and
+resource limits also remain ambient, so it is scripting-only. A trusted
+provider may classify an immutable request as cacheable when it can guarantee
+that the request accounts for every semantic input. Toolchain and
+execution-policy schemas remain ordinary pp libraries; the optional `:policy`
+field is canonical pp data that only the provider interprets.
 
 The package is authored by Pranav Rao and distributed under the MIT License;
 see [LICENSE](LICENSE).

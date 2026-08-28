@@ -2,7 +2,7 @@
 # tests/026 — per-parameter type annotations are CHECKED: they used to
 # parse and then be silently discarded. The reader desugars `(def (f x :
 # int) body)` into a located type check on `x` ahead of the body, so the
-# tree-walker enforces:
+# evaluator enforces:
 #   (a) a well-typed call passes and returns the body's value;
 #   (b) an ill-typed call raises a "type mismatch" error, with the
 #       definition-site location;

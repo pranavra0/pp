@@ -263,7 +263,9 @@ Disposition is an explicit result argument, never ambient hook state."
          (hit (runtime-cache-lookup
                :policy policy :traces traces :objects objects :blobs blobs
                :key key :observe-id #'runtime-node-observed-cell-id
-               :replay #'runtime-observation-replay :authorized authorized)))
+               :replay #'runtime-observation-replay
+               :authorized authorized
+               :reachable-blobs #'store-default-reachable-blobs)))
     (when (runtime-cache-result-hit-p hit)
       (let ((served (runtime-node-serve-hit thunk hit key session)))
         (when (and served observer) (funcall observer :hit))

@@ -144,18 +144,28 @@ same trust boundaries for readers.
   object store.
 - `run` launches ambient POSIX processes and is scripting-tier
   only.
-- `run-closed!` closes environment, filesystem, and network around immutable
-  blobs through a session-owned executor. Its Linux provider accepts only the
-  exact Linux platform constraint and does not mediate time, randomness, CPU
-  instructions, kernel behavior, or resource limits; it fails unavailable when
-  Bubblewrap cannot create every requested namespace, and reports those
-  ambient facts as ordinary evidence while remaining scripting-tier.
+- `run-closed!` materializes declared immutable blobs in a session-owned
+  workspace. The canonical self-build request invokes SBCL's selected runtime
+  directly; `sbcl-toolchain()` snapshots its runtime, core, and `SBCL_HOME`
+  into content-addressed artifacts after checking explicit filesystem
+  capability. The provider's versioned policy contract declares
+  workspace-materialized filesystem, explicit-only environment, ambient network,
+  and direct-process behavior.
+
+  This provider does not yet mediate the ELF interpreter's complete shared
+  library closure, absolute filesystem access, network, time, randomness, CPU
+  instructions, kernel behavior, resource limits, or platform behavior. It
+  therefore remains scripting-tier and makes no cache or remote-reuse claim.
+  The loader and other ambient namespaces are recorded as evidence rather than
+  silently treated as closed.
 
 Cache eligibility is a narrow provider guarantee, not a built-in sandbox
 policy. Before executing inside a node, the runtime asks the trusted executor
 to classify the immutable request. A cacheable classification means the
 provider guarantees that the request accounts for every semantic input; a
-scripting-only classification is rejected before execution. Providers and pp
+scripting-only classification is rejected before execution. When a request
+names a provider, its versioned capability and namespace contract is required
+and validated against that provider's installed contract. Providers and pp
 libraries may define platform, toolchain, resource, and reproducibility
 schemas in the request's optional canonical `:policy` value. The evaluator
 understands none of those schemas.

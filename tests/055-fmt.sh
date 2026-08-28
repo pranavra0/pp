@@ -19,12 +19,11 @@
 #       twice on the same input, byte-identical stdout;
 #   (d) the whole-tree sweep (every .pp in tests/, stdlib/, build.pp,
 #       demo/, examples/, docs/manual/**): `to-braces` then `to-sexpr`,
-#       in place (same path both hops — mutates the dune-sandboxed copy
-#       tests run against, never the developer's real tree; restored
-#       immediately after each file so later tests in this same run see
-#       pristine sources), preserves every top-level form's hash. The
-#       brace intermediate re-reading to the same hash as the sexpr
-#       original is the same property tests/054's whole-tree
+#       in place (same path both hops — mutates a temporary test copy, never
+#       the developer's real tree; restored immediately after each file so
+#       later tests in this same run see pristine sources), preserves every
+#       top-level form's hash. The brace intermediate re-reading to the same
+#       hash as the sexpr original is the same property tests/054's whole-tree
 #       `--roundtrip-braces` loop already gates.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
@@ -239,9 +238,8 @@ for lane in $(seq 0 $((sweep_lanes - 1))); do
       work="$TMP/sweep-work-$lane-$((lane_count + 1)).pp"
       backup="$TMP/sweep-orig-$lane-$((lane_count + 1)).pp"
       cp "$f" "$work"; cp "$f" "$backup"
-      # dune's sandboxed source_tree deps are read-only; cp carries that mode
-      # onto the work copy, so make it writable for the round-trip below.
-      chmod u+w "$work"
+      # A copied source may be read-only; make the temporary work copy
+      # writable for the round-trip below.
       c_before=$(comment_texts brace "$work")
       # count every comment, including delimiter-only lines whose content is
       # empty after stripping (`#` separators) — those still must survive

@@ -5,8 +5,8 @@
 #
 # Two SIMULATED cluster members are two `pp` process invocations differing
 # only in $HOME (the default repository layout is fixed at startup, so
-# "two stores" means "two processes" — see transport.ml's
-# module header); they share a WORK dir (the underlying "world" both
+# "two stores" means "two processes" — see `lisp/runtime/distribution.lisp`'s
+# transport implementation); they share a WORK dir (the underlying "world" both
 # members can observe identically, like tests/019) and a cluster
 # secret/id distributed out of band via a plain file copy (simulating
 # `pp cluster-init` + scp).

@@ -12,13 +12,129 @@
 (defstruct (runtime-executor-cacheable (:constructor make-runtime-executor-cacheable ())))
 (defstruct (runtime-executor-scripting-only
             (:constructor make-runtime-executor-scripting-only (reason))) reason)
+(defstruct (runtime-executor-provider-contract
+            (:constructor %make-runtime-executor-provider-contract
+                (&key name version capabilities namespaces)))
+  name version capabilities namespaces)
 (defstruct (runtime-executor
-            (:constructor %make-runtime-executor (classify execute))) classify execute)
+            (:constructor %make-runtime-executor
+                (provider-contract classify execute)))
+  provider-contract classify execute)
 
-(defun make-runtime-executor (&key classify execute)
+(defun make-runtime-executor-provider-contract
+    (&key name version capabilities namespaces)
+  (unless (and (stringp name) (plusp (length name)))
+    (error "executor provider contract has no name"))
+  (unless (and (stringp version) (plusp (length version)))
+    (error "executor provider contract has no version"))
+  (unless (and (listp capabilities) (every #'stringp capabilities))
+    (error "executor provider contract has invalid capabilities"))
+  (unless (and (listp namespaces)
+               (every (lambda (pair)
+                        (and (consp pair) (stringp (car pair))
+                             (stringp (cdr pair))))
+                      namespaces))
+    (error "executor provider contract has invalid namespaces"))
+  (%make-runtime-executor-provider-contract
+   :name name :version version
+   :capabilities (sort (copy-list capabilities) #'string<)
+   :namespaces (runtime-executor-sorted-pairs namespaces "provider namespace")))
+
+(defun make-runtime-executor (&key provider-contract classify execute)
+  (unless (or (null provider-contract)
+              (typep provider-contract 'runtime-executor-provider-contract))
+    (error "executor provider contract is invalid"))
   (unless (functionp classify) (error "executor classifier is unavailable"))
   (unless (functionp execute) (error "executor provider is unavailable"))
-  (%make-runtime-executor classify execute))
+  (%make-runtime-executor provider-contract classify execute))
+
+(defun runtime-executor-policy-field (policy name)
+  (and (typep policy 'pp.kernel:value-map)
+       (let ((entry
+               (find-if
+                (lambda (item)
+                  (let ((key (car item)))
+                    (or (and (typep key 'pp.kernel:value-keyword)
+                             (string= (pp.kernel:value-keyword-value key)
+                                      name))
+                        (and (typep key 'pp.kernel:value-string)
+                             (string= (pp.kernel:value-string-value key)
+                                      name)))))
+                (pp.kernel:value-map-entries policy))))
+         (and entry (cdr entry)))))
+
+(defun runtime-executor-provider-contract-data (request)
+  (let* ((policy (runtime-executor-request-policy request))
+         (provider (runtime-executor-policy-field policy "provider"))
+         (contract (runtime-executor-policy-field policy "contract")))
+    (values provider contract)))
+
+(defun runtime-executor-contract-strings (value label)
+  (unless (typep value 'pp.kernel:value-vector)
+    (error "run-closed!: provider contract ~A must be a vector" label))
+  (let ((strings
+          (map 'list
+               (lambda (item)
+                 (unless (typep item 'pp.kernel:value-string)
+                   (error "run-closed!: provider contract ~A must contain strings"
+                          label))
+                 (pp.kernel:value-string-value item))
+               (pp.kernel:value-vector-values value))))
+    (when (or (some (lambda (item) (zerop (length item))) strings)
+              (/= (length strings) (length (remove-duplicates strings
+                                                               :test #'string=))))
+      (error "run-closed!: provider contract ~A contains duplicate or empty names"
+             label))
+    (sort strings #'string<)))
+
+(defun runtime-executor-contract-namespaces (value)
+  (unless (typep value 'pp.kernel:value-map)
+    (error "run-closed!: provider contract namespaces must be a map"))
+  (runtime-executor-sorted-pairs
+   (mapcar
+    (lambda (entry)
+      (let ((key (car entry))
+            (value (cdr entry)))
+        (unless (and (typep key 'pp.kernel:value-string)
+                     (typep value 'pp.kernel:value-string))
+          (error "run-closed!: provider contract namespaces must map strings"))
+        (cons (pp.kernel:value-string-value key)
+              (pp.kernel:value-string-value value))))
+    (pp.kernel:value-map-entries value))
+   "provider namespace"))
+
+(defun runtime-executor-provider-contract-valid-p (executor request)
+  (let ((contract (runtime-executor-provider-contract executor)))
+    (unless contract (return-from runtime-executor-provider-contract-valid-p t))
+    (multiple-value-bind (provider declared)
+        (runtime-executor-provider-contract-data request)
+      ;; Requests without a provider declaration cannot claim a provider
+      ;; promise, and are deliberately left to the classifier as scripting-only.
+      (unless provider (return-from runtime-executor-provider-contract-valid-p t))
+      (unless (typep provider 'pp.kernel:value-string)
+        (error "run-closed!: provider contract name must be a string"))
+      (unless (typep declared 'pp.kernel:value-map)
+        (error "run-closed!: provider capability/namespace contract is required"))
+      (let ((version (runtime-executor-policy-field declared "version"))
+            (capabilities
+              (runtime-executor-policy-field declared "capabilities"))
+            (namespaces
+              (runtime-executor-policy-field declared "namespaces")))
+        (unless (and (typep version 'pp.kernel:value-string)
+                     (string= (pp.kernel:value-string-value provider)
+                              (runtime-executor-provider-contract-name contract))
+                     (string= (pp.kernel:value-string-value version)
+                              (runtime-executor-provider-contract-version
+                               contract)))
+          (error "run-closed!: provider contract identity is unsupported"))
+        (unless (equal (runtime-executor-contract-strings capabilities
+                                                        "capabilities")
+                       (runtime-executor-provider-contract-capabilities contract))
+          (error "run-closed!: provider capability contract is unsupported"))
+        (unless (equal (runtime-executor-contract-namespaces namespaces)
+                       (runtime-executor-provider-contract-namespaces contract))
+          (error "run-closed!: provider namespace contract is unsupported"))
+        t))))
 
 (defun runtime-executor-classification-cacheable-p (value)
   (or (typep value 'runtime-executor-cacheable)
@@ -112,9 +228,10 @@
                (runtime-executor-request-data-p
                 (runtime-executor-request-policy request)))
     (error "run-closed!: request is not canonical data"))
+  (runtime-executor-provider-contract-valid-p executor request)
   (let ((classification (runtime-executor-classify-request executor request)))
     (when (and in-node (runtime-executor-classification-scripting-only-p classification))
-      (error "run-closed!: provider is scripting-only: ~A"
+      (error "run-closed!: executor classifies this request as scripting-only: ~A"
              (runtime-executor-classification-reason classification)))
     (runtime-executor-validate-result
      (funcall (runtime-executor-execute executor) request))))

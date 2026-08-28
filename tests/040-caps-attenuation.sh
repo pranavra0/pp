@@ -19,10 +19,11 @@
 # Both directions matter: (a) alone could be explained by "narrow wins", (b)
 # alone by "broad wins" — only capture-AT-CREATION explains both.
 #
-# (process capability PRESERVED through an fs-only restrict — CapRestrict
-# narrows filesystem authority only; non-fs channels (process, network,
-# secret) pass through transparently via the check_*/CapRestrict unwrap).
-# Tree-walker, isolated HOME (a fresh ~/.pp/store per case, like tests/011/013).
+# (process capability PRESERVED through an fs-only `cap-restrict`: it narrows
+# filesystem authority only; non-fs channels (process, network, secret) pass
+# through transparently via the capability checks).
+# Runtime evaluator, isolated HOME (a fresh ~/.pp/store per case, like
+# tests/011/013).
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 mkdir -p "$TMP/secret" "$TMP/other"
@@ -87,8 +88,8 @@ assert "plain-wc-slurp-narrowed-denied" safe denied
 "$PP" --grant "fs:$TMP:ro" "$TMP/wc-slurp-allowed.pp" > "$TMP/o" 2>&1
 if grep -q "OK-OTHER" "$TMP/o"; then echo "ok   plain-wc-slurp-narrowed-allowed"
 else echo "FAIL plain-wc-slurp-narrowed-allowed: expected OK-OTHER"; cat "$TMP/o"; fail=1; fi
-# fs-only restrict — CapRestrict narrows filesystem authority only;
-# non-fs channels pass through transparently).
+# fs-only restrict — `cap-restrict` narrows filesystem authority only;
+# non-fs channels pass through transparently.
 # =====================================================================
 cat > "$TMP/wc-run-restricted.pp" <<EOF
 with-caps(cap-restrict(current-capabilities(), "$TMP", :ro)) {

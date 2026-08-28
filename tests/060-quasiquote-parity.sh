@@ -6,9 +6,9 @@
 # This is a brace-surface property: the bug it guards is the brace reader
 # lowering `[ ... ]` inside quasiquote to a vector instead of a list, so
 # a template `[a, b]` diverged from the literal `[a, b]` it stands for.
-# This check requires a fixed expected-value oracle rather than metamorphic
-# fuzzing because the fuzzer generates sexpr, not brace, and cannot express
-# the template-equals-literal relation.
+# This check uses a fixed expected-value oracle because the
+# template-equals-literal relation is specific to brace syntax and cannot be
+# expressed by the general property sweeps.
 #
 # Cases: bracket list (+ empty + splice), a list-building macro, try and
 # match block templates (control forms, so correctness is only observable by
