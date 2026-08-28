@@ -4,15 +4,13 @@ A build is a DAG: this artifact depends on those inputs. Most tools encode
 it as a sequence anyway. A Dockerfile is a linked list of snapshots, so
 touching one file early invalidates every layer below it. A Terraform plan
 goes stale the moment the world drifts under it, and nothing rechecks. pp
-takes the dependency graph as the semantics of the language itself, so
-incremental reuse, parallelism, and distribution fall out of evaluation
-instead of being bolted on by a wrapper tool.
+evaluates the dependency graph directly, providing incremental reuse,
+parallelism, and distribution as language semantics.
 
 pp is a content-addressed, capability-scoped language implemented in Common
-Lisp. Every value has a content hash, and two computations with the same
-code and inputs are the same computation wherever they run. Caching,
-deduplication, and early cutoff are consequences of that identity, not
-separate mechanisms.
+Lisp. Every value has a content hash, and computations with the same code and
+inputs share that identity across runs. That identity drives caching,
+deduplication, and early cutoff.
 
 ## Getting started
 
@@ -22,15 +20,14 @@ bin/pp build pp
 bin/pp file.pp
 ```
 
-The first command is the shell-level bootstrap: it requires SBCL and builds the
-saved image that `bin/pp` runs. `bin/pp build pp` then exercises pp's canonical
-bootstrap request, materializing `build/pp` and its image through
-`run-closed!`.
-There is no `he bootstrap` command in this repository; these are the supported
-shell-level and pp-level bootstrap stages, not a hermeticity claim.
+The first command builds the saved SBCL image used by `bin/pp`.
+`bin/pp build pp` runs pp's canonical bootstrap request and materializes
+`build/pp` and its image through `run-closed!`. `bin/pp file.pp` runs a pp
+program.
 
 Run `scripts/run-tests.sh bin/pp` for the test suite, or `bin/pp --help`
 for all flags.
+
 
 ## A tour
 
@@ -127,16 +124,16 @@ Source comes in two spellings: `.pp`, braces and infix notation, and
 `pp fmt` converts between them.
 
 Foreign execution is provider-owned. The bundled Linux executor materializes
-declared tool and input trees in a private working directory and supplies only
-the request's explicit environment to its direct child. This is not OS
-namespace isolation: absolute filesystem access, the ELF interpreter and
-shared-library loader, network access, subprocess creation, and other kernel
-interfaces remain host-mediated. Clock, randomness, CPU/kernel behavior, and
-resource limits also remain ambient, so it is scripting-only. A trusted
-provider may classify an immutable request as cacheable when it can guarantee
-that the request accounts for every semantic input. Toolchain and
-execution-policy schemas remain ordinary pp libraries; the optional `:policy`
-field is canonical pp data that only the provider interprets.
+declared tool and input trees in a private working directory and supplies the
+request's explicit environment to its direct child. Absolute filesystem
+access, the ELF interpreter and shared-library loader, network access,
+subprocess creation, and other kernel interfaces are mediated by the host.
+Clock, randomness, CPU/kernel behavior, and resource limits come from the
+host, so this executor is scripting-only. A trusted provider may classify an
+immutable request as cacheable when it can guarantee that the request accounts
+for every semantic input. Toolchain and execution-policy schemas are ordinary
+pp libraries; the optional `:policy` field is canonical pp data that only the
+provider interprets.
 
 The package is authored by Pranav Rao and distributed under the MIT License;
 see [LICENSE](LICENSE).
