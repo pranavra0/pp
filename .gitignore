@@ -5,8 +5,6 @@
 /lisp/pp
 /lisp/pp.sbcl-image
 /lisp/pp.sbcl-image.build-id
-/pp
-/pp-native
 
 # Tool caches
 _build/

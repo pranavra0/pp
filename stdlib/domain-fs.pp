@@ -2,12 +2,11 @@
 #
 # This is the POLICY half of the domain: what counts as
 # create/update/delete and how a blob identity resolves to bytes,
-# single-writer deletion. The TRUSTED MECHANICS (atomic materialize/remove,
-# whole-tree observation) are OCaml primitives (src/runtime/domain_prims.ml),
-# reached only via `perform`. main.ml's `--reconcile ROOT` auto-loads this
-# file (after stdlib/list.pp, map.pp, string.pp) and calls
-# `register-fs-domain` with ROOT and a write-cap already narrowed via
-# `cap-restrict`.
+# single-writer deletion. Trusted mechanics (atomic materialize/remove
+# and whole-tree observation) live in the Lisp runtime providers and are
+# Programs load this file after stdlib/list.pp, map.pp, and string.pp,
+# then call `register-fs-domain` with ROOT and a write capability narrowed
+# through `cap-restrict`.
 #
 # observe = perform tree-observe(root)   -> {relpath -> content-hash}
 # desired = {:tree -> {relpath -> file descriptor}}
@@ -69,11 +68,10 @@ fn(rel) { fs-plan-item("delete", rel, nil) }, deletes)))) {
 {:items -> items, :summary -> vec[vec[:root, root], vec[:create, number->string(length(creates))], vec[:update, number->string(length(updates))], vec[:delete, number->string(length(deletes))]]}
 # A VECTOR of [key value] pairs, not a map — plan caching
 # round-trips a cache MISS's result through the store, and
-# Codec's on-disk format canonicalizes (sorts) a VMap's entries
-# but preserves a VVector's order (domains.ml), so a cache HIT
-# must not be allowed to reorder this or the "root=R create=C
-# update=U delete=D" journal/print byte-compatibility breaks on
-# exactly the passes that matter most (repeated/null reconciles).
+# the runtime's codec canonicalizes map entries while preserving
+# vector order. A cache HIT must not reorder this or the
+# "root=R create=C update=U delete=D" journal/print byte-compatibility
+# breaks on exactly the passes that matter most (repeated/null reconciles).
     }}
   }
 }

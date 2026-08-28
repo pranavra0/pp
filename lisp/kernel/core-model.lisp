@@ -1,7 +1,8 @@
 (in-package :pp.kernel)
 
-;;; Explicit tagged structures mirror Core_model.  User names are strings and
-;;; no host reader symbols are used, which keeps values safe to encode later.
+;;; Explicit tagged structures represent the pp AST and runtime values. User
+;;; names are strings and no host reader symbols are used, which keeps values
+;;; safe to encode later.
 (defstruct (env (:constructor make-env (bindings &key (env-id 0) (env-hash ""))))
   (env-id 0 :type integer)
   (env-hash "" :type string)

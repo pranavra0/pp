@@ -1418,7 +1418,7 @@ containment as a defensive fallback."
                 :eval (list expression environment nil)))))
 
 (defun runtime-evaluator-eval (state expression &key environment (expand t))
-  "Evaluate one Core_model expression.
+  "Evaluate one pp expression.
 ENVIRONMENT defaults to the evaluator's initial environment."
   (check-type state runtime-evaluator-state)
   (setf (runtime-evaluator-state-depth state) 0

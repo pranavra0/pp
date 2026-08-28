@@ -1,11 +1,11 @@
 # stdlib/domain-proc.pp — process-domain policy
 #
 # This is the POLICY half of the domain: start/stop/
-# restart decisions on spec-hash (here: spec VALUE) change. The TRUSTED
-# MECHANICS (fork/exec/reap, TERM->poll->KILL, per-domain state
-# persistence) are OCaml primitives (src/runtime/domain_prims.ml): proc-spawn,
-# proc-alive?, proc-stop, proc-reap, domain-state-get/put. main.ml's
-# `--supervise` auto-loads this file and calls `register-proc-domain`.
+# restart decisions on spec-hash (here: spec VALUE) change. Trusted
+# mechanics (fork/exec/reap, TERM->poll->KILL, per-domain state
+# persistence) live in the Lisp runtime providers: proc-spawn,
+# proc-alive?, proc-stop, proc-reap, and domain-state-get/put.
+# Supervising programs load this file and call `register-proc-domain`.
 #
 # The old procs/ state-file directory is replaced by domain-state-get/put
 # — generic, per-domain-scoped persistent storage. This domain maintains
@@ -39,9 +39,9 @@
 # ambient, same env — exactly what apply's `with_domain`-fixed cap does
 # for its whole extent) and pp replays the FIRST call's memoized result
 # instead of re-reading "known-services" — invisible staleness, not an
-# error. (Domains.ml's per-call config-stack nonce busts this ACROSS the
-# two top-level observe/apply calls a pass makes; it does nothing for
-# repeat calls WITHIN one of those two, which is what bit here.) The
+# error. The per-call dynamic scope in the runtime breaks this ACROSS
+# the two top-level observe/apply calls a pass makes; it does nothing for
+# repeat calls WITHIN one of those two, which is what bit here. The
 # general, robust fix is mechanical: never call an argument-free
 # domain-state accessor more than once per dynamic extent — read the
 # known-set ONCE (proc-apply, below) and thread it through explicitly as
@@ -95,19 +95,19 @@ def proc-plan-item(kind, name, spec) {
   {:kind -> kind, :name -> name, :spec -> spec}
 }
 # `desired`'s spec VALUES are lazy (hash-map/map literals force keys only —
-# the primitives.ml convention) — `observed`'s spec values
-# are NOT (they round-tripped through domain-state's Codec encode/decode).
+# the runtime primitive convention) — `observed`'s spec values
+# are NOT (they round-tripped through domain-state's codec).
 # Two more traps found the hard way, both closed the same way (force-deep
 # + compare by `hash-value`, never raw `=`, whenever one side may have
 # come back through domain-state):
 # 1. an unforced thunk vs an already-concrete value are different
 # SHAPES to `=`, not merely different values — force-deep first;
-# 2. Codec's on-disk map encoding SORTS entries for canonical text
-# (codec.ml), so a spec map that round-tripped through domain-state
-# compares "different" from the in-memory original via `=` — an
-# ORDER difference, not a content difference. `hash-value` (Hasher.
-# hash_value) canonicalizes map/set order the SAME way Codec does,
-# so it is the one comparison that cannot be fooled by either trap.
+# 2. the codec's on-disk map encoding SORTS entries for canonical text,
+# so a spec map that round-tripped through domain-state compares
+# "different" from the in-memory original via `=` — an ORDER difference,
+# not a content difference. `hash-value` canonicalizes map/set order the
+# SAME way the codec does, so it is the one comparison that cannot be
+# fooled by either trap.
 def proc-spec-eq?(a, b) { hash-value(a) = hash-value(b) }
 
 def proc-diff(observed, desired) {

@@ -223,9 +223,8 @@
         (%suffix-p name ".ppl"))))
 
 (defun %validate-command-modes (arguments)
-  ;; Port of cli.ml validate_modes: at most one command mode may be active,
-  ;; and flag combinations with their own contracts are rejected up front so
-  ;; the diagnostics do not depend on which runtime services are installed.
+  ;; At most one command mode may be active. Validate flag combinations up
+  ;; front so diagnostics do not depend on which runtime services are installed.
   (let ((modes nil)
         (first-subcommand
           (and arguments
@@ -271,7 +270,7 @@
       (let ((modes (remove-duplicates (nreverse modes) :test #'string=)))
         (when (> (length modes) 1)
           (error "conflicting command modes: ~{~A~^, ~}" modes))))
-    ;; Pairwise contracts, in cli.ml's order.
+    ;; Pairwise command contracts in validation order.
     (flet ((has-flag (flag) (member flag arguments :test #'string=))
            (has-source ()
              (and (not first-subcommand)
@@ -4154,8 +4153,7 @@ hash: ~A" old-pin)
       (case target
         (:brace
          ;; fmt reads the file with the target surface's inverse reader
-         ;; directly; the file's extension carries no authority (OCaml
-         ;; command_frontend.ml never checked it either).
+         ;; directly; the file's extension carries no authority.
          (let* ((forms (read-source source :source path :surface :sexpr))
                 (comments (scan-comments source :surface :sexpr))
                 (base (handler-case
