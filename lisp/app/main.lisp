@@ -594,29 +594,31 @@ Flatten only capability containers; no user value is accepted as authority."
                     (pp.kernel:capability-check-fs-read-p capability target))))
           capabilities)))
 
- (defun %command-file-sealed-p (path)
+(defun %command-file-sealed-p (path)
   "Select the least-authority read mode for PATH."
-  (if (and (pp.runtime:runtime-dynamic-in-node-p)
-           (pp.runtime:runtime-sandbox-relative-p path)
-           (ignore-errors (pp.runtime:runtime-sandbox-resolve path)))
-      nil
-      (let* ((canonical (pp.runtime:store-canonical-path path))
-             (target (pp.kernel:canonicalize-path
-                      canonical :realpath #'pp.runtime:store-canonical-path))
-             (capabilities (%command-current-capabilities)))
-        (cond
-          ((some (lambda (capability)
-                   (pp.kernel:capability-check-fs-read-p capability target))
-                 capabilities)
-           nil)
-          ((some (lambda (capability)
-                   (pp.kernel:capability-check-secret-p capability target))
-                 capabilities)
-           t)
-          (t
-           (pp.runtime:language-fail
-            (format nil "slurp: permission denied for ~A" canonical)
-            "runtime.authority"))))))
+  (let ((scratch
+          (and (pp.runtime:runtime-dynamic-in-node-p)
+               (pp.runtime:runtime-sandbox-relative-p path)
+               (ignore-errors (pp.runtime:runtime-sandbox-resolve path)))))
+    (if (and scratch (probe-file scratch))
+        nil
+        (let* ((canonical (pp.runtime:store-canonical-path path))
+               (target (pp.kernel:canonicalize-path
+                        canonical :realpath #'pp.runtime:store-canonical-path))
+               (capabilities (%command-current-capabilities)))
+          (cond
+            ((some (lambda (capability)
+                     (pp.kernel:capability-check-fs-read-p capability target))
+                   capabilities)
+             nil)
+            ((some (lambda (capability)
+                     (pp.kernel:capability-check-secret-p capability target))
+                   capabilities)
+             t)
+            (t
+             (pp.runtime:language-fail
+              (format nil "slurp: permission denied for ~A" canonical)
+              "runtime.authority")))))))
 
 (defun %command-unseal-value (value)
   (if (typep value 'pp.kernel:value-sealed)
@@ -686,17 +688,15 @@ Flatten only capability containers; no user value is accepted as authority."
     #-sbcl
     (if (probe-file target-string) "file" "absent")))
 
- (defun %command-file-bytes-value (bytes sealed)
+(defun %command-file-bytes-value (bytes sealed)
   (if sealed
       (pp.kernel:make-vsealed (pp.runtime::store-codec-octets-string bytes))
       (handler-case
           (pp.kernel:make-vstring (pp.runtime:store-octets-string bytes))
-        ;; `slurp` is normally a text operation, but it is also the
-        ;; construction path used by `blob` for opaque tools. Preserve
-        ;; malformed UTF-8 byte-for-byte and let blob consume the sealed
-        ;; representation below.
+        ;; Ordinary malformed bytes remain publishable only through the
+        ;; explicit opaque-byte-to-blob boundary.  Secret reads stay sealed.
         (error ()
-          (pp.kernel:make-vsealed
+          (pp.kernel:make-vopaque
            (pp.runtime::store-codec-octets-string bytes))))))
 
  (defun %command-read-file-value (path &optional sealed)
@@ -1792,15 +1792,17 @@ ambient."
               (pp.kernel:make-vstring
                (pp.runtime::runtime-artifact-blob-put
                 (pp.kernel:value-string-value value))))
-             ;; A malformed-UTF-8 `slurp` is represented as sealed raw bytes
-             ;; so opaque tool blobs retain their executable bytes.
-             ((typep value 'pp.kernel:value-sealed)
+             ((typep value 'pp.kernel:value-opaque)
               (pp.kernel:make-vstring
                (pp.runtime::runtime-artifact-blob-put
                 (pp.runtime::store-codec-string-octets
-                 (pp.kernel:value-sealed-bytes value)))))
+                 (pp.kernel:value-opaque-bytes value)))))
+             ((typep value 'pp.kernel:value-sealed)
+              (pp.runtime:language-fail
+               "blob cannot publish a sealed value; call unseal explicitly"
+               "runtime.authority"))
              (t
-              (pp.runtime:language-fail "blob expects a string"
+              (pp.runtime:language-fail "blob expects a string or opaque bytes"
                                         "primitive.type"))))))
       (extend
        "blob-get"
@@ -1809,10 +1811,15 @@ ambient."
          (unless (= (length args) 1)
            (pp.runtime:language-fail "blob-get expects one argument"
                                      "primitive.arity"))
-         (let ((hash (one-text args force "blob-get")))
-           (pp.kernel:make-vstring
-            (pp.runtime:store-octets-string
-             (pp.runtime:runtime-artifact-blob-get hash))))))
+         (let ((hash (one-text args force "blob-get"))
+               (bytes nil))
+           (setf bytes (pp.runtime:runtime-artifact-blob-get hash))
+           (handler-case
+               (pp.kernel:make-vstring
+                (pp.runtime:store-octets-string bytes))
+             (error ()
+               (pp.kernel:make-vopaque
+                (pp.runtime::store-codec-octets-string bytes)))))))
       (extend
        "unseal"
        (lambda (args environment &key force &allow-other-keys)
@@ -2089,6 +2096,10 @@ ambient."
                   (value (if (= (length arguments) 2)
                              (second arguments)
                              (third arguments))))
+             (unless (pp.kernel:durable-value-p value)
+               (pp.runtime:language-fail
+                "domain-state-put value is not durable"
+                "runtime.authority"))
              (pp.runtime::runtime-domain-state-put session domain key value)
              (pp.kernel:make-vnil)))
           ((string= name "run")
@@ -2738,7 +2749,9 @@ an explicit authority override and therefore bypasses the manifest."
           (format stream "~A~%" line))))
     path))
 
- (defun %command-publish-copy-blobs (value source destination)
+(defun %command-publish-copy-blobs (value source destination)
+  (unless (pp.kernel:durable-value-p value)
+    (error "publish-object: value is not durable"))
   (labels ((walk (item)
              (cond
                ((typep item 'pp.kernel:value-map)
@@ -2759,7 +2772,9 @@ an explicit authority override and therefore bypasses the manifest."
                 (walk (pp.kernel:value-pair-cdr item))))))
     (walk value)))
 
- (defun %command-publish-value (session value shared-root output)
+(defun %command-publish-value (session value shared-root output)
+  (unless (pp.kernel:durable-value-p value)
+    (error "publish-object: value is not durable"))
   (let* ((layout (pp.runtime:make-store-layout shared-root))
          (source (funcall (pp.runtime:runtime-session-find-service
                            session :store-blobs)))
@@ -4886,7 +4901,8 @@ hash: ~A" old-pin)
                    (make-vpair (make-vint 1) (make-vnil))
                    (make-vvector-from-list (list (make-vint 1)))
                    (make-vmap (list (cons (make-vstring "k") (make-vint 1))))
-                   (make-vset (list (make-vint 1)))))
+                   (make-vset (list (make-vint 1)))
+                   (make-vopaque (string (code-char #xff)))))
            (caps
              (list
               (make-cap-none)
@@ -4983,8 +4999,8 @@ hash: ~A" old-pin)
               (fail "cap-subseteq" "repeated subset check failed"))
             (incf cap-checks (length (cap-probe-vector cap)))))
         (format output
-                "kernel-props: seed=~D count=~D | adv:e=~D v=~D p=~D faith:e=~D | forms=28/28 value-kinds=11/11 pattern-kinds=5/5 cap-kinds=7/7 | print-rt: ~D checked, ~D printer-refused | cap-checks: ~D~%"
-                seed count (+ 28 count) (+ 11 count) (+ 5 count)
+                "kernel-props: seed=~D count=~D | adv:e=~D v=~D p=~D faith:e=~D | forms=28/28 value-kinds=12/12 pattern-kinds=5/5 cap-kinds=7/7 | print-rt: ~D checked, ~D printer-refused | cap-checks: ~D~%"
+                seed count (+ 28 count) (+ 12 count) (+ 5 count)
                 count print-checks print-skips cap-checks)
         (if failures
             (progn

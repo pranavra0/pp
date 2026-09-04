@@ -919,26 +919,42 @@ excluded from shared caches, since there is no cache to exclude them from.
 `CapSecret` and not by `CapFilesystem` returns a new value kind, `VSealed`,
 instead of `VString`. The cell records `sealed:<canonical-path>`, a hash of
 the bytes for rotation invalidation; the bytes pin in-memory only, never via
-`store_blob` or the store, so a store-wide scan must never find secret
-plaintext; every printer redacts to `#<sealed>`. `VSealed` joins the
-node-boundary ban exactly like `VCapability` — free-variable ban and result
-ban, both directions — and `Observation.authorized` requires a covering
-`CapSecret` grant to serve a hit on a `sealed:` cell. LAW 23's transitive
-closure and introspection filtering fall out unchanged: no laundering through
-an aggregator, `pp why` redacts. `unseal(v)` is the one explicit, greppable
-way out to `VString`; derived data is ordinary data afterward, by design, no
-tainting — the line Vault and SOPS draw. Unsealing inside a node makes the
-result cacheable ordinary data, a documented residual like any other cache
-holding what a node returns. When a path is covered by both `secret:` and
-`fs:` grants, filesystem behaviour wins: granting plain access over the same
-path says "not secret here".
+`store_blob` or the store, so a sealed read that is not explicitly unsealed
+cannot put secret plaintext in a store-wide scan; every printer redacts to
+`#<sealed>`. `VSealed` joins the node-boundary ban exactly like `VCapability`
+— free-variable ban and result ban, both directions — and
+`Observation.authorized` requires a covering `CapSecret` grant to serve a hit
+on a `sealed:` cell. LAW 23's transitive closure and introspection filtering
+fall out unchanged: no laundering through an aggregator, `pp why` redacts.
+`unseal(v)` is the one explicit, greppable way out to `VString`; derived data
+is ordinary data afterward, by design, no tainting — the line Vault and SOPS
+draw. For non-text sealed bytes, `unseal` exposes one-byte string characters
+and a subsequent text `blob` uses UTF-8 encoding; raw-byte disclosure is not
+promised. Unsealing inside a node makes the result cacheable ordinary data, a
+documented residual like any other cache holding what a node returns. When a
+path is covered by both `secret:` and `fs:` grants, filesystem behaviour wins:
+granting plain access over the same path says "not secret here".
 
-**Status: holds**: implemented. `tests/044-sealed.sh` covers: redacted print,
-`unseal` round-trip, recursive store scans proving the secret's bytes never
-land under `~/.pp/store`, the node-boundary ban both directions with stable
-stderr, rotation invalidating exactly the observing node, a caller without
-the `secret:` grant unable to hit a node whose cached closure read it, and
-the both-grants case behaving as plain filesystem access.
+Ordinary malformed filesystem bytes use the separate, runtime-only
+`VOpaque` value. It has one-byte identity but no durable codec or wire form;
+an ordinary file observation may still retain the source bytes as a public
+blob, while `blob(VOpaque)` is the explicit value-to-blob conversion.
+`blob-get` returns `VOpaque` when a stored blob is not strict UTF-8 so that
+the byte/hash round trip is exact. `blob(VSealed)` is rejected before any
+blob repository operation with a `runtime.authority` error. The existing
+`durable-value-p` contract rejects `VSealed`, `VOpaque`, and nested instances
+before object, node-result, fenced-spec, publish, or generic lifecycle
+publication.
+
+**Status: holds**: implemented. `tests/044-sealed.sh` covers redacted print,
+`unseal` round-trip, recursive store scans proving sealed reads never land
+under `~/.pp/store`, the node-boundary ban both directions with stable stderr,
+rotation invalidating exactly the observing node, a caller without the
+`secret:` grant unable to hit a node whose cached closure read it, and the
+both-grants case behaving as plain filesystem access.
+`tests/127-sealed-blob-boundary.sh` covers the pre-CAS `blob` rejection,
+recursive publication guards, opaque malformed-byte round trips, filesystem
+precedence, and explicit unseal disclosure.
 
 ---
 

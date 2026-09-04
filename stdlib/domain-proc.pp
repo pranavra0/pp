@@ -134,9 +134,8 @@ fn(n) { proc-plan-item("start", n, dspec(n)) }, starts), append(map(
 fn(n) { proc-plan-item("restart", n, dspec(n)) }, restarts), map(
 fn(n) { proc-plan-item("stop", n, nil) }, stops)))) {
 {:items -> items, :summary -> vec[vec[:started, number->string(length(starts))], vec[:restarted, number->string(length(restarts))], vec[:stopped, number->string(length(stops))]]}
-# A VECTOR of pairs, not a map — see domain-fs.pp's fs-diff-for for
-# why (Codec's canonical on-disk form sorts map keys but preserves
-# vector order; plan caching round-trips a MISS through the store).
+# why canonical durable encoding sorts map keys but preserves vector order;
+# plan caching round-trips a MISS through the store.
   }
 }
 

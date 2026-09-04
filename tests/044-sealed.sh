@@ -5,9 +5,9 @@
 #
 # `--grant secret:<path>` mints CapSecret. A read covered by CapSecret and
 # NOT by CapFilesystem returns VSealed instead of VString: print redacts
-# ("#<sealed>"), the bytes pin in-memory only in the session, never
-# store_blob/the CAS), and the node boundary bans VSealed both directions
-# exactly like VCapability. `(unseal v)` is the one explicit way out to
+# ("#<sealed>"); the bytes pin in-memory only in the session, never via an
+# ordinary blob or canonical store object; the node boundary bans VSealed
+# both directions exactly like VCapability. `(unseal v)` is the one explicit
 # VString — a Vault/SOPS-style boundary, not dataflow tainting: unsealing
 # INSIDE a node makes the result ordinary data again, by design (a
 # documented residual), so this suite's "never in store" checks are built
@@ -50,7 +50,7 @@ assert "unseal-round-trips"        "SECRETDATA" present
 
 # =====================================================================
 # (2) secret bytes NEVER under ~/.pp/store (recursive grep, whole store —
-#     blobs/ included, since a sealed read must NEVER call store_blob):
+#     blobs/ included, since a sealed read must never call the blob repository):
 #     (a) a program that only reads (never unseals) the secret;
 #     (b) a program that unseals, but at SCRIPT TIER only (never inside a
 #         node) — keeping the plaintext out of anything the store touches.

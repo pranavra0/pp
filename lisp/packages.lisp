@@ -94,19 +94,19 @@
    #:value-nil #:value-bool #:value-int #:value-float #:value-string
    #:value-keyword #:value-symbol #:value-pair #:value-vector #:value-map
    #:value-set #:value-closure #:value-builtin #:value-capability
-   #:value-thunk #:value-env-map #:value-sealed
+   #:value-thunk #:value-env-map #:value-sealed #:value-opaque
    #:make-vnil #:make-vbool #:make-vint #:make-vfloat #:make-vstring
    #:make-vkeyword #:make-vsymbol #:make-vpair #:make-vvector
    #:make-vvector-from-list #:make-vmap #:make-vset #:make-vclosure
    #:make-vbuiltin #:make-vcapability #:make-vthunk #:make-venvmap
-   #:make-vsealed
+   #:make-vsealed #:make-vopaque
    #:value-bool-value #:value-int-value #:value-float-value
    #:value-string-value #:value-keyword-value #:value-symbol-value
    #:value-pair-car #:value-pair-cdr #:value-vector-values
    #:value-map-entries #:value-set-values #:value-closure-closure
    #:value-builtin-name #:value-builtin-implementation
    #:value-capability-capability #:value-thunk-thunk
-   #:value-env-map-bindings #:value-sealed-bytes
+   #:value-env-map-bindings #:value-sealed-bytes #:value-opaque-bytes
    ;; Capabilities and observation cells.
    #:fs-mode #:capability #:cap-filesystem #:cap-network #:cap-secret #:cap-process
    #:cap-compose #:cap-restrict #:cap-none
@@ -418,7 +418,7 @@
   (:export
    #:+ #:runtime-fenced-aborted #:runtime-fenced-aborted-p #:make-runtime-fenced-aborted #:runtime-fenced-aborted-kind #:runtime-fenced-aborted-spec-hash
    #:runtime-fenced-aborted-reason #:runtime-fenced-force #:runtime-fenced-new-epoch #:runtime-fenced-ensure-epoch #:runtime-fenced-action-key #:runtime-fenced-spec-hash
-   #:runtime-fenced-plain-data-p #:runtime-fenced-map-find #:runtime-fenced-run-command #:runtime-fenced-register #:runtime-fenced-result-hash #:runtime-fenced-current
+   #:runtime-fenced-map-find #:runtime-fenced-run-command #:runtime-fenced-register #:runtime-fenced-result-hash #:runtime-fenced-current
    #:runtime-fenced-aborted-value #:runtime-fenced-recover-entry #:runtime-fenced-recover-unknown #:runtime-fenced-drain))
 
 (defpackage #:pp.rt.watch
@@ -616,7 +616,7 @@
    #:runtime-journal-entry-line #:runtime-journal-split-words #:runtime-journal-parse-line #:runtime-journal-entry-valid-p #:runtime-journal-layout #:runtime-journal-path
    #:runtime-journal-append #:runtime-journal-fold #:runtime-journal-pending-fenced-actions #:runtime-journal-has-fenced-done-p #:runtime-fenced-aborted #:runtime-fenced-aborted-p
    #:make-runtime-fenced-aborted #:runtime-fenced-aborted-kind #:runtime-fenced-aborted-spec-hash #:runtime-fenced-aborted-reason #:runtime-fenced-force #:runtime-fenced-new-epoch
-   #:runtime-fenced-ensure-epoch #:runtime-fenced-action-key #:runtime-fenced-spec-hash #:runtime-fenced-plain-data-p #:runtime-fenced-map-find #:runtime-fenced-run-command
+   #:runtime-fenced-ensure-epoch #:runtime-fenced-action-key #:runtime-fenced-spec-hash #:runtime-fenced-map-find #:runtime-fenced-run-command
    #:runtime-fenced-register #:runtime-fenced-result-hash #:runtime-fenced-current #:runtime-fenced-aborted-value #:runtime-fenced-recover-entry #:runtime-fenced-recover-unknown
    #:runtime-fenced-drain #:runtime-watch-state #:runtime-watch-state-p #:make-runtime-watch-state #:runtime-watch-state-session #:runtime-watch-state-interval
    #:runtime-watch-state-stabilize #:runtime-watch-state-once #:runtime-watch-snapshot #:runtime-watch-snapshot-p #:make-runtime-watch-snapshot #:runtime-watch-snapshot-cells

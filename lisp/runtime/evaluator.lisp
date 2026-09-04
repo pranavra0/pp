@@ -157,6 +157,7 @@ instead of the language type error we owe the caller."
     (value-capability "#<capability>")
     (value-env-map "#<envmap>")
     (value-sealed "#<sealed>")
+    (value-opaque "#<opaque-bytes>")
     ;; A malformed host object must still become a stable language error, not
     ;; an implementation-dependent printer/type condition.
     (t (format nil "#<~A>" (string-downcase (symbol-name (type-of value)))))))

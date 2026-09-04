@@ -130,7 +130,7 @@ Each takes one argument, forces it, and returns a boolean.
   [`not(x)`], [Logical negation; `nil` counts as false.],
   [`error(msg)`], [Raise an error with string message `msg`.],
   [`exit([n])`], [Terminate the run with status `n` (default 0).],
-  [`slurp(path)`], [Read a file to a string. Needs an `fs` read grant (or a `secret` grant, which yields a sealed value); capability-free inside a node's scratch sandbox.],
+  [`slurp(path)`], [Read a file as text, or as runtime-only opaque bytes when its ordinary contents are not strict UTF-8. Needs an `fs` read grant (or a `secret` grant, which yields a sealed value); capability-free inside a node's scratch sandbox.],
   [`argv()`], [The program arguments after `--`, as a list of strings. Recorded as an `argv:` observation.],
   [`env-get(name)`], [The environment variable `name`, or `nil`. Recorded as an `env:` observation.],
 )
@@ -161,8 +161,8 @@ reading contents.
   table.header([*Signature*], [*Description*]),
   [`hash-value(v)`], [A canonical structural content hash of any value — order-independent for maps and sets.],
   [`hash-string(s)`], [The SHA-256 hex digest of a string's raw bytes (pure; no store I/O).],
-  [`blob(s)`], [Ingest bytes into the content store, returning the SHA-256 identity.],
-  [`blob-get(hash)`], [The inverse of `blob`: the stored bytes for a blob identity.],
+  [`blob(v)`], [Ingest string or runtime-only opaque bytes into the content store, returning the SHA-256 identity.],
+  [`blob-get(hash)`], [Read the stored blob bytes as text when they are strict UTF-8, or as runtime-only opaque bytes otherwise.],
 )
 
 === Capabilities
@@ -197,7 +197,7 @@ and policy helpers. `configure-runtime` installs a manifest at script scope.
   [`probe(name)`], [Read a registered probe's value, pinned once per pass and recorded as a `probe:` cell.],
   [`fenced(kind, spec)`], [Register a non-convergent (fenced) action for the reconciler to drain after convergent state is applied.],
   [`collect(results)`], [Partition `[:ok, value]` and `[:err, error]` results into one aggregate result.],
-  [`unseal(v)`], [Convert a sealed value to a string — the one sanctioned exit from `secret:` bytes.],
+  [`unseal(v)`], [Convert a sealed value to a string — the one sanctioned exit from `secret:` bytes. Explicit disclosure of non-text secret bytes uses the string's UTF-8 encoding.],
   [`eval-pp(code)`], [Parse and evaluate a code string in the current run's environment and macro table.],
   [`apply-pp(fn, args)`], [Apply `fn` to a list of already-evaluated arguments.],
   [`force-deep(v)`], [Fully force a value and everything reachable from it.],

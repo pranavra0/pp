@@ -31,28 +31,6 @@
 (defun runtime-fenced-spec-hash (session spec)
   (pp.kernel:hash-value (runtime-fenced-force session spec)))
 
-(defun runtime-fenced-plain-data-p (value &optional (seen nil))
-  (when (member value seen :test #'eq) (return-from runtime-fenced-plain-data-p nil))
-  (let ((seen (cons value seen)))
-    (typecase value
-      ((or pp.kernel:value-nil pp.kernel:value-bool pp.kernel:value-int
-           pp.kernel:value-float pp.kernel:value-string pp.kernel:value-keyword
-           pp.kernel:value-symbol) t)
-      (pp.kernel:value-pair
-       (and (runtime-fenced-plain-data-p (value-pair-car value) seen)
-            (runtime-fenced-plain-data-p (value-pair-cdr value) seen)))
-      (pp.kernel:value-vector
-       (every (lambda (item) (runtime-fenced-plain-data-p item seen))
-              (coerce (value-vector-values value) 'list)))
-      (pp.kernel:value-map
-       (every (lambda (entry)
-                (and (runtime-fenced-plain-data-p (car entry) seen)
-                     (runtime-fenced-plain-data-p (cdr entry) seen)))
-              (value-map-entries value)))
-      (pp.kernel:value-set
-       (every (lambda (item) (runtime-fenced-plain-data-p item seen))
-              (value-set-values value)))
-      (t nil))))
 
 (defun runtime-fenced-map-find (session spec name)
   (find-if (lambda (entry)
@@ -108,7 +86,7 @@
       (runtime-dynamic-require-script-tier
        "fenced effects may not appear inside node bodies (LAW 31)")))
   (let ((forced (runtime-fenced-force session spec)))
-    (unless (runtime-fenced-plain-data-p forced)
+    (unless (pp.kernel:durable-value-p forced)
       (error "fenced: spec is not serializable data"))
     (unless (pp.kernel:encode-value forced)
       (error "fenced: spec is not serializable data"))

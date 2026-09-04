@@ -32,11 +32,14 @@ Cluster forcing must protect these assets:
   `cap-restrict`. A cache hit must only be granted when the caller's
   authority covers everything the result transitively read, whether the
   request comes from the same process or over the wire (LAW 23b)
-- secret confidentiality: a sealed value fails at the node boundary and
-  fails `Codec.encode_value` (LAW 39), so pp already refuses to let it
-  reach the store. Cluster forcing must not weaken this: shipping a sealed
-  value over the transport must be exactly as impossible as writing it to
-  `~/.pp/store/objects`
+- secret confidentiality: a sealed value fails at the node boundary, the
+  `blob` primitive rejects it before raw CAS ingress, and
+  `pp.kernel:encode-value` rejects it (LAW 39), so pp refuses to let a new
+  language-origin sealed value reach the store. Cluster forcing must not
+  weaken this: shipping a sealed value over the transport must be exactly as
+  impossible as writing it to `~/.pp/store/objects`. Raw blob bytes have no
+  provenance after ingress, so this guarantee cannot classify historical
+  blobs or bytes inserted through a low-level bytes-only repository.
 - audit integrity: `pp why` and the journal redact information they must
   not show, and they never lie about what happened (LAW 23c). When a trace
   has synced to another member, it must redact according to that member's

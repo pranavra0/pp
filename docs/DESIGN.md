@@ -121,8 +121,12 @@ transport boundaries. It does not protect against a trusted cluster owner,
 timing side channels, traffic analysis, or a compromised host.
 
 Secret values remain sealed until an explicit `unseal`. The printer redacts
-them and the codec rejects them. A persistent node cannot capture or return a
-capability or sealed value.
+them, `blob` rejects them before the raw blob repository, and the codec rejects
+them. Ordinary malformed filesystem bytes use a separate runtime-only opaque
+value. The source bytes may live in an ordinary file-observation blob, but the
+opaque value itself has no durable representation and only `blob(VOpaque)` is
+the explicit value-to-blob conversion. A persistent node does not persist a
+capability, sealed value, or opaque value.
 
 Island fetching is runtime authority. It is opt-in, journaled, and checked
 against the requested content pin. It is not a capability that user code can

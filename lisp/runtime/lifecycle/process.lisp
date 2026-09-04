@@ -99,6 +99,12 @@
           ((stringp spec) (pp.kernel:hash-string spec))
           (t (error "process specification is not canonical data")))))
 
+(defun runtime-process-require-durable-spec (spec)
+  (unless (pp.kernel:durable-value-p spec)
+    (pp.rt.effects:runtime-effects-error
+     "process specification is not durable" "runtime.authority"))
+  spec)
+
 (defun runtime-process-spec-field (spec name)
   (when (typep spec 'pp.kernel:value-map)
     (let ((entry (find-if
@@ -342,6 +348,8 @@
   (runtime-process-state-put session domain key value))
 
 (defun runtime-process-state-put (session domain key value)
+  (unless (pp.kernel:durable-value-p value)
+    (error "process state value is not durable"))
   (let ((path (runtime-process-state-path session domain key)))
     (if (typep value 'pp.kernel:value-nil)
         (ignore-errors (delete-file path))
@@ -350,6 +358,7 @@
 
 (defun runtime-process-start (session name spec)
   (runtime-process-require-capability)
+  (runtime-process-require-durable-spec spec)
   (let* ((hash (runtime-process-spec-hash spec))
          (argv (runtime-process-argv spec))
          ;; Reject an unresolvable command BEFORE the journal records a
@@ -446,6 +455,7 @@
   record)
 
 (defun runtime-process-start-service (session name spec)
+  (runtime-process-require-durable-spec spec)
   (let ((provider (runtime-session-find-service session :process-start)))
     (if provider (funcall provider session name spec)
         (runtime-process-start session name spec))))
@@ -528,8 +538,8 @@
        session "proc" "known-services"
        (value-list (sort names #'string<))))))
 (defun runtime-process-domain-apply (session plan)
-  (unless (typep plan 'runtime-process-plan)
-    (error "supervise: invalid process plan"))
+  (unless (runtime-process-plan-safe-p plan)
+    (error "supervise: unsafe process plan"))
   (dolist (action (runtime-process-plan-actions plan))
     (destructuring-bind (kind name spec) action
       (when (member kind '(:stop :restart))
@@ -555,6 +565,20 @@
        (zerop (runtime-process-plan-started plan))
        (zerop (runtime-process-plan-stopped plan))
        (zerop (runtime-process-plan-restarted plan))))
+(defun runtime-process-plan-safe-p (plan)
+  (and (typep plan 'runtime-process-plan)
+       (let ((actions-length (ignore-errors
+                               (list-length
+                                (runtime-process-plan-actions plan)))))
+         (and actions-length
+              (every
+               (lambda (action)
+                 (let ((action-length (ignore-errors (list-length action))))
+                   (and action-length
+                        (= action-length 3)
+                        (or (eq (first action) :stop)
+                            (pp.kernel:durable-value-p (third action))))))
+               (runtime-process-plan-actions plan))))))
 
 (defun runtime-process-domain-entry (session)
   (make-runtime-domain-entry
@@ -564,5 +588,5 @@
            (runtime-process-domain-diff session observed desired))
    :apply (lambda (plan) (runtime-process-domain-apply session plan))
    :plan-valid-p
-   (lambda (plan) (typep plan 'runtime-process-plan))
+   (lambda (plan) (runtime-process-plan-safe-p plan))
    :converged-p #'runtime-process-plan-converged-p))

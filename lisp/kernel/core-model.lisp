@@ -154,6 +154,18 @@
 (defstruct (value-env-map (:constructor make-venvmap (bindings)))
   (bindings nil :type list))
 (defstruct (value-sealed (:constructor make-vsealed (bytes))) (bytes "" :type string))
+(defstruct (value-opaque (:constructor %make-vopaque (bytes))
+                         (:conc-name %value-opaque-))
+  (bytes "" :type string))
+
+(defun value-opaque-bytes (value)
+  (copy-seq (%value-opaque-bytes value)))
+
+(defun make-vopaque (bytes)
+  (check-type bytes string)
+  (unless (every (lambda (char) (<= (char-code char) #xff)) bytes)
+    (error "Opaque bytes contain a non-byte character"))
+  (%make-vopaque (copy-seq bytes)))
 
 (defun make-vvector-from-list (values) (make-vvector (coerce values 'vector)))
 (defun make-vpersistent-thunk-kind (captured-caps argument-values)

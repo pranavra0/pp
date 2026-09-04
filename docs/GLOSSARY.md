@@ -78,9 +78,14 @@ brace-to-s-expression mapping.
 - sealed cell (real): a confidential read (SPEC law 39). `--grant
   secret:<path>` mints a `CapSecret`; a read covered by it, not by a
   filesystem grant, returns `VSealed` instead of `VString`. pp redacts a
-  sealed value on print, excludes it from the store, and bans it at the
-  node boundary like a capability; `unseal(v)` is the explicit, greppable
-  way back to a `VString`.
+  `VSealed` on print, excludes its bytes from the content-addressed store,
+  and bans it at the node boundary like a capability. `unseal(v)` is the
+  explicit, greppable way back to a `VString`; non-text secret bytes are
+  interpreted as string characters and an explicit blob then uses UTF-8.
+- opaque bytes, or `VOpaque`: runtime-only one-byte data for malformed
+  ordinary file contents. It has no durable codec or wire form; `blob(v)` is
+  the explicit value-to-blob boundary, while `blob-get` returns it for
+  non-UTF-8 stored bytes.
 - `run`, or the process effect: `perform run(CMD, ARG…)` executes an
   external command under `--grant process`, and returns
   `{"exit","out","err"}`. It is scripting-tier only because an ambient

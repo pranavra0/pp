@@ -31,7 +31,7 @@
 (defun runtime-domain-map (value)
   (if (typep value 'pp.kernel:value-map)
       (value-map-entries value)
-      (error "domain value must be a map, got ~A" value)))
+      (error "domain value must be a map, got ~A" (type-of value))))
 
 (defun runtime-domain-service-value (session name)
   (let ((service (runtime-session-find-service session name)))
@@ -41,6 +41,14 @@
   (find-if (lambda (entry)
              (let ((key (runtime-domain-string (car entry))))
                (and key (string= key name)))) entries))
+(defun runtime-domain-kernel-value-p (value)
+  (typep value
+         '(or pp.kernel:value-nil pp.kernel:value-bool pp.kernel:value-int
+           pp.kernel:value-float pp.kernel:value-string pp.kernel:value-keyword
+           pp.kernel:value-symbol pp.kernel:value-pair pp.kernel:value-vector
+           pp.kernel:value-map pp.kernel:value-set pp.kernel:value-closure
+           pp.kernel:value-builtin pp.kernel:value-capability pp.kernel:value-thunk
+           pp.kernel:value-env-map pp.kernel:value-sealed pp.kernel:value-opaque)))
 
 ;; Plan policy travels with the registered domain value, not with global
 ;; generic methods: installing a domain affects exactly one session.  NIL
@@ -182,51 +190,72 @@
                                     callback nil))))
 
 (defun runtime-domain-diff (session observed)
-  (let* ((target (runtime-domain-observed-target observed))
-         (entry (runtime-domain-target-entry target))
-         (callback (runtime-domain-entry-diff entry)))
+  (let* ((original-target (runtime-domain-observed-target observed))
+         (entry (runtime-domain-target-entry original-target))
+         (callback (runtime-domain-entry-diff entry))
+         (desired (runtime-domain-force
+                   session (runtime-domain-target-desired original-target)))
+         (target (make-runtime-domain-target
+                  (runtime-domain-target-name original-target) entry desired))
+         (observed (make-runtime-domain-observed
+                    target (runtime-domain-observed-state observed))))
     (unless callback (error "domain has no diff callback"))
-    (let* ((plan (runtime-domain-cache-plan
-                  session (runtime-domain-target-name target) callback
-                  (runtime-domain-observed-state observed)
-                  (runtime-domain-target-desired target)))
-           (planned (make-runtime-domain-planned
-                     observed plan (runtime-domain-plan-summary session plan))))
-      ;; Fail closed BEFORE apply mutates the world.
+    (when (and (runtime-domain-kernel-value-p desired)
+               (not (pp.kernel:durable-value-p desired)))
+      (error "reconcile: domain desired state is not durable"))
+    (let ((plan (runtime-domain-cache-plan
+                 session (runtime-domain-target-name target) callback
+                 (runtime-domain-observed-state observed) desired)))
+      ;; Validate and reject unsafe language data before summary hashing,
+      ;; journaling, or any domain callback can mutate the world.
       (unless (runtime-domain-plan-recognized-p entry plan)
         (error "reconcile: domain '~A' produced a plan of unrecognized type ~A"
                (runtime-domain-target-name target) (type-of plan)))
-      planned)))
+      (when (and (runtime-domain-kernel-value-p plan)
+                 (not (pp.kernel:durable-value-p plan)))
+        (error "reconcile: domain '~A' produced a non-durable plan"
+               (runtime-domain-target-name target)))
+      (make-runtime-domain-planned
+       observed plan (runtime-domain-plan-summary session plan)))))
 
 (defun runtime-domain-apply (session planned)
   (let* ((observed (runtime-domain-planned-observed planned))
          (target (runtime-domain-observed-target observed))
          (entry (runtime-domain-target-entry target))
+         (plan (runtime-domain-planned-plan planned))
          (callback (runtime-domain-entry-apply entry))
          (summary (or (runtime-domain-planned-summary planned)
                       (list (cons "result" "opaque"))))
-         (hash (pp.kernel:hash-concat
-                (list "domain-pass" (runtime-domain-target-name target)
-                      (pp.kernel:hash-value
-                       (runtime-domain-target-desired target))))))
+         (desired (runtime-domain-target-desired target)))
+    (when (and (runtime-domain-kernel-value-p desired)
+               (not (pp.kernel:durable-value-p desired)))
+      (error "reconcile: domain desired state is not durable"))
+    (unless (runtime-domain-plan-recognized-p entry plan)
+      (error "reconcile: domain plan is unrecognized or unsafe"))
+    (when (and (runtime-domain-kernel-value-p plan)
+               (not (pp.kernel:durable-value-p plan)))
+      (error "reconcile: domain plan is not durable"))
     (unless callback (error "domain has no apply callback"))
-    (runtime-journal-append
-     session (make-runtime-journal-domain-intent hash summary))
-    (runtime-domain-with-domain
-     entry (runtime-domain-target-name target)
-     (lambda ()
-       (runtime-domain-call-uncached session entry
-                                     (runtime-domain-target-name target)
-                                     callback
-                                     (list (runtime-domain-planned-plan planned)))))
-    (runtime-journal-append session (make-runtime-journal-domain-done hash))
-    (format *error-output* "[reconcile:~A] ~{~A~^ ~}~%"
-            (runtime-domain-target-name target)
-            (mapcar (lambda (pair)
-                      (format nil "~A=~A" (car pair) (cdr pair)))
-                    summary))
-    (finish-output *error-output*)
-    planned))
+    (let ((hash (pp.kernel:hash-concat
+                 (list "domain-pass" (runtime-domain-target-name target)
+                       (pp.kernel:hash-value desired)))))
+      (runtime-journal-append
+       session (make-runtime-journal-domain-intent hash summary))
+      (runtime-domain-with-domain
+       entry (runtime-domain-target-name target)
+       (lambda ()
+         (runtime-domain-call-uncached session entry
+                                       (runtime-domain-target-name target)
+                                       callback
+                                       (list plan))))
+      (runtime-journal-append session (make-runtime-journal-domain-done hash))
+      (format *error-output* "[reconcile:~A] ~{~A~^ ~}~%"
+              (runtime-domain-target-name target)
+              (mapcar (lambda (pair)
+                        (format nil "~A=~A" (car pair) (cdr pair)))
+                      summary))
+      (finish-output *error-output*)
+      planned)))
 
 (defun runtime-domain-verify (session planned)
   (let* (
@@ -264,21 +293,24 @@
                  (runtime-domain-target-name target) cell))))))
 
 (defun runtime-domain-prepare-pass (session invocation desired)
-  (let* ((forced (runtime-domain-force session desired))
-         (entries (runtime-domain-map forced))
-         (targets nil))
-    (dolist (entry entries)
-      (let ((name (runtime-domain-string (car entry))))
-        (unless name (error "reconcile: domain name must be a string or keyword"))
-        (let ((domain (runtime-session-find-domain session name)))
-          (unless domain (error "reconcile: no domain registered under name '~A'" name))
-          (unless (and (runtime-domain-entry-diff domain)
-                       (runtime-domain-entry-apply domain))
-            (error "reconcile: domain '~A' has no diff/apply" name))
-          (push (make-runtime-domain-target name domain (cdr entry)) targets))))
-    (setf targets (nreverse targets))
-    (runtime-domain-stratification-check session targets)
-    (make-runtime-domain-pass invocation forced targets)))
+  (let* ((forced (runtime-domain-force session desired)))
+    (unless (and (runtime-domain-kernel-value-p forced)
+                 (pp.kernel:durable-value-p forced))
+      (error "reconcile: desired state is not durable"))
+    (let* ((entries (runtime-domain-map forced))
+           (targets nil))
+      (dolist (entry entries)
+        (let ((name (runtime-domain-string (car entry))))
+          (unless name (error "reconcile: domain name must be a string or keyword"))
+          (let ((domain (runtime-session-find-domain session name)))
+            (unless domain (error "reconcile: no domain registered under name '~A'" name))
+            (unless (and (runtime-domain-entry-diff domain)
+                         (runtime-domain-entry-apply domain))
+              (error "reconcile: domain '~A' has no diff/apply" name))
+            (push (make-runtime-domain-target name domain (cdr entry)) targets))))
+      (setf targets (nreverse targets))
+      (runtime-domain-stratification-check session targets)
+      (make-runtime-domain-pass invocation forced targets))))
 
 (defun runtime-domain-invocation-keep (invocation)
   (cond ((and (listp invocation) (getf invocation :keep-epochs))
@@ -287,6 +319,9 @@
         (t 0)))
 
 (defun runtime-domain-record-epoch (session invocation forced)
+  (unless (and (runtime-domain-kernel-value-p forced)
+               (pp.kernel:durable-value-p forced))
+    (error "reconcile: epoch value is not durable"))
   (let ((hash (pp.kernel:hash-value forced))
         (layout (and (fboundp 'runtime-session-store-layout)
                      (runtime-session-store-layout session))))

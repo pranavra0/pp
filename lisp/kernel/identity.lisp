@@ -373,6 +373,7 @@
                                                (hash-concat (list (car entry) (hv active (cdr entry)))))
                                              (sort (copy-list (value-env-map-bindings v)) #'string< :key #'car)))))
                (value-sealed (hash-concat (list "sealed" (value-sealed-bytes v))))
+               (value-opaque (hash-concat (list "opaque-bytes" (value-opaque-bytes v))))
                (t (error "Unknown value structure")))))
                (unless *value-hash-impure-walk*
                  (setf (gethash v *value-hash-cache*) h))

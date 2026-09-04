@@ -672,6 +672,8 @@ names — mkdtemp semantics without a repeatable PRNG."
   (object-repository-put-verified repository area key value))
 
 (defun object-repository-put-verified (repository area key value)
+  (unless (pp.kernel:durable-value-p value)
+    (error "Object value is not durable"))
   (let* ((name (store-identity-string key))
          (encoded (pp.kernel:encode-value value)))
     (unless (and (store-digest-p name) encoded
@@ -1301,6 +1303,8 @@ values under a `:blob` key."
          (cells (make-cell-repository layout blobs)))
     (funcall callback layout objects blobs traces cells)))
 (defun runtime-store-put-node-result (objects traces key value outcome reads)
+  (unless (pp.kernel:durable-value-p value)
+    (error "Node result is not durable"))
   (let ((hash (pp.kernel:hash-value value)))
     (object-repository-put objects :key hash :value value)
     (trace-repository-put traces :key (pp.kernel:cache-key-from-node-key key)

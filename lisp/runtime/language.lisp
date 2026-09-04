@@ -386,7 +386,7 @@ NIL is also the representation of the empty pp list; callers that need to
                         "language.quote"))
        (runtime-expr-of-list items)))
     ((or value-closure value-builtin value-capability value-thunk
-         value-env-map value-sealed)
+         value-env-map value-sealed value-opaque)
      (language-fail
       (typecase value
         (value-closure "cannot convert a closure to syntax")
@@ -394,7 +394,9 @@ NIL is also the representation of the empty pp list; callers that need to
         (value-capability "cannot convert a capability to syntax")
         (value-thunk "cannot convert an unevaluated thunk to syntax")
         (value-env-map "cannot convert a module to syntax")
-        (t "cannot convert a sealed value to syntax"))
+        (value-sealed "cannot convert a sealed value to syntax")
+        (value-opaque "cannot convert opaque bytes to syntax")
+        (t "cannot convert an unsupported value to syntax"))
       "language.quote"))
     (t (language-fail "unknown value structure" "language.quote"))))
 
@@ -763,6 +765,7 @@ In particular NaN is unequal to itself while signed zeroes compare equal."
     (value-env-map (format nil "#<envmap ~D exports>"
                            (length (value-env-map-bindings value))))
     (value-sealed "#<sealed>")
+    (value-opaque "#<opaque-bytes>")
     (t (language-fail "unknown value structure" "language.presentation"))))
 
 (defun runtime-string-like (value)

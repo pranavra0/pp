@@ -158,9 +158,9 @@
                   (codec-wrap "m" (nreverse parts))))
                (value-set (let ((parts (mapcar #'enc (canonical-set-elements (value-set-values v)))))
                             (and (every #'identity parts) (codec-wrap "t" parts))))
-               ;; Code, capabilities, environments, thunks and sealed bytes
-               ;; never enter durable data.
-               ((or value-closure value-builtin value-capability value-thunk value-env-map value-sealed) nil)
+               ;; Code, capabilities, environments, thunks, sealed values,
+               ;; and opaque byte values never enter durable data.
+               ((or value-closure value-builtin value-capability value-thunk value-env-map value-sealed value-opaque) nil)
                (t nil))))
     (enc value)))
 

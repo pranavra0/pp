@@ -97,6 +97,11 @@ boundary.
 - closures and builtins as explicit records;
 - cells, capabilities, source ranges, and identity wrapper types.
 
+`value-opaque` is runtime-only one-byte data for malformed ordinary file
+contents. It has an identity hash but no canonical value codec or wire form;
+the `blob` primitive is its explicit conversion to a raw content-addressed
+blob. It is distinct from `value-sealed`, whose bytes remain confidential.
+
 `identity.lisp` hashes expressions, values, patterns, environments, and
 capabilities. `identity-types.lisp` keeps node keys, result hashes, observed
 hashes, and cell ids separate. Store and transport code performs the only
