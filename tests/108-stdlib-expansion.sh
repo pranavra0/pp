@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Collection, string, and lexical path helpers preserve values and reject invalid input.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -25,12 +26,38 @@ print(path-dirname("/usr/local/bin"))
 print(path-dirname("/usr"))
 print(path-normalize("a/./b/../c"))
 print(path-join("/tmp", "x"))
-print(path-extension("archive.tar.gz"))
-print(path-stem("archive.tar.gz"))
-print(path-extension(".profile"))
+def check-path(p, extension, stem) {
+  assert(path-extension(p) = extension, f"path-extension({p}): expected {extension}, got {path-extension(p)}")
+  assert(path-stem(p) = stem, f"path-stem({p}): expected {stem}, got {path-stem(p)}")
+}
+
+check-path("", "", "")
+check-path("/", "", "/")
+check-path("///", "", "/")
+check-path(".", "", ".")
+check-path("..", "", "..")
+check-path("...", "", "...")
+check-path("file", "", "file")
+check-path(".profile", "", ".profile")
+check-path("..profile", "", "..profile")
+check-path("...profile", "", "...profile")
+check-path("file.txt", ".txt", "file")
+check-path(".config.json", ".json", ".config")
+check-path("..config.json", ".json", "..config")
+check-path("archive.tar.gz", ".gz", "archive.tar")
+check-path("a..b", ".b", "a.")
+check-path("file.", ".", "file")
+check-path("file..", ".", "file.")
+check-path(".config.", ".", ".config")
+check-path(".config..json", ".json", ".config.")
+check-path("a.b/file", "", "file")
+check-path("a.b/.config.json", ".json", ".config")
+check-path("/tmp/archive.tar.gz/", ".gz", "archive.tar")
+check-path("café.日本", ".日本", "café")
+print("path suffix cases passed")
 EOF
 
-expected=$'(5 3 1)\n((1 :a) (2 :b))\n{:rest (4), :matched (1 2)}\n("a" "b-")\n("a" "" "b")\n"a-x-x"\n(4 5)\n[6 7]\ntrue\n(:a)\n((:a 1) (:b 2))\n"/usr/local"\n"/"\n"a/c"\n"/tmp/x"\n".gz"\n"archive.tar"\n""'
+expected=$'(5 3 1)\n((1 :a) (2 :b))\n{:rest (4), :matched (1 2)}\n("a" "b-")\n("a" "" "b")\n"a-x-x"\n(4 5)\n[6 7]\ntrue\n(:a)\n((:a 1) (:b 2))\n"/usr/local"\n"/"\n"a/c"\n"/tmp/x"\n"path suffix cases passed"'
 got=$($PP "$TMP/stdlib.pp" 2>"$TMP/err")
 if [ "$got" = "$expected" ]; then ok "stdlib-expansion"; else bad "stdlib-expansion" "expected: $expected" "got: $got" "err: $(cat "$TMP/err")"; fi
 

@@ -1,4 +1,6 @@
-# stdlib/path.pp — pure lexical path operations
+# stdlib/path.pp — absolute-path?, path-basename, path-dirname, path-extension,
+# path-stem, path-join, path-normalize. Pure lexical operations.
+# Load stdlib/list.pp and stdlib/string.pp first.
 
 def absolute-path?(p) { starts-with?(p, "/") }
 def path-basename(p) {
@@ -15,13 +17,10 @@ def path-dirname(p) {
   }
 }
 def path-extension(p) {
-  let (base = path-basename(p), i = string-index(base, ".")) {
-    if nil?(i) or i = 0 { "" } else {
-      let (rest = string-sub(base, i + 1, string-length(base) - i - 1)) {
-        if nil?(string-index(rest, ".")) { string-append(".", rest) }
-        else { string-append(".", nth(length(string-split(rest, ".")) - 1, string-split(rest, "."))) }
-      }
-    }
+  let (parts = reverse(string-split(path-basename(p), "."))) {
+    if any?(fn(part) { not(part = "") }, cdr(parts)) {
+      string-append(".", car(parts))
+    } else { "" }
   }
 }
 def path-stem(p) {

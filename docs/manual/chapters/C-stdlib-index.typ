@@ -265,6 +265,30 @@ scheduler's fan-out point.
   [`lines(s)`], [Split `s` into lines, dropping empty fields.],
 )
 
+== Paths
+
+`stdlib/path.pp` — load `stdlib/list.pp` and `stdlib/string.pp` first.
+These operations are lexical and do not access the filesystem.
+
+#table(
+  columns: (auto, 1fr),
+  inset: (x: 6pt, y: 4pt),
+  align: (left, left),
+  stroke: (x: none, y: 0.5pt + luma(220)),
+  table.header([*Signature*], [*Description*]),
+  [`absolute-path?(p)`], [Whether `p` begins with `/`.],
+  [`path-basename(p)`], [Last nonempty path component; `/` for root, `""` for an empty path.],
+  [`path-dirname(p)`], [Parent path; `/` at root, `.` when a relative path has no parent component.],
+  [`path-extension(p)`], [Final dot and suffix of the basename, or `""` if no non-dot character precedes that dot.],
+  [`path-stem(p)`], [Basename with its extension removed.],
+  [`path-join(a, b)`], [Join a relative `b` to `a`; normalize when `a` is nonempty.],
+  [`path-normalize(p)`], [Remove repeated separators, `.` and paired `..`; reject NUL and relative traversal above the root.],
+)
+
+Leading dots alone do not introduce an extension: `.profile` and `..profile`
+have none, while `.config.json` has extension `.json` and stem `.config`.
+A trailing dot is an extension of `.`: `file.` has stem `file`.
+
 == Domains
 
 The built-in `--reconcile`/`--supervise` domains register their policy
